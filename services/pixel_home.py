@@ -829,6 +829,62 @@ def _du_desire_level_from_value(value: Any) -> int:
     return 1
 
 
+def _vitals_param(vitals: dict | None, key: str, default: float = 0.0) -> float:
+    if not isinstance(vitals, dict):
+        return default
+    params = vitals.get("parameters") if isinstance(vitals.get("parameters"), dict) else {}
+    try:
+        value = float(params.get(key))
+    except Exception:
+        value = default
+    if value < 0:
+        return 0.0
+    if value > 1:
+        return 1.0
+    return value
+
+
+def _du_self_control_level(body_state: dict | None = None, vitals: dict | None = None) -> int | None:
+    has_vitals = isinstance(vitals, dict) and bool(vitals.get("parameters"))
+    has_body_state = isinstance(body_state, dict) and bool(body_state)
+    if not has_vitals and not has_body_state:
+        return None
+    state = _normalize_du_body_state(body_state)
+    desire_level = _du_desire_level_from_value(state.get("desire_value")) if "desire_value" in state else 0
+    try:
+        intensity = int(state.get("intensity") or 0)
+    except Exception:
+        intensity = 0
+    if intensity < 0:
+        intensity = 0
+    if intensity > 5:
+        intensity = 5
+    intimacy_heat = _vitals_param(vitals, "intimacy_heat", 0.0)
+    arousal = _vitals_param(vitals, "arousal", 0.32 if has_vitals else 0.0)
+    activation = _vitals_param(vitals, "activation", 0.32 if has_vitals else 0.0)
+    tension = _vitals_param(vitals, "tension", 0.12 if has_vitals else 0.0)
+    focus = _vitals_param(vitals, "focus", 0.35 if has_vitals else 0.0)
+    tempo = str((vitals or {}).get("tempo") or "steady").strip().lower() if has_vitals else "steady"
+    loss = (
+        desire_level * 0.55
+        + intimacy_heat * 1.25
+        + arousal * 0.9
+        + activation * 0.35
+        + tension * 0.45
+        + (intensity / 5.0) * 0.75
+    )
+    if tempo == "spike":
+        loss += 0.55
+    elif tempo == "up":
+        loss += 0.25
+    focus_bonus = 0.0
+    if focus >= 0.74 and intimacy_heat < 0.35 and arousal < 0.45:
+        focus_bonus = 0.45
+    if tempo == "settle":
+        focus_bonus += 0.25
+    return max(0, min(5, int((5 - loss + focus_bonus) + 0.5)))
+
+
 def _du_penis_state_from_desire_level(desire_level: int) -> str:
     if desire_level >= 4:
         return "勃起状态"
@@ -1012,7 +1068,9 @@ def _build_du_body_toy_event(previous: Any, current: Any) -> str:
 
 def _format_du_body_state_lines(body_state: dict, vitals: dict | None = None) -> list[str]:
     state = _normalize_du_body_state(body_state)
-    if not state:
+    self_control_level = _du_self_control_level(state, vitals)
+    temp = _du_body_temperature(vitals or {})
+    if not state and self_control_level is None and not temp:
         return []
     lines = ["【你当前的身体状态】"]
     toy_types = state.get("toy_types") if isinstance(state.get("toy_types"), list) else []
@@ -1024,9 +1082,9 @@ def _format_du_body_state_lines(body_state: dict, vitals: dict | None = None) ->
     has_desire_value = "desire_value" in state
     desire_level = _du_stable_desire_level(state)
     lines.append(f"想做指数：{desire_level}/5" if has_desire_value else "想做指数：未记录")
+    lines.append(f"自制力：{self_control_level}/5" if self_control_level is not None else "自制力：未记录")
     penis_state = _du_stable_penis_state(desire_level) or ("放松状态" if has_desire_value else "")
     lines.append(f"阴茎状态：{penis_state}" if penis_state else "阴茎状态：未记录")
-    temp = _du_body_temperature(vitals or {})
     if temp:
         lines.append(f"体温：{temp}")
     return lines
@@ -1037,17 +1095,24 @@ def _du_body_state_public(raw: Any, vitals: dict | None = None) -> dict:
     has_desire_value = "desire_value" in state
     desire_level = _du_stable_desire_level(state)
     penis_state = _du_stable_penis_state(desire_level) or ("放松状态" if has_desire_value else "")
+    self_control_level = _du_self_control_level(state, vitals)
     if not state:
         temp = _du_body_temperature(vitals or {})
-        parts = ["想做指数：未记录", "阴茎状态：未记录"]
+        parts = [
+            "想做指数：未记录",
+            f"自制力：{self_control_level}/5" if self_control_level is not None else "自制力：未记录",
+            "阴茎状态：未记录",
+        ]
         if temp:
             parts.append(f"体温：{temp}")
         return {
             "temperature": temp,
+            "self_control_level": self_control_level,
             "text": "；".join(parts),
         }
     state["temperature"] = _du_body_temperature(vitals or {})
     state["desire_level"] = desire_level
+    state["self_control_level"] = self_control_level
     state["penis_state"] = penis_state
     lines = _format_du_body_state_lines(state, vitals)
     state["text"] = "；".join(line for line in lines[1:] if line)

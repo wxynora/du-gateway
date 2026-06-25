@@ -42,6 +42,7 @@ type DuBodyState = {
   intensity?: number;
   desire_value?: number;
   desire_level?: number;
+  self_control_level?: number | null;
   penis_state?: string;
   temperature?: string;
   text?: string;
@@ -548,9 +549,17 @@ function bodyStateText(state: DuBodyState | undefined) {
   if (typeof state?.desire_value !== "undefined" || typeof state?.desire_level !== "undefined") {
     const desireLevel = Number(state?.desire_level || 0);
     parts.push(`想做指数：${desireLevel}/5`);
+    if (typeof state?.self_control_level !== "undefined" && state?.self_control_level !== null) {
+      parts.push(`自制力：${Number(state.self_control_level || 0)}/5`);
+    }
     parts.push(`阴茎状态：${state?.penis_state || "放松状态"}`);
   } else if (state?.penis_state) {
+    if (typeof state?.self_control_level !== "undefined" && state?.self_control_level !== null) {
+      parts.push(`自制力：${Number(state.self_control_level || 0)}/5`);
+    }
     parts.push(`阴茎状态：${state.penis_state}`);
+  } else if (typeof state?.self_control_level !== "undefined" && state?.self_control_level !== null) {
+    parts.push(`自制力：${Number(state.self_control_level || 0)}/5`);
   }
   if (state?.temperature) parts.push(`体温：${state.temperature}`);
   return parts.join("；") || "未记录";

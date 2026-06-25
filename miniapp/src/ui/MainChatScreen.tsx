@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiJson, consumePendingPanelDeviceIdMigration, getOrCreatePanelDeviceId, setPanelToken } from "./api";
 import { AvatarBubble, ChatActionButton, ChatAttachmentBlock, ChatBubbleFrame, ChatHeaderStatus, ChatVoiceTranscriptBlock, HtmlBlock, PlainTextBlock, RichTextBlock, copyText } from "./ChatPresentation";
 import {
@@ -792,6 +792,16 @@ export function MainChatScreen({
   const [openVoiceTranscriptId, setOpenVoiceTranscriptId] = useState("");
   const [bubbleMenu, setBubbleMenu] = useState<ChatBubbleMenuTarget | null>(null);
   const [quotedBubble, setQuotedBubble] = useState<ChatBubbleQuote | null>(null);
+  const chatBackgroundHeightRef = useRef(
+    typeof window !== "undefined"
+      ? Math.max(
+          Math.round(window.innerHeight || 0),
+          Math.round(document.documentElement?.clientHeight || 0),
+          Math.round(window.visualViewport?.height || 0),
+        )
+      : 0,
+  );
+  const chatShouldStickBottomRef = useRef(true);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const lastSearchQueryRef = useRef("");
@@ -3633,15 +3643,63 @@ export function MainChatScreen({
   const messagesTopPaddingClass = searchOpen
     ? hasCustomChatBackground ? "pt-[140px]" : "pt-[156px]"
     : hasCustomChatBackground ? "pt-[88px]" : "pt-[104px]";
+  const chatBackgroundCanvasHeight = chatBackgroundHeightRef.current ? `${chatBackgroundHeightRef.current}px` : "100lvh";
 
-  useEffect(() => {
+  const stickChatToBottom = useCallback(() => {
     if (searchOpen) return;
     const el = messagesScrollRef.current;
     if (!el) return;
     requestAnimationFrame(() => {
       el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+      chatShouldStickBottomRef.current = true;
     });
-  }, [messages, searchOpen, voiceInputOpen, plusOpen, quotedBubble]);
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (searchOpen) return;
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    stickChatToBottom();
+  }, [messages, searchOpen, voiceInputOpen, plusOpen, quotedBubble, stickChatToBottom]);
+
+  useEffect(() => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+
+    const updateStickyState = () => {
+      chatShouldStickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 180;
+    };
+
+    updateStickyState();
+    el.addEventListener("scroll", updateStickyState, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", updateStickyState);
+    };
+  }, []);
+
+  useEffect(() => {
+    const el = messagesScrollRef.current;
+    if (!el || searchOpen) return;
+
+    let frame = 0;
+    const keepBottomIfNeeded = () => {
+      if (!chatShouldStickBottomRef.current) return;
+      if (frame) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+      });
+    };
+
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(keepBottomIfNeeded) : null;
+    observer?.observe(el);
+    window.addEventListener("resize", keepBottomIfNeeded);
+
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener("resize", keepBottomIfNeeded);
+    };
+  }, [searchOpen]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -3679,16 +3737,19 @@ export function MainChatScreen({
         fontFamily: chatFontFamily,
       } as React.CSSProperties}
     >
-      <div className="pointer-events-none fixed left-0 top-0 z-0 h-[100lvh] w-full bg-[#F8F9FA]" />
+      <div
+        className="pointer-events-none absolute left-0 top-0 z-0 w-full bg-[#F8F9FA]"
+        style={{ height: chatBackgroundCanvasHeight }}
+      />
       {hasCustomChatBackground ? (
         <>
           <div
-            className="pointer-events-none fixed left-0 top-0 z-0 h-[100lvh] w-full bg-cover bg-center"
-            style={{ backgroundImage: `url(${chatBackgroundImage})` }}
+            className="pointer-events-none absolute left-0 top-0 z-0 w-full bg-cover bg-center"
+            style={{ backgroundImage: `url(${chatBackgroundImage})`, height: chatBackgroundCanvasHeight }}
           />
           <div
-            className="pointer-events-none fixed left-0 top-0 z-0 h-[100lvh] w-full"
-            style={{ backgroundColor: `rgba(248,249,250,${chatBackgroundOverlayAlpha})` }}
+            className="pointer-events-none absolute left-0 top-0 z-0 w-full"
+            style={{ backgroundColor: `rgba(248,249,250,${chatBackgroundOverlayAlpha})`, height: chatBackgroundCanvasHeight }}
           />
         </>
       ) : null}
