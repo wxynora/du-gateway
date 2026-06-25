@@ -1023,6 +1023,11 @@ PY
 - 已改动：`scripts/claude_oauth_proxy.js` 在正常转发上游响应时顺手解析并保存结构化 `rateLimitSnapshot`；`/internal/oauth-status` 会随 token 状态返回最新快照，不额外发探测请求，不记录 token、请求正文或完整响应体。
 - 已改动：`routes/miniapp/upstreams.py` 放行清洗后的 `rateLimitSnapshot`；`miniapp/src/ui/tabs/SettingsUpstream.tsx` 可在 OAuth 节点显示 `5h` / `周` 用量和 reset 时间。
 - 部署注意：`claude-oauth-proxy.service` 实际运行 `/home/nora/claude-proxy/proxy.js`，不是直接运行仓库里的 `scripts/claude_oauth_proxy.js`。线上生效需要服务器拉代码后，把仓库脚本同步到该实际服务文件，再重启 `du-gateway.service` 和 `claude-oauth-proxy.service`；MiniApp 若要显示最新前端，需要重新构建/同步静态资源。
+当前状态（2026-06-25 Claude beta header 减负实测）：
+- 已备份：本地备份分支 `backup/claude-beta-headers-before-prune-20260625-200237`；远端实际运行文件备份 `/home/nora/claude-proxy/proxy.js.bak-20260625-200435`。
+- 已改动：`scripts/claude_oauth_proxy.js` 的 `anthropic-beta` 删掉 `interleaved-thinking-2025-05-14`、`fine-grained-tool-streaming-2025-05-14`、`token-efficient-tools-2025-02-19`、`effort-2025-11-24`；保留 `claude-code-20250219`、`oauth-2025-04-20`、`prompt-caching-scope-2026-01-05`、`context-management-2025-06-27`。
+- 已验证：`node --check scripts/claude_oauth_proxy.js` 通过；VPS 拉到包含本改动的 main 后同步到 `/home/nora/claude-proxy/proxy.js` 并重启 `claude-oauth-proxy.service`，服务 active、`127.0.0.1:8082` 正常监听。
+- 直打测试：在 VPS 直接请求 `127.0.0.1:8082/v1/models` 返回 9 个模型；直接请求 `127.0.0.1:8082/v1/chat/completions`，`claude-sonnet-4-6` 返回 `测试`，`claude-opus-4-6` 返回 `42` 且 `output_tokens_details.thinking_tokens=0`；未经过 `du-gateway` 聊天转发链路。
 当前状态（2026-06-11 Claude proxy 脱管 node 清理）：
 - 已查明：`127.0.0.1:8082` 被 `session-41335.scope` 里的脱管 `node proxy.js` 占用，session 来源是 `2026-06-11 16:01:51` 从 `100.105.159.127` SSH 登录；它不在 `claude-oauth-proxy.service` cgroup 内，导致 user systemd 后续每 3 秒拉起新进程时都报 `EADDRINUSE`。
 - 已处理：先 `systemctl --user stop --no-block claude-oauth-proxy.service`，再校验 `/proc/757708/cwd=/home/nora/claude-proxy` 且 cmdline 为 `node proxy.js` 后杀掉脱管进程，最后 `reset-failed` 并 `start claude-oauth-proxy.service`。
