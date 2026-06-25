@@ -3650,7 +3650,6 @@ export function MainChatScreen({
 
   useEffect(() => {
     const viewport = window.visualViewport;
-    let frame = 0;
 
     const setRootVar = (root: HTMLDivElement, name: string, value: string) => {
       if (root.style.getPropertyValue(name) !== value) {
@@ -3658,33 +3657,8 @@ export function MainChatScreen({
       }
     };
 
-    const scheduleKeyboardSettle = (offset: number) => {
-      if (keyboardSettleTimerRef.current) {
-        window.clearTimeout(keyboardSettleTimerRef.current);
-      }
-      keyboardSettleTimerRef.current = window.setTimeout(() => {
-        keyboardSettleTimerRef.current = null;
-        const root = chatRootRef.current;
-        const el = messagesScrollRef.current;
-        const shouldStickToBottom = !searchOpen && el
-          ? el.scrollHeight - el.scrollTop - el.clientHeight < 220
-          : false;
-
-        if (root && keyboardPaddingOffsetRef.current !== offset) {
-          keyboardPaddingOffsetRef.current = offset;
-          setRootVar(root, "--chat-keyboard-offset", `${offset}px`);
-        }
-
-        if (shouldStickToBottom && el) {
-          requestAnimationFrame(() => {
-            el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
-          });
-        }
-      }, 160);
-    };
-
     const applyKeyboardOffset = () => {
-      frame = 0;
+      keyboardSettleTimerRef.current = null;
       const visibleHeight = viewport
         ? Math.round(viewport.height + viewport.offsetTop)
         : Math.round(window.innerHeight);
@@ -3701,32 +3675,52 @@ export function MainChatScreen({
       }
 
       const root = chatRootRef.current;
+      const el = messagesScrollRef.current;
+      const shouldStickToBottom = !searchOpen && el
+        ? el.scrollHeight - el.scrollTop - el.clientHeight < 220
+        : false;
+      const offsetChanged = keyboardOffsetRef.current !== normalizedOffset;
+
       if (root) {
         setRootVar(root, "--chat-viewport-height", `${chatViewportHeightRef.current || layoutHeight || visibleHeight}px`);
+        setRootVar(root, "--chat-keyboard-offset", `${normalizedOffset}px`);
         setRootVar(root, "--chat-keyboard-translate", normalizedOffset ? `-${normalizedOffset}px` : "0px");
       }
 
-      if (keyboardOffsetRef.current !== normalizedOffset) {
+      if (offsetChanged) {
         keyboardOffsetRef.current = normalizedOffset;
+        keyboardPaddingOffsetRef.current = normalizedOffset;
+        if (shouldStickToBottom && el) {
+          requestAnimationFrame(() => {
+            el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+          });
+        }
       }
-      scheduleKeyboardSettle(normalizedOffset);
     };
 
-    const updateKeyboardOffset = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(applyKeyboardOffset);
+    const scheduleKeyboardMeasure = (delay = 90) => {
+      if (keyboardSettleTimerRef.current) {
+        window.clearTimeout(keyboardSettleTimerRef.current);
+      }
+      keyboardSettleTimerRef.current = window.setTimeout(applyKeyboardOffset, delay);
     };
 
-    updateKeyboardOffset();
+    const updateKeyboardOffset = () => scheduleKeyboardMeasure(90);
+    const updateKeyboardSoon = () => scheduleKeyboardMeasure(40);
+
+    updateKeyboardSoon();
     viewport?.addEventListener("resize", updateKeyboardOffset);
     viewport?.addEventListener("scroll", updateKeyboardOffset);
     window.addEventListener("resize", updateKeyboardOffset);
+    document.addEventListener("focusin", updateKeyboardSoon, true);
+    document.addEventListener("focusout", updateKeyboardOffset, true);
 
     return () => {
       viewport?.removeEventListener("resize", updateKeyboardOffset);
       viewport?.removeEventListener("scroll", updateKeyboardOffset);
       window.removeEventListener("resize", updateKeyboardOffset);
-      if (frame) cancelAnimationFrame(frame);
+      document.removeEventListener("focusin", updateKeyboardSoon, true);
+      document.removeEventListener("focusout", updateKeyboardOffset, true);
       if (keyboardSettleTimerRef.current) {
         window.clearTimeout(keyboardSettleTimerRef.current);
         keyboardSettleTimerRef.current = null;
@@ -4127,7 +4121,7 @@ export function MainChatScreen({
         onChange={handleDocumentInputChange}
       />
       <div
-        className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] will-change-transform ${chatFooterClass}`}
+        className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] transition-transform duration-200 ease-out will-change-transform ${chatFooterClass}`}
         style={{ transform: "translate3d(0, var(--chat-keyboard-translate, 0px), 0)" }}
       >
           <div className={`relative z-10 mx-4 overflow-hidden rounded-[28px] border transition-all duration-300 ease-in-out ${chatPlusPanelClass} ${plusOpen ? "mb-2 h-[194px] opacity-100" : "mb-0 h-0 border-transparent opacity-0"}`}>
@@ -4247,20 +4241,30 @@ export function MainChatScreen({
           {voiceInputOpen ? (
             <button
               type="button"
-              className={`flex min-h-[32px] flex-1 items-center justify-center rounded-full px-3 py-1 text-[14px] font-semibold transition-colors ${
+              className={`flex min-h-[32px] flex-1 touch-none select-none items-center justify-center rounded-full px-3 py-1 text-[14px] font-semibold transition-colors ${
                 chatVoiceCancelArmed
                   ? "bg-rose-500 text-white"
                   : recordingChatVoice
                     ? "bg-gray-900 text-white"
                     : `${chatInputShellClass} text-gray-700 active:bg-white/70`
               }`}
+              style={{
+                WebkitTouchCallout: "none",
+                WebkitUserSelect: "none",
+                touchAction: "none",
+                userSelect: "none",
+              } as React.CSSProperties}
+              draggable={false}
               onPointerDown={handleChatVoicePressStart}
               onPointerMove={handleChatVoicePressMove}
               onPointerUp={handleChatVoicePressEnd}
               onPointerCancel={handleChatVoicePressCancel}
+              onTouchStart={(event) => event.preventDefault()}
               onContextMenu={(event) => event.preventDefault()}
             >
-              {chatVoiceCancelArmed ? "松手取消" : recordingChatVoice ? "松开发送，上滑取消" : "按住说话"}
+              <span className="pointer-events-none select-none">
+                {chatVoiceCancelArmed ? "松手取消" : recordingChatVoice ? "松开发送，上滑取消" : "按住说话"}
+              </span>
             </button>
           ) : (
             <div className={`flex min-h-[32px] flex-1 items-center rounded-full px-3 py-1 ${chatInputShellClass}`}>
