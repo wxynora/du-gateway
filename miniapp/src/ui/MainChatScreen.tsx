@@ -782,6 +782,7 @@ export function MainChatScreen({
   const [quotedBubble, setQuotedBubble] = useState<ChatBubbleQuote | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const lastSearchQueryRef = useRef("");
   const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
@@ -3328,9 +3329,10 @@ export function MainChatScreen({
     });
     return matches;
   }, [groupedMessages, searchQuery]);
-  const activeSearchMatch = searchMatches.length
-    ? searchMatches[Math.min(activeSearchIndex, searchMatches.length - 1)]
-    : null;
+  const activeSearchDisplayIndex = searchMatches.length
+    ? Math.min(activeSearchIndex, searchMatches.length - 1)
+    : 0;
+  const activeSearchMatch = searchMatches.length ? searchMatches[activeSearchDisplayIndex] : null;
   const activeSearchMatchId = activeSearchMatch?.id || "";
   const transparentBubbleClass = TRANSPARENT_BUBBLE_CLASS;
   const hasCustomChatBackground = Boolean(String(chatBackgroundImage || "").trim());
@@ -3383,11 +3385,23 @@ export function MainChatScreen({
   }, [messages, searchOpen]);
 
   useEffect(() => {
-    if (!searchQuery.trim()) {
+    const query = searchQuery.trim();
+    if (!query) {
+      lastSearchQueryRef.current = "";
       setActiveSearchIndex(0);
       return;
     }
-    setActiveSearchIndex(searchMatches.length > 0 ? searchMatches.length - 1 : 0);
+
+    if (lastSearchQueryRef.current !== query) {
+      lastSearchQueryRef.current = query;
+      setActiveSearchIndex(searchMatches.length > 0 ? searchMatches.length - 1 : 0);
+      return;
+    }
+
+    setActiveSearchIndex((prev) => {
+      if (!searchMatches.length) return 0;
+      return Math.min(prev, searchMatches.length - 1);
+    });
   }, [searchQuery, searchMatches.length]);
 
   useEffect(() => {
@@ -3484,7 +3498,7 @@ export function MainChatScreen({
                   <ChevronDownMini />
                 </button>
                 <span className="text-[11px] font-medium text-gray-500">
-                  {activeSearchIndex + 1}/{searchMatches.length}
+                  {activeSearchDisplayIndex + 1}/{searchMatches.length}
                 </span>
               </>
             ) : searchQuery.trim() ? (
