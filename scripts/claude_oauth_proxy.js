@@ -36,12 +36,8 @@ const ANTHROPIC_VERSION = "2023-06-01";
 const BETA_HEADER = [
   "claude-code-20250219",
   "oauth-2025-04-20",
-  "interleaved-thinking-2025-05-14",
-  "fine-grained-tool-streaming-2025-05-14",
   "prompt-caching-scope-2026-01-05",
-  "token-efficient-tools-2025-02-19",
   "context-management-2025-06-27",
-  "effort-2025-11-24",
 ].join(",");
 const DYNAMIC_SYSTEM_MARKER = "__dynamic__";
 const SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__";
