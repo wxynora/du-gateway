@@ -667,8 +667,13 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     };
   }
 
+  const stackShift = motion?.targetIndex != null ? motion.direction * motionProgress : 0;
+  const stackAnchorIndex = baseIndex + stackShift;
+  const backgroundTransition = motion?.phase === "settling"
+    ? "transform 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease-out"
+    : "none";
   const backgroundEntries = imageItems
-    .map((item, index) => ({ item, index, offset: index - baseIndex }))
+    .map((item, index) => ({ item, index, offset: index - stackAnchorIndex }))
     .filter(({ index, offset }) => (
       index !== baseIndex
       && index !== motion?.targetIndex
@@ -681,8 +686,10 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     });
 
   const frontPose: CardPose = { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1 };
+  const targetStartPose = motion?.targetIndex != null ? stackPose(motion.direction) : null;
+  const currentRestPose = motion?.targetIndex != null ? stackPose(-motion.direction) : null;
   const currentExitPose: CardPose = motion?.targetIndex != null
-    ? { x: -motion.direction * 28, y: 4, scale: 0.97, rotate: -motion.direction * 1.1, opacity: 0.86 }
+    ? currentRestPose || frontPose
     : {
         x: motion ? -motion.direction * 14 : 0,
         y: motion ? 2 : 0,
@@ -692,8 +699,15 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
       };
   const currentPose = motion ? mixPose(frontPose, currentExitPose, motionProgress) : frontPose;
   const targetPose = motion && targetItem
-    ? mixPose(stackPose(motion.direction), frontPose, motionProgress)
+    ? mixPose(targetStartPose || frontPose, frontPose, motionProgress)
     : frontPose;
+  const layerFlipProgress = 0.48;
+  const targetLayerZIndex = targetStartPose && motionProgress < layerFlipProgress
+    ? targetStartPose.zIndex
+    : 24;
+  const currentLayerZIndex = currentRestPose && motionProgress >= layerFlipProgress
+    ? currentRestPose.zIndex
+    : 24;
 
   function stopBubbleGesture(event: React.SyntheticEvent) {
     event.stopPropagation();
@@ -829,7 +843,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
                   ? "shadow-[0_6px_18px_rgba(15,23,42,0.11)]"
                   : "shadow-[0_4px_14px_rgba(15,23,42,0.10)]"
               }`}
-              style={cardLayerStyle(pose, pose.zIndex)}
+              style={cardLayerStyle(pose, pose.zIndex, backgroundTransition)}
               aria-hidden="true"
             >
               <img
@@ -846,7 +860,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
           <span
             key={`${targetItem.id}-target-${motion.targetIndex}`}
             className="pointer-events-none absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_7px_20px_rgba(15,23,42,0.12)]"
-            style={cardLayerStyle(targetPose, 24, movingTransition)}
+            style={cardLayerStyle(targetPose, targetLayerZIndex, movingTransition)}
             aria-hidden="true"
           >
             <img
@@ -861,7 +875,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
         <span
           key={`${currentItem.id}-current-${baseIndex}`}
           className="pointer-events-none absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_7px_20px_rgba(15,23,42,0.12)]"
-          style={cardLayerStyle(currentPose, targetItem && motion ? 23 : 24, movingTransition)}
+          style={cardLayerStyle(currentPose, targetItem && motion ? currentLayerZIndex : 24, movingTransition)}
           onTransitionEnd={handleSwipeTransitionEnd}
         >
           <img
