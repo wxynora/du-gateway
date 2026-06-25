@@ -798,6 +798,8 @@ export function MainChatScreen({
   const lastSearchQueryRef = useRef("");
   const chatViewportHeightRef = useRef(typeof window !== "undefined" ? Math.max(0, Math.round(window.innerHeight)) : 0);
   const keyboardOffsetRef = useRef(0);
+  const keyboardPaddingOffsetRef = useRef(0);
+  const keyboardSettleTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
@@ -1159,7 +1161,7 @@ export function MainChatScreen({
     reschedulePrivateInputAggregateAfterEdit();
     setBubbleMenu(null);
     if (mode === "edit") {
-      setInput((current) => [editableText, String(current || "").trim()].filter(Boolean).join("\n"));
+      setInput(editableText);
       refocusTextInputSoon();
     } else {
       toast("已删除");
@@ -3650,6 +3652,37 @@ export function MainChatScreen({
     const viewport = window.visualViewport;
     let frame = 0;
 
+    const setRootVar = (root: HTMLDivElement, name: string, value: string) => {
+      if (root.style.getPropertyValue(name) !== value) {
+        root.style.setProperty(name, value);
+      }
+    };
+
+    const scheduleKeyboardSettle = (offset: number) => {
+      if (keyboardSettleTimerRef.current) {
+        window.clearTimeout(keyboardSettleTimerRef.current);
+      }
+      keyboardSettleTimerRef.current = window.setTimeout(() => {
+        keyboardSettleTimerRef.current = null;
+        const root = chatRootRef.current;
+        const el = messagesScrollRef.current;
+        const shouldStickToBottom = !searchOpen && el
+          ? el.scrollHeight - el.scrollTop - el.clientHeight < 220
+          : false;
+
+        if (root && keyboardPaddingOffsetRef.current !== offset) {
+          keyboardPaddingOffsetRef.current = offset;
+          setRootVar(root, "--chat-keyboard-offset", `${offset}px`);
+        }
+
+        if (shouldStickToBottom && el) {
+          requestAnimationFrame(() => {
+            el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+          });
+        }
+      }, 160);
+    };
+
     const applyKeyboardOffset = () => {
       frame = 0;
       const visibleHeight = viewport
@@ -3658,7 +3691,7 @@ export function MainChatScreen({
       const layoutHeight = Math.round(window.innerHeight);
       const baseline = Math.max(chatViewportHeightRef.current || 0, visibleHeight, layoutHeight);
       const nextOffset = Math.max(0, baseline - visibleHeight);
-      const normalizedOffset = nextOffset > 80 ? nextOffset : 0;
+      const normalizedOffset = nextOffset > 80 ? Math.round(nextOffset / 4) * 4 : 0;
 
       if (!normalizedOffset) {
         const nextHeight = Math.max(visibleHeight, layoutHeight);
@@ -3669,20 +3702,14 @@ export function MainChatScreen({
 
       const root = chatRootRef.current;
       if (root) {
-        root.style.setProperty("--chat-viewport-height", `${chatViewportHeightRef.current || layoutHeight || visibleHeight}px`);
-        root.style.setProperty("--chat-keyboard-offset", `${normalizedOffset}px`);
-        root.style.setProperty("--chat-keyboard-translate", normalizedOffset ? `-${normalizedOffset}px` : "0px");
+        setRootVar(root, "--chat-viewport-height", `${chatViewportHeightRef.current || layoutHeight || visibleHeight}px`);
+        setRootVar(root, "--chat-keyboard-translate", normalizedOffset ? `-${normalizedOffset}px` : "0px");
       }
 
       if (keyboardOffsetRef.current !== normalizedOffset) {
         keyboardOffsetRef.current = normalizedOffset;
-        if (!searchOpen) {
-          requestAnimationFrame(() => {
-            const el = messagesScrollRef.current;
-            if (el) el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
-          });
-        }
       }
+      scheduleKeyboardSettle(normalizedOffset);
     };
 
     const updateKeyboardOffset = () => {
@@ -3700,6 +3727,10 @@ export function MainChatScreen({
       viewport?.removeEventListener("scroll", updateKeyboardOffset);
       window.removeEventListener("resize", updateKeyboardOffset);
       if (frame) cancelAnimationFrame(frame);
+      if (keyboardSettleTimerRef.current) {
+        window.clearTimeout(keyboardSettleTimerRef.current);
+        keyboardSettleTimerRef.current = null;
+      }
     };
   }, [searchOpen]);
 
@@ -3835,7 +3866,10 @@ export function MainChatScreen({
       <div
         ref={messagesScrollRef}
         className={`relative z-10 min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-5 ${messagesTopPaddingClass}`}
-        style={{ paddingBottom: "calc(var(--chat-keyboard-offset, 0px) + 1.25rem)" }}
+        style={{
+          paddingBottom: "calc(var(--chat-keyboard-offset, 0px) + 1.25rem)",
+          WebkitOverflowScrolling: "touch",
+        }}
       >
         <div className="space-y-4">
           {groupedMessages.map((group, index) => (
@@ -4093,7 +4127,7 @@ export function MainChatScreen({
         onChange={handleDocumentInputChange}
       />
       <div
-        className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] transition-transform duration-200 ease-out will-change-transform ${chatFooterClass}`}
+        className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] will-change-transform ${chatFooterClass}`}
         style={{ transform: "translate3d(0, var(--chat-keyboard-translate, 0px), 0)" }}
       >
           <div className={`relative z-10 mx-4 overflow-hidden rounded-[28px] border transition-all duration-300 ease-in-out ${chatPlusPanelClass} ${plusOpen ? "mb-2 h-[194px] opacity-100" : "mb-0 h-0 border-transparent opacity-0"}`}>
