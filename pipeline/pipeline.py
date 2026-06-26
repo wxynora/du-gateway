@@ -2274,6 +2274,17 @@ def _canonical_memory_id(memory_id: str) -> str:
     return mid[len("core::") :] if mid.startswith("core::") else mid
 
 
+def _memory_event_timestamp(mem: dict) -> str:
+    """事件发生/内容更新时间；不要用 last_mentioned，它只是最近被引用时间。"""
+    return str(
+        (mem or {}).get("updated_at")
+        or (mem or {}).get("created_at")
+        or (mem or {}).get("promoted_at")
+        or (mem or {}).get("last_mentioned")
+        or ""
+    ).strip()
+
+
 def _build_sqlite_shadow_compare(
     *,
     query: str,
@@ -2538,8 +2549,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                 return "晚上"
             return "深夜"
 
-        last_mentioned = mem.get("last_mentioned") or mem.get("created_at") or ""
-        dt = parse_iso_to_beijing(last_mentioned)
+        dt = parse_iso_to_beijing(_memory_event_timestamp(mem))
         if dt is None:
             return "之前"
         now_dt = _now_beijing()
@@ -2585,6 +2595,8 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                 "target_type": str(mem.get("target_type") or "").strip(),
                 "importance": int(mem.get("importance") or 0),
                 "mention_count": int(mem.get("mention_count") or 0),
+                "created_at": str(mem.get("created_at") or "").strip(),
+                "updated_at": str(mem.get("updated_at") or "").strip(),
                 "last_mentioned": str(mem.get("last_mentioned") or mem.get("created_at") or "").strip(),
             }
         )
@@ -3228,6 +3240,7 @@ def _apply_one_decision(
             "target_type": target_type,
             "mention_count": mention_init if mention_init is not None else 1,
             "created_at": now_iso,
+            "updated_at": now_iso,
             "last_mentioned": now_iso,
         }
         current_memories.append(new_mem)
@@ -3274,6 +3287,7 @@ def _apply_one_decision(
                 mem["emotion_label"] = emotion_label
                 mem["scene_type"] = scene_type
                 mem["target_type"] = target_type
+                mem["updated_at"] = now_iso
                 mem["last_mentioned"] = now_iso
                 mem["mention_count"] = int(mem.get("mention_count") or 0) + 1
                 merged_mem = mem

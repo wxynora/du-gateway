@@ -37,6 +37,9 @@ def _metadata_for_item(item: dict[str, Any]) -> dict[str, Any]:
         "scene_type": str((item or {}).get("scene_type") or "").strip(),
         "target_type": str((item or {}).get("target_type") or "").strip(),
         "promoted_at": (item or {}).get("promoted_at") or "",
+        "created_at": (item or {}).get("created_at") or "",
+        "updated_at": (item or {}).get("updated_at") or "",
+        "last_mentioned": (item or {}).get("last_mentioned") or "",
     }
 
 

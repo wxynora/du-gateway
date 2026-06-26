@@ -807,6 +807,12 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 - 已完成：shadow 候选质量优化：`tag/emotion_label/scene_type/target_type` 等低信号标签降权，`拒绝/不行/老婆说` 等泛词停用；候选至少需要高信号词命中或足够高综合分，避免只靠“拒绝”这类泛词捞出无关亲密记忆。
 - 未完成 / 下次继续：第四阶段仍未做。不要让 SQLite mirror 参与真实召回排序或注入；如果以后要试，只允许先返回 candidate id，再从同一份 R2 current snapshot 取正文。
 
+当前状态（2026-06-26 动态记忆召回时间标签修复）：
+- 问题：召回行里的 `[今天中午]` / `[今天上午]` 一度使用 `last_mentioned` 计算；旧记忆只要今天被引用或命中，`last_mentioned` 就会刷新，导致前天/昨天发生的事被显示成“今天”。典型例子：`fa86f29f-0a57-4830-86aa-925dd76e37c5` 事件创建于 `2026-06-24T22:35:02+08:00`，但因 `last_mentioned=2026-06-26T11:58:22+08:00` 被误标为 `[今天中午]`。
+- 已完成：召回展示时间改为优先 `updated_at` / `created_at` / `promoted_at`，最后才兜底 `last_mentioned`；`last_mentioned` 只表示最近被引用，仍可用于权重、活跃度和淘汰，不再用于事件展示时间。
+- 已完成：动态层 `new` 写入 `updated_at=created_at`，`merge` 更新 `updated_at`；未来 core cache 提拔会保留 `created_at`、`updated_at`、`last_mentioned`，旧 core cache 记录如果 id 能对应当前动态记忆，会从动态记忆继承事件时间，避免 `promoted_at` 冒充发生时间。
+- 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py storage/r2_store.py memory_vector/core_pending_index.py memory_vector/dynamic_vector_retriever.py services/dynamic_memory_search.py` 通过；本地复现同一条记忆 `created_at=2026-06-24T22:35:02+08:00`、`last_mentioned=2026-06-26T11:58:22+08:00` 时，时间标签变为 `前天深夜`。
+
 ## 核心 Prompt / 风格规则 / 禁言模式
 
 现象：

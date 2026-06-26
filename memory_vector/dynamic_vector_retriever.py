@@ -40,6 +40,17 @@ def _memory_weight(m: dict) -> float:
     return importance + mention_count - time_decay
 
 
+def _memory_event_timestamp(mem: dict) -> str:
+    """事件时间/内容更新时间；last_mentioned 只表示最近被引用。"""
+    return str(
+        (mem or {}).get("updated_at")
+        or (mem or {}).get("created_at")
+        or (mem or {}).get("promoted_at")
+        or (mem or {}).get("last_mentioned")
+        or ""
+    ).strip()
+
+
 def _guess_tag_from_query(query: str) -> str:
     q = (query or "").strip()
     for t in ROOM_TAGS:
@@ -74,7 +85,7 @@ def _memory_matches_time_range(mem: dict, time_range: str) -> bool:
             return False
         start_dt = datetime.combine(start.date(), time.min, tzinfo=now.tzinfo)
         end_dt = datetime.combine(end.date(), time.max, tzinfo=now.tzinfo)
-    ts = parse_iso_to_beijing(mem.get("last_mentioned") or mem.get("created_at") or "")
+    ts = parse_iso_to_beijing(_memory_event_timestamp(mem))
     if ts is None:
         return False
     if start_dt and ts < start_dt:
@@ -174,14 +185,21 @@ def dynamic_vector_retrieve(
         cid = p.get("id")
         if not cid:
             continue
+        dynamic_base = mem_by_id.get(str(cid)) or {}
         mem_id = f"core::{cid}"
         mem = {
             "id": mem_id,
             "content": (p.get("content") or "").strip(),
             "importance": int(p.get("importance") or 0),
             "mention_count": int(p.get("mention_count") or 0),
-            "last_mentioned": p.get("promoted_at") or _now_beijing().isoformat(),
+            "created_at": p.get("created_at") or dynamic_base.get("created_at") or "",
+            "updated_at": p.get("updated_at") or dynamic_base.get("updated_at") or dynamic_base.get("created_at") or "",
+            "last_mentioned": p.get("last_mentioned") or dynamic_base.get("last_mentioned") or p.get("promoted_at") or _now_beijing().isoformat(),
+            "promoted_at": p.get("promoted_at") or "",
             "tag": (p.get("tag") or "").strip() or "图书馆",
+            "emotion_label": str((p or {}).get("emotion_label") or "").strip(),
+            "scene_type": str((p or {}).get("scene_type") or "").strip(),
+            "target_type": str((p or {}).get("target_type") or "").strip(),
         }
         core_mems.append(mem)
         mem_by_id[mem_id] = mem

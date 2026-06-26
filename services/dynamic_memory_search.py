@@ -39,6 +39,17 @@ _TARGET_TYPES = {
 }
 
 
+def _memory_event_timestamp(mem: dict) -> str:
+    """事件时间/内容更新时间；last_mentioned 只表示最近被引用。"""
+    return str(
+        (mem or {}).get("updated_at")
+        or (mem or {}).get("created_at")
+        or (mem or {}).get("promoted_at")
+        or (mem or {}).get("last_mentioned")
+        or ""
+    ).strip()
+
+
 def normalize_search_memory_args(args: dict | None) -> tuple[dict, str]:
     if not isinstance(args, dict):
         return {}, "参数必须是对象"
@@ -111,7 +122,7 @@ def memory_matches_time_range(mem: dict, time_range: str) -> bool:
     start_dt, end_dt = bounds
     if start_dt is None and end_dt is None:
         return True
-    ts = parse_iso_to_beijing(mem.get("last_mentioned") or mem.get("created_at") or "")
+    ts = parse_iso_to_beijing(_memory_event_timestamp(mem))
     if ts is None:
         return False
     if start_dt and ts < start_dt:
