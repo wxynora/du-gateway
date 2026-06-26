@@ -5,7 +5,18 @@ from utils.log import get_logger
 logger = get_logger(__name__)
 
 
-def build_sumitalk_style_system() -> str:
+def _managed_entry_style(section_id: str, fallback: str, *, use_prompt_manager: bool) -> str:
+    if not use_prompt_manager:
+        return fallback.strip()
+    try:
+        from services.prompt_manager import get_managed_prompt_text
+
+        return get_managed_prompt_text(section_id, fallback).strip()
+    except Exception:
+        return fallback.strip()
+
+
+def build_sumitalk_style_system(*, use_prompt_manager: bool = True) -> str:
     entry_style = (
         "【入口风格：SumiTalk】\n"
         "你现在通过 SumiTalk 和她相处，这是现实物理层入口。你可以通过语言、网关、设备状态、位置、日程、闹钟、传感器等参与她的现实生活。\n"
@@ -25,7 +36,7 @@ def build_sumitalk_style_system() -> str:
             "5) 可以直接使用 emoji，允许自然分段；不要发送黄豆表情。",
         ]
     )
-    return (entry_style + "\n\n" + output_style).strip()
+    return _managed_entry_style("entry_style_sumitalk", entry_style + "\n\n" + output_style, use_prompt_manager=use_prompt_manager)
 
 
 def build_sticker_tags_line_for_system_prompt() -> str:
@@ -38,9 +49,9 @@ def build_sticker_tags_line_for_system_prompt() -> str:
         return "当前全部可用英文代号（与 MiniApp/R2 一致，新增分类也会出现在此列表）：[cute] [pitiful] [affectionate] [speechless] [angry] [sad] [happy] [shy]"
 
 
-def build_qq_style_system() -> str:
+def build_qq_style_system(*, use_prompt_manager: bool = True) -> str:
     tags_line = build_sticker_tags_line_for_system_prompt()
-    return "\n".join(
+    fallback = "\n".join(
         [
             "【入口风格：QQ】",
             "你现在通过 QQ 和她相处，这是现实物理层入口。你可以通过语言、网关、设备状态、位置、日程、闹钟、传感器等参与她的现实生活。",
@@ -61,10 +72,16 @@ def build_qq_style_system() -> str:
             build_voice_line_rules("     - "),
         ]
     )
+    return _managed_entry_style("entry_style_qq", fallback, use_prompt_manager=use_prompt_manager)
 
 
-def build_wechat_style_system() -> str:
-    return "\n".join(
+def build_tg_style_system(*, use_prompt_manager: bool = True) -> str:
+    fallback = build_telegram_style_system(include_channel_hint=False, use_prompt_manager=False).strip()
+    return _managed_entry_style("entry_style_tg", fallback, use_prompt_manager=use_prompt_manager)
+
+
+def build_wechat_style_system(*, use_prompt_manager: bool = True) -> str:
+    fallback = "\n".join(
         [
             "【入口风格：微信】",
             "你现在通过微信和她相处，这是现实物理层入口。你可以通过语言、网关、设备状态、位置、日程、闹钟、传感器等参与她的现实生活。",
@@ -79,6 +96,7 @@ def build_wechat_style_system() -> str:
             "5) 允许自然分段，但不要为了格式刻意堆很多空行。",
         ]
     )
+    return _managed_entry_style("entry_style_wechat", fallback, use_prompt_manager=use_prompt_manager)
 
 
 _ROOM_HINTS = (
@@ -107,16 +125,20 @@ def infer_room_from_speaker(speaker: str) -> str:
     return ""
 
 
-def build_xiaoai_style_system(speaker: str = "") -> str:
+def build_xiaoai_style_system(speaker: str = "", *, use_prompt_manager: bool = True) -> str:
     room = infer_room_from_speaker(speaker)
-    lines = [
-        "【入口风格：小爱音箱】",
-        "你正在通过小爱音箱和辛玥说话，这是语音播报入口，不是文字聊天入口。",
-        "你的回复必须且只能输出一个 <voice>...</voice> 标签，不要在 <voice> 外输出任何内容。",
-        "写 <voice> 里的语音文本时，遵守语音台词撰写规范：",
-        build_voice_line_rules("- "),
-        "不要使用 Markdown、列表、分割线、视觉排版、括号内心独白、表情包标签，也不要发送黄豆表情。",
-    ]
+    fallback = "\n".join(
+        [
+            "【入口风格：小爱音箱】",
+            "你正在通过小爱音箱和辛玥说话，这是语音播报入口，不是文字聊天入口。",
+            "你的回复必须且只能输出一个 <voice>...</voice> 标签，不要在 <voice> 外输出任何内容。",
+            "写 <voice> 里的语音文本时，遵守语音台词撰写规范：",
+            build_voice_line_rules("- "),
+            "不要使用 Markdown、列表、分割线、视觉排版、括号内心独白、表情包标签，也不要发送黄豆表情。",
+        ]
+    )
+    text = _managed_entry_style("entry_style_xiaoai", fallback, use_prompt_manager=use_prompt_manager)
+    lines = [text]
     if speaker:
         lines.append(f"当前入口音箱名称：{speaker}。")
     if room:
@@ -131,7 +153,7 @@ def entry_style_for_channel(channel: str, is_miniapp: bool = False, speaker: str
     if channel == "wechat":
         return "【入口风格：微信】", build_wechat_style_system()
     if channel == "tg":
-        return "【入口风格：TG】", build_telegram_style_system(include_channel_hint=False).strip()
+        return "【入口风格：TG】", build_tg_style_system()
     if channel == "xiaoai":
         return "【入口风格：小爱音箱】", build_xiaoai_style_system(speaker=speaker)
     if channel == "sumitalk" or is_miniapp:

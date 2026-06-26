@@ -4,12 +4,20 @@ from pathlib import Path
 
 from flask import jsonify, request
 
+from services import prompt_manager
 from storage import million_plan_mode_store, r2_store, silence_mode_store
 from utils.time_aware import now_beijing_iso
 
 
 def _core_prompt_file_path() -> Path:
     return Path(__file__).resolve().parents[2] / "prompts" / "du_core_prompt.txt"
+
+
+def _prompt_updated_by_device() -> str:
+    payload = request.environ.get("miniapp_panel_payload") if isinstance(request.environ.get("miniapp_panel_payload"), dict) else {}
+    device_id = str((payload or {}).get("device_id") or "").strip()
+    subject = str((payload or {}).get("sub") or "").strip()
+    return device_id or subject or "miniapp"
 
 
 def register_routes(bp) -> None:
@@ -100,6 +108,52 @@ def register_routes(bp) -> None:
             return jsonify({"ok": False, "error": "content 不能为空"}), 400
         ok = r2_store.save_core_prompt_text(content)
         return jsonify({"ok": ok})
+
+    @bp.route("/prompt-manager", methods=["GET"])
+    def miniapp_prompt_manager_list():
+        return jsonify({"ok": True, "sections": prompt_manager.list_prompt_sections()})
+
+    @bp.route("/prompt-manager/sections/<section_id>", methods=["GET"])
+    def miniapp_prompt_manager_get_section(section_id: str):
+        detail = prompt_manager.get_prompt_section_detail(section_id)
+        if not detail:
+            return jsonify({"ok": False, "error": "未知 prompt section"}), 404
+        return jsonify({"ok": True, **detail})
+
+    @bp.route("/prompt-manager/sections/<section_id>", methods=["PUT"])
+    def miniapp_prompt_manager_save_section(section_id: str):
+        data = request.get_json(silent=True) or {}
+        content = str(data.get("content") or "")
+        base_revision_raw = data.get("base_revision")
+        try:
+            base_revision = int(base_revision_raw) if base_revision_raw is not None else None
+        except Exception:
+            return jsonify({"ok": False, "error": "base_revision 无效"}), 400
+        result = prompt_manager.save_prompt_section(
+            section_id,
+            content,
+            base_revision=base_revision,
+            updated_by_device=_prompt_updated_by_device(),
+        )
+        if not result.get("ok"):
+            status = 409 if result.get("code") == "revision_conflict" else 400
+            return jsonify(result), status
+        return jsonify(result)
+
+    @bp.route("/prompt-manager/sections/<section_id>/rollback", methods=["POST"])
+    def miniapp_prompt_manager_rollback_section(section_id: str):
+        data = request.get_json(silent=True) or {}
+        backup_id = str(data.get("backup_id") or "").strip()
+        if not backup_id:
+            return jsonify({"ok": False, "error": "backup_id 不能为空"}), 400
+        result = prompt_manager.rollback_prompt_section(
+            section_id,
+            backup_id,
+            updated_by_device=_prompt_updated_by_device(),
+        )
+        if not result.get("ok"):
+            return jsonify(result), 400
+        return jsonify(result)
 
     @bp.route("/silence-mode", methods=["GET"])
     def miniapp_get_silence_mode():

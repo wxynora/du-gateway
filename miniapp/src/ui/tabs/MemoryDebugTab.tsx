@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { apiJson } from "../api";
-import { HeaderPortal, HeaderStatusPill } from "../components";
+import { HeaderPortal } from "../components";
 import { useToast } from "../toast";
 
 type RecallScore = {
@@ -402,11 +402,23 @@ export function MemoryDebugTab() {
       `}</style>
 
       <HeaderPortal targetId="memory-debug-header-status">
-        <HeaderStatusPill text="实时" dotClassName="bg-green-400" pulse />
+        <button
+          className="flex h-8 w-8 items-center justify-center rounded-full border border-gray-100/70 bg-white/80 text-gray-500 shadow-[0_3px_10px_rgba(15,23,42,0.04)] transition-colors active:bg-gray-50 disabled:opacity-50"
+          onClick={reload}
+          disabled={loading}
+          title="刷新"
+          aria-label="刷新记忆调试"
+        >
+          <svg className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="23 4 23 10 17 10" />
+            <polyline points="1 20 1 14 7 14" />
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+          </svg>
+        </button>
       </HeaderPortal>
 
-      <div className="space-y-4 px-5 pb-2 pt-4">
-        <div className="flex items-center justify-between">
+      <div className="relative z-10 space-y-4 px-5 pb-3 pt-7">
+        <div className="flex items-center">
           <div className="segmented-control flex">
             <button
               className={`segmented-item ${tab === "summary" ? "active text-gray-800" : "text-gray-400"}`}
@@ -428,20 +440,6 @@ export function MemoryDebugTab() {
               disabled={loading}
             >
               核心
-            </button>
-          </div>
-          <div className="flex items-center space-x-2">
-            <button
-              className="rounded-xl border border-gray-100 bg-white p-2.5 text-gray-500 shadow-sm transition-colors active:bg-gray-50"
-              onClick={reload}
-              disabled={loading}
-              title="刷新"
-            >
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="23 4 23 10 17 10" />
-                <polyline points="1 20 1 14 7 14" />
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-              </svg>
             </button>
           </div>
         </div>

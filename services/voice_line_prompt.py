@@ -1,5 +1,4 @@
-def build_voice_line_rules(prefix: str = "") -> str:
-    lines = [
+_DEFAULT_VOICE_LINE_RULES = [
         "全程用生活化口语；短句表达，不硬切碎，每句只承载 1-2 个小信息，适配自然一口气读完。",
         "逗号常规用；句号只用于大停顿、换节奏，不做普通断句。",
         "按动作、语义、情绪自然分句，不强行拆句凑节奏。",
@@ -16,5 +15,21 @@ def build_voice_line_rules(prefix: str = "") -> str:
         "情绪靠台词文字本身体现，禁止“轻笑”“低声说”等旁白、括号动作提示。",
         "只保留要朗读的正文，不带动作注解、表演说明。",
         "亲密台词可参考“称呼-靠近-安抚”骨架，不死板套用，避免流水线感。",
-    ]
+]
+
+
+def default_voice_line_rules_text() -> str:
+    return "\n".join(_DEFAULT_VOICE_LINE_RULES)
+
+
+def build_voice_line_rules(prefix: str = "", *, use_prompt_manager: bool = True) -> str:
+    text = default_voice_line_rules_text()
+    if use_prompt_manager:
+        try:
+            from services.prompt_manager import get_managed_prompt_text
+
+            text = get_managed_prompt_text("voice_line_rules", text)
+        except Exception:
+            pass
+    lines = [line for line in str(text or "").splitlines() if line.strip()]
     return "\n".join(f"{prefix}{line}" for line in lines)

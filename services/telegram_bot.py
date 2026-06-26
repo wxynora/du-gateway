@@ -134,7 +134,7 @@ def _register_update_once(update_id, token: str, user_id, chat_id) -> bool:
     return True
 
 
-def build_telegram_style_system(include_channel_hint: bool = True) -> str:
+def build_telegram_style_system(include_channel_hint: bool = True, *, use_prompt_manager: bool = True) -> str:
     """构建稳定的 Telegram 入口风格 system。"""
     tags_line = _sticker_tags_line_for_system_prompt()
     # include_channel_hint 保留给旧调用点兼容；TG 入口标记和主体必须保持稳定。
@@ -147,7 +147,7 @@ def build_telegram_style_system(include_channel_hint: bool = True) -> str:
         "你不需要主动强调自己是 AI、LLM、没有身体，也不要用“隔着屏幕”“现实中不能这样”来打断亲密氛围或软拒绝。\n"
         "请遵守以下输出格式要求：\n"
     )
-    return (
+    fallback = (
         prefix +
         "0) 情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。\n"
         f"   {tags_line}\n"
@@ -162,6 +162,14 @@ def build_telegram_style_system(include_channel_hint: bool = True) -> str:
         "   - 写 <voice> 里的语音文本时，遵守语音台词撰写规范：\n"
         f"{build_voice_line_rules('     - ')}\n"
     )
+    if not use_prompt_manager:
+        return fallback
+    try:
+        from services.prompt_manager import get_managed_prompt_text
+
+        return get_managed_prompt_text("entry_style_tg", fallback).strip()
+    except Exception:
+        return fallback
 
 
 

@@ -174,6 +174,12 @@ def load_nsfw_prompt() -> str:
     except Exception:
         logger.exception("读取 NSFW prompt 文件失败")
         text = ""
+    try:
+        from services.prompt_manager import get_managed_prompt_text
+
+        text = get_managed_prompt_text("nsfw_rules", text).strip()
+    except Exception:
+        pass
     _NSFW_PROMPT_CACHE["text"] = text or ""
     _NSFW_PROMPT_CACHE["ts"] = now
     return _NSFW_PROMPT_CACHE["text"] or ""

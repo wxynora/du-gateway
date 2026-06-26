@@ -488,7 +488,7 @@ def step_clean_for_forward(body: dict) -> dict:
 
 _CORE_PROMPT_CACHE = {"text": None, "ts": 0.0}
 _COMMON_KNOWLEDGE_MARKER = "### 常识"
-_COMMON_KNOWLEDGE_CACHE = {"text": None, "mtime": None}
+_COMMON_KNOWLEDGE_CACHE = {"text": None, "mtime": None, "ts": 0.0}
 _ENTRY_STYLE_MARKERS = (
     "【入口风格：QQ】",
     "【入口风格：TG】",
@@ -537,6 +537,12 @@ def _load_du_core_prompt() -> str:
         text = None
     if not text:
         text = _load_du_core_prompt_from_file()
+    try:
+        from services.prompt_manager import get_managed_prompt_text
+
+        text = get_managed_prompt_text("core_prompt", text or "")
+    except Exception:
+        pass
     _CORE_PROMPT_CACHE["text"] = text or ""
     _CORE_PROMPT_CACHE["ts"] = now
     return _CORE_PROMPT_CACHE["text"] or ""
@@ -546,20 +552,36 @@ def _load_du_common_knowledge() -> str:
     """
     读取独立常识块。它不是核心 prompt 本体，也不是动态记忆。
     """
+    now = time.time()
+    cache_ttl_s = 5.0
+    if _COMMON_KNOWLEDGE_CACHE["text"] is not None and (now - float(_COMMON_KNOWLEDGE_CACHE.get("ts") or 0.0) <= cache_ttl_s):
+        return _COMMON_KNOWLEDGE_CACHE["text"] or ""
     try:
         path = Path(__file__).resolve().parent.parent / "prompts" / "du_common_knowledge.md"
-        if not path.exists():
-            return ""
-        mtime = path.stat().st_mtime
-        if _COMMON_KNOWLEDGE_CACHE["text"] is not None and _COMMON_KNOWLEDGE_CACHE.get("mtime") == mtime:
-            return _COMMON_KNOWLEDGE_CACHE["text"] or ""
-        text = path.read_text(encoding="utf-8").strip()
+        mtime = path.stat().st_mtime if path.exists() else None
+        text = path.read_text(encoding="utf-8").strip() if path.exists() else ""
+        try:
+            from services.prompt_manager import get_managed_prompt_text
+
+            text = get_managed_prompt_text("common_knowledge", text).strip()
+        except Exception:
+            pass
         _COMMON_KNOWLEDGE_CACHE["text"] = text
         _COMMON_KNOWLEDGE_CACHE["mtime"] = mtime
+        _COMMON_KNOWLEDGE_CACHE["ts"] = now
         return text
     except Exception:
         logger.exception("读取渡常识块失败")
         return ""
+
+
+def _load_managed_static_prompt(section_id: str, fallback: str) -> str:
+    try:
+        from services.prompt_manager import get_managed_prompt_text
+
+        return get_managed_prompt_text(section_id, fallback).strip()
+    except Exception:
+        return (fallback or "").strip()
 
 
 def step_replace_rikka_system(body: dict) -> dict:
@@ -589,7 +611,7 @@ def step_inject_du_non_retreat_rules(body: dict) -> dict:
     """
     全局注入：独立放在渡核心 prompt 后面，不写进 R2 核心 prompt 本体。
     """
-    rules = _DU_NON_RETREAT_RULES.strip()
+    rules = _load_managed_static_prompt("non_retreat_rules", _DU_NON_RETREAT_RULES)
     if not rules:
         return body
     messages = body.get("messages") or []
@@ -617,7 +639,7 @@ def step_inject_thinking_block_rules(body: dict) -> dict:
     """
     全局注入：放在渡核心 prompt 之后、核心行为规则之前。
     """
-    rules = _THINKING_BLOCK_RULES.strip()
+    rules = _load_managed_static_prompt("thinking_rules", _THINKING_BLOCK_RULES)
     if not rules:
         return body
     messages = body.get("messages") or []
@@ -645,7 +667,7 @@ def step_inject_core_behavior_rules(body: dict) -> dict:
     """
     全局注入：放在 thinking block 约束之后、各入口风格 system 之前。
     """
-    rules = _CORE_BEHAVIOR_RULES.strip()
+    rules = _load_managed_static_prompt("core_behavior_rules", _CORE_BEHAVIOR_RULES)
     if not rules:
         return body
     messages = body.get("messages") or []

@@ -1,5 +1,6 @@
 # R2 存储（S3 兼容 API）
 # 与需求文档十一「R2 存储结构」对齐：global/、conversations/、dynamic_memory/、core_cache/
+import hashlib
 import json
 import threading
 import time
@@ -111,6 +112,9 @@ R2_KEY_NOTEBOOK = "notebook/entries.json"
 # MiniApp 可编辑核心 Prompt（全局注入）
 R2_KEY_CORE_PROMPT = "global/core_prompt_316.txt"
 R2_KEY_CORE_PROMPT_CONFIG = "global/core_prompt_config.json"
+# MiniApp Prompt 管理（多提示词 + 自动备份）
+R2_KEY_PROMPT_MANAGER_CONFIG = "global/prompt_manager_config.json"
+R2_KEY_PROMPT_MANAGER_BACKUP_PREFIX = "global/prompt_manager_backups/"
 # MiniApp 背景配置与图片（跨设备同步）
 R2_KEY_MINIAPP_BG_CONFIG = "global/miniapp_bg_config.json"
 R2_KEY_MINIAPP_BG_IMAGE = "global/miniapp_bg_image"
@@ -2280,6 +2284,218 @@ def save_core_prompt_config(data: dict) -> bool:
     except Exception as e:
         logger.error("save_core_prompt_config 失败 error=%s", e, exc_info=True)
         return False
+
+
+def _prompt_manager_hash(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def _normalize_prompt_manager_config(data: Any) -> dict:
+    if not isinstance(data, dict):
+        data = {}
+    sections_raw = data.get("sections") if isinstance(data.get("sections"), dict) else {}
+    sections: dict[str, dict] = {}
+    for section_id, raw in (sections_raw or {}).items():
+        sid = str(section_id or "").strip()
+        if not sid or not isinstance(raw, dict):
+            continue
+        content = str(raw.get("content") or "")
+        try:
+            revision = int(raw.get("revision") or 0)
+        except Exception:
+            revision = 0
+        sections[sid] = {
+            "section_id": sid,
+            "content": content,
+            "revision": revision,
+            "content_sha256": str(raw.get("content_sha256") or _prompt_manager_hash(content)),
+            "updated_at": str(raw.get("updated_at") or ""),
+            "updated_by_device": str(raw.get("updated_by_device") or ""),
+            "source": str(raw.get("source") or "r2"),
+        }
+    return {"schema_version": 1, "sections": sections}
+
+
+def get_prompt_manager_config() -> dict:
+    client = _s3_client()
+    if not client:
+        return _normalize_prompt_manager_config({})
+    try:
+        data = _read_json(client, R2_KEY_PROMPT_MANAGER_CONFIG)
+        return _normalize_prompt_manager_config(data)
+    except Exception as e:
+        logger.error("get_prompt_manager_config 失败 error=%s", e, exc_info=True)
+        return _normalize_prompt_manager_config({})
+
+
+def get_prompt_manager_section(section_id: str) -> Optional[dict]:
+    sid = str(section_id or "").strip()
+    if not sid:
+        return None
+    cfg = get_prompt_manager_config()
+    section = (cfg.get("sections") or {}).get(sid)
+    return dict(section) if isinstance(section, dict) else None
+
+
+def get_prompt_manager_section_text(section_id: str) -> Optional[str]:
+    section = get_prompt_manager_section(section_id)
+    if not section:
+        return None
+    return str(section.get("content") or "")
+
+
+def _backup_prompt_manager_section(
+    client,
+    *,
+    section_id: str,
+    content: str,
+    revision: int,
+    updated_at: str = "",
+    updated_by_device: str = "",
+    reason: str = "save",
+) -> dict:
+    now = now_beijing_iso()
+    backup_id = f"{datetime.now(BEIJING_TZ).strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:10]}"
+    payload = {
+        "backup_id": backup_id,
+        "section_id": section_id,
+        "content": str(content or ""),
+        "revision": int(revision or 0),
+        "content_sha256": _prompt_manager_hash(str(content or "")),
+        "content_length": len(str(content or "")),
+        "created_at": now,
+        "updated_at": str(updated_at or ""),
+        "updated_by_device": str(updated_by_device or ""),
+        "reason": str(reason or "save"),
+        "schema_version": 1,
+    }
+    key = f"{R2_KEY_PROMPT_MANAGER_BACKUP_PREFIX}{section_id}/{backup_id}.json"
+    _write_json(client, key, payload)
+    return {k: v for k, v in payload.items() if k != "content"}
+
+
+def save_prompt_manager_section(
+    section_id: str,
+    content: str,
+    *,
+    base_revision: Optional[int] = None,
+    updated_by_device: str = "",
+    backup_content: Optional[str] = None,
+    backup_revision: Optional[int] = None,
+    reason: str = "save",
+) -> dict:
+    client = _s3_client()
+    if not client:
+        return {"ok": False, "error": "R2 未配置"}
+    sid = str(section_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "section_id 不能为空"}
+    text = str(content or "")
+    with _global_write_lock:
+        try:
+            cfg = get_prompt_manager_config()
+            sections = cfg.get("sections") if isinstance(cfg.get("sections"), dict) else {}
+            current = sections.get(sid) if isinstance(sections.get(sid), dict) else None
+            current_revision = int((current or {}).get("revision") or 0)
+            if base_revision is not None and int(base_revision) != current_revision:
+                return {
+                    "ok": False,
+                    "error": "版本已变化，请重新加载后再保存",
+                    "code": "revision_conflict",
+                    "current_revision": current_revision,
+                }
+
+            previous_content = str((current or {}).get("content") or "")
+            previous_revision = current_revision
+            previous_updated_at = str((current or {}).get("updated_at") or "")
+            previous_updated_by = str((current or {}).get("updated_by_device") or "")
+            if backup_content is not None and not current:
+                previous_content = str(backup_content or "")
+                previous_revision = int(backup_revision or 0)
+                previous_updated_at = ""
+                previous_updated_by = ""
+
+            backup = None
+            if previous_content:
+                backup = _backup_prompt_manager_section(
+                    client,
+                    section_id=sid,
+                    content=previous_content,
+                    revision=previous_revision,
+                    updated_at=previous_updated_at,
+                    updated_by_device=previous_updated_by,
+                    reason=reason,
+                )
+
+            next_revision = max(current_revision, int(time.time() * 1000)) + 1
+            now = now_beijing_iso()
+            section = {
+                "section_id": sid,
+                "content": text,
+                "revision": next_revision,
+                "content_sha256": _prompt_manager_hash(text),
+                "updated_at": now,
+                "updated_by_device": str(updated_by_device or ""),
+                "source": "r2",
+            }
+            sections[sid] = section
+            payload = {"schema_version": 1, "sections": sections}
+            _write_json(client, R2_KEY_PROMPT_MANAGER_CONFIG, payload)
+            return {"ok": True, "section": section, "backup": backup}
+        except Exception as e:
+            logger.error("save_prompt_manager_section 失败 section_id=%s error=%s", sid, e, exc_info=True)
+            return {"ok": False, "error": str(e)}
+
+
+def list_prompt_manager_backups(section_id: str, limit: int = 30) -> list[dict]:
+    client = _s3_client()
+    if not client:
+        return []
+    sid = str(section_id or "").strip()
+    if not sid:
+        return []
+    prefix = f"{R2_KEY_PROMPT_MANAGER_BACKUP_PREFIX}{sid}/"
+    rows: list[dict] = []
+    try:
+        kwargs: dict[str, Any] = {"Bucket": R2_BUCKET_NAME, "Prefix": prefix}
+        while True:
+            resp = client.list_objects_v2(**kwargs)
+            for obj in resp.get("Contents") or []:
+                key = str(obj.get("Key") or "")
+                if not key.endswith(".json"):
+                    continue
+                data = _read_json(client, key)
+                if not isinstance(data, dict):
+                    continue
+                item = {k: v for k, v in data.items() if k != "content"}
+                item["key"] = key
+                rows.append(item)
+            token = resp.get("NextContinuationToken")
+            if not token:
+                break
+            kwargs["ContinuationToken"] = token
+    except Exception as e:
+        logger.error("list_prompt_manager_backups 失败 section_id=%s error=%s", sid, e, exc_info=True)
+        return []
+    rows.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+    return rows[: max(1, int(limit or 30))]
+
+
+def get_prompt_manager_backup(section_id: str, backup_id: str) -> Optional[dict]:
+    client = _s3_client()
+    if not client:
+        return None
+    sid = str(section_id or "").strip()
+    bid = str(backup_id or "").strip()
+    if not sid or not bid or "/" in bid or ".." in bid:
+        return None
+    key = f"{R2_KEY_PROMPT_MANAGER_BACKUP_PREFIX}{sid}/{bid}.json"
+    try:
+        data = _read_json(client, key)
+        return data if isinstance(data, dict) else None
+    except Exception as e:
+        logger.error("get_prompt_manager_backup 失败 section_id=%s backup_id=%s error=%s", sid, bid, e, exc_info=True)
+        return None
 
 
 def get_miniapp_bg_config() -> Optional[dict]:

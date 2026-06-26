@@ -7,12 +7,12 @@ import { apiJson } from "./api";
 import { AvatarCropModal } from "./AvatarCropModal";
 import { ChatsHome } from "./ChatsHome";
 import { BottomNav, type MainTab } from "./BottomNav";
-import { CorePromptEditor } from "./CorePromptEditor";
 import { DiagnosticsScreen } from "./DiagnosticsScreen";
 import { FullScreenPane } from "./FullScreenPane";
 import { MainChatScreen } from "./MainChatScreen";
 import { PersonalizationScreen } from "./PersonalizationScreen";
 import { FloatingBallSettingRow, ListRow, SwitchSettingRow } from "./SettingsRows";
+import { PromptManagerScreen } from "./PromptManagerScreen";
 import {
   BUBBLE_STYLE_KEYS,
   DEFAULT_GROUP_CHAT_TITLE,
@@ -33,7 +33,6 @@ import {
   CabinetFilingIconMini,
   CalendarIconMini,
   ClockIconMini,
-  CodeIcon,
   CloudUploadIconMini,
   CpuIcon,
   FeatherIcon,
@@ -44,7 +43,6 @@ import {
   HeartIconMini,
   HomeIconMini,
   LogoutIconMini,
-  MuteIconMini,
   NotebookPenIconMini,
   PhoneIconMini,
   SmartphoneIconMini,
@@ -104,13 +102,6 @@ const SecretDrawerTab = lazy(() => import("./tabs/SecretDrawerTab").then((m) => 
 
 type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "study-room" | "budget-checkin" | "secret-drawer" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
 type AvatarImageKind = "myAvatar" | "duAvatar" | "benbenAvatar";
-type SilenceModeResponse = {
-  ok?: boolean;
-  enabled?: boolean;
-  updated_at?: string;
-  error?: string;
-};
-type MillionPlanModeResponse = SilenceModeResponse;
 type ChatScreenId = "du" | "group" | "wenyou" | null;
 type BackHandler = () => boolean;
 
@@ -128,7 +119,7 @@ export function AppShell({
   const toast = useToast();
   const [panel, setPanel] = useState<PanelId>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [showCorePrompt, setShowCorePrompt] = useState(false);
+  const [showPromptManager, setShowPromptManager] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showAlarm, setShowAlarm] = useState(false);
   const [showPersonalization, setShowPersonalization] = useState(false);
@@ -148,10 +139,6 @@ export function AppShell({
   const wenyouBackHandlerRef = useRef<(() => boolean) | null>(null);
   const callHubBackHandlerRef = useRef<BackHandler | null>(null);
   const secretDrawerBackHandlerRef = useRef<BackHandler | null>(null);
-  const [silenceModeEnabled, setSilenceModeEnabled] = useState(false);
-  const [silenceModeSaving, setSilenceModeSaving] = useState(false);
-  const [millionPlanModeEnabled, setMillionPlanModeEnabled] = useState(false);
-  const [millionPlanModeSaving, setMillionPlanModeSaving] = useState(false);
   const [groupFreeChatEnabled, setGroupFreeChatEnabled] = useState(() => readStoredBoolean(GROUP_FREE_CHAT_MODE_STORAGE_KEY, true));
   const [sharedChatWindowId, setSharedChatWindowId] = useState("");
   const [dailyWhisper, setDailyWhisper] = useState("");
@@ -311,24 +298,6 @@ export function AppShell({
 
   useEffect(() => {
     if (mainTab !== "settings") return;
-    let cancelled = false;
-    void apiJson<SilenceModeResponse>("/miniapp-api/silence-mode")
-      .then((j) => {
-        if (!cancelled && j?.ok) setSilenceModeEnabled(!!j.enabled);
-      })
-      .catch(() => {});
-    void apiJson<MillionPlanModeResponse>("/miniapp-api/million-plan-mode")
-      .then((j) => {
-        if (!cancelled && j?.ok) setMillionPlanModeEnabled(!!j.enabled);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [mainTab]);
-
-  useEffect(() => {
-    if (mainTab !== "settings") return;
     if (Capacitor.getPlatform() !== "android") return;
     let cancelled = false;
     void SumiOverlay.getFloatingBallEnabled()
@@ -431,48 +400,6 @@ export function AppShell({
     }
   }
 
-  async function saveSilenceMode(next: boolean) {
-    const prev = silenceModeEnabled;
-    setSilenceModeEnabled(next);
-    setSilenceModeSaving(true);
-    try {
-      const j = await apiJson<SilenceModeResponse>("/miniapp-api/silence-mode", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: next }),
-      });
-      if (!j?.ok) throw new Error(j?.error || "保存失败");
-      setSilenceModeEnabled(!!j.enabled);
-      toast(j.enabled ? "禁言模式已开启" : "禁言模式已关闭");
-    } catch (e: any) {
-      setSilenceModeEnabled(prev);
-      toast(`禁言模式设置失败：${e?.message || e}`);
-    } finally {
-      setSilenceModeSaving(false);
-    }
-  }
-
-  async function saveMillionPlanMode(next: boolean) {
-    const prev = millionPlanModeEnabled;
-    setMillionPlanModeEnabled(next);
-    setMillionPlanModeSaving(true);
-    try {
-      const j = await apiJson<MillionPlanModeResponse>("/miniapp-api/million-plan-mode", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: next }),
-      });
-      if (!j?.ok) throw new Error(j?.error || "保存失败");
-      setMillionPlanModeEnabled(!!j.enabled);
-      toast(j.enabled ? "百万计划游戏模式已开启" : "百万计划游戏模式已关闭");
-    } catch (e: any) {
-      setMillionPlanModeEnabled(prev);
-      toast(`百万计划游戏模式设置失败：${e?.message || e}`);
-    } finally {
-      setMillionPlanModeSaving(false);
-    }
-  }
-
   function saveGroupFreeChatMode(next: boolean) {
     setGroupFreeChatEnabled(next);
     toast(next ? "自由聊模式已开启" : "自由聊模式已关闭");
@@ -502,8 +429,8 @@ export function AppShell({
         setShowSettings(false);
         return;
       }
-      if (showCorePrompt) {
-        setShowCorePrompt(false);
+      if (showPromptManager) {
+        setShowPromptManager(false);
         return;
       }
       if (showSchedule) {
@@ -571,7 +498,7 @@ export function AppShell({
     panel,
     showAlarm,
     showCallHub,
-    showCorePrompt,
+    showPromptManager,
     showCoRead,
     showListenWithDu,
     showDuDay,
@@ -611,11 +538,6 @@ export function AppShell({
               onClick={() => setShowMemoryNebula(true)}
             />
             <ListRow
-              icon={<GraduationCapIconMini />}
-              label="学习"
-              onClick={() => setPanel("study-room")}
-            />
-            <ListRow
               icon={<BookOpenIcon />}
               label="和渡一起读"
               onClick={() => setShowCoRead(true)}
@@ -629,9 +551,9 @@ export function AppShell({
               }}
             />
             <ListRow
-              icon={<CalendarIconMini />}
-              label="存钱打卡"
-              onClick={() => setPanel("budget-checkin")}
+              icon={<PhoneIconMini />}
+              label="通话记录"
+              onClick={() => openCallHub("records")}
             />
             <ListRow
               icon={<NotebookPenIconMini />}
@@ -657,11 +579,11 @@ export function AppShell({
             <ListRow icon={<GitMergeIcon />} label="思维链" onClick={() => setPanel("reasoning")} />
             <ListRow icon={<BrainIconMini />} label="记忆调试" onClick={() => setPanel("memory-debug")} />
             <ListRow icon={<HeartIconMini />} label="健康数据" onClick={() => setPanel("health-data")} />
+            <ListRow icon={<GraduationCapIconMini />} label="学习" onClick={() => setPanel("study-room")} />
+            <ListRow icon={<CalendarIconMini />} label="存钱打卡" onClick={() => setPanel("budget-checkin")} />
             <ListRow icon={<ClockIconMini />} label="闹钟" onClick={() => setShowAlarm(true)} />
             <ListRow icon={<CalendarIconMini />} label="日历" onClick={() => setShowSchedule(true)} />
-            <ListRow icon={<PhoneIconMini />} label="通话记录" onClick={() => openCallHub("records")} />
-            <ListRow icon={<SpeakerIconMini />} label="小爱音箱" onClick={() => setPanel("xiaoai")} />
-            <ListRow icon={<UserRoundCogIconMini />} label="核心 Prompt" onClick={() => setShowCorePrompt(true)} last />
+            <ListRow icon={<SpeakerIconMini />} label="小爱音箱" onClick={() => setPanel("xiaoai")} last />
           </div>
         </div>
       );
@@ -675,25 +597,12 @@ export function AppShell({
               <FloatingBallSettingRow enabled={floatingBallEnabled} onToggle={(v) => void setFloatingBallNative(v)} />
             ) : null}
             <SwitchSettingRow
-              icon={<MuteIconMini />}
-              label="禁言模式"
-              enabled={silenceModeEnabled}
-              disabled={silenceModeSaving}
-              onToggle={(v) => void saveSilenceMode(v)}
-            />
-            <SwitchSettingRow
               icon={<GitMergeIcon />}
               label="自由聊模式"
               enabled={groupFreeChatEnabled}
               onToggle={saveGroupFreeChatMode}
             />
-            <SwitchSettingRow
-              icon={<CodeIcon />}
-              label="百万计划游戏模式"
-              enabled={millionPlanModeEnabled}
-              disabled={millionPlanModeSaving}
-              onToggle={(v) => void saveMillionPlanMode(v)}
-            />
+            <ListRow icon={<UserRoundCogIconMini />} label="Prompt 管理" onClick={() => setShowPromptManager(true)} />
             <ListRow icon={<FeatherIcon />} label="个性化" onClick={() => setShowPersonalization(true)} />
             <ListRow icon={<CpuIcon />} label="系统诊断" onClick={() => setShowDiagnostics(true)} />
             <ListRow icon={<ToggleRightIcon />} label="API管理" onClick={() => setShowSettings(true)} />
@@ -729,7 +638,7 @@ export function AppShell({
     !!deviceManagerOpen ||
     !!panel ||
     showSettings ||
-    showCorePrompt ||
+    showPromptManager ||
     showSchedule ||
     showAlarm ||
     showPersonalization ||
@@ -834,7 +743,7 @@ export function AppShell({
         </FullScreenPane>
       ) : null}
       {panel === "memory-debug" ? (
-        <FullScreenPane title="记忆调试" accent="neutral" headerRightPortalId="memory-debug-header-status" onBack={() => setPanel(null)}>
+        <FullScreenPane title="记忆调试" accent="neutral" headerMode="simple" headerRightPortalId="memory-debug-header-status" onBack={() => setPanel(null)}>
           <LazyPane><MemoryDebugTab /></LazyPane>
         </FullScreenPane>
       ) : null}
@@ -887,7 +796,7 @@ export function AppShell({
           <LazyPane><SettingsUpstream /></LazyPane>
         </FullScreenPane>
       ) : null}
-      {showCorePrompt ? <CorePromptEditor onClose={() => setShowCorePrompt(false)} /> : null}
+      {showPromptManager ? <PromptManagerScreen onClose={() => setShowPromptManager(false)} /> : null}
       {showSchedule ? (
         <FullScreenPane title="日历" accent="neutral" onBack={() => setShowSchedule(false)}>
           <LazyPane><ScheduleTab /></LazyPane>
