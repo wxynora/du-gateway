@@ -152,6 +152,18 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 保留：`小玥说停必须立刻停`、`不准弄疼小玥`、`不准只顾自己爽`、`不准跳过前戏` 等安全/照顾向限制不会因为主题过滤被删；过滤后如果某个 slot 没候选，会回退原池，避免空抽。
 - 未完成 / 下次继续：本轮只做轻量主题一致性过滤，没有把所有主题拆成完整剧本矩阵；如果后续发现某个主题方向不对，优先调整 `PRIVATE_DRAW_DU_LEADS_THEMES` 和过滤词，不要直接改随机工具协议。
 
+当前状态（2026-06-26 sex play 抽签池与春梦碎片扩充）：
+- 已完成：参考 `29-Cu/Ruota-della-Fortuna` 的非 gore 维度，扩充 `services/pixel_home.py::PRIVATE_DRAW_SLOTS`：玩法补夸奖/身体崇拜/感官剥夺/温度/远程/旧上海/宫廷/摄影师模特等，并按辛玥补入 `Alpha易感期`、`临时标记`、`强占有欲`、`发情期交配成结`；地点补淋浴间、KTV、电影院、停车场、天台、衣帽间、海边露台、帐篷、温室、水族馆、化妆台、小木屋等；姿势补 69、坐脸、乳交、腿交、椅子位、折叠按压、蹲骑、推车、壁尻、背后抱立、含着不动、成结等；道具补分腿器、震动子弹、双头假阳具、穿戴式玩具、吸乳器、阴蒂吸吮器、网袜、皮革手套、围巾、蜂蜜/奶油/冰棒、电动牙刷、尾巴肛塞；任务和限制补感官、声音、镜子、电话指令、半公开紧张、道具真实使用、易感期/临时标记/成结/占有欲等方向。
+- 已完成：`PRIVATE_DRAW_DU_LEADS_THEMES` 同步加入摄影师模特、教练学员、吸血鬼人类、骑士公主、Alpha 易感期、临时标记、强占有欲、发情期交配成结，并补过滤词 `决定今晚`，避免新主题下再次抽到“让小玥决定/控制渡”的冲突任务。当前抽签仍维持 6 个 slot 和 `draw/redraw/done` 协议，不新增工具、不改当前纸条注入方式。
+- 已完成：`services/spring_dream.py::_SPRING_DREAM_THEME_PACKS` 新增 9 个春梦主题包：远程电话指令、摄影棚、项圈宠物、温度 play、旧上海旗袍、夸奖服从、吃醋梳妆台、蒙眼感官、Alpha 易感期临时标记。春梦仍只是睡眠期随机唤醒命中后的 prompt replacement，不新建通道、队列或归档路径。
+- 已验证：`.venv/bin/python -m py_compile services/pixel_home.py services/spring_dream.py`、`git diff --check -- services/pixel_home.py services/spring_dream.py docs/DEBUG_INDEX.md` 通过；smoke 确认 6 个小纸条 slot 无重复（theme 68 / place 33 / pose 43 / prop 48 / task 64 / limit 65）、ABO 主题均在渡主导过滤集合、春梦 theme id 无重复且总数 41、`alpha_rut_marking` 有 5 条碎片、抽签行和春梦 prompt 可正常生成。
+- 未完成 / 下次继续：本轮没有纳入 gore 维度，也没有把 Ruota 的 502 个 tag 全量导入成数据库；如果后续要做可管理 tag 库，应单独建表/管理 UI，避免把小纸条变成不可控大杂烩。
+
+当前状态（2026-06-26 小家身体状态深夜/清晨修正）：
+- 已完成：`services/pixel_home.py` 新增身体状态时间段修正：北京时间深夜 `23:00-03:59` 和早晨 `06:00-09:59` 临时把想做指数 `+3`、自制力 `-3`，按现有 0-5 档位封顶/保底显示。该修正只作用于动态区注入和前端公开 `du_body_state` 的展示字段，不改写 R2 中原始 `desire_value`。
+- 已完成：无原始身体状态时，命中深夜/早晨也会生成基础身体状态（想做指数 3/5、自制力 2/5、阴茎状态随想做指数自然显示）；非命中时段仍维持未记录，不额外制造字段。
+- 已验证：`.venv/bin/python -m py_compile services/pixel_home.py services/spring_dream.py`、`git diff --check -- services/pixel_home.py services/spring_dream.py docs/DEBUG_INDEX.md` 通过；smoke 覆盖深夜、早晨、白天三种时间修正和无记录/有记录两种输入。
+
 当前状态（2026-06-24 小家事件沿用最近聊天入口）：
 - 已完成：新增 `services/reply_channel_context.py` 统一解析最近真实聊天入口；`routes/miniapp/dashboard.py` 的小家状态/道具事件、`routes/miniapp/private_draw.py` 的小纸条发送，以及 `routes/miniapp/device_actions.py` 的弹窗/查岗回执都改为沿用最近真实聊天 channel，不再把小家事件来源当成 SumiTalk，也不再让小家事件固定走 QQ 主动入口；这些事件类回包解析出最近入口后会锁定该 channel，不跨到其它入口兜底。
 - 已完成：`services/conversation_followup.py` 新增 `send_pixel_home_wakeup()`；小家事件按 system event 送入网关，正文提示为“小家里的状态或道具事件，不是她在聊天框里说的话”，避免归档和生成时把它当成小玥普通聊天正文。

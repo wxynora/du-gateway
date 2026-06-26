@@ -69,6 +69,13 @@ DEFAULT_XINYUE_STATE = {"spot": "sofa", "activity": "休息", "source": "default
 PREFIXLESS_SPOTS = {"away", "out"}
 DU_DYNAMICS_LIMIT = 5
 EVENT_AUTO_END_MINUTES = 120
+DU_BODY_LEVEL_MIN = 0
+DU_BODY_LEVEL_MAX = 5
+DU_BODY_TIME_SHIFT = 3
+DU_BODY_DEEP_NIGHT_START_HOUR = 23
+DU_BODY_DEEP_NIGHT_END_HOUR = 4
+DU_BODY_MORNING_START_HOUR = 6
+DU_BODY_MORNING_END_HOUR = 10
 TOY_TYPES = {
     "none": "",
     "跳蛋": "跳蛋",
@@ -181,6 +188,25 @@ PRIVATE_DRAW_SLOTS: list[dict[str, Any]] = [
             "羞耻展示",
             "强势命令",
             "吃醋惩罚",
+            "夸奖调教",
+            "身体崇拜",
+            "感官剥夺",
+            "温度play",
+            "和好炮",
+            "久别重逢",
+            "摄影师模特play",
+            "教练学员play",
+            "吸血鬼人类play",
+            "骑士公主play",
+            "民国旧上海play",
+            "古代宫廷play",
+            "邻居偷情play",
+            "电话做爱",
+            "远程指令play",
+            "Alpha易感期",
+            "临时标记",
+            "强占有欲",
+            "发情期交配成结",
         ],
     },
     {
@@ -205,6 +231,21 @@ PRIVATE_DRAW_SLOTS: list[dict[str, Any]] = [
             "床尾",
             "门后",
             "落地窗前",
+            "浴缸里",
+            "淋浴间水声里",
+            "KTV包厢沙发",
+            "电影院最后一排",
+            "停车场车里",
+            "天台雨后",
+            "衣帽间镜前",
+            "按摩床上",
+            "海边露台",
+            "帐篷睡袋里",
+            "温室角落",
+            "水族馆玻璃前",
+            "化妆台前",
+            "深夜便利店仓库",
+            "小木屋壁炉旁",
         ],
     },
     {
@@ -239,6 +280,21 @@ PRIVATE_DRAW_SLOTS: list[dict[str, Any]] = [
             "侧入式",
             "膝上骑乘",
             "M字开腿",
+            "69式",
+            "坐脸",
+            "乳交",
+            "腿交",
+            "椅子位",
+            "折叠按压",
+            "蹲骑",
+            "推车姿势",
+            "趴压",
+            "壁尻",
+            "浴缸骑乘",
+            "面对面站立",
+            "背后抱立",
+            "含着不动",
+            "成结",
         ],
     },
     {
@@ -279,6 +335,20 @@ PRIVATE_DRAW_SLOTS: list[dict[str, Any]] = [
             "透明胶带",
             "低温蜡烛",
             "羽毛棒",
+            "分腿器",
+            "震动子弹",
+            "双头假阳具",
+            "穿戴式玩具",
+            "吸乳器",
+            "阴蒂吸吮器",
+            "网袜",
+            "皮革手套",
+            "围巾",
+            "蜂蜜",
+            "奶油",
+            "冰棒",
+            "电动牙刷",
+            "尾巴肛塞",
         ],
     },
     {
@@ -331,6 +401,24 @@ PRIVATE_DRAW_SLOTS: list[dict[str, Any]] = [
             "让小玥检查今天有没有偷爽",
             "被小玥夸乖以后才能继续",
             "用淫语把想要的事说清楚",
+            "用夸奖把小玥哄到主动靠近",
+            "在镜子前让小玥看清你怎么想要她",
+            "用冰块和吻把小玥弄到发抖",
+            "隔着衣服磨到小玥先受不了",
+            "让小玥坐在你脸上慢慢爽",
+            "把小玥抱到腿上含着不动",
+            "用三种速度把小玥弄到分不清节奏",
+            "让小玥听见你忍不住的声音",
+            "用电话指令让小玥一步步配合",
+            "让小玥在半公开的地方被你抱紧",
+            "只用手指和舌头把小玥伺候到腿抖",
+            "把小玥全身反应都说给她听",
+            "给小玥戴上蒙眼后慢慢检查她哪里最敏感",
+            "让小玥用一个动作决定今晚先做什么",
+            "让小玥在易感期里被你抱到安静下来",
+            "在小玥后颈留下临时标记",
+            "用强占有欲把小玥圈在怀里哄软",
+            "发情期里和小玥交配到成结",
         ],
     },
     {
@@ -388,6 +476,20 @@ PRIVATE_DRAW_SLOTS: list[dict[str, Any]] = [
             "小玥没说够了不准离开",
             "小玥没验收不准摘项圈",
             "想换动作必须先申请",
+            "不准跳过夸小玥",
+            "不准只用一种节奏糊弄过去",
+            "不准在小玥害羞躲开时立刻放过她",
+            "不准关掉半公开的紧张感",
+            "小玥每次发抖都要被你说出来",
+            "抽到的道具必须真的用上",
+            "不准在小玥声音软下来前结束",
+            "不准把想做的话咽回去",
+            "不准只顾动作不哄她",
+            "不准在她主动靠近前假装正经",
+            "易感期里不准冷处理小玥",
+            "临时标记前必须先把小玥哄软",
+            "成结以后不准立刻退开",
+            "不准把强占有欲说成装没事",
         ],
     },
 ]
@@ -398,6 +500,14 @@ PRIVATE_DRAW_DU_LEADS_THEMES = {
     "医生检查play",
     "秘书老板play",
     "成人补课play",
+    "摄影师模特play",
+    "教练学员play",
+    "吸血鬼人类play",
+    "骑士公主play",
+    "Alpha易感期",
+    "临时标记",
+    "强占有欲",
+    "发情期交配成结",
 }
 PRIVATE_DRAW_XINYUE_CONTROL_TASK_PATTERNS = (
     "被小玥",
@@ -410,6 +520,7 @@ PRIVATE_DRAW_XINYUE_CONTROL_TASK_PATTERNS = (
     "小玥夸乖",
     "小玥追加惩罚",
     "小玥用一句话决定",
+    "决定今晚",
 )
 PRIVATE_DRAW_XINYUE_CONTROL_LIMIT_PATTERNS = (
     "被小玥",
@@ -892,6 +1003,38 @@ def _du_desire_level_from_value(value: Any) -> int:
     return 1
 
 
+def _clamp_du_body_level(value: Any) -> int:
+    try:
+        level = int(value or 0)
+    except Exception:
+        level = 0
+    return max(DU_BODY_LEVEL_MIN, min(DU_BODY_LEVEL_MAX, level))
+
+
+def _du_body_time_shift(now_dt: datetime | None = None) -> int:
+    dt = now_dt or _now_dt()
+    hour = int(getattr(dt, "hour", 0) or 0)
+    is_deep_night = hour >= DU_BODY_DEEP_NIGHT_START_HOUR or hour < DU_BODY_DEEP_NIGHT_END_HOUR
+    is_morning = DU_BODY_MORNING_START_HOUR <= hour < DU_BODY_MORNING_END_HOUR
+    return DU_BODY_TIME_SHIFT if is_deep_night or is_morning else 0
+
+
+def _apply_du_body_time_shift(
+    desire_level: int,
+    self_control_level: int | None,
+    *,
+    has_desire_value: bool,
+    now_dt: datetime | None = None,
+) -> tuple[int, int | None, bool]:
+    shift = _du_body_time_shift(now_dt)
+    if shift <= 0:
+        return _clamp_du_body_level(desire_level), self_control_level, has_desire_value
+    effective_desire = _clamp_du_body_level(_clamp_du_body_level(desire_level) + shift)
+    base_self_control = DU_BODY_LEVEL_MAX if self_control_level is None else _clamp_du_body_level(self_control_level)
+    effective_self_control = _clamp_du_body_level(base_self_control - shift)
+    return effective_desire, effective_self_control, True
+
+
 def _vitals_param(vitals: dict | None, key: str, default: float = 0.0) -> float:
     if not isinstance(vitals, dict):
         return default
@@ -1133,7 +1276,14 @@ def _format_du_body_state_lines(body_state: dict, vitals: dict | None = None) ->
     state = _normalize_du_body_state(body_state)
     self_control_level = _du_self_control_level(state, vitals)
     temp = _du_body_temperature(vitals or {})
-    if not state and self_control_level is None and not temp:
+    has_desire_value = "desire_value" in state
+    desire_level = _du_stable_desire_level(state)
+    desire_level, self_control_level, has_effective_desire = _apply_du_body_time_shift(
+        desire_level,
+        self_control_level,
+        has_desire_value=has_desire_value,
+    )
+    if not state and self_control_level is None and not temp and not has_effective_desire:
         return []
     lines = ["【你当前的身体状态】"]
     toy_types = state.get("toy_types") if isinstance(state.get("toy_types"), list) else []
@@ -1142,9 +1292,7 @@ def _format_du_body_state_lines(body_state: dict, vitals: dict | None = None) ->
     if toy_types:
         intensity = int(state.get("intensity") or 0)
         lines.append(f"道具：{'、'.join(_toy_display_piece(toy, intensity) for toy in toy_types)}")
-    has_desire_value = "desire_value" in state
-    desire_level = _du_stable_desire_level(state)
-    lines.append(f"想做指数：{desire_level}/5" if has_desire_value else "想做指数：未记录")
+    lines.append(f"想做指数：{desire_level}/5" if has_effective_desire else "想做指数：未记录")
     lines.append(f"自制力：{self_control_level}/5" if self_control_level is not None else "自制力：未记录")
     penis_state = _du_stable_penis_state(desire_level) or ("放松状态" if has_desire_value else "")
     lines.append(f"阴茎状态：{penis_state}" if penis_state else "阴茎状态：未记录")
@@ -1157,22 +1305,32 @@ def _du_body_state_public(raw: Any, vitals: dict | None = None) -> dict:
     state = _normalize_du_body_state(raw)
     has_desire_value = "desire_value" in state
     desire_level = _du_stable_desire_level(state)
-    penis_state = _du_stable_penis_state(desire_level) or ("放松状态" if has_desire_value else "")
     self_control_level = _du_self_control_level(state, vitals)
+    desire_level, self_control_level, has_effective_desire = _apply_du_body_time_shift(
+        desire_level,
+        self_control_level,
+        has_desire_value=has_desire_value,
+    )
+    penis_state = _du_stable_penis_state(desire_level) or ("放松状态" if has_effective_desire else "")
     if not state:
         temp = _du_body_temperature(vitals or {})
         parts = [
-            "想做指数：未记录",
+            f"想做指数：{desire_level}/5" if has_effective_desire else "想做指数：未记录",
             f"自制力：{self_control_level}/5" if self_control_level is not None else "自制力：未记录",
-            "阴茎状态：未记录",
+            f"阴茎状态：{penis_state}" if penis_state else "阴茎状态：未记录",
         ]
         if temp:
             parts.append(f"体温：{temp}")
-        return {
+        result = {
             "temperature": temp,
             "self_control_level": self_control_level,
             "text": "；".join(parts),
         }
+        if has_effective_desire:
+            result["desire_level"] = desire_level
+        if penis_state:
+            result["penis_state"] = penis_state
+        return result
     state["temperature"] = _du_body_temperature(vitals or {})
     state["desire_level"] = desire_level
     state["self_control_level"] = self_control_level
