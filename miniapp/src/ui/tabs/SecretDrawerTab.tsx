@@ -633,20 +633,19 @@ function SecretDrawerDetail({ item, layer, onBack }: { item: SecretDrawerItem; l
   const media = item.media_refs || [];
   const type = TYPE_LABELS[item.type || "misc"] || "Note";
   return (
-    <SecretSurface tone="detail">
-      <div className="flex h-full min-h-0 flex-col bg-[#FDFBF7]">
-        <div className="flex items-center justify-between px-6 pb-4 pt-[calc(env(safe-area-inset-top,0px)+48px)]">
-          <button type="button" className="flex h-10 w-10 items-center justify-center rounded-full bg-black/5 active:bg-black/10" onClick={onBack} aria-label="Back">
-            <BackGlyph />
-          </button>
-          <div className="flex gap-4 text-gray-400">
+    <SecretSurface tone="detail" onExit={onBack}>
+      <div className="relative flex h-full min-h-0 flex-col bg-[#FDFBF7]">
+        <div className="pointer-events-none absolute right-6 top-[calc(env(safe-area-inset-top,0px)+22px)] z-30 flex gap-4 text-gray-400">
+          <div className="pointer-events-auto">
             <ShareGlyph />
+          </div>
+          <div className="pointer-events-auto">
             <DotsGlyph />
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-12 [-webkit-overflow-scrolling:touch]">
-          <div className="mb-8 mt-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-12 pt-[calc(env(safe-area-inset-top,0px)+72px)] [-webkit-overflow-scrolling:touch]">
+          <div className="mb-8">
             <div className="mb-3 flex items-center gap-2">
               <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-amber-800">{layer === "alcove" || item.sealed ? "Vault" : type}</span>
               <span className="text-[10px] text-gray-400">{formatDetailDate(item.created_at)}</span>
