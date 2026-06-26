@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from flask import Response, jsonify, request
 
-from config import R2_PUBLIC_URL, TELEGRAM_PROACTIVE_TARGET_USER_ID, VOICE_CALL_MAX_BYTES, VOICE_CALL_WINDOW_ID
+from config import R2_PUBLIC_URL, TELEGRAM_PROACTIVE_TARGET_USER_ID, VOICE_CALL_MAX_BYTES, VOICE_CALL_MAX_SECONDS, VOICE_CALL_WINDOW_ID
 from storage import r2_store
 from services.html_preview_store import resolve_preview_base_url_for_http_request
 from utils.time_aware import now_beijing_iso
@@ -580,6 +580,10 @@ def register_routes(bp) -> None:
         call_id = (request.form.get("call_id") or "").strip() or str(uuid4())
         call_started_at = (request.form.get("call_started_at") or "").strip() or now_beijing_iso()
         user_text_override = (request.form.get("user_text_override") or "").strip()
+        duration_ms = _safe_duration_ms(request.form.get("duration_ms") or request.form.get("durationMs"))
+        max_duration_ms = max(0, int(VOICE_CALL_MAX_SECONDS or 0)) * 1000
+        if duration_ms > 0 and max_duration_ms > 0 and duration_ms > max_duration_ms + 1000:
+            return jsonify({"ok": False, "error": "语音太长了，缩短一点再试"}), 400
         try:
             from services.voice_call_pipeline import run_voice_call
         except Exception as e:
@@ -592,6 +596,7 @@ def register_routes(bp) -> None:
             filename=filename,
             window_id=window_id,
             user_text_override=user_text_override,
+            duration_ms=duration_ms,
         )
         if status >= 400:
             return jsonify(payload), status
@@ -619,6 +624,8 @@ def register_routes(bp) -> None:
         audio_bytes = f.read()
         if not audio_bytes:
             return jsonify({"ok": False, "error": "音频为空"}), 400
+        if len(audio_bytes) > max(1024, int(VOICE_CALL_MAX_BYTES or 0)):
+            return jsonify({"ok": False, "error": "音频太大了，缩短一点再试"}), 400
         filename = (f.filename or "voice.webm").strip() or "voice.webm"
         try:
             from services.stt import transcribe_speech

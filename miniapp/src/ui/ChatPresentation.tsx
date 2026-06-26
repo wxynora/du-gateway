@@ -9,7 +9,7 @@ import softJellyBlueStickerUrl from "../assets/soft-jelly-blue-sticker.png?url";
 import softJellyYellowStickerUrl from "../assets/soft-jelly-yellow-sticker.png?url";
 import sumikaBubbleStickerUrl from "../assets/sumika-bubble-sticker.png?url";
 import type { BubbleSkinKey } from "./chatAppearance";
-import { BrushIconMini, FileTextIcon, ImageIconMini, MicIconMini, PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
+import { BrushIconMini, CpuIcon, FileTextIcon, ImageIconMini, MicIconMini, PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
 import type { ChatAttachment, ChatAttachmentKind } from "./chatMessages";
 
 type BubbleStickerAnchor = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -1084,9 +1084,11 @@ export function SummaryBlock({
   );
 }
 
-export function ChatActionButton({ label, onClick }: { label: string; onClick: () => void }) {
+export function ChatActionButton({ label, onClick, active = false }: { label: string; onClick: () => void; active?: boolean }) {
   const actionIconClass = "h-[22px] w-[22px] stroke-[1.6]";
-  const icon = label === "表情包"
+  const icon = label === "Real"
+    ? <CpuIcon />
+    : label === "表情包"
     ? <SmileIconMini className={actionIconClass} />
     : label === "出行规划"
       ? <RouteIconMini className={actionIconClass} />
@@ -1101,10 +1103,14 @@ export function ChatActionButton({ label, onClick }: { label: string; onClick: (
           : <PhoneIconLarge className={actionIconClass} />;
   return (
     <button className="group flex flex-col items-center" onClick={onClick}>
-      <div className="mb-2 flex h-[52px] w-[52px] items-center justify-center rounded-[18px] bg-[#F8F9FA] text-gray-600 transition-transform active:scale-95">
+      <div className={`mb-2 flex h-[52px] w-[52px] items-center justify-center rounded-[18px] transition-transform active:scale-95 ${
+        active
+          ? "bg-[#E8F7FF] text-[#2E7DA6] shadow-[0_8px_18px_rgba(99,179,237,0.18)]"
+          : "bg-[#F8F9FA] text-gray-600"
+      }`}>
         {icon}
       </div>
-      <span className="text-[11px] font-medium tracking-wide text-gray-500">{label}</span>
+      <span className={`text-[11px] font-medium tracking-wide ${active ? "text-[#2E7DA6]" : "text-gray-500"}`}>{label}</span>
     </button>
   );
 }

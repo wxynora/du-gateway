@@ -133,6 +133,7 @@ export async function runGroupDuReplyFlow(args: {
   logEvent?: (event: string, fields?: ClientLogFields, level?: ClientLogLevel) => void;
   skipStaleAttemptUpdate?: (stage: string) => boolean;
   onJobId?: (jobId: string) => Promise<void>;
+  onEvent?: (event: any) => void | Promise<void>;
 }): Promise<GroupDuReplyFlowResult | null> {
   let lastJobStatusKey = "";
   const logFields = (fields: ClientLogFields = {}) => ({
@@ -161,8 +162,9 @@ export async function runGroupDuReplyFlow(args: {
   const data = startedStatus === "done"
     ? attachSumiTalkJobEventsToResponse(started?.response || started, (started as any)?.events)
     : jobId
-    ? await waitForSumiTalkChatJob(jobId, {
+      ? await waitForSumiTalkChatJob(jobId, {
         signal: args.abortSignal,
+        onEvent: args.onEvent,
         onStatus: (job: SumiTalkChatJobStatusResponse) => {
           const statusKey = `${job.status || ""}:${job.stage || ""}`;
           if (statusKey === lastJobStatusKey) return;

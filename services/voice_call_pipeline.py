@@ -122,11 +122,12 @@ def call_voice_chat_pipeline(user_text, window_id="", audio_observations=""):
     return reply_text, None
 
 
-def run_voice_call(audio_bytes, mime_type, filename, window_id="", status_cb=None, audio_chunk_cb=None, user_text_override=""):
+def run_voice_call(audio_bytes, mime_type, filename, window_id="", status_cb=None, audio_chunk_cb=None, user_text_override="", duration_ms=0):
     if not audio_bytes:
         return {"ok": False, "error": "音频为空"}, 400
     try:
         from services.stt import transcribe_speech
+        from services.stt import sanitize_transcript_for_duration
         from services.minimax_tts import tts_to_audio_bytes
     except Exception as e:
         logger.warning("voice-call 依赖加载失败 err=%s", e)
@@ -143,7 +144,7 @@ def run_voice_call(audio_bytes, mime_type, filename, window_id="", status_cb=Non
     stt_result = None
     if not user_text:
         stt_result = transcribe_speech(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename)
-        user_text = str((stt_result or {}).get("text") or "").strip()
+        user_text = sanitize_transcript_for_duration((stt_result or {}).get("text") or "", duration_ms=duration_ms)
         audio_observations = str((stt_result or {}).get("audio_observations") or "").strip()
     if not user_text:
         return {"ok": False, "error": "没识别出内容，再说一遍试试"}, 422
@@ -172,6 +173,8 @@ def run_voice_call(audio_bytes, mime_type, filename, window_id="", status_cb=Non
     audio_reply = tts_to_audio_bytes(reply_text)
     if audio_reply:
         audio_b64 = base64.b64encode(audio_reply).decode("ascii")
+    else:
+        return {"ok": False, "error": "语音生成失败", "user_text": user_text, "reply_text": reply_text}, 502
 
     return {
         "ok": True,

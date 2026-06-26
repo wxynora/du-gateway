@@ -106,12 +106,25 @@ export async function waitForSumiTalkChatJob(
   options: {
     signal?: AbortSignal | null;
     onStatus?: (job: SumiTalkChatJobStatusResponse) => void;
+    onEvent?: (event: any) => void | Promise<void>;
   } = {},
 ): Promise<any> {
   const jid = String(jobId || "").trim();
   if (!jid) throw new Error("缺少渡回复任务 ID");
   const startedAt = Date.now();
   let lastError = "";
+  const seenEventKeys = new Set<string>();
+  const emitNewEvents = async (job: SumiTalkChatJobStatusResponse) => {
+    const rows = Array.isArray(job.events) ? job.events : [];
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const seq = Number(row.seq || 0);
+      const key = String(row.event_id || row.eventId || (seq > 0 ? `seq:${seq}` : "") || JSON.stringify(row)).trim();
+      if (seenEventKeys.has(key)) continue;
+      seenEventKeys.add(key);
+      await options.onEvent?.(row);
+    }
+  };
   while (Date.now() - startedAt < SUMITALK_CHAT_JOB_TIMEOUT_MS) {
     throwIfAborted(options.signal);
     await waitMs(SUMITALK_CHAT_JOB_POLL_MS, options.signal);
@@ -128,6 +141,7 @@ export async function waitForSumiTalkChatJob(
       }
       continue;
     }
+    await emitNewEvents(job);
     options.onStatus?.(job);
     if (job.status === "done") return attachSumiTalkJobEventsToResponse(job.response || {}, job.events);
     if (job.status === "cancelled") throw makeAbortError(String(job.error || "已取消发送"));

@@ -26,6 +26,11 @@ const MIME_CANDIDATES = [
   "audio/ogg",
 ];
 
+const VOICE_CONFIG_TIMEOUT_MS = 15000;
+const VOICE_CALL_TIMEOUT_MS = 120000;
+const VOICE_PREVIEW_TIMEOUT_MS = 15000;
+const TTS_PREVIEW_TIMEOUT_MS = 45000;
+
 function formatSeconds(total: number): string {
   const safe = Math.max(0, Math.floor(total || 0));
   const mm = String(Math.floor(safe / 60)).padStart(2, "0");
@@ -44,6 +49,12 @@ function resolveRecorderMimeType(): string {
     }
   });
   return supported || "";
+}
+
+function isAbortError(e: any): boolean {
+  const name = String(e?.name || "");
+  const message = String(e?.message || "");
+  return name === "AbortError" || /abort|aborted|timeout|timed out/i.test(message);
 }
 
 export function VoiceCallScreen({
@@ -72,14 +83,52 @@ export function VoiceCallScreen({
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const lastAudioRef = useRef<{ audioB64: string; audioFormat: string } | null>(null);
+  const speakerOnRef = useRef(true);
   const mimeTypeRef = useRef("");
   const isClosingRef = useRef(false);
   const actionBusyRef = useRef(false);
   const previewBusyRef = useRef(false);
   const previewTextRef = useRef("");
   const previewStampRef = useRef(0);
+  const recordingRef = useRef(false);
+  const recordingStartedAtRef = useRef(0);
+  const requestControllersRef = useRef<Set<AbortController>>(new Set());
+  const statusRef = useRef<CallStatus>("connecting");
   const playedIncomingInviteRef = useRef("");
   const autoStartedInviteRef = useRef("");
+
+  function setSafeStatus(nextStatus: CallStatus, text?: string) {
+    if (isClosingRef.current) return;
+    setStatus(nextStatus);
+    statusRef.current = nextStatus;
+    if (typeof text === "string") setStatusText(text);
+  }
+
+  function abortPendingRequests() {
+    requestControllersRef.current.forEach((controller) => {
+      try {
+        controller.abort();
+      } catch {}
+    });
+    requestControllersRef.current.clear();
+  }
+
+  async function apiFetchWithTimeout(path: string, init: RequestInit | undefined, timeoutMs: number): Promise<Response> {
+    const controller = new AbortController();
+    requestControllersRef.current.add(controller);
+    const timer = window.setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+    try {
+      return await apiFetch(path, { ...init, signal: controller.signal });
+    } finally {
+      window.clearTimeout(timer);
+      requestControllersRef.current.delete(controller);
+    }
+  }
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   useEffect(() => {
     tgReady(false);
@@ -87,28 +136,28 @@ export function VoiceCallScreen({
 
     async function bootstrap() {
       try {
-        const resp = await apiFetch("/miniapp-api/voice-config");
+        const resp = await apiFetchWithTimeout("/miniapp-api/voice-config", undefined, VOICE_CONFIG_TIMEOUT_MS);
         const data = await resp.json().catch(() => ({}));
-        if (cancelled) return;
+        if (cancelled || isClosingRef.current) return;
         if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
         const next: VoiceConfig = {
           ...DEFAULT_CONFIG,
           ...(data.config || {}),
         };
         setConfig(next);
-        setStatus("ready");
-        setStatusText("已接通，点一下录音");
+        setSafeStatus("ready", "已接通，点一下录音");
       } catch (e: any) {
-        setStatus("error");
-        setStatusText(e?.message || "语音配置加载失败");
+        if (cancelled || isClosingRef.current) return;
+        setSafeStatus("error", isAbortError(e) ? "语音配置加载超时" : e?.message || "语音配置加载失败");
       } finally {
-        if (!cancelled) setConfigReady(true);
+        if (!cancelled && !isClosingRef.current) setConfigReady(true);
       }
     }
 
     void bootstrap();
     return () => {
       cancelled = true;
+      isClosingRef.current = true;
       cleanupMedia();
     };
   }, []);
@@ -121,6 +170,7 @@ export function VoiceCallScreen({
   }, [callStartedAt]);
 
   useEffect(() => {
+    speakerOnRef.current = speakerOn;
     if (audioRef.current) audioRef.current.muted = !speakerOn;
   }, [speakerOn]);
 
@@ -134,10 +184,16 @@ export function VoiceCallScreen({
     playedIncomingInviteRef.current = invite.callId;
     setCallId(invite.callId);
     if (invite.openingLine.trim()) {
-      void playIncomingOpeningLine(invite.openingLine, invite.callId);
+      void playIncomingOpeningLine(invite.openingLine, invite.callId).then(() => {
+        if (invite.autoStartRecording && autoStartedInviteRef.current !== invite.callId && !isClosingRef.current) {
+          autoStartedInviteRef.current = invite.callId;
+          window.setTimeout(() => {
+            void beginRecording();
+          }, 180);
+        }
+      });
     } else {
-      setStatus("ready");
-      setStatusText("已接通，点一下录音");
+      setSafeStatus("ready", "已接通，点一下录音");
       if (invite.autoStartRecording && autoStartedInviteRef.current !== invite.callId) {
         autoStartedInviteRef.current = invite.callId;
         window.setTimeout(() => {
@@ -149,11 +205,14 @@ export function VoiceCallScreen({
   }, [configReady, incomingInvite?.callId, onIncomingInviteConsumed]);
 
   function cleanupMedia() {
+    abortPendingRequests();
     try {
       if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
     } catch {}
     recorderRef.current = null;
     chunksRef.current = [];
+    recordingRef.current = false;
+    recordingStartedAtRef.current = 0;
     try {
       audioRef.current?.pause();
       audioRef.current = null;
@@ -190,7 +249,9 @@ export function VoiceCallScreen({
         audioRef.current?.pause();
       } catch {}
       audioRef.current = null;
+      lastAudioRef.current = null;
       const stream = await ensureStream();
+      if (isClosingRef.current) return;
       chunksRef.current = [];
       mimeTypeRef.current = resolveRecorderMimeType();
       const recorder = mimeTypeRef.current ? new MediaRecorder(stream, { mimeType: mimeTypeRef.current }) : new MediaRecorder(stream);
@@ -198,21 +259,22 @@ export function VoiceCallScreen({
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
           chunksRef.current.push(event.data);
-          void triggerPreview(mimeTypeRef.current || recorder.mimeType || "audio/webm");
+          if (recordingRef.current) void triggerPreview(mimeTypeRef.current || recorder.mimeType || "audio/webm");
         }
       };
       recorder.onstop = () => {
       };
       previewTextRef.current = "";
       previewStampRef.current = 0;
+      recordingRef.current = true;
+      recordingStartedAtRef.current = Date.now();
       recorder.start(1200);
       actionBusyRef.current = false;
-      setStatus("recording");
-      setStatusText("正在听你说话...");
+      setSafeStatus("recording", "正在听你说话...");
     } catch (e: any) {
       actionBusyRef.current = false;
-      setStatus("error");
-      setStatusText(e?.message || "麦克风打开失败");
+      if (isClosingRef.current) return;
+      setSafeStatus("error", e?.message || "麦克风打开失败");
     }
   }
 
@@ -220,9 +282,8 @@ export function VoiceCallScreen({
     const recorder = recorderRef.current;
     if (!recorder || recorder.state === "inactive" || actionBusyRef.current) return;
     actionBusyRef.current = true;
-    setStatus("recognizing");
-    setStatusText("识别中...");
-    recorder.stop();
+    recordingRef.current = false;
+    setSafeStatus("recognizing", "识别中...");
     const mimeType = mimeTypeRef.current || recorder.mimeType || "audio/webm";
     previewBusyRef.current = false;
     const blob = await new Promise<Blob>((resolve) => {
@@ -231,12 +292,12 @@ export function VoiceCallScreen({
         resolve(new Blob(chunksRef.current, { type: mimeType }));
       };
       recorder.addEventListener("stop", finalize);
+      recorder.stop();
     });
     chunksRef.current = [];
     if (blob.size <= 0 || isClosingRef.current) {
       actionBusyRef.current = false;
-      setStatus("ready");
-      setStatusText("已接通，点一下录音");
+      if (!isClosingRef.current) setSafeStatus("ready", "已接通，点一下录音");
       return;
     }
     await sendVoice(blob, mimeType);
@@ -251,28 +312,31 @@ export function VoiceCallScreen({
       form.append("mime_type", mimeType);
       form.append("call_id", callId);
       form.append("call_started_at", callStartedAtIso);
-      if (previewTextRef.current.trim()) form.append("user_text_override", previewTextRef.current.trim());
-      const resp = await apiFetch("/miniapp-api/voice-call", { method: "POST", body: form });
+      const durationMs = Math.max(0, Date.now() - recordingStartedAtRef.current);
+      if (durationMs > 0) form.append("duration_ms", String(durationMs));
+      const resp = await apiFetchWithTimeout("/miniapp-api/voice-call", { method: "POST", body: form }, VOICE_CALL_TIMEOUT_MS);
       const data = await resp.json().catch(() => ({}));
+      if (isClosingRef.current) return;
       if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
       if (data.call_id) setCallId(String(data.call_id));
       if (data.audio_b64) {
-        setStatus("speaking");
-        setStatusText("渡正在讲话...");
+        setSafeStatus("speaking", "渡正在讲话...");
         await playReplyAudio(String(data.audio_b64 || ""), String(data.audio_format || "mp3"));
       } else {
-        setStatus("ready");
-        setStatusText("已接通，点一下录音");
+        setSafeStatus("ready", data.reply_text ? "渡回了文字，但语音生成失败" : "已接通，点一下录音");
       }
     } catch (e: any) {
-      setStatus("error");
-      setStatusText(e?.message || "语音请求失败");
-      toast(e?.message || "语音请求失败");
+      if (isClosingRef.current || isAbortError(e)) {
+        if (!isClosingRef.current) setSafeStatus("error", "语音请求超时");
+        return;
+      }
+      setSafeStatus("error", e?.message || "语音请求失败");
+      if (!isClosingRef.current) toast(e?.message || "语音请求失败");
     }
   }
 
   async function triggerPreview(mimeType: string) {
-    if (previewBusyRef.current || status !== "recording") return;
+    if (previewBusyRef.current || !recordingRef.current || statusRef.current !== "recording") return;
     if (chunksRef.current.length < 2) return;
     const now = Date.now();
     if (now - previewStampRef.current < 2200) return;
@@ -285,9 +349,9 @@ export function VoiceCallScreen({
       const ext = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : mimeType.includes("mpeg") ? "mp3" : "webm";
       form.append("audio", blob, `voice-preview.${ext}`);
       form.append("mime_type", mimeType);
-      const resp = await apiFetch("/miniapp-api/voice-call-preview", { method: "POST", body: form });
+      const resp = await apiFetchWithTimeout("/miniapp-api/voice-call-preview", { method: "POST", body: form }, VOICE_PREVIEW_TIMEOUT_MS);
       const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || !data?.ok) return;
+      if (isClosingRef.current || !recordingRef.current || !resp.ok || !data?.ok) return;
       const text = String(data.text || "").trim();
       if (!text) return;
       previewTextRef.current = text;
@@ -302,9 +366,8 @@ export function VoiceCallScreen({
     const openingLine = String(text || "").trim();
     if (!openingLine) return;
     try {
-      setStatus("speaking");
-      setStatusText("渡正在讲话...");
-      const resp = await apiFetch("/miniapp-api/tts-preview", {
+      setSafeStatus("speaking", "渡正在讲话...");
+      const resp = await apiFetchWithTimeout("/miniapp-api/tts-preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -313,41 +376,64 @@ export function VoiceCallScreen({
           call_id: activeCallId || callId,
           call_started_at: callStartedAtIso,
         }),
-      });
+      }, TTS_PREVIEW_TIMEOUT_MS);
       const data = await resp.json().catch(() => ({}));
+      if (isClosingRef.current) return;
       if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
       await playReplyAudio(String(data.audio_b64 || ""), String(data.audio_format || "mp3"));
     } catch (e: any) {
-      setStatus("ready");
-      setStatusText("已接通，点一下录音");
-      toast(e?.message || "开场白播放失败");
+      if (isClosingRef.current) return;
+      setSafeStatus("ready", "已接通，点一下录音");
+      if (!isAbortError(e)) toast(e?.message || "开场白播放失败");
     }
   }
 
   function playReplyAudio(audioB64: string, audioFormat: string): Promise<void> {
     return new Promise((resolve) => {
+      if (!audioB64 || isClosingRef.current) {
+        setSafeStatus("ready", "已接通，点一下录音");
+        resolve();
+        return;
+      }
       try {
         audioRef.current?.pause();
       } catch {}
+      lastAudioRef.current = { audioB64, audioFormat: audioFormat || "mp3" };
       const audio = new Audio(`data:audio/${audioFormat || "mp3"};base64,${audioB64}`);
       audioRef.current = audio;
-      audio.muted = !speakerOn;
+      audio.muted = !speakerOnRef.current;
       audio.onended = () => {
-        setStatus("ready");
-        setStatusText("已接通，点一下录音");
+        if (audioRef.current === audio) audioRef.current = null;
+        lastAudioRef.current = null;
+        setSafeStatus("ready", "已接通，点一下录音");
         resolve();
       };
       audio.onerror = () => {
-        setStatus("ready");
-        setStatusText("已接通，点一下录音");
+        if (audioRef.current === audio) audioRef.current = null;
+        setSafeStatus("ready", "语音播放失败，点扬声器重试");
         resolve();
       };
       audio.play().catch(() => {
-        setStatus("ready");
-        setStatusText("语音已生成，点扬声器后再试");
+        if (audioRef.current === audio) audioRef.current = null;
+        setSafeStatus("ready", "语音已生成，点扬声器重试");
         resolve();
       });
     });
+  }
+
+  function toggleSpeakerOrRetry() {
+    const lastAudio = lastAudioRef.current;
+    if (lastAudio && statusRef.current === "ready" && !audioRef.current) {
+      speakerOnRef.current = true;
+      setSpeakerOn(true);
+      window.setTimeout(() => {
+        if (!isClosingRef.current) void playReplyAudio(lastAudio.audioB64, lastAudio.audioFormat);
+      }, 0);
+      return;
+    }
+    const nextSpeakerOn = !speakerOnRef.current;
+    speakerOnRef.current = nextSpeakerOn;
+    setSpeakerOn(nextSpeakerOn);
   }
 
   function endCall() {
@@ -395,7 +481,7 @@ export function VoiceCallScreen({
           </div>
 
           <div className="mt-10 flex items-center justify-center gap-8">
-            <button type="button" className="flex flex-col items-center gap-2 text-xs text-white/72" onClick={() => setSpeakerOn((v) => !v)}>
+            <button type="button" className="flex flex-col items-center gap-2 text-xs text-white/72" onClick={toggleSpeakerOrRetry}>
               <span className={`voice-call-action-icon ${speakerOn ? "bg-[#d7e8ff] text-[#183a6f]" : ""}`}>
                 <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <path d="M5 10h4l5-4v12l-5-4H5zM17 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" />

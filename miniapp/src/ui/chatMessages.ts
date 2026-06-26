@@ -208,6 +208,36 @@ export function chatDisplayPartsFromSumiTalkEvents(events: any): ChatDisplayPart
   }));
 }
 
+function chatTextPartsFromDisplayParts(parts: ChatDisplayPart[]): string[] {
+  return parts
+    .filter((part): part is Extract<ChatDisplayPart, { kind: "text" }> => part.kind === "text")
+    .map((part) => cleanShortText(part.text, 4000))
+    .filter(Boolean);
+}
+
+function mergeStreamingTextContent(currentContent: string, additions: string[]): string {
+  let current = cleanShortText(currentContent, 12000);
+  for (const raw of additions) {
+    const text = cleanShortText(raw, 4000);
+    if (!text) continue;
+    const currentCompact = current.replace(/\s+/g, " ").trim();
+    const textCompact = text.replace(/\s+/g, " ").trim();
+    if (!current) {
+      current = text;
+      continue;
+    }
+    if (currentCompact === textCompact || currentCompact.endsWith(textCompact) || currentCompact.includes(textCompact)) {
+      continue;
+    }
+    if (textCompact.startsWith(currentCompact)) {
+      current = text;
+      continue;
+    }
+    current = `${current}\n\n${text}`;
+  }
+  return current;
+}
+
 export function extractAssistantDisplayParts(data: any): ChatDisplayPart[] {
   const msg = extractAssistantMessage(data);
   return mergeChatDisplayParts(
@@ -219,6 +249,7 @@ export function extractAssistantDisplayParts(data: any): ChatDisplayPart[] {
 export function applySumiTalkChatEventToMessages(currentMessages: ChatDraftMessage[], event: any): ChatDraftMessage[] {
   const parts = chatDisplayPartsFromSumiTalkEvents([event]);
   if (!parts.length) return currentMessages;
+  const textAdditions = chatTextPartsFromDisplayParts(parts);
   const jid = String(event?.job_id || event?.jobId || "").trim();
   const cid = String(event?.client_request_id || event?.clientRequestId || "").trim();
   const list = Array.isArray(currentMessages) ? currentMessages : [];
@@ -229,10 +260,17 @@ export function applySumiTalkChatEventToMessages(currentMessages: ChatDraftMessa
     const matchesClient = cid && String(msg.clientRequestId || "").trim() === cid;
     if (!matchesJob && !matchesClient) return msg;
     const merged = mergeChatDisplayParts(msg.displayParts, parts);
-    if (JSON.stringify(merged) === JSON.stringify(normalizeChatDisplayParts(msg.displayParts || []))) return msg;
+    const content = mergeStreamingTextContent(msg.content, textAdditions);
+    if (
+      content === cleanShortText(msg.content, 12000)
+      && JSON.stringify(merged) === JSON.stringify(normalizeChatDisplayParts(msg.displayParts || []))
+    ) {
+      return msg;
+    }
     changed = true;
     return {
       ...msg,
+      content,
       ...(jid && !msg.jobId ? { jobId: jid } : {}),
       ...(cid && !msg.clientRequestId ? { clientRequestId: cid } : {}),
       displayParts: merged,
@@ -904,7 +942,10 @@ function stripDisplayedTextPrefixes(content: string, displayParts: ChatDisplayPa
   return next;
 }
 
-export function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
+export function groupChatMessages(
+  messages: ChatDraftMessage[],
+  options: { preserveLineBreaks?: boolean } = {},
+): ChatMessageGroup[] {
   const groups: ChatMessageGroup[] = [];
   for (const msg of messages) {
     const displayParts = normalizeChatDisplayParts((msg as any)?.displayParts || (msg as any)?.display_parts);
@@ -925,7 +966,9 @@ export function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGrou
     const segments = rawSegments.flatMap((segment) => (
       segment.systemCard
         ? [segment]
-        : splitLineBubbleSegments(msg.role, segment.content)
+        : options.preserveLineBreaks && msg.role === "user"
+          ? [{ content: String(segment.content || "").trim(), systemCard: null }]
+          : splitLineBubbleSegments(msg.role, segment.content)
     ));
     const allSegments = [
       ...displaySegments,

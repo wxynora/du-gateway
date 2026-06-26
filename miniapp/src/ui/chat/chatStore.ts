@@ -66,6 +66,7 @@ export interface ChatHistoryStore {
   readLatestLocalChatHistory(deviceId: string): Promise<ChatHistoryMessage[]>;
   inspectLocalChatHistoryRows(): Promise<ChatHistoryLocalStatRow[]>;
   writeLocalChatHistory(deviceId: string, windowId: string, messages: ChatHistoryMessage[]): Promise<void>;
+  deleteLocalChatHistoryMessages(deviceId: string, windowId: string, messageIds: string[]): Promise<void>;
   migrateLocalChatHistoryDevice(oldDeviceId: string, newDeviceId: string): Promise<void>;
   migrateLocalChatHistoriesToDevice(deviceId: string): Promise<void>;
   createDraftTurn(args: {

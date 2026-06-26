@@ -1820,3 +1820,19 @@ npm -C miniapp run android
 - 已完成：`HiddenBlockParser` 增加 `split_all()`，`DU_SECRET_SAVE` 支持一次回复里多个完整隐藏块；后续块也会剥离并逐个保存，不会露到客户端或进可见正文。
 - 已验证：`.venv/bin/python -m py_compile storage/secret_drawer_store.py services/secret_drawer.py routes/miniapp/secret_drawer.py routes/miniapp_api.py services/chat_sidecars.py services/pc_command_handler.py pipeline/pipeline.py routes/chat.py services/gateway_tools.py services/notion_tools.py` 通过；本地 monkeypatch R2 smoke 覆盖隐藏块剥离、保存本轮消息+图片、工具保存 media_refs、待整理/置顶筛选、标签统计、软删除读取与恢复、MiniApp PIN/items/random/restore；`python3 -m py_compile storage/secret_drawer_store.py routes/miniapp/secret_drawer.py services/secret_drawer.py` 和 `npm -C miniapp run build` 通过并重建 `miniapp_static`。
 - 未完成 / 下次继续：当前前端是偷看/浏览 UI，不提供编辑、删除、恢复；也不提供设置 PIN 的入口，PIN 设置由渡走 `secret_drawer` 的 `set_pin`。后端仍是 R2 JSON 单对象低频写入，只有进程内锁；当前单 worker 可接受，但没有做 D1/SQLite、跨进程版本锁/CAS 或物理删除。
+
+当前状态（2026-06-26 MiniApp 语音通话链路收束）：
+- 已完成：`VoiceCallScreen.tsx` 修正 `MediaRecorder.stop()` 监听顺序，先注册 `stop` 再停止录音，避免 Android WebView 卡在“识别中”；通话页所有关键请求新增本地超时和挂断 abort，挂断/退出后的晚到响应不会再改状态或突然播放。
+- 已完成：通话播放失败时保留最近一次 `audio_b64`，点击扬声器会优先打开扬声器并重播；普通状态下扬声器按钮仍是静音切换。来电 opening line 播完后会继续执行 `autoStartRecording`，不再因为有开场白跳过自动录音。
+- 已完成：实时 preview 只用于界面显示，不再作为 `user_text_override` 覆盖最终 STT；最终 `/voice-call` 会上传真实录音时长，后端用现有短语音清洗压掉 1-2 秒音频里重复“嗯/停顿”的错误转写。
+- 已完成：`routes/miniapp/media.py` 将 `VOICE_CALL_MAX_SECONDS` 真正用于客户端传时长时的超限拦截，并给 `/voice-call-preview` 补上音频大小上限；`services/voice_call_pipeline.py` 在 MiniMax TTS 失败时返回明确 502，不再 `ok=true` 但 `audio_b64` 为空。
+- 已验证：`.venv/bin/python -m py_compile services/voice_call_pipeline.py routes/miniapp/media.py app.py`、`.venv/bin/python -c "import app"`、`git diff --check`、`npm -C miniapp run build` 通过并重建 `miniapp_static`；`npx/tsc --noEmit` 当前仍被既有 `PromptManagerScreen.tsx` 的 `editable?: boolean` 类型问题挡住，和本轮语音通话改动无关。
+- 未完成 / 下次继续：本轮没有做 WebRTC、后台前台录音服务、通话 job 化/断点恢复，也没有改 nginx/realtime 服务健康检查；真正抗熄屏/切网/进程重启还需要单独做通话任务队列或原生侧托管。
+
+当前状态（2026-06-26 MiniApp 私聊取消发送待定队列）：
+- 已完成：`MainChatScreen.tsx` 将私聊输入聚合改成内部 `idle / armed / paused / flushing` 状态机。每条私聊输入默认进入 15 秒聚合队列；新输入会重置倒计时；点击“取消发送”只切到 `paused/cancel`，不删除气泡、不发送、不在气泡上显示“待定”标记；下一条输入会恢复队列并把旧消息一起纳入新的 15 秒窗口。
+- 已完成：flush 开始时不再把 localStorage 写空；当前批次会先转入 `flushingItems`，成功后才清掉，准备失败或发送失败会把批次放回队列并切到 `paused/failure`。如果旧批次发送过程中又输入新消息，新消息会成为新的 armed 队列，旧批次成功不会误清新队列。
+- 已完成：取消/失败暂停中的队列仍可长按用户气泡编辑或删除；删除会写入本地 deleted id sidecar，历史加载、远端 resync、`saveDisplayHistory()` 都会过滤这些 id，避免被删掉的待发消息从远端/本地历史恢复时回魂。这个 sidecar 只用于待发聚合消息，不改变普通消息状态。
+- 已完成：`chatStore.ts` / `nativeChatStore.ts` / `chatHistoryDb.ts` 增加按消息 id 删除本地历史的抽象；实现上复用现有 `upsertMessages` 写 `deletedAt` tombstone，不新增 native 插件方法，尽量兼容已经安装的 Android 壳。
+- 已验证：`npm -C miniapp run build` 通过并重建 `miniapp_static`；`git diff --check` 通过；`npx tsc --noEmit --pretty false` 只剩既有 `src/ui/PromptManagerScreen.tsx:92` 的 `editable?: boolean` 类型问题，和本轮取消发送队列改动无关。
+- 未完成 / 下次继续：本轮只修私聊 Du 的聚合取消/编辑/删除语义，不改群聊取消笨笨任务、不改后端 job 取消语义，也不把“待定”持久化成可见消息状态；后续如需更严谨，可为 `flushingItems` 做服务端 operation 回查去重，降低崩溃恢复后人工重发的重复风险。

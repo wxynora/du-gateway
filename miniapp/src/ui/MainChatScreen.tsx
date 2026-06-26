@@ -47,6 +47,7 @@ import {
   type ChatRole,
   type ChatSearchMatch,
   type ChatTimeFormat,
+  type ChatToolCallState,
 } from "./chatMessages";
 import {
   MAIN_SUMITALK_DISPLAY_WINDOW_ID,
@@ -57,7 +58,6 @@ import {
   ChevronDownMini,
   ChevronLeftIcon,
   ChevronUpMini,
-  CpuIcon,
   KeyboardIconMini,
   MicIconMini,
   PlusIcon,
@@ -68,6 +68,7 @@ import {
   attachChatJobToOperation,
   completeChatOperation,
   createChatDraftTurn,
+  deleteLocalChatHistoryMessages,
   failChatOperation,
   getChatOperation,
   listActiveChatOperations,
@@ -167,6 +168,8 @@ type QueuedPrivateInput = {
   modelContent: PrivateModelContent;
   userMessage: ChatDraftMessage;
 };
+type PrivateInputAggregateMode = "idle" | "armed" | "paused" | "flushing";
+type PrivateInputAggregatePauseReason = "cancel" | "failure" | null;
 type PendingImageDraft = {
   id: string;
   file: File;
@@ -212,6 +215,64 @@ const CODEX_GROUP_CHAT_CREATE_RETRY_TIMEOUT_MS = 45000;
 const SUMITALK_PRIVATE_INPUT_IDLE_MS = 15000;
 const SUMITALK_PRIVATE_INPUT_BUSY_RETRY_MS = 1200;
 const SUMITALK_PRIVATE_INPUT_AGGREGATE_STORAGE_PREFIX = "miniapp.chat.privateInputAggregate.v1";
+const SUMITALK_PRIVATE_INPUT_DELETED_STORAGE_PREFIX = "miniapp.chat.privateInputAggregateDeleted.v1";
+const SUMITALK_REAL_MODE_STORAGE_PREFIX = "miniapp.chat.realMode.v1";
+const SUMITALK_REAL_BODY_STATE_POLL_MS = 5000;
+
+function sumitalkRealModeStorageKey(windowId: string): string {
+  return `${SUMITALK_REAL_MODE_STORAGE_PREFIX}:${encodeURIComponent(String(windowId || "default").trim() || "default")}`;
+}
+
+function readStoredRealMode(storageKey: string): boolean {
+  try {
+    return window.localStorage.getItem(storageKey) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeStoredRealMode(storageKey: string, enabled: boolean) {
+  try {
+    if (enabled) window.localStorage.setItem(storageKey, "1");
+    else window.localStorage.removeItem(storageKey);
+  } catch {}
+}
+
+function realVitalsNumber(vitals: Record<string, any> | undefined, key: string): number {
+  const raw = vitals?.parameters?.[key] ?? vitals?.[key];
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function realModeMoodEmoji(vitals: Record<string, any> | undefined): string {
+  if (realVitalsNumber(vitals, "intimacy_heat") >= 0.6) return "🥵";
+  const tempo = String(vitals?.tempo || "").trim().toLowerCase();
+  if (tempo === "up" || tempo === "settle") return "😄";
+  if (tempo === "down") return "😭";
+  if (tempo === "spike") return "😠";
+  return "😐";
+}
+
+function realModeLevel(value: any): string {
+  if (value === null || typeof value === "undefined" || value === "") return "?";
+  const level = Number(value);
+  if (!Number.isFinite(level)) return "?";
+  return String(Math.max(0, Math.min(5, Math.round(level))));
+}
+
+function realModePenisState(value: any): string {
+  const text = String(value || "").replace(/^阴茎状态[:：]?\s*/, "").replace(/状态$/, "").trim();
+  return text || "未记录";
+}
+
+function formatRealModeBodyStatus(state: any): string {
+  const bodyState = state?.du_body_state && typeof state.du_body_state === "object" ? state.du_body_state : {};
+  const desireLevel = realModeLevel(bodyState.desire_level);
+  const selfControlLevel = realModeLevel(bodyState.self_control_level);
+  const penisState = realModePenisState(bodyState.penis_state);
+  const mood = realModeMoodEmoji(state?.du_vitals && typeof state.du_vitals === "object" ? state.du_vitals : undefined);
+  return `想做指数${desireLevel}/5·自制力${selfControlLevel}/5·${penisState}·${mood}`;
+}
 
 function privateInputAggregateDeadlineFromPayload(payload: any): number {
   const expiresAt = Date.parse(String(payload?.expiresAt || ""));
@@ -221,49 +282,97 @@ function privateInputAggregateDeadlineFromPayload(payload: any): number {
   return 0;
 }
 
+function ToolCallGlyph({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 12 12" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M8.6 1.1A2.8 2.8 0 0 0 5.5 4.7L1.8 8.4a1.35 1.35 0 1 0 1.9 1.9l3.7-3.7A2.8 2.8 0 0 0 10.9 3L9 4.9 7.7 3.6l1.9-1.9c-.3-.3-.6-.5-1-.6Z"
+      />
+    </svg>
+  );
+}
+
+function ToolStatusGlyph({ state, className = "" }: { state: ChatToolCallState; className?: string }) {
+  if (state === "running") {
+    return (
+      <svg className={className} viewBox="0 0 12 12" aria-hidden="true">
+        <circle cx="6" cy="6" r="5" fill="currentColor" opacity="0.18" />
+        <circle cx="6" cy="6" r="2.2" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (state === "error") {
+    return (
+      <svg className={className} viewBox="0 0 12 12" aria-hidden="true">
+        <circle cx="6" cy="6" r="5" fill="currentColor" />
+        <path d="m4.2 4.2 3.6 3.6M7.8 4.2 4.2 7.8" fill="none" stroke="white" strokeWidth="1.35" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  return (
+    <svg className={className} viewBox="0 0 12 12" aria-hidden="true">
+      <circle cx="6" cy="6" r="5" fill="currentColor" />
+      <path d="m3.7 6.1 1.5 1.5 3.1-3.4" fill="none" stroke="white" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function ChatToolCallBlock({ part }: { part: ChatDisplayPart }) {
   const [open, setOpen] = useState(false);
   if (part.kind !== "tool_call") return null;
   const name = String(part.name || "工具").trim() || "工具";
   const state = part.state || "done";
-  const statusLabel = state === "running" ? "调用中" : state === "error" ? "失败" : "完成";
-  const statusClass = state === "running"
-    ? "bg-sky-50 text-sky-700"
-    : state === "error"
-      ? "bg-rose-50 text-rose-700"
-      : "bg-emerald-50 text-emerald-700";
+  const statusLabel = state === "running" ? "running" : state === "error" ? "failed" : "done";
+  const statusClass = state === "running" ? "text-sky-500" : state === "error" ? "text-rose-500" : "text-gray-400";
   const argsText = String(part.argumentsText || "").trim();
   const resultText = String(part.resultText || "").trim();
-  const durationText = part.durationMs ? `${Math.max(1, Math.round(part.durationMs))}ms` : "";
-  const hasDetails = Boolean(argsText || resultText || durationText);
+  const hasDetails = Boolean(argsText || resultText);
 
   return (
-    <div className="w-fit max-w-full overflow-hidden rounded-[14px] border border-gray-200/70 bg-white/72 text-gray-700 shadow-sm backdrop-blur">
+    <div className="w-fit max-w-full py-0.5 text-[10px] leading-[14px] text-gray-400">
       <button
         type="button"
-        className="flex max-w-full items-center gap-2 px-2.5 py-1.5 text-left"
+        className={`grid max-w-full grid-cols-[14px_minmax(0,1fr)] gap-x-1 text-left ${hasDetails ? "cursor-pointer" : "cursor-default"}`}
         onClick={() => hasDetails && setOpen((value) => !value)}
         aria-expanded={open}
       >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-500 [&>svg]:h-3.5 [&>svg]:w-3.5">
-          <CpuIcon />
+        <span className="col-start-1 row-start-1 flex h-[14px] items-center justify-center text-gray-400">
+          <ToolCallGlyph className="h-3 w-3" />
         </span>
-        <span className="min-w-0 flex-1 truncate text-[12px] font-semibold leading-4">{name}</span>
-        {durationText ? <span className="shrink-0 text-[10px] font-medium text-gray-400">{durationText}</span> : null}
-        <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${statusClass}`}>{statusLabel}</span>
+        <span className="col-start-2 row-start-1 min-w-0 truncate font-mono text-[10px] font-semibold leading-[14px] text-gray-500">
+          {name}
+        </span>
+        <span className="col-start-1 row-start-2 flex justify-center py-[1px]" aria-hidden="true">
+          <span
+            className="h-[14px] w-1"
+            style={{
+              backgroundImage: "radial-gradient(circle, rgba(156, 163, 175, 0.85) 1px, transparent 1.2px)",
+              backgroundPosition: "center top",
+              backgroundRepeat: "repeat-y",
+              backgroundSize: "4px 4px",
+            }}
+          />
+        </span>
+        <span className={`col-start-1 row-start-3 flex h-[14px] items-center justify-center ${statusClass}`}>
+          <ToolStatusGlyph state={state} className="h-3 w-3" />
+        </span>
+        <span className={`col-start-2 row-start-3 min-w-0 truncate font-mono text-[10px] font-semibold leading-[14px] ${statusClass}`}>
+          {statusLabel}
+        </span>
       </button>
       {open && hasDetails ? (
-        <div className="space-y-1 border-t border-gray-100 px-2.5 py-2 text-[11px] leading-[15px] text-gray-500">
+        <div className="ml-[7px] mt-1 space-y-1 border-l border-gray-200 pl-2.5 text-[10px] leading-[15px] text-gray-500">
           {argsText ? (
             <div>
-              <div className="mb-0.5 font-semibold text-gray-400">参数</div>
-              <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap break-words rounded-[10px] bg-gray-50 px-2 py-1 font-mono text-[10px] leading-[14px] text-gray-600">{argsText}</pre>
+              <div className="mb-0.5 font-semibold text-gray-400">args</div>
+              <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-[14px] text-gray-500">{argsText}</pre>
             </div>
           ) : null}
           {resultText ? (
             <div>
-              <div className="mb-0.5 font-semibold text-gray-400">结果</div>
-              <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-[10px] bg-gray-50 px-2 py-1 font-mono text-[10px] leading-[14px] text-gray-600">{resultText}</pre>
+              <div className="mb-0.5 font-semibold text-gray-400">result</div>
+              <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-[14px] text-gray-500">{resultText}</pre>
             </div>
           ) : null}
         </div>
@@ -282,6 +391,22 @@ function isChatSendSource(value: any): value is ChatSendSource {
 
 function privateInputAggregateStorageKey(windowId: string): string {
   return `${SUMITALK_PRIVATE_INPUT_AGGREGATE_STORAGE_PREFIX}:${encodeURIComponent(String(windowId || "default").trim() || "default")}`;
+}
+
+function privateInputAggregateDeletedStorageKey(windowId: string): string {
+  return `${SUMITALK_PRIVATE_INPUT_DELETED_STORAGE_PREFIX}:${encodeURIComponent(String(windowId || "default").trim() || "default")}`;
+}
+
+function normalizePrivateInputAggregateMode(value: any): PrivateInputAggregateMode {
+  const mode = String(value || "").trim();
+  if (mode === "armed" || mode === "paused" || mode === "flushing") return mode;
+  return "idle";
+}
+
+function normalizePrivateInputAggregatePauseReason(value: any): PrivateInputAggregatePauseReason {
+  const reason = String(value || "").trim();
+  if (reason === "cancel" || reason === "failure") return reason;
+  return null;
 }
 
 function normalizePrivateModelContent(value: any): PrivateModelContent {
@@ -757,6 +882,7 @@ export function MainChatScreen({
   const displayHistoryWindowId = String(displayWindowId || (!groupChatMode ? MAIN_SUMITALK_DISPLAY_WINDOW_ID : "")).trim();
   const historyWindowId = String(displayHistoryWindowId || windowId || "").trim();
   const remoteHistoryWindowId = displayHistoryWindowId;
+  const realModeStorageKey = sumitalkRealModeStorageKey(historyWindowId || windowId);
   const [deviceId, setDeviceId] = useState("");
   const seedMessages: ChatDraftMessage[] = [
     {
@@ -769,18 +895,22 @@ export function MainChatScreen({
   const [messages, setMessages] = useState<ChatDraftMessage[]>(seedMessages);
   const messagesRef = useRef<ChatDraftMessage[]>(seedMessages);
   const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
+  const [sending, setSendingState] = useState(false);
   const [mediaBusy, setMediaBusyValue] = useState(false);
   const [activeSendStageLabel, setActiveSendStageLabel] = useState("");
   const [recordingChatVoice, setRecordingChatVoiceValue] = useState(false);
   const [voiceInputOpen, setVoiceInputOpen] = useState(false);
   const [chatVoiceCancelArmed, setChatVoiceCancelArmed] = useState(false);
   const [privateInputAggregateCount, setPrivateInputAggregateCount] = useState(0);
-  const [privateInputAggregateCancelable, setPrivateInputAggregateCancelableState] = useState(false);
+  const [privateInputAggregateMode, setPrivateInputAggregateModeState] = useState<PrivateInputAggregateMode>("idle");
+  const privateInputAggregateCancelable = privateInputAggregateMode === "armed";
+  const privateInputAggregateHeld = privateInputAggregateMode === "paused";
   const [pendingImageDrafts, setPendingImageDrafts] = useState<PendingImageDraft[]>([]);
   const [groupDiscussionRunning, setGroupDiscussionRunning] = useState(false);
   const [groupDiscussionStatus, setGroupDiscussionStatus] = useState("");
   const [plusOpen, setPlusOpen] = useState(false);
+  const [realModeEnabled, setRealModeEnabled] = useState(() => readStoredRealMode(realModeStorageKey));
+  const [realBodyStatusText, setRealBodyStatusText] = useState("");
   const [doodleBoardOpen, setDoodleBoardOpen] = useState(false);
   const [travelFormCard, setTravelFormCard] = useState<TravelPlanFormCard | null>(null);
   const [travelResultCard, setTravelResultCard] = useState<TravelPlanResultCard | null>(null);
@@ -808,6 +938,7 @@ export function MainChatScreen({
   const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
+  const sendingRef = useRef(false);
   const pendingImageDraftsRef = useRef<PendingImageDraft[]>([]);
   const mediaBusyRef = useRef(false);
   const recordingChatVoiceRef = useRef(false);
@@ -824,9 +955,12 @@ export function MainChatScreen({
   const privateInputAggregateQueueRef = useRef<QueuedPrivateInput[]>([]);
   const privateInputAggregateTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const privateInputAggregateVersionRef = useRef(0);
-  const privateInputAggregateHoldUntilNextInputRef = useRef(false);
-  const privateInputAggregateCancelableRef = useRef(false);
+  const privateInputAggregateModeRef = useRef<PrivateInputAggregateMode>("idle");
+  const privateInputAggregatePauseReasonRef = useRef<PrivateInputAggregatePauseReason>(null);
+  const privateInputAggregateFlushingItemsRef = useRef<QueuedPrivateInput[]>([]);
+  const privateInputAggregateDeletedMessageIdsRef = useRef<Set<string>>(new Set());
   const privateInputAggregateDeadlineRef = useRef(0);
+  const realModeEnabledRef = useRef(realModeEnabled);
   const bubbleTouchRef = useRef<ChatBubbleTouchState | null>(null);
   const remoteHistorySyncingRef = useRef(false);
 
@@ -840,15 +974,21 @@ export function MainChatScreen({
     setRecordingChatVoiceValue(next);
   }
 
+  function setSending(next: boolean) {
+    sendingRef.current = next;
+    setSendingState(next);
+  }
+
   function setPrivateInputAggregateQueue(items: QueuedPrivateInput[]) {
     privateInputAggregateQueueRef.current = items;
     setPrivateInputAggregateCount(items.length);
   }
 
-  function setPrivateInputAggregateCancelable(next: boolean) {
-    privateInputAggregateCancelableRef.current = next;
-    setPrivateInputAggregateCancelableState(next);
-    if (!next) {
+  function setPrivateInputAggregateMode(next: PrivateInputAggregateMode, pauseReason: PrivateInputAggregatePauseReason = null) {
+    privateInputAggregateModeRef.current = next;
+    privateInputAggregatePauseReasonRef.current = next === "paused" ? pauseReason : null;
+    setPrivateInputAggregateModeState(next);
+    if (next !== "armed" && next !== "paused") {
       setBubbleMenu((current) => (current?.aggregateEditable ? null : current));
     }
   }
@@ -864,8 +1004,8 @@ export function MainChatScreen({
   function resetPrivateInputAggregateMemory() {
     clearPrivateInputAggregateTimer();
     setPrivateInputAggregateQueue([]);
-    setPrivateInputAggregateCancelable(false);
-    privateInputAggregateHoldUntilNextInputRef.current = false;
+    privateInputAggregateFlushingItemsRef.current = [];
+    setPrivateInputAggregateMode("idle");
     privateInputAggregateDeadlineRef.current = 0;
     setActiveSendStageLabel("");
   }
@@ -877,14 +1017,27 @@ export function MainChatScreen({
   }
 
   function reschedulePrivateInputAggregateWithinDeadline(reason: "idle" | "busy_retry" = "idle") {
+    if (!privateInputAggregateQueueRef.current.length) {
+      clearPrivateInputAggregateTimer();
+      setPrivateInputAggregateMode("idle");
+      setActiveSendStageLabel("");
+      privateInputAggregateDeadlineRef.current = 0;
+      return;
+    }
+    if (privateInputAggregateModeRef.current === "paused") {
+      clearPrivateInputAggregateTimer();
+      setActiveSendStageLabel("等待继续输入");
+      privateInputAggregateDeadlineRef.current = 0;
+      return;
+    }
     const remaining = privateInputAggregateRemainingMs();
     if (remaining > 0) {
-      setPrivateInputAggregateCancelable(true);
+      setPrivateInputAggregateMode("armed");
       setActiveSendStageLabel("等待继续输入");
       schedulePrivateInputAggregateFlush(remaining, reason);
       return;
     }
-    setPrivateInputAggregateCancelable(false);
+    setPrivateInputAggregateMode("armed");
     schedulePrivateInputAggregateFlush(0, reason);
   }
 
@@ -901,9 +1054,55 @@ export function MainChatScreen({
     window.setTimeout(focus, 60);
   }
 
+  const refreshRealBodyStatus = useCallback(async () => {
+    if (!realModeEnabledRef.current) return;
+    try {
+      const state = await apiJson<any>("/miniapp-api/pixel-home-state");
+      setRealBodyStatusText(formatRealModeBodyStatus(state));
+    } catch (e: any) {
+      logSumiTalkClientEvent("real_mode_body_state_refresh_error", {
+        error: String(e?.message || e),
+      }, "warning");
+    }
+  }, []);
+
+  function toggleRealMode() {
+    setRealModeEnabled((current) => {
+      const next = !current;
+      realModeEnabledRef.current = next;
+      writeStoredRealMode(realModeStorageKey, next);
+      logSumiTalkClientEvent("real_mode_toggle", { enabled: next });
+      if (next) void refreshRealBodyStatus();
+      else setRealBodyStatusText("");
+      return next;
+    });
+  }
+
   useEffect(() => {
     pendingImageDraftsRef.current = pendingImageDrafts;
   }, [pendingImageDrafts]);
+
+  useEffect(() => {
+    const stored = readStoredRealMode(realModeStorageKey);
+    realModeEnabledRef.current = stored;
+    setRealModeEnabled(stored);
+    if (!stored) setRealBodyStatusText("");
+  }, [realModeStorageKey]);
+
+  useEffect(() => {
+    realModeEnabledRef.current = realModeEnabled;
+    if (!realModeEnabled) {
+      setRealBodyStatusText("");
+      return;
+    }
+    void refreshRealBodyStatus();
+    const timer = window.setInterval(() => {
+      void refreshRealBodyStatus();
+    }, SUMITALK_REAL_BODY_STATE_POLL_MS);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [realModeEnabled, realModeStorageKey, refreshRealBodyStatus]);
 
   useEffect(() => {
     return () => {
@@ -964,18 +1163,23 @@ export function MainChatScreen({
     const storageKey = historyWindowId ? privateInputAggregateStorageKey(historyWindowId) : "";
     if (!storageKey) return;
     const items = privateInputAggregateQueueRef.current;
+    const flushingItems = privateInputAggregateFlushingItemsRef.current;
     try {
-      if (!items.length) {
+      if (!items.length && !flushingItems.length) {
         window.localStorage.removeItem(storageKey);
         return;
       }
       window.localStorage.setItem(storageKey, JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         windowId: historyWindowId,
-        holdUntilNextInput: Boolean(privateInputAggregateHoldUntilNextInputRef.current),
+        mode: privateInputAggregateModeRef.current,
+        pauseReason: privateInputAggregatePauseReasonRef.current,
+        holdUntilNextInput: privateInputAggregateModeRef.current === "paused",
+        holdReason: privateInputAggregatePauseReasonRef.current,
         expiresAt: privateInputAggregateDeadlineRef.current ? new Date(privateInputAggregateDeadlineRef.current).toISOString() : "",
         updatedAt: new Date().toISOString(),
         items: items.map(queuedPrivateInputForLocalStorage),
+        flushingItems: flushingItems.map(queuedPrivateInputForLocalStorage),
       }));
     } catch (e: any) {
       logSumiTalkClientEvent("private_input_aggregate_persist_error", {
@@ -985,9 +1189,62 @@ export function MainChatScreen({
     }
   }
 
+  function loadPrivateInputAggregateDeletedMessageIds(): Set<string> {
+    if (groupChatMode || !historyWindowId) return new Set();
+    try {
+      const payload = JSON.parse(window.localStorage.getItem(privateInputAggregateDeletedStorageKey(historyWindowId)) || "null");
+      const ids = Array.isArray(payload?.ids) ? payload.ids : Array.isArray(payload) ? payload : [];
+      return new Set(ids.map((id: any) => String(id || "").trim()).filter(Boolean));
+    } catch {
+      return new Set();
+    }
+  }
+
+  function persistPrivateInputAggregateDeletedMessageIds(reason: string) {
+    if (groupChatMode || !historyWindowId) return;
+    const ids = [...privateInputAggregateDeletedMessageIdsRef.current].filter(Boolean).slice(-500);
+    privateInputAggregateDeletedMessageIdsRef.current = new Set(ids);
+    try {
+      if (!ids.length) {
+        window.localStorage.removeItem(privateInputAggregateDeletedStorageKey(historyWindowId));
+        return;
+      }
+      window.localStorage.setItem(privateInputAggregateDeletedStorageKey(historyWindowId), JSON.stringify({
+        schemaVersion: 1,
+        windowId: historyWindowId,
+        updatedAt: new Date().toISOString(),
+        ids,
+      }));
+    } catch (e: any) {
+      logSumiTalkClientEvent("private_input_aggregate_deleted_persist_error", {
+        reason,
+        error: String(e?.message || e),
+      }, "warning");
+    }
+  }
+
+  function rememberDeletedPrivateInputMessages(messageIds: Set<string>, source: string) {
+    const current = privateInputAggregateDeletedMessageIdsRef.current;
+    let changed = false;
+    for (const rawId of messageIds) {
+      const id = String(rawId || "").trim();
+      if (!id || current.has(id)) continue;
+      current.add(id);
+      changed = true;
+    }
+    if (changed) persistPrivateInputAggregateDeletedMessageIds(source);
+  }
+
+  function filterDeletedDisplayMessages(nextMessages: ChatDraftMessage[]): ChatDraftMessage[] {
+    const deletedIds = privateInputAggregateDeletedMessageIdsRef.current;
+    if (!deletedIds.size) return sanitizeHistoryMessages(nextMessages);
+    return sanitizeHistoryMessages(nextMessages).filter((message) => !deletedIds.has(String(message.id || "").trim()));
+  }
+
   function restorePrivateInputAggregate() {
     resetPrivateInputAggregateMemory();
     if (groupChatMode || !historyWindowId) return;
+    privateInputAggregateDeletedMessageIdsRef.current = loadPrivateInputAggregateDeletedMessageIds();
     const storageKey = privateInputAggregateStorageKey(historyWindowId);
     let payload: any = null;
     try {
@@ -995,25 +1252,47 @@ export function MainChatScreen({
     } catch {
       payload = null;
     }
-    const items = Array.isArray(payload?.items)
+    const deletedIds = privateInputAggregateDeletedMessageIdsRef.current;
+    const storedItems: QueuedPrivateInput[] = Array.isArray(payload?.items)
       ? payload.items.map(normalizeQueuedPrivateInput).filter((item: QueuedPrivateInput | null): item is QueuedPrivateInput => Boolean(item))
       : [];
+    const flushingItems: QueuedPrivateInput[] = Array.isArray(payload?.flushingItems)
+      ? payload.flushingItems.map(normalizeQueuedPrivateInput).filter((item: QueuedPrivateInput | null): item is QueuedPrivateInput => Boolean(item))
+      : [];
+    const filteredStoredItems = storedItems.filter((item) => !deletedIds.has(String(item.userMessage.id || "").trim()));
+    const filteredFlushingItems = flushingItems.filter((item) => !deletedIds.has(String(item.userMessage.id || "").trim()));
+    const restoredMode = normalizePrivateInputAggregateMode(payload?.mode);
+    const restoredPauseReason = normalizePrivateInputAggregatePauseReason(payload?.pauseReason ?? payload?.holdReason);
+    const items = restoredMode === "flushing" || filteredFlushingItems.length
+      ? [...filteredFlushingItems, ...filteredStoredItems]
+      : filteredStoredItems;
     if (!items.length || String(payload?.windowId || "") !== historyWindowId) {
       try {
         window.localStorage.removeItem(storageKey);
       } catch {}
       return;
     }
-    privateInputAggregateHoldUntilNextInputRef.current = Boolean(payload?.holdUntilNextInput);
+    const mode: PrivateInputAggregateMode = filteredFlushingItems.length || restoredMode === "flushing"
+      ? "paused"
+      : restoredMode === "paused" || Boolean(payload?.holdUntilNextInput)
+        ? "paused"
+        : "armed";
+    const pauseReason: PrivateInputAggregatePauseReason = mode === "paused"
+      ? (filteredFlushingItems.length || restoredMode === "flushing" ? "failure" : restoredPauseReason || "cancel")
+      : null;
+    setPrivateInputAggregateMode(mode, pauseReason);
     privateInputAggregateDeadlineRef.current = privateInputAggregateDeadlineFromPayload(payload);
     setPrivateInputAggregateQueue(items);
+    privateInputAggregateFlushingItemsRef.current = [];
     logSumiTalkClientEvent("private_input_aggregate_restore", {
       parts: items.length,
-      holdUntilNextInput: privateInputAggregateHoldUntilNextInputRef.current,
+      mode,
+      pauseReason,
       remainingMs: privateInputAggregateRemainingMs(),
     }, "warning");
-    if (privateInputAggregateHoldUntilNextInputRef.current) {
-      setPrivateInputAggregateCancelable(false);
+    if (mode === "paused") {
+      clearPrivateInputAggregateTimer();
+      privateInputAggregateDeadlineRef.current = 0;
       setActiveSendStageLabel("等待继续输入");
     } else {
       setActiveSendStageLabel("等待继续输入");
@@ -1037,11 +1316,11 @@ export function MainChatScreen({
   }
 
   function clearHeldPrivateInputAggregate(reason: string) {
-    if (!privateInputAggregateHoldUntilNextInputRef.current || !privateInputAggregateQueueRef.current.length) return;
+    if (privateInputAggregateModeRef.current !== "paused" || !privateInputAggregateQueueRef.current.length) return;
     clearPrivateInputAggregateTimer();
     setPrivateInputAggregateQueue([]);
-    setPrivateInputAggregateCancelable(false);
-    privateInputAggregateHoldUntilNextInputRef.current = false;
+    privateInputAggregateFlushingItemsRef.current = [];
+    setPrivateInputAggregateMode("idle");
     privateInputAggregateDeadlineRef.current = 0;
     setActiveSendStageLabel("");
     persistPrivateInputAggregate(reason);
@@ -1051,13 +1330,14 @@ export function MainChatScreen({
   }
 
   async function saveDisplayHistoryWithoutAggregateMessages(messageIds: Set<string>, source: string): Promise<ChatDraftMessage[]> {
-    const currentMessages = sanitizeHistoryMessages(messagesRef.current);
+    rememberDeletedPrivateInputMessages(messageIds, source);
+    const currentMessages = filterDeletedDisplayMessages(messagesRef.current);
     const filteredCurrent = currentMessages.filter((msg) => !messageIds.has(String(msg.id || "")));
     const localDeviceId = String(deviceId || await getOrCreatePanelDeviceId()).trim();
     if (!localDeviceId || !historyWindowId) return filteredCurrent;
-    const storedMessages = sanitizeHistoryMessages(await readLocalChatHistory(localDeviceId, historyWindowId));
+    const storedMessages = filterDeletedDisplayMessages(await readLocalChatHistory(localDeviceId, historyWindowId));
     const baseMessages = storedMessages.length
-      ? mergeHistorySnapshots(storedMessages, currentMessages)
+      ? filterDeletedDisplayMessages(mergeHistorySnapshots(storedMessages, currentMessages))
       : currentMessages;
     const filteredForStorage = baseMessages.filter((msg) => !messageIds.has(String(msg.id || "")));
     await writeLocalChatHistory(
@@ -1065,6 +1345,7 @@ export function MainChatScreen({
       historyWindowId,
       stripPreviewUrlsFromMessages(filteredForStorage),
     );
+    await deleteLocalChatHistoryMessages(localDeviceId, historyWindowId, [...messageIds]);
     logSumiTalkClientEvent("private_input_aggregate_history_save", {
       source,
       removed: messageIds.size,
@@ -1081,10 +1362,16 @@ export function MainChatScreen({
   function reschedulePrivateInputAggregateAfterEdit() {
     if (!privateInputAggregateQueueRef.current.length) {
       clearPrivateInputAggregateTimer();
-      setPrivateInputAggregateCancelable(false);
+      setPrivateInputAggregateMode("idle");
       setActiveSendStageLabel("");
-      privateInputAggregateHoldUntilNextInputRef.current = false;
       privateInputAggregateDeadlineRef.current = 0;
+      persistPrivateInputAggregate("edit_empty");
+      return;
+    }
+    if (privateInputAggregateModeRef.current === "paused") {
+      clearPrivateInputAggregateTimer();
+      privateInputAggregateDeadlineRef.current = 0;
+      setActiveSendStageLabel("等待继续输入");
       return;
     }
     reschedulePrivateInputAggregateWithinDeadline();
@@ -1092,42 +1379,22 @@ export function MainChatScreen({
 
   async function cancelPendingPrivateInputAggregate() {
     const queued = [...privateInputAggregateQueueRef.current];
-    if (!queued.length || !privateInputAggregateCancelableRef.current) return;
-    if (privateInputAggregateRemainingMs() <= 0) {
-      setPrivateInputAggregateCancelable(false);
-      reschedulePrivateInputAggregateWithinDeadline();
-      return;
-    }
-    const messageIds = new Set(queued.map((item) => item.userMessage.id));
+    if (!queued.length || privateInputAggregateModeRef.current !== "armed") return;
     clearPrivateInputAggregateTimer();
-    let nextMessages: ChatDraftMessage[];
-    try {
-      nextMessages = await saveDisplayHistoryWithoutAggregateMessages(messageIds, "private_input_aggregate_cancel");
-    } catch (e: any) {
-      logSumiTalkClientEvent("private_input_aggregate_cancel_history_save_error", {
-        parts: queued.length,
-        error: String(e?.message || e),
-      }, "error");
-      toast(`取消失败：${e?.message || e}`);
-      reschedulePrivateInputAggregateWithinDeadline();
-      return;
-    }
-    applyDisplayHistoryMessages(nextMessages);
-    setPrivateInputAggregateQueue([]);
-    setPrivateInputAggregateCancelable(false);
-    privateInputAggregateHoldUntilNextInputRef.current = false;
+    setPrivateInputAggregateMode("paused", "cancel");
     privateInputAggregateDeadlineRef.current = 0;
-    setActiveSendStageLabel("");
-    persistPrivateInputAggregate("cancel");
-    logSumiTalkClientEvent("private_input_aggregate_cancel", { parts: queued.length }, "warning");
+    setActiveSendStageLabel("等待继续输入");
+    persistPrivateInputAggregate("cancel_hold");
+    logSumiTalkClientEvent("private_input_aggregate_cancel_hold", { parts: queued.length }, "warning");
   }
 
   async function deletePendingPrivateInput(target: ChatBubbleMenuTargetBase, mode: "delete" | "edit") {
     const messageId = String(target.messageId || "").trim();
     const item = queuedPrivateInputForMessage(messageId);
-    if (!item || !privateInputAggregateCancelableRef.current || privateInputAggregateRemainingMs() <= 0) {
-      if (privateInputAggregateRemainingMs() <= 0) {
-        setPrivateInputAggregateCancelable(false);
+    const canEditQueued = privateInputAggregateModeRef.current === "paused"
+      || (privateInputAggregateModeRef.current === "armed" && privateInputAggregateRemainingMs() > 0);
+    if (!item || !canEditQueued) {
+      if (privateInputAggregateModeRef.current !== "paused" && privateInputAggregateRemainingMs() <= 0) {
         reschedulePrivateInputAggregateWithinDeadline();
       }
       toast("这条已经开始发送，不能改了");
@@ -1208,10 +1475,10 @@ export function MainChatScreen({
     const transcriptItem = audioAttachments.find((item) => String(item.transcript || "").trim()) || audioAttachments[0];
     const transcript = sanitizeVoiceTranscriptText(transcriptItem?.transcript || "", transcriptItem?.durationMs || 0);
     const messageId = String(args.messageId || args.id || "").trim();
-    const aggregateItem = args.role === "user" && privateInputAggregateCancelable
+    const aggregateItem = args.role === "user" && (privateInputAggregateCancelable || privateInputAggregateHeld)
       ? queuedPrivateInputForMessage(messageId)
       : null;
-    const aggregateEditable = Boolean(aggregateItem && privateInputAggregateCancelable);
+    const aggregateEditable = Boolean(aggregateItem && (privateInputAggregateCancelable || privateInputAggregateHeld));
     return {
       id: args.id,
       messageId,
@@ -1466,24 +1733,25 @@ export function MainChatScreen({
             error: String(e?.message || e),
           }, "warning");
         }
-        const localMessages = sanitizeHistoryMessages(await readLocalChatHistory(resolvedDeviceId, historyWindowId));
+        privateInputAggregateDeletedMessageIdsRef.current = loadPrivateInputAggregateDeletedMessageIds();
+        const localMessages = filterDeletedDisplayMessages(await readLocalChatHistory(resolvedDeviceId, historyWindowId));
         const localRecoveryWindowIds = groupChatMode
           ? uniqueNonEmptyStrings([historyWindowId, displayHistoryWindowId, windowId])
           : uniqueNonEmptyStrings([historyWindowId, displayHistoryWindowId, windowId, MAIN_SUMITALK_DISPLAY_WINDOW_ID]);
         const localCandidateRows = await readLocalChatHistoryRows(localRecoveryWindowIds);
         const localCandidateMessages = localCandidateRows.reduce(
           (best, row) => {
-            const rowMessages = sanitizeHistoryMessages((row?.messages || []) as ChatDraftMessage[]);
+            const rowMessages = filterDeletedDisplayMessages((row?.messages || []) as ChatDraftMessage[]);
             return pickBetterHistory(rowMessages, best, []);
           },
           [] as ChatDraftMessage[],
         );
         const legacyLocalGroups = [];
         if (!groupChatMode && windowId && windowId !== historyWindowId) {
-          legacyLocalGroups.push(sanitizeHistoryMessages(await readLocalChatHistory(resolvedDeviceId, windowId)));
+          legacyLocalGroups.push(filterDeletedDisplayMessages(await readLocalChatHistory(resolvedDeviceId, windowId)));
         }
         if (!groupChatMode && historyWindowId !== MAIN_SUMITALK_DISPLAY_WINDOW_ID) {
-          legacyLocalGroups.push(sanitizeHistoryMessages(await readLocalChatHistory(resolvedDeviceId, MAIN_SUMITALK_DISPLAY_WINDOW_ID)));
+          legacyLocalGroups.push(filterDeletedDisplayMessages(await readLocalChatHistory(resolvedDeviceId, MAIN_SUMITALK_DISPLAY_WINDOW_ID)));
         }
         const legacyLocalMessages = legacyLocalGroups.reduce(
           (best, item) => pickBetterHistory(item, best, []),
@@ -1492,7 +1760,7 @@ export function MainChatScreen({
         const recoveredLocalMessages = pickBetterHistory(localCandidateMessages, localMessages, []);
         const fallbackLocalMessages = pickBetterHistory(recoveredLocalMessages, legacyLocalMessages, []);
         if (!cancelled && fallbackLocalMessages.length) {
-          const nextLocalMessages = mergeHistorySnapshots(fallbackLocalMessages, messagesRef.current);
+          const nextLocalMessages = filterDeletedDisplayMessages(mergeHistorySnapshots(fallbackLocalMessages, messagesRef.current));
           messagesRef.current = nextLocalMessages;
           setMessages(nextLocalMessages);
           await saveDisplayHistory(nextLocalMessages, {
@@ -1506,7 +1774,7 @@ export function MainChatScreen({
         let remoteMessages: ChatDraftMessage[] = [];
         try {
           const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(remoteHistoryWindowId));
-          remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
+          remoteMessages = filterDeletedDisplayMessages(Array.isArray(j?.messages) ? j.messages : []);
         } catch (e: any) {
           logSumiTalkClientEvent("chat_remote_history_load_error", {
             error: String(e?.message || e),
@@ -1514,7 +1782,7 @@ export function MainChatScreen({
         }
         if (cancelled) return;
         const preferredSnapshot = pickBetterHistory(remoteMessages, fallbackLocalMessages, seedMessages);
-        const next = mergeHistorySnapshots(preferredSnapshot, messagesRef.current);
+        const next = filterDeletedDisplayMessages(mergeHistorySnapshots(preferredSnapshot, messagesRef.current));
         messagesRef.current = next;
         setMessages(next);
         if (hasNonSeedHistoryMessages(next)) {
@@ -1562,7 +1830,7 @@ export function MainChatScreen({
     nextMessages: ChatDraftMessage[],
     options: { localDeviceId?: string; strict?: boolean; source?: string } = {},
   ) {
-    const sanitizedMessages = stripPreviewUrlsFromMessages(sanitizeHistoryMessages(nextMessages));
+    const sanitizedMessages = stripPreviewUrlsFromMessages(filterDeletedDisplayMessages(nextMessages));
     const resolvedDeviceId = String(options.localDeviceId || deviceId || "").trim();
     if (resolvedDeviceId && historyWindowId) {
       try {
@@ -1592,12 +1860,12 @@ export function MainChatScreen({
     remoteHistorySyncingRef.current = true;
     try {
       const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(remoteHistoryWindowId));
-      const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
+      const remoteMessages = filterDeletedDisplayMessages(Array.isArray(j?.messages) ? j.messages : []);
       if (!remoteMessages.length) return;
-      const current = messagesRef.current;
+      const current = filterDeletedDisplayMessages(messagesRef.current);
       const beforeSignature = historySnapshotSignature(current);
       const preferredSnapshot = pickBetterHistory(remoteMessages, current, seedMessages);
-      const next = mergeHistorySnapshots(preferredSnapshot, current);
+      const next = filterDeletedDisplayMessages(mergeHistorySnapshots(preferredSnapshot, current));
       if (historySnapshotSignature(next) === beforeSignature) return;
       messagesRef.current = next;
       setMessages(next);
@@ -1853,17 +2121,24 @@ export function MainChatScreen({
     },
   });
 
+  function applyStreamingSumiTalkChatEvent(event: SumiTalkChatRealtimeEvent): boolean {
+    const current = messagesRef.current;
+    const beforeSignature = historySnapshotSignature(current);
+    const nextMessages = applySumiTalkChatEventToMessages(current, event);
+    if (historySnapshotSignature(nextMessages) === beforeSignature) return false;
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    saveDisplayHistoryInBackground(nextMessages, { localDeviceId: deviceId });
+    if (realModeEnabledRef.current) void refreshRealBodyStatus();
+    return true;
+  }
+
   useSumiTalkChatRealtime({
     enabled: Boolean(deviceId),
     deviceId,
     windowId: String(windowId || "__default__").trim() || "__default__",
     onEvent: (event: SumiTalkChatRealtimeEvent) => {
-      const current = messagesRef.current;
-      const beforeSignature = historySnapshotSignature(current);
-      const nextMessages = applySumiTalkChatEventToMessages(current, event);
-      if (historySnapshotSignature(nextMessages) === beforeSignature) return;
-      messagesRef.current = nextMessages;
-      setMessages(nextMessages);
+      applyStreamingSumiTalkChatEvent(event);
     },
   });
 
@@ -2128,6 +2403,9 @@ export function MainChatScreen({
         assistantId,
         assistantCreatedAt,
         logEvent: logSumiTalkSendStage,
+        onEvent: (event) => {
+          applyStreamingSumiTalkChatEvent(event);
+        },
       });
       if (!result) return "";
       const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, result.assistantMessage);
@@ -2458,6 +2736,8 @@ export function MainChatScreen({
     delayMs = SUMITALK_PRIVATE_INPUT_IDLE_MS,
     reason: "idle" | "busy_retry" = "idle",
   ) {
+    if (!privateInputAggregateQueueRef.current.length || privateInputAggregateModeRef.current === "paused") return;
+    setPrivateInputAggregateMode("armed");
     if (privateInputAggregateTimerRef.current) {
       window.clearTimeout(privateInputAggregateTimerRef.current);
       privateInputAggregateTimerRef.current = null;
@@ -2502,12 +2782,13 @@ export function MainChatScreen({
       setDeviceId((prev) => (prev === resolvedDeviceId ? prev : resolvedDeviceId));
     }
     const pendingBefore = privateInputAggregateQueueRef.current.length;
-    if (privateInputAggregateHoldUntilNextInputRef.current) {
+    if (privateInputAggregateModeRef.current === "paused") {
       const queuedSource = resolveAggregateSource(privateInputAggregateQueueRef.current);
-      if (shouldDropPrivateAggregateAfterFailure(queuedSource, privateInputAggregateQueueRef.current, messagesRef.current)) {
+      const pauseReason = privateInputAggregatePauseReasonRef.current;
+      if (pauseReason === "failure"
+        && shouldDropPrivateAggregateAfterFailure(queuedSource, privateInputAggregateQueueRef.current, messagesRef.current)) {
         setPrivateInputAggregateQueue([]);
-        setPrivateInputAggregateCancelable(false);
-        privateInputAggregateHoldUntilNextInputRef.current = false;
+        setPrivateInputAggregateMode("idle");
         privateInputAggregateDeadlineRef.current = 0;
         persistPrivateInputAggregate("drop_image_too_large_before_resume");
         logSumiTalkClientEvent("private_input_aggregate_drop_image_too_large_before_resume", {
@@ -2515,10 +2796,11 @@ export function MainChatScreen({
           source,
         }, "warning");
       } else {
-        privateInputAggregateHoldUntilNextInputRef.current = false;
-        logSumiTalkClientEvent("private_input_aggregate_resume_after_failure", {
+        setPrivateInputAggregateMode("armed");
+        logSumiTalkClientEvent("private_input_aggregate_resume_after_pause", {
           pendingBefore,
           source,
+          pauseReason,
         }, "warning");
       }
     }
@@ -2559,18 +2841,26 @@ export function MainChatScreen({
       toast(`消息暂存失败：${e?.message || e}`);
       return false;
     }
-    setPrivateInputAggregateQueue([...privateInputAggregateQueueRef.current, {
+    const queuedItem: QueuedPrivateInput = {
       content,
       displayContent,
       attachments,
       source,
       modelContent: options.modelContent ?? buildPrivateUserContent(content, attachments),
       userMessage,
-    }]);
+    };
+    const currentQueue = privateInputAggregateQueueRef.current;
+    const shouldPrependRealText = realModeEnabledRef.current
+      && source === "text"
+      && !attachments.length
+      && currentQueue.length > 0
+      && currentQueue.some((item) => item.attachments.length > 0)
+      && !currentQueue.some((item) => item.source === "text" && !item.attachments.length);
+    setPrivateInputAggregateQueue(shouldPrependRealText ? [queuedItem, ...currentQueue] : [...currentQueue, queuedItem]);
     privateInputAggregateDeadlineRef.current = Date.now() + SUMITALK_PRIVATE_INPUT_IDLE_MS;
-    setPrivateInputAggregateCancelable(true);
+    setPrivateInputAggregateMode("armed");
     persistPrivateInputAggregate("enqueue");
-    if (sending) {
+    if (sendingRef.current) {
       logSumiTalkClientEvent("private_input_aggregate_enqueue_while_busy", {
         pendingBefore,
         source,
@@ -2584,9 +2874,8 @@ export function MainChatScreen({
   async function flushPrivateInputAggregate(expectedVersion: number) {
     if (expectedVersion !== privateInputAggregateVersionRef.current) return;
     if (!privateInputAggregateQueueRef.current.length) return;
-    if (privateInputAggregateHoldUntilNextInputRef.current) return;
-    setPrivateInputAggregateCancelable(false);
-    if (sending) {
+    if (privateInputAggregateModeRef.current === "paused") return;
+    if (sendingRef.current) {
       logSumiTalkClientEvent("private_input_aggregate_wait_busy", {
         parts: privateInputAggregateQueueRef.current.length,
       }, "warning");
@@ -2605,7 +2894,8 @@ export function MainChatScreen({
     }
     const rawQueued = privateInputAggregateQueueRef.current;
     setPrivateInputAggregateQueue([]);
-    setPrivateInputAggregateCancelable(false);
+    privateInputAggregateFlushingItemsRef.current = rawQueued;
+    setPrivateInputAggregateMode("flushing");
     privateInputAggregateDeadlineRef.current = 0;
     if (privateInputAggregateTimerRef.current) {
       window.clearTimeout(privateInputAggregateTimerRef.current);
@@ -2617,8 +2907,9 @@ export function MainChatScreen({
     try {
       queued = await Promise.all(rawQueued.map(compressQueuedPrivateInputImages));
     } catch (e: any) {
+      privateInputAggregateFlushingItemsRef.current = [];
       setPrivateInputAggregateQueue([...rawQueued, ...privateInputAggregateQueueRef.current]);
-      privateInputAggregateHoldUntilNextInputRef.current = true;
+      setPrivateInputAggregateMode("paused", "failure");
       privateInputAggregateDeadlineRef.current = 0;
       setActiveSendStageLabel("等待继续输入");
       persistPrivateInputAggregate("hold_after_prepare_error");
@@ -2648,10 +2939,14 @@ export function MainChatScreen({
       modelContent,
       aggregateUserMessages: queued.map((item) => item.userMessage),
     });
+    privateInputAggregateFlushingItemsRef.current = [];
     if (!ok) {
       if (shouldDropPrivateAggregateAfterFailure(source, queued, messagesRef.current)) {
-        privateInputAggregateHoldUntilNextInputRef.current = false;
-        privateInputAggregateDeadlineRef.current = 0;
+        if (!privateInputAggregateQueueRef.current.length) {
+          setPrivateInputAggregateMode("idle");
+          privateInputAggregateDeadlineRef.current = 0;
+          setActiveSendStageLabel("");
+        }
         persistPrivateInputAggregate("drop_image_too_large");
         logSumiTalkClientEvent("private_input_aggregate_drop_image_too_large", {
           parts: queued.length,
@@ -2659,8 +2954,9 @@ export function MainChatScreen({
         }, "warning");
       } else {
         setPrivateInputAggregateQueue([...queued, ...privateInputAggregateQueueRef.current]);
-        privateInputAggregateHoldUntilNextInputRef.current = true;
+        setPrivateInputAggregateMode("paused", "failure");
         privateInputAggregateDeadlineRef.current = 0;
+        setActiveSendStageLabel("等待继续输入");
         persistPrivateInputAggregate("hold_after_failure");
         logSumiTalkClientEvent("private_input_aggregate_hold_after_failure", {
           parts: queued.length,
@@ -2669,8 +2965,16 @@ export function MainChatScreen({
         }, "warning");
       }
     } else {
-      privateInputAggregateHoldUntilNextInputRef.current = false;
-      privateInputAggregateDeadlineRef.current = 0;
+      if (!privateInputAggregateQueueRef.current.length) {
+        setPrivateInputAggregateMode("idle");
+        privateInputAggregateDeadlineRef.current = 0;
+        setActiveSendStageLabel("");
+      } else if (privateInputAggregateModeRef.current === "flushing") {
+        privateInputAggregateDeadlineRef.current = Date.now() + SUMITALK_PRIVATE_INPUT_IDLE_MS;
+        setPrivateInputAggregateMode("armed");
+        setActiveSendStageLabel("等待继续输入");
+        schedulePrivateInputAggregateFlush();
+      }
       persistPrivateInputAggregate("flush_ok");
     }
   }
@@ -2711,7 +3015,7 @@ export function MainChatScreen({
       logSumiTalkClientEvent("chat_send_skipped", { source, reason: "empty" }, "warning");
       return false;
     }
-    if (sending && !canSendWhileBusy) {
+    if (sendingRef.current && !canSendWhileBusy) {
       logSumiTalkClientEvent("chat_send_skipped", { source, reason: "busy" }, "warning");
       return false;
     }
@@ -3043,6 +3347,9 @@ export function MainChatScreen({
             abortSignal: abortController?.signal,
             logEvent: logSumiTalkSendStage,
             skipStaleAttemptUpdate,
+            onEvent: (event) => {
+              applyStreamingSumiTalkChatEvent(event);
+            },
             onJobId: async (jobId) => {
               if (activeChatRequestRef.current?.clientRequestId === clientRequestId && isCurrentAttempt()) {
                 activeChatRequestRef.current = { ...activeChatRequestRef.current, jobId };
@@ -3093,6 +3400,9 @@ export function MainChatScreen({
             abortSignal: abortController?.signal,
             logEvent: logSumiTalkSendStage,
             skipStaleAttemptUpdate,
+            onEvent: (event) => {
+              applyStreamingSumiTalkChatEvent(event);
+            },
             onJobId: async (jobId) => {
               if (activeChatRequestRef.current?.clientRequestId === clientRequestId && isCurrentAttempt()) {
                 activeChatRequestRef.current = { ...activeChatRequestRef.current, jobId };
@@ -3213,21 +3523,28 @@ export function MainChatScreen({
     const drafts = pendingImageDraftsRef.current;
     if (!drafts.length || sending || mediaBusy) return false;
     const files = drafts.map((draft) => draft.file);
+    const realModeText = realModeEnabledRef.current ? input.trim() : "";
+    const imageCaptionText = realModeText ? "" : input;
     setMediaBusy(true);
     try {
       logSumiTalkClientEvent("image_upload_start", {
         count: files.length,
         names: files.map((file) => file.name).slice(0, 8).join(", "),
         bytes: files.reduce((sum, file) => sum + file.size, 0),
+        realModeText: Boolean(realModeText),
       });
-      const prepared = await prepareImagesPrivateChatInput(files, input);
+      const prepared = await prepareImagesPrivateChatInput(files, imageCaptionText);
       logSumiTalkClientEvent("image_upload_ok", {
         count: prepared.attachments.length,
         bytes: prepared.attachments.reduce((sum, attachment) => sum + Number(attachment.size || 0), 0),
         hasRemoteUrl: prepared.attachments.some((attachment) => Boolean(attachment.remoteUrl)),
         hasRemoteKey: prepared.attachments.some((attachment) => Boolean(attachment.remoteKey)),
       });
-      const sent = await sendPreparedPrivateChatInput(prepared);
+      if (realModeText) {
+        const textSent = await sendPreparedPrivateChatInput(prepareTextPrivateChatInput(realModeText));
+        if (!textSent) return false;
+      }
+      const sent = await sendPreparedPrivateChatInput(prepared, { quote: realModeText ? null : undefined });
       if (sent) {
         clearPendingImageDrafts();
       }
@@ -3250,8 +3567,11 @@ export function MainChatScreen({
     if (sent) refocusTextInputSoon();
   }
 
-  async function sendPreparedPrivateChatInput(prepared: PreparedPrivateChatInput): Promise<boolean> {
-    const quote = quotedBubble;
+  async function sendPreparedPrivateChatInput(
+    prepared: PreparedPrivateChatInput,
+    options: { quote?: ChatBubbleQuote | null } = {},
+  ): Promise<boolean> {
+    const quote = Object.prototype.hasOwnProperty.call(options, "quote") ? options.quote : quotedBubble;
     const finalPrepared = quote ? preparedInputWithQuote(prepared, quote) : prepared;
     const sent = await sendChatContent(finalPrepared.content, {
       displayContent: finalPrepared.displayContent,
@@ -3260,6 +3580,7 @@ export function MainChatScreen({
       modelContent: finalPrepared.modelContent,
     });
     if (sent && quote) setQuotedBubble(null);
+    if (sent && realModeEnabledRef.current) void refreshRealBodyStatus();
     return sent;
   }
 
@@ -3543,7 +3864,7 @@ export function MainChatScreen({
     ? "bg-[#F8F0F4] text-[#704A5D]"
     : "bg-[#F0F4F8] text-[#4A5568]";
   const benbenGroupActive = groupChatMode;
-  const groupedMessages = groupChatMessages(messages);
+  const groupedMessages = groupChatMessages(messages, { preserveLineBreaks: realModeEnabled });
   const assistantTyping = (sending || groupDiscussionRunning) && messages.some(
     (msg) => (msg.role === "assistant" || msg.role === "benben") && String(msg.status || "").trim().toLowerCase() === "pending",
   );
@@ -3638,11 +3959,18 @@ export function MainChatScreen({
     : "bg-[#F4F5F7]";
   const chatMessageColumnWidthClass = showChatAvatars ? "max-w-[70%]" : "max-w-[78%]";
   const chatHeaderWrapClass = hasCustomChatBackground
-    ? "absolute top-0 z-20 w-full border-b px-3 pb-2 pt-[calc(env(safe-area-inset-top,0px)+10px)]"
-    : "absolute top-0 z-20 w-full border-b px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)]";
+    ? `absolute top-0 z-20 w-full border-b px-3 ${realModeEnabled ? "pb-3" : "pb-2"} pt-[calc(env(safe-area-inset-top,0px)+10px)]`
+    : `absolute top-0 z-20 w-full border-b px-3 ${realModeEnabled ? "pb-4" : "pb-3"} pt-[calc(env(safe-area-inset-top,0px)+20px)]`;
+  const chatRealBodyCapsuleClass = hasCustomChatBackground
+    ? "max-w-[calc(100vw-9rem)] truncate rounded-full border border-white/30 bg-white/28 px-2.5 py-[2px] text-[9px] font-medium leading-[13px] text-gray-700/80 shadow-[0_5px_14px_rgba(15,23,42,0.08)] backdrop-blur-2xl"
+    : "max-w-[calc(100vw-9rem)] truncate rounded-full border border-gray-100/70 bg-white/58 px-2.5 py-[2px] text-[9px] font-medium leading-[13px] text-gray-500 shadow-[0_5px_14px_rgba(15,23,42,0.05)] backdrop-blur-xl";
   const messagesTopPaddingClass = searchOpen
-    ? hasCustomChatBackground ? "pt-[140px]" : "pt-[156px]"
-    : hasCustomChatBackground ? "pt-[88px]" : "pt-[104px]";
+    ? realModeEnabled
+      ? hasCustomChatBackground ? "pt-[164px]" : "pt-[180px]"
+      : hasCustomChatBackground ? "pt-[140px]" : "pt-[156px]"
+    : realModeEnabled
+      ? hasCustomChatBackground ? "pt-[112px]" : "pt-[128px]"
+      : hasCustomChatBackground ? "pt-[88px]" : "pt-[104px]";
   const chatBackgroundCanvasHeight = chatBackgroundHeightRef.current ? `${chatBackgroundHeightRef.current}px` : "100lvh";
 
   const stickChatToBottom = useCallback(() => {
@@ -3758,7 +4086,7 @@ export function MainChatScreen({
           <button className={chatHeaderButtonClass} onClick={onBack} aria-label="返回">
             <ChevronLeftIcon />
           </button>
-          <div className="flex min-w-0 justify-center">
+          <div className="flex min-w-0 flex-col items-center justify-start">
             <div className={chatHeaderCenterPillClass}>
               <div
                 className="max-w-full truncate font-semibold leading-[1.05] text-gray-900"
@@ -3770,6 +4098,11 @@ export function MainChatScreen({
                 <ChatHeaderStatus sending={assistantTyping} />
               </div>
             </div>
+            {realModeEnabled ? (
+              <div className={`mt-1 ${chatRealBodyCapsuleClass}`}>
+                {realBodyStatusText || formatRealModeBodyStatus(null)}
+              </div>
+            ) : null}
           </div>
           <button
             className={`${chatHeaderButtonClass} justify-self-end`}
@@ -3935,11 +4268,35 @@ export function MainChatScreen({
                         {group.role === "benben" ? "笨笨" : avatarLabel || "渡"}
                       </div>
                     ) : null}
-                    {group.parts.map((part, index) => {
-                      const matchId = getChatSearchMatchId(group.id, index);
-                      const isActiveSearchPart = activeSearchMatchId === matchId;
-                      const bubbleSkin = transparentBubbleEnabled || group.role === "benben" ? undefined : resolveBubbleSkin(assistantBubbleStyle);
-                      const hasText = Boolean(String(part.content || "").trim());
+	                    {group.parts.map((part, index) => {
+	                      const matchId = getChatSearchMatchId(group.id, index);
+	                      const isActiveSearchPart = activeSearchMatchId === matchId;
+	                      if (part.displayPart?.kind === "tool_call") {
+	                        return (
+	                          <div
+	                            key={`${group.id}-${index}`}
+	                            ref={(el) => {
+	                              searchResultRefs.current[matchId] = el;
+	                            }}
+	                            className={`max-w-full rounded-[20px] px-1 ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
+	                          >
+	                            {part.reasoning ? (
+	                              <details className="group max-w-full text-[10px] text-gray-500">
+	                                <summary className="flex cursor-pointer list-none items-center gap-1 text-[10px] font-medium leading-[14px] text-gray-400 [&::-webkit-details-marker]:hidden">
+	                                  <span className="transition-transform group-open:rotate-90">&gt;</span>
+	                                  <span>碎碎念</span>
+	                                </summary>
+	                                <div className="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap break-words pl-4 text-[10px] leading-[15px] text-gray-500">
+	                                  {part.reasoning}
+	                                </div>
+	                              </details>
+	                            ) : null}
+	                            <ChatToolCallBlock part={part.displayPart} />
+	                          </div>
+	                        );
+	                      }
+	                      const bubbleSkin = transparentBubbleEnabled || group.role === "benben" ? undefined : resolveBubbleSkin(assistantBubbleStyle);
+	                      const hasText = Boolean(String(part.content || "").trim());
                         const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
                         const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
                         const hasVoice = audioAttachments.length > 0;
@@ -4015,13 +4372,10 @@ export function MainChatScreen({
                               card={part.systemCard}
                               onOpen={() => setTravelFoodCard(part.systemCard as TravelFoodDetailCard)}
                             />
-                          ) : (
-                            <>
-                              {part.displayPart?.kind === "tool_call" ? (
-                                <ChatToolCallBlock part={part.displayPart} />
-                              ) : null}
-                              {showText ? (
-                                <ChatBubbleFrame
+	                          ) : (
+	                            <>
+	                              {showText ? (
+	                                <ChatBubbleFrame
                                   skin={bubbleSkin}
                                   className={`block w-fit max-w-full rounded-[18px] px-2.5 py-[5px] font-medium leading-[1.42] shadow-sm ${
                                     transparentBubbleEnabled
@@ -4093,10 +4447,11 @@ export function MainChatScreen({
       />
       <div className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] ${chatFooterClass}`}>
           <div className={`relative z-10 mx-4 overflow-hidden rounded-[28px] border transition-all duration-300 ease-in-out ${chatPlusPanelClass} ${plusOpen ? "mb-2 h-[194px] opacity-100" : "mb-0 h-0 border-transparent opacity-0"}`}>
-            <div className="grid grid-cols-3 gap-x-3 gap-y-3 px-5 pb-4 pt-4">
+            <div className="grid grid-cols-4 gap-x-2 gap-y-3 px-4 pb-4 pt-4">
               <ChatActionButton label="图片" onClick={openImagePicker} />
               <ChatActionButton label="画画" onClick={openDoodleBoard} />
               <ChatActionButton label="文档" onClick={openDocumentPicker} />
+              <ChatActionButton label="Real" active={realModeEnabled} onClick={toggleRealMode} />
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
               <ChatActionButton label="通话" onClick={() => { setPlusOpen(false); onOpenCall(); }} />
               <ChatActionButton

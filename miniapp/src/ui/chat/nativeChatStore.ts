@@ -63,6 +63,25 @@ export const nativeChatStore: ChatHistoryStore = {
     });
   },
 
+  async deleteLocalChatHistoryMessages(deviceId: string, windowId: string, messageIds: string[]): Promise<void> {
+    const now = new Date().toISOString();
+    const ids = messageIds.map((id) => String(id || "").trim()).filter(Boolean);
+    if (!ids.length) return;
+    await SumiChatStore.upsertMessages({
+      deviceId,
+      windowId,
+      messages: ids.map((id) => ({
+        id,
+        role: "user",
+        content: "deleted",
+        createdAt: now,
+        updatedAt: now,
+        status: "sent",
+        deletedAt: now,
+      })) as ChatHistoryMessage[],
+    });
+  },
+
   async migrateLocalChatHistoryDevice(oldDeviceId: string, newDeviceId: string): Promise<void> {
     await SumiChatStore.migrateDevice({ oldDeviceId, newDeviceId });
   },

@@ -110,6 +110,16 @@ export async function writeLocalChatHistory(deviceId: string, windowId: string, 
   );
 }
 
+export async function deleteLocalChatHistoryMessages(deviceId: string, windowId: string, messageIds: string[]): Promise<void> {
+  const ids = (Array.isArray(messageIds) ? messageIds : []).map((id) => String(id || "").trim()).filter(Boolean);
+  if (!ids.length) return;
+  await mutateNativeOrThrow(
+    "deleteLocalChatHistoryMessages",
+    () => nativeChatStore.deleteLocalChatHistoryMessages(deviceId, windowId, ids),
+    undefined,
+  );
+}
+
 export async function migrateLocalChatHistoryDevice(oldDeviceId: string, newDeviceId: string): Promise<void> {
   await mutateNativeOrThrow(
     "migrateLocalChatHistoryDevice",
