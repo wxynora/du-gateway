@@ -1912,6 +1912,24 @@ def chat_completions():
                 break
             if isinstance(msg, dict):
                 _accumulate_nonstream_reasoning(msg)
+                try:
+                    reasoning_event_text, _reasoning_event_details, reasoning_event_omitted = _extract_reasoning_text_and_details(msg)
+                    if reasoning_event_text or reasoning_event_omitted:
+                        _emit_sumitalk_chat_event(
+                            "assistant_reasoning",
+                            {
+                                "round": tool_rounds_used + 1,
+                                "text": reasoning_event_text,
+                                "omitted": bool(reasoning_event_omitted),
+                            },
+                        )
+                except Exception:
+                    sumitalk_logger.debug(
+                        "sumitalk_reasoning_event_emit_failed job_id=%s round=%s",
+                        sumitalk_job_id,
+                        tool_rounds_used + 1,
+                        exc_info=True,
+                    )
                 _append_visible_tool_round_content(accumulated_tool_visible_parts, msg.get("content"))
                 visible_tool_content = _normalize_visible_reply_text(get_assistant_content_text(msg))
                 if visible_tool_content:

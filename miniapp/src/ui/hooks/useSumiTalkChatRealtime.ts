@@ -10,6 +10,7 @@ export type SumiTalkChatRealtimeEvent = {
   window_id?: string;
   round?: number;
   text?: string;
+  omitted?: boolean;
   tool_call_id?: string;
   name?: string;
   arguments?: string;

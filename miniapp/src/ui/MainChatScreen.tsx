@@ -41,6 +41,7 @@ import {
   sanitizeHistoryMessages,
   sanitizeVoiceTranscriptText,
   shouldShowGroupTime,
+  stripTransientChatDisplayParts,
   type ChatAttachment,
   type ChatDisplayPart,
   type ChatDraftMessage,
@@ -375,6 +376,32 @@ function ChatToolCallBlock({ part }: { part: ChatDisplayPart }) {
               <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-[14px] text-gray-500">{resultText}</pre>
             </div>
           ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ChatReasoningBlock({ part }: { part: ChatDisplayPart }) {
+  const [open, setOpen] = useState(true);
+  if (part.kind !== "reasoning") return null;
+  const text = String(part.text || "").trim();
+  if (!text) return null;
+  const label = part.round ? `碎碎念 · 第${part.round}轮` : "碎碎念";
+  return (
+    <div className="max-w-full px-1 text-[10px] leading-[15px] text-gray-500">
+      <button
+        type="button"
+        className="flex max-w-full items-center gap-1 text-[10px] font-medium leading-[14px] text-gray-400"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <span className={`transition-transform ${open ? "rotate-90" : ""}`}>&gt;</span>
+        <span>{label}</span>
+      </button>
+      {open ? (
+        <div className="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap break-words border-l border-gray-200 pl-3 text-[10px] leading-[15px] text-gray-500">
+          {text}
         </div>
       ) : null}
     </div>
@@ -1343,7 +1370,7 @@ export function MainChatScreen({
     await writeLocalChatHistory(
       localDeviceId,
       historyWindowId,
-      stripPreviewUrlsFromMessages(filteredForStorage),
+      stripPreviewUrlsFromMessages(stripTransientChatDisplayParts(filteredForStorage)),
     );
     await deleteLocalChatHistoryMessages(localDeviceId, historyWindowId, [...messageIds]);
     logSumiTalkClientEvent("private_input_aggregate_history_save", {
@@ -1830,7 +1857,7 @@ export function MainChatScreen({
     nextMessages: ChatDraftMessage[],
     options: { localDeviceId?: string; strict?: boolean; source?: string } = {},
   ) {
-    const sanitizedMessages = stripPreviewUrlsFromMessages(filterDeletedDisplayMessages(nextMessages));
+    const sanitizedMessages = stripPreviewUrlsFromMessages(stripTransientChatDisplayParts(filterDeletedDisplayMessages(nextMessages)));
     const resolvedDeviceId = String(options.localDeviceId || deviceId || "").trim();
     if (resolvedDeviceId && historyWindowId) {
       try {
@@ -4273,6 +4300,19 @@ export function MainChatScreen({
 	                    {group.parts.map((part, index) => {
 	                      const matchId = getChatSearchMatchId(group.id, index);
 	                      const isActiveSearchPart = activeSearchMatchId === matchId;
+	                      if (part.displayPart?.kind === "reasoning") {
+	                        return (
+	                          <div
+	                            key={`${group.id}-${index}`}
+	                            ref={(el) => {
+	                              searchResultRefs.current[matchId] = el;
+	                            }}
+	                            className={`max-w-full rounded-[20px] px-1 ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
+	                          >
+	                            <ChatReasoningBlock part={part.displayPart} />
+	                          </div>
+	                        );
+	                      }
 	                      if (part.displayPart?.kind === "tool_call") {
 	                        return (
 	                          <div

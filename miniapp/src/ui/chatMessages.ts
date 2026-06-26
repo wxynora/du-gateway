@@ -34,6 +34,14 @@ export type ChatDisplayPart =
     }
   | {
       id: string;
+      kind: "reasoning";
+      text: string;
+      round?: number;
+      omitted?: boolean;
+      transient?: boolean;
+    }
+  | {
+      id: string;
       kind: "tool_call";
       callId?: string;
       name: string;
@@ -87,6 +95,9 @@ function stableDisplayPartId(...values: any[]): string {
 }
 
 function displayPartKey(part: ChatDisplayPart): string {
+  if (part.kind === "reasoning") {
+    return `reasoning:${part.round || ""}:${part.id || stableDisplayPartId(part.text)}`;
+  }
   if (part.kind === "tool_call") {
     const fallbackKey = `${part.round || ""}:${part.name}`;
     return `tool:${part.callId || fallbackKey || part.id}`;
@@ -112,6 +123,22 @@ export function normalizeChatDisplayParts(value: any): ChatDisplayPart[] {
         id: String(raw.id || raw.event_id || `text-${stableDisplayPartId(text)}`).trim(),
         kind: "text",
         text,
+      });
+      continue;
+    }
+    if (kind === "reasoning" || kind === "assistant_reasoning" || kind === "assistant_thinking") {
+      const text = cleanShortText(raw.text || raw.reasoning || raw.thinking || raw.content || "", 12000);
+      const omitted = Boolean(raw.omitted);
+      if (!text && !omitted) continue;
+      const round = Number(raw.round || 0) || undefined;
+      const transient = Boolean(raw.transient) || kind === "assistant_reasoning";
+      out.push({
+        id: String(raw.id || raw.event_id || `reasoning-${round || ""}-${stableDisplayPartId(text || "omitted")}`).trim(),
+        kind: "reasoning",
+        text: text || "（本轮 adaptive thinking 未返回可展示正文）",
+        ...(round ? { round } : {}),
+        ...(omitted ? { omitted } : {}),
+        ...(transient ? { transient } : {}),
       });
       continue;
     }
@@ -182,7 +209,7 @@ export function mergeChatDisplayParts(...groups: Array<ChatDisplayPart[] | undef
   return out;
 }
 
-export function chatDisplayPartsFromSumiTalkEvents(events: any): ChatDisplayPart[] {
+export function chatDisplayPartsFromSumiTalkEvents(events: any, options: { includeReasoning?: boolean } = {}): ChatDisplayPart[] {
   const list = Array.isArray(events) ? events : [];
   return normalizeChatDisplayParts(list.map((event) => {
     const kind = String(event?.kind || event?.phase || "").trim();
@@ -191,6 +218,17 @@ export function chatDisplayPartsFromSumiTalkEvents(events: any): ChatDisplayPart
         id: `event-${event?.seq || event?.event_id || stableDisplayPartId(event?.text)}`,
         kind: "text",
         text: event?.text || event?.content || event?.preview || "",
+      };
+    }
+    if (kind === "assistant_reasoning") {
+      if (!options.includeReasoning) return null;
+      return {
+        id: `event-${event?.seq || event?.event_id || stableDisplayPartId(event?.text)}`,
+        kind: "reasoning",
+        text: event?.text || event?.reasoning || event?.thinking || "",
+        round: event?.round,
+        omitted: Boolean(event?.omitted),
+        transient: true,
       };
     }
     if (kind.startsWith("tool_call")) {
@@ -250,7 +288,7 @@ export function extractAssistantDisplayParts(data: any): ChatDisplayPart[] {
 }
 
 export function applySumiTalkChatEventToMessages(currentMessages: ChatDraftMessage[], event: any): ChatDraftMessage[] {
-  const parts = chatDisplayPartsFromSumiTalkEvents([event]);
+  const parts = chatDisplayPartsFromSumiTalkEvents([event], { includeReasoning: true });
   if (!parts.length) return currentMessages;
   const textAdditions = chatTextPartsFromDisplayParts(parts);
   const jid = String(event?.job_id || event?.jobId || "").trim();
@@ -281,6 +319,19 @@ export function applySumiTalkChatEventToMessages(currentMessages: ChatDraftMessa
     };
   });
   return changed ? next : list;
+}
+
+export function stripTransientChatDisplayParts(messages: ChatDraftMessage[]): ChatDraftMessage[] {
+  return (Array.isArray(messages) ? messages : []).map((message) => {
+    const parts = normalizeChatDisplayParts((message as any)?.displayParts || (message as any)?.display_parts)
+      .filter((part) => !(part.kind === "reasoning" && part.transient));
+    if (parts.length) {
+      return { ...message, displayParts: parts };
+    }
+    const { displayParts: _displayParts, ...rest } = message;
+    delete (rest as any).display_parts;
+    return rest;
+  });
 }
 
 function decodeJsonStringLiteral(value: string): string {
