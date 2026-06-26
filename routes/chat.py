@@ -1584,6 +1584,15 @@ def chat_completions():
                 },
             )
             if event:
+                sumitalk_logger.info(
+                    "sumitalk_chat_event_emitted job_id=%s kind=%s seq=%s round=%s name=%s text_chars=%s",
+                    sumitalk_job_id,
+                    kind,
+                    event.get("seq"),
+                    event.get("round"),
+                    event.get("name") or "",
+                    len(str(event.get("text") or "")),
+                )
                 publish_sumitalk_chat_event(reply_target, event, window_id=window_id)
         except Exception:
             sumitalk_logger.debug(
@@ -1899,6 +1908,28 @@ def chat_completions():
         _append_unique_reasoning_text(merged_parts, existing_reasoning_text)
         return "\n\n".join(merged_parts).strip()
 
+    def _emit_sumitalk_reasoning_event(msg_obj: dict, round_no: int) -> None:
+        if not isinstance(msg_obj, dict):
+            return
+        try:
+            reasoning_event_text, _reasoning_event_details, reasoning_event_omitted = _extract_reasoning_text_and_details(msg_obj)
+            if reasoning_event_text or reasoning_event_omitted:
+                _emit_sumitalk_chat_event(
+                    "assistant_reasoning",
+                    {
+                        "round": round_no,
+                        "text": reasoning_event_text,
+                        "omitted": bool(reasoning_event_omitted),
+                    },
+                )
+        except Exception:
+            sumitalk_logger.debug(
+                "sumitalk_reasoning_event_emit_failed job_id=%s round=%s",
+                sumitalk_job_id,
+                round_no,
+                exc_info=True,
+            )
+
     max_tool_rounds = TOOL_MAX_ROUNDS
     max_processed_tool_rounds = max(0, int(max_tool_rounds))
     tool_rounds_used = 0
@@ -1912,24 +1943,7 @@ def chat_completions():
                 break
             if isinstance(msg, dict):
                 _accumulate_nonstream_reasoning(msg)
-                try:
-                    reasoning_event_text, _reasoning_event_details, reasoning_event_omitted = _extract_reasoning_text_and_details(msg)
-                    if reasoning_event_text or reasoning_event_omitted:
-                        _emit_sumitalk_chat_event(
-                            "assistant_reasoning",
-                            {
-                                "round": tool_rounds_used + 1,
-                                "text": reasoning_event_text,
-                                "omitted": bool(reasoning_event_omitted),
-                            },
-                        )
-                except Exception:
-                    sumitalk_logger.debug(
-                        "sumitalk_reasoning_event_emit_failed job_id=%s round=%s",
-                        sumitalk_job_id,
-                        tool_rounds_used + 1,
-                        exc_info=True,
-                    )
+                _emit_sumitalk_reasoning_event(msg, tool_rounds_used + 1)
                 _append_visible_tool_round_content(accumulated_tool_visible_parts, msg.get("content"))
                 visible_tool_content = _normalize_visible_reply_text(get_assistant_content_text(msg))
                 if visible_tool_content:
@@ -1998,6 +2012,8 @@ def chat_completions():
             continue
         if isinstance(msg, dict):
             _accumulate_nonstream_reasoning(msg)
+            if tool_rounds_used > 0:
+                _emit_sumitalk_reasoning_event(msg, tool_rounds_used + 1)
             break
     if resp_json:
         resp_json = _merge_visible_tool_round_content_into_response(resp_json, accumulated_tool_visible_parts)

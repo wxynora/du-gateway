@@ -50,6 +50,7 @@ export type ChatDisplayPart =
       state: ChatToolCallState;
       round?: number;
       durationMs?: number;
+      transient?: boolean;
     };
 export type ChatDraftMessage = {
   id: string;
@@ -162,6 +163,7 @@ export function normalizeChatDisplayParts(value: any): ChatDisplayPart[] {
         state,
         round: Number(raw.round || 0) || undefined,
         durationMs: Number(raw.durationMs ?? raw.duration_ms ?? 0) || undefined,
+        ...(raw.transient ? { transient: true } : {}),
       };
       const existingIndex = toolIndex.get(key);
       if (existingIndex === undefined) {
@@ -243,6 +245,7 @@ export function chatDisplayPartsFromSumiTalkEvents(events: any, options: { inclu
         round: event?.round,
         durationMs: event?.duration_ms,
         ok: event?.ok,
+        transient: true,
       };
     }
     return event;
@@ -283,7 +286,7 @@ export function extractAssistantDisplayParts(data: any): ChatDisplayPart[] {
   const msg = extractAssistantMessage(data);
   return mergeChatDisplayParts(
     normalizeChatDisplayParts(msg?.displayParts || msg?.display_parts),
-    chatDisplayPartsFromSumiTalkEvents(data?.sumitalk_chat_events || data?.events),
+    chatDisplayPartsFromSumiTalkEvents(data?.sumitalk_chat_events || data?.events, { includeReasoning: true }),
   );
 }
 
@@ -295,17 +298,14 @@ export function applySumiTalkChatEventToMessages(currentMessages: ChatDraftMessa
   const cid = String(event?.client_request_id || event?.clientRequestId || "").trim();
   const list = Array.isArray(currentMessages) ? currentMessages : [];
   let changed = false;
-  const next = list.map((msg) => {
-    if (msg.role !== "assistant") return msg;
-    if (msg.status === "sent" || msg.status === "failed") return msg;
-    const matchesJob = jid && String(msg.jobId || "").trim() === jid;
-    const matchesClient = cid && String(msg.clientRequestId || "").trim() === cid;
-    if (!matchesJob && !matchesClient) return msg;
+  const applyToMessage = (msg: ChatDraftMessage): ChatDraftMessage => {
     const merged = mergeChatDisplayParts(msg.displayParts, parts);
     const content = mergeStreamingTextContent(msg.content, textAdditions);
     if (
       content === cleanShortText(msg.content, 12000)
       && JSON.stringify(merged) === JSON.stringify(normalizeChatDisplayParts(msg.displayParts || []))
+      && (!jid || msg.jobId)
+      && (!cid || msg.clientRequestId)
     ) {
       return msg;
     }
@@ -317,14 +317,33 @@ export function applySumiTalkChatEventToMessages(currentMessages: ChatDraftMessa
       ...(cid && !msg.clientRequestId ? { clientRequestId: cid } : {}),
       displayParts: merged,
     };
+  };
+  let matched = false;
+  const next = list.map((msg) => {
+    if (msg.role !== "assistant") return msg;
+    if (msg.status === "sent" || msg.status === "failed") return msg;
+    const matchesJob = jid && String(msg.jobId || "").trim() === jid;
+    const matchesClient = cid && String(msg.clientRequestId || "").trim() === cid;
+    if (!matchesJob && !matchesClient) return msg;
+    matched = true;
+    return applyToMessage(msg);
   });
+  if (!matched && (jid || cid)) {
+    const pendingAssistantIndexes = next
+      .map((msg, index) => ({ msg, index }))
+      .filter(({ msg }) => msg.role === "assistant" && msg.status !== "sent" && msg.status !== "failed");
+    if (pendingAssistantIndexes.length === 1) {
+      const targetIndex = pendingAssistantIndexes[0].index;
+      next[targetIndex] = applyToMessage(next[targetIndex]);
+    }
+  }
   return changed ? next : list;
 }
 
 export function stripTransientChatDisplayParts(messages: ChatDraftMessage[]): ChatDraftMessage[] {
   return (Array.isArray(messages) ? messages : []).map((message) => {
     const parts = normalizeChatDisplayParts((message as any)?.displayParts || (message as any)?.display_parts)
-      .filter((part) => !(part.kind === "reasoning" && part.transient));
+      .filter((part) => !("transient" in part && part.transient));
     if (parts.length) {
       return { ...message, displayParts: parts };
     }

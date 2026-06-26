@@ -2150,8 +2150,12 @@ export function MainChatScreen({
 
   function applyStreamingSumiTalkChatEvent(event: SumiTalkChatRealtimeEvent): boolean {
     const eventWindowId = String(event?.window_id || (event as any)?.windowId || "").trim();
-    const currentWindowId = String(windowId || "__default__").trim() || "__default__";
-    if (eventWindowId && eventWindowId !== currentWindowId) return false;
+    const allowedWindowIds = uniqueNonEmptyStrings([
+      String(windowId || "__default__").trim() || "__default__",
+      historyWindowId,
+      remoteHistoryWindowId,
+    ]);
+    if (eventWindowId && allowedWindowIds.length && !allowedWindowIds.includes(eventWindowId)) return false;
     const current = messagesRef.current;
     const beforeSignature = historySnapshotSignature(current);
     const nextMessages = applySumiTalkChatEventToMessages(current, event);
