@@ -1563,7 +1563,11 @@ def chat_completions():
     window_id = _get_window_id_from_request(body)
     # 未传 id 的客户端（如 RikkaHub）与 R2 主存 __default__ 对齐，否则轮次恒为 1、总结永不触发
     window_id = r2_store.normalize_window_id(window_id)
-    sumitalk_job_id = str(headers.get("X-SumiTalk-Job-Id") or "").strip() if is_sumitalk_request else ""
+    sumitalk_job_id = (
+        str(request.headers.get("X-SumiTalk-Job-Id") or "").strip()
+        if is_sumitalk_request
+        else ""
+    )
     sumitalk_client_request_id = str((body or {}).get("client_request_id") or "").strip() if is_sumitalk_request else ""
 
     def _emit_sumitalk_chat_event(kind: str, payload: dict | None = None) -> None:
