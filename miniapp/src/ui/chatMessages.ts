@@ -106,6 +106,15 @@ function displayPartKey(part: ChatDisplayPart): string {
   return `text:${stableDisplayPartId(part.text)}`;
 }
 
+function mergeDisplayPartPersistence<T extends ChatDisplayPart>(merged: T, incoming: ChatDisplayPart): T {
+  if ("transient" in incoming && incoming.transient) {
+    return { ...merged, transient: true } as T;
+  }
+  const next = { ...merged } as T;
+  delete (next as any).transient;
+  return next;
+}
+
 export function normalizeChatDisplayParts(value: any): ChatDisplayPart[] {
   const list = Array.isArray(value) ? value : [];
   const out: ChatDisplayPart[] = [];
@@ -132,7 +141,7 @@ export function normalizeChatDisplayParts(value: any): ChatDisplayPart[] {
       const omitted = Boolean(raw.omitted);
       if (!text && !omitted) continue;
       const round = Number(raw.round || 0) || undefined;
-      const transient = Boolean(raw.transient) || kind === "assistant_reasoning";
+      const transient = Boolean(raw.transient);
       out.push({
         id: String(raw.id || raw.event_id || `reasoning-${round || ""}-${stableDisplayPartId(text || "omitted")}`).trim(),
         kind: "reasoning",
@@ -171,13 +180,13 @@ export function normalizeChatDisplayParts(value: any): ChatDisplayPart[] {
         out.push(part);
       } else {
         const existing = out[existingIndex];
-        out[existingIndex] = {
+        out[existingIndex] = mergeDisplayPartPersistence({
           ...existing,
           ...part,
           id: existing.id || part.id,
           state: part.state === "done" || part.state === "error" ? part.state : (existing as any).state || part.state,
           resultText: part.resultText || (existing as any).resultText,
-        } as ChatDisplayPart;
+        } as ChatDisplayPart, part);
       }
     }
   }
@@ -198,21 +207,34 @@ export function mergeChatDisplayParts(...groups: Array<ChatDisplayPart[] | undef
       }
       const existing = out[existingIndex];
       if (part.kind === "tool_call" && existing.kind === "tool_call") {
-        out[existingIndex] = {
+        out[existingIndex] = mergeDisplayPartPersistence({
           ...existing,
           ...part,
           id: existing.id || part.id,
           state: part.state === "done" || part.state === "error" ? part.state : existing.state,
           resultText: part.resultText || existing.resultText,
-        };
+        }, part);
+        continue;
+      }
+      if (part.kind === "reasoning" && existing.kind === "reasoning") {
+        out[existingIndex] = mergeDisplayPartPersistence({
+          ...existing,
+          ...part,
+          id: existing.id || part.id,
+          text: part.text || existing.text,
+        }, part);
       }
     }
   }
   return out;
 }
 
-export function chatDisplayPartsFromSumiTalkEvents(events: any, options: { includeReasoning?: boolean } = {}): ChatDisplayPart[] {
+export function chatDisplayPartsFromSumiTalkEvents(
+  events: any,
+  options: { includeReasoning?: boolean; transient?: boolean } = {},
+): ChatDisplayPart[] {
   const list = Array.isArray(events) ? events : [];
+  const transient = Boolean(options.transient);
   return normalizeChatDisplayParts(list.map((event) => {
     const kind = String(event?.kind || event?.phase || "").trim();
     if (kind === "assistant_text") {
@@ -230,7 +252,7 @@ export function chatDisplayPartsFromSumiTalkEvents(events: any, options: { inclu
         text: event?.text || event?.reasoning || event?.thinking || "",
         round: event?.round,
         omitted: Boolean(event?.omitted),
-        transient: true,
+        ...(transient ? { transient: true } : {}),
       };
     }
     if (kind.startsWith("tool_call")) {
@@ -245,7 +267,7 @@ export function chatDisplayPartsFromSumiTalkEvents(events: any, options: { inclu
         round: event?.round,
         durationMs: event?.duration_ms,
         ok: event?.ok,
-        transient: true,
+        ...(transient ? { transient: true } : {}),
       };
     }
     return event;
@@ -291,7 +313,7 @@ export function extractAssistantDisplayParts(data: any): ChatDisplayPart[] {
 }
 
 export function applySumiTalkChatEventToMessages(currentMessages: ChatDraftMessage[], event: any): ChatDraftMessage[] {
-  const parts = chatDisplayPartsFromSumiTalkEvents([event], { includeReasoning: true });
+  const parts = chatDisplayPartsFromSumiTalkEvents([event], { includeReasoning: true, transient: true });
   if (!parts.length) return currentMessages;
   const textAdditions = chatTextPartsFromDisplayParts(parts);
   const jid = String(event?.job_id || event?.jobId || "").trim();
