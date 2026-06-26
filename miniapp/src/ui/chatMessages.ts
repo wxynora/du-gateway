@@ -974,7 +974,7 @@ export function groupChatMessages(
     const segments = rawSegments.flatMap((segment) => (
       segment.systemCard
         ? [segment]
-        : options.preserveLineBreaks && msg.role === "user"
+        : options.preserveLineBreaks && msg.role === "assistant"
           ? [{ content: String(segment.content || "").trim(), systemCard: null }]
           : splitLineBubbleSegments(msg.role, segment.content)
     ));
