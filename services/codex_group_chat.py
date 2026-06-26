@@ -5,6 +5,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,11 +18,18 @@ _TASK_FILE = DATA_DIR / "codex_group_chat_tasks.json"
 _LOCK = threading.Lock()
 _MAX_TASKS = 200
 _TASK_TTL_SECONDS = 2 * 24 * 60 * 60
+_MAX_WORKERS = 20
+_WORKER_TTL_SECONDS = 24 * 60 * 60
 _RUNNING_RECLAIM_SECONDS = max(
     60,
     int(float(os.environ.get("CODEX_GROUP_CHAT_RUNNING_RECLAIM_SECONDS") or "120")),
 )
+_LEASE_SECONDS = max(
+    30,
+    int(float(os.environ.get("CODEX_GROUP_CHAT_LEASE_SECONDS") or "180")),
+)
 logger = get_logger(__name__)
+_BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 def _load_state() -> dict:
@@ -54,6 +62,10 @@ def _now_ts() -> float:
     return time.time()
 
 
+def _ts_to_beijing_iso(ts: float) -> str:
+    return datetime.fromtimestamp(float(ts or 0), _BEIJING_TZ).strftime("%Y-%m-%dT%H:%M:%S+08:00")
+
+
 def _safe_text(value, max_chars: int = 12000) -> str:
     text = str(value or "").strip()
     if len(text) > max_chars:
@@ -73,6 +85,16 @@ def _safe_mode(value) -> str:
     if mode in {"daily_chat", "studyroom", "coding_task"}:
         return mode
     return "daily_chat"
+
+
+def _safe_worker_id(value) -> str:
+    return re.sub(r"[^a-zA-Z0-9_.:@-]", "", str(value or "").strip())[:120]
+
+
+def _worker_supports_lease(meta: dict | None) -> bool:
+    if not isinstance(meta, dict):
+        return False
+    return bool(str(meta.get("version") or "").strip())
 
 
 def _normalize_recent_messages(items) -> list[dict]:
@@ -129,7 +151,7 @@ def _safe_coding_thread_key(value, user_message: str = "") -> str:
     return "general"
 
 
-def _public_task(task: dict | None) -> dict | None:
+def _public_task(task: dict | None, *, include_internal: bool = False) -> dict | None:
     if not isinstance(task, dict):
         return None
     keep = {
@@ -152,7 +174,76 @@ def _public_task(task: dict | None) -> dict | None:
         "cancel_reason",
         "cancelled_at",
     }
+    if include_internal:
+        keep.update({
+            "lease_token",
+            "lease_required",
+            "lease_expires_ts",
+            "lease_expires_at",
+        })
     return {k: task.get(k) for k in keep if k in task}
+
+
+def _cleanup_workers(workers: dict) -> dict:
+    cutoff = _now_ts() - _WORKER_TTL_SECONDS
+    rows = []
+    for worker_id, worker in (workers or {}).items():
+        if not isinstance(worker, dict):
+            continue
+        last_seen_ts = float(worker.get("last_seen_ts") or 0)
+        if last_seen_ts and last_seen_ts < cutoff:
+            continue
+        row = dict(worker)
+        row["worker_id"] = str(worker.get("worker_id") or worker_id)
+        rows.append(row)
+    rows.sort(key=lambda item: float(item.get("last_seen_ts") or 0), reverse=True)
+    return {str(item.get("worker_id") or ""): item for item in rows[:_MAX_WORKERS] if str(item.get("worker_id") or "")}
+
+
+def _record_worker_seen_locked(state: dict, worker_id: str = "", meta: dict | None = None) -> None:
+    wid = _safe_worker_id(worker_id)
+    if not wid:
+        return
+    now_ts = _now_ts()
+    workers = state.get("workers")
+    if not isinstance(workers, dict):
+        workers = {}
+    workers = _cleanup_workers(workers)
+    row = workers.get(wid) if isinstance(workers.get(wid), dict) else {}
+    meta = meta if isinstance(meta, dict) else {}
+    row.update({
+        "worker_id": wid,
+        "last_seen_ts": now_ts,
+        "last_seen_at": now_beijing_iso(),
+    })
+    for key, max_chars in {
+        "version": 120,
+        "status": 80,
+        "last_error": 500,
+        "gateway_url": 300,
+    }.items():
+        if key in meta:
+            row[key] = _safe_text(meta.get(key), max_chars)
+    if "outbox_count" in meta:
+        try:
+            row["outbox_count"] = max(0, int(float(meta.get("outbox_count") or 0)))
+        except Exception:
+            row["outbox_count"] = 0
+    workers[wid] = row
+    state["workers"] = workers
+
+
+def list_workers(limit: int = 20) -> list[dict]:
+    limit = max(1, min(int(limit or 20), _MAX_WORKERS))
+    with _LOCK:
+        state = _load_state()
+        workers = _cleanup_workers(state.get("workers") if isinstance(state.get("workers"), dict) else {})
+        if workers != state.get("workers"):
+            state["workers"] = workers
+            _save_state(state)
+        rows = list(workers.values())
+    rows.sort(key=lambda item: float(item.get("last_seen_ts") or 0), reverse=True)
+    return rows[:limit]
 
 
 def _publish_task(task: dict | None) -> None:
@@ -289,14 +380,18 @@ def list_tasks(limit: int = 20) -> list[dict]:
 def _is_stale_running(task: dict, now_ts: float) -> bool:
     if str(task.get("status") or "") != "running":
         return False
+    lease_expires_ts = float(task.get("lease_expires_ts") or 0)
+    if lease_expires_ts:
+        return now_ts >= lease_expires_ts
     claimed_ts = float(task.get("claimed_ts") or task.get("updated_ts") or 0)
     return bool(claimed_ts and now_ts - claimed_ts >= _RUNNING_RECLAIM_SECONDS)
 
 
-def claim_next(worker_id: str = "") -> dict | None:
+def claim_next(worker_id: str = "", worker_meta: dict | None = None) -> dict | None:
     now_ts = _now_ts()
     with _LOCK:
         state = _load_state()
+        _record_worker_seen_locked(state, worker_id=worker_id, meta=worker_meta)
         tasks = _cleanup_tasks(state.get("tasks") or [])
         selected: dict | None = None
         for task in tasks:
@@ -310,7 +405,17 @@ def claim_next(worker_id: str = "") -> dict | None:
         selected["status"] = "running"
         if selected.get("worker_id"):
             selected["previous_worker_id"] = selected.get("worker_id")
-        selected["worker_id"] = str(worker_id or "").strip()[:80]
+        selected["worker_id"] = _safe_worker_id(worker_id)[:80]
+        if _worker_supports_lease(worker_meta):
+            selected["lease_token"] = uuid4().hex
+            selected["lease_required"] = True
+            selected["lease_expires_ts"] = now_ts + _LEASE_SECONDS
+            selected["lease_expires_at"] = _ts_to_beijing_iso(selected["lease_expires_ts"])
+        else:
+            selected.pop("lease_token", None)
+            selected.pop("lease_required", None)
+            selected.pop("lease_expires_ts", None)
+            selected.pop("lease_expires_at", None)
         selected["reclaimed_count"] = int(float(selected.get("reclaimed_count") or 0)) + (1 if selected.get("claimed_ts") else 0)
         selected["claimed_ts"] = now_ts
         selected["updated_ts"] = now_ts
@@ -321,7 +426,44 @@ def claim_next(worker_id: str = "") -> dict | None:
             return None
         public = _public_task(selected)
         _publish_task(public)
-        return public
+        return _public_task(selected, include_internal=True)
+
+
+def heartbeat_task(task_id: str, lease_token: str, worker_id: str = "", worker_meta: dict | None = None) -> dict | None:
+    task_id = str(task_id or "").strip()
+    lease = str(lease_token or "").strip()
+    if not re.fullmatch(r"[a-f0-9]{32}", task_id) or not lease:
+        return None
+    now_ts = _now_ts()
+    updated = False
+    with _LOCK:
+        state = _load_state()
+        _record_worker_seen_locked(state, worker_id=worker_id, meta=worker_meta)
+        tasks = _cleanup_tasks(state.get("tasks") or [])
+        found = None
+        for task in tasks:
+            if str(task.get("id") or "") != task_id:
+                continue
+            found = task
+            if str(task.get("status") or "") != "running":
+                break
+            if str(task.get("lease_token") or "") != lease:
+                break
+            task["lease_expires_ts"] = now_ts + _LEASE_SECONDS
+            task["lease_expires_at"] = _ts_to_beijing_iso(task["lease_expires_ts"])
+            task["lease_heartbeat_ts"] = now_ts
+            task["lease_heartbeat_at"] = now_beijing_iso()
+            wid = _safe_worker_id(worker_id)
+            if wid:
+                task["worker_id"] = wid[:80]
+            updated = True
+            break
+        if found is None or not updated:
+            return None
+        state["tasks"] = tasks
+        if not _save_state(state):
+            return None
+        return _public_task(found, include_internal=True)
 
 
 def cancel_task(task_id: str, reason: str = "") -> dict | None:
@@ -357,12 +499,15 @@ def cancel_task(task_id: str, reason: str = "") -> dict | None:
     return public
 
 
-def finish_task(task_id: str, response: str = "", error: str = "") -> dict | None:
+def finish_task(task_id: str, response: str = "", error: str = "", worker_id: str = "", lease_token: str = "") -> dict | None:
     task_id = str(task_id or "").strip()
     if not re.fullmatch(r"[a-f0-9]{32}", task_id):
         return None
     now_ts = _now_ts()
     sync_task = None
+    public = None
+    changed = False
+    lease_rejected = False
     with _LOCK:
         state = _load_state()
         tasks = _cleanup_tasks(state.get("tasks") or [])
@@ -371,10 +516,26 @@ def finish_task(task_id: str, response: str = "", error: str = "") -> dict | Non
             if str(task.get("id") or "") != task_id:
                 continue
             found = task
-            if str(task.get("status") or "") == "cancelled":
+            current_status = str(task.get("status") or "")
+            has_error = bool(str(error or "").strip())
+            # Terminal success/cancel states are authoritative. A bridge may
+            # time out after the server has already accepted a finish(response);
+            # its later transport error must not turn that successful task into
+            # an error or duplicate publish.
+            if current_status in {"cancelled", "done"}:
                 sync_task = dict(task)
                 break
-            if str(error or "").strip():
+            stored_lease = str(task.get("lease_token") or "").strip()
+            incoming_lease = str(lease_token or "").strip()
+            if stored_lease and incoming_lease and incoming_lease != stored_lease:
+                sync_task = dict(task)
+                lease_rejected = True
+                break
+            if stored_lease and bool(task.get("lease_required")) and not incoming_lease and current_status == "running":
+                sync_task = dict(task)
+                lease_rejected = True
+                break
+            if has_error:
                 task["status"] = "error"
                 task["error"] = _safe_text(error, 4000)
                 task.pop("response", None)
@@ -386,14 +547,30 @@ def finish_task(task_id: str, response: str = "", error: str = "") -> dict | Non
             task["updated_ts"] = now_ts
             task["finished_at"] = now_beijing_iso()
             task["updated_at"] = now_beijing_iso()
+            wid = _safe_worker_id(worker_id)
+            if wid:
+                task["finished_by_worker_id"] = wid
+            task.pop("lease_token", None)
+            task.pop("lease_required", None)
+            task.pop("lease_expires_ts", None)
+            task.pop("lease_expires_at", None)
             sync_task = dict(task)
+            changed = True
             break
         if found is None:
             return None
+        if lease_rejected:
+            return {
+                "id": task_id,
+                "status": str((sync_task or {}).get("status") or "running"),
+                "finish_rejected": True,
+                "error": "lease_conflict",
+            }
         state["tasks"] = tasks
         if not _save_state(state):
             return None
         public = _public_task(found)
-    _publish_task(public)
-    _sync_studyroom_task_result(sync_task)
+    if changed:
+        _publish_task(public)
+        _sync_studyroom_task_result(sync_task)
     return public

@@ -276,6 +276,8 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 三人群聊真施工必须显式触发：`@笨笨 改代码...`、`@笨笨 开工...`、`@笨笨 debug...` 等会创建 `mode=coding_task`，bridge 使用单独 `coding_thread_id` 和 `workspace-write` sandbox；普通 `@笨笨` 仍是日常群聊，不改代码。
 - 三人群聊取消笨笨任务走显式指令：`@笨笨 停一下`、`@笨笨 取消施工`、`@笨笨 别改了` 等会取消当前 pending/running 的 Codex group task；前端先把用户取消消息落到群聊，再 POST `/miniapp-api/codex-group-chat-tasks/<id>/cancel`，后端标记 `cancelled` 后不会被 bridge 的迟到 finish 覆盖。
 - 本机 Codex bridge 默认参数应偏快：`CODEX_GROUP_CHAT_POLL_SECONDS=0.5`、`CODEX_GROUP_CHAT_IDLE_POLL_SECONDS=1`、`CODEX_GROUP_CHAT_CLAIM_TIMEOUT_SECONDS=3`，并用短重试降低 `SSL EOF`/超时导致的随机拖延。
+- Codex bridge 稳定性第一优先级是 finish 回写可靠性：bridge 已经生成成功回复后，如果 `/finish` 撞上 gateway 重启、502 或 timeout，成功结果必须进本地 outbox 后续重试；服务端 `done/cancelled` 终态不能被迟到 `error` 覆盖。
+- Codex group task 长任务必须靠 `lease_token + heartbeat` 保活；新 bridge claim 会带 `worker_version` 启用 lease，运行时 POST `/api/codex_group_chat/tasks/<id>/heartbeat`，旧 token 的迟到 finish 要返回 409 或被服务端忽略。
 - VPS 系统盘读数突然抬高时，先查是否有高频整读本地状态文件：SumiTalk 安卓壳 realtime 断开后会每 20 秒 fallback 轮询 `/sumitalk-history/latest`，realtime 服务也会每 60 秒兜底读最新消息；`data/sumitalk_display_histories.json` 必须走缓存和行数/TTL 收口。
 - `<voice>`/TTS 事故先查 `services/minimax_tts.py`：超长 voice 文本会被截断到 `MINIMAX_TTS_MAX_CHARS`，MiniMax 返回音频也受 `MINIMAX_TTS_MAX_AUDIO_BYTES` 限制，避免几千字语音把 CPU/内存/网络一起拖爆。
 - QQ/SumiTalk/触发唤醒里看到 `{"action":"...","message":"...","channel":"..."}` 原样正文时，先查 `services/telegram_proactive.py::_parse_proactive_model_reply`、`_sanitize_control_reply_for_delivery` 和 `services/conversation_followup.py` 的外发清洗；这类 JSON 是主动决策控制格式，不应该作为用户可见正文发出。
@@ -1843,3 +1845,17 @@ npm -C miniapp run android
 - 已完成：`PromptManagerScreen.tsx` 给远端自定义 prompt 段落补 `editable: true` 默认值，修掉 `tsc` 既有阻断点。
 - 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`git diff --check`、`npm -C miniapp run build` 通过；`miniapp_static/index.html` 已指向新入口 `index-Mpj23jq8.js`。本轮只改 MiniApp 前端和静态包，没有改 SumiTalk 后端队列/worker，线上只需重启 `du-gateway.service`。
 - 未完成 / 下次继续：没有做后端 token 级流式；当前“流式展示”仍是按 SumiTalk job events 一轮一轮追加可见内容和工具调用状态。
+
+当前状态（2026-06-26 Codex 群聊 bridge 稳定性第一刀）：
+- 已完成：`services/codex_group_chat.py` 的 `finish_task()` 改为终态幂等，`done/cancelled` 不会被 bridge 迟到的 `error` 或 `response` 覆盖；`claim_next()` 会记录 worker 最近状态，新增只读 `/api/codex_group_chat/workers/status` 方便确认桥接是否在线、是否有 outbox 积压。
+- 已完成：`scripts/codex_group_chat_bridge.py` 增加本地 `finish_outbox.json`；Codex 已生成的成功回复如果回写 `/finish` 遇到 502/503/504/timeout，会落盘并按退避重试，不再把传输失败当成任务失败回写。claim 循环连续失败时指数退避，恢复后继续 flush outbox 和 claim。
+- 已完成：`scripts/install_codex_group_chat_launch_agent.sh` 写入 outbox 路径、post retry、claim backoff 和 finish outbox retry 默认参数，避免重装 LaunchAgent 后缺关键配置。
+- 已验证：`python3 -m py_compile services/codex_group_chat.py routes/pc_command.py scripts/codex_group_chat_bridge.py` 通过；临时 `_TASK_FILE` smoke 覆盖 done 不被迟到 error 覆盖、cancelled 不被迟到 response 覆盖、worker 状态记录；bridge outbox smoke 覆盖 finish 失败落盘、到期后 flush 成功、response 队列会丢弃同任务旧 error。
+- 未完成 / 下次继续：本轮没有迁 SQLite、没有改前端显示“桥接离线/回写重试中”；上线后需要重新安装/重启本机 Codex bridge LaunchAgent 才会加载新 bridge 脚本和 `.env` 默认值。
+
+当前状态（2026-06-26 Codex 群聊 bridge 稳定性第二刀）：
+- 已完成：Codex group task 新增 `lease_token / lease_required / lease_expires_ts`；新 bridge claim 时会带 `worker_version` 自动启用 lease，旧 bridge 不带版本时仍保持兼容 finish，降低部署窗口卡死风险。
+- 已完成：新增 PC 内部接口 `POST /api/codex_group_chat/tasks/<id>/heartbeat`；bridge 在 Codex 子进程运行中按 `CODEX_GROUP_CHAT_HEARTBEAT_SECONDS` 默认 30 秒续租，续租失败若明确是 lease 失效会终止本地 Codex 子进程，避免旧 worker 继续跑完后乱回写。
+- 已完成：`finish_task()` 校验 lease；旧 token 或缺 token 的新任务 finish 会返回/传递 `lease_conflict`，路由给 409，bridge 不会把这类非重试错误写进 finish outbox。任务完成后会清掉 lease 字段，`done/cancelled` 终态仍保持不可覆盖。
+- 已验证：`.venv/bin/python -m py_compile services/codex_group_chat.py routes/pc_command.py scripts/codex_group_chat_bridge.py` 和 `python3 -m py_compile ...` 均通过；临时 `_TASK_FILE` smoke 覆盖旧 bridge 兼容 finish、新 bridge claim 带 token、heartbeat 续租、lease 过期后被新 worker 重领、旧 token finish 被拒、新 token finish 成功且迟到 error 不覆盖；bridge smoke 覆盖 heartbeat 请求体和 `lease_conflict` 不进入 outbox。
+- 未完成 / 下次继续：仍未迁 SQLite 或跨进程文件锁；当前 JSON 队列依赖生产 gunicorn 单 worker 更稳。前端还没有展示“bridge 离线/lease 失效/回写重试中”的状态文案。

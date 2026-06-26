@@ -20,6 +20,7 @@ import subprocess
 import tempfile
 import time
 import traceback
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -53,18 +54,25 @@ def _env_bool(name: str, default: bool = False) -> bool:
 GATEWAY_URL = _env("GATEWAY_URL").rstrip("/")
 PC_COMMAND_TOKEN = _env("PC_COMMAND_TOKEN")
 REPO_ROOT = Path(_env("CODEX_GROUP_CHAT_REPO", str(Path.home() / "Downloads" / "du-gateway"))).expanduser()
+BRIDGE_VERSION = "2026-06-26-lease-heartbeat"
 POLL_SECONDS = max(0.5, float(_env("CODEX_GROUP_CHAT_POLL_SECONDS", "0.5") or "0.5"))
 IDLE_POLL_SECONDS = max(POLL_SECONDS, float(_env("CODEX_GROUP_CHAT_IDLE_POLL_SECONDS", "1") or "1"))
 CODEX_MODEL = _env("CODEX_GROUP_CHAT_MODEL")
 CODEX_BIN = _env("CODEX_BIN", "codex")
 WORKER_ID = _env("CODEX_GROUP_CHAT_WORKER_ID", f"benben-codex-bridge@{socket.gethostname()}")
 CODEX_TIMEOUT_SECONDS = int(float(_env("CODEX_GROUP_CHAT_TIMEOUT_SECONDS", "600") or "600"))
+HEARTBEAT_SECONDS = max(5.0, float(_env("CODEX_GROUP_CHAT_HEARTBEAT_SECONDS", "30") or "30"))
 CLAIM_TIMEOUT_SECONDS = max(1.0, float(_env("CODEX_GROUP_CHAT_CLAIM_TIMEOUT_SECONDS", "3") or "3"))
 FINISH_TIMEOUT_SECONDS = max(2.0, float(_env("CODEX_GROUP_CHAT_FINISH_TIMEOUT_SECONDS", "15") or "15"))
 POST_RETRY_ATTEMPTS = max(1, int(float(_env("CODEX_GROUP_CHAT_POST_RETRY_ATTEMPTS", "2") or "2")))
 POST_RETRY_SLEEP_SECONDS = max(0.0, float(_env("CODEX_GROUP_CHAT_POST_RETRY_SLEEP_SECONDS", "0.2") or "0.2"))
 PROJECT_RULES_MAX_CHARS = int(float(_env("CODEX_GROUP_CHAT_RULES_MAX_CHARS", "10000") or "10000"))
 STATE_PATH = Path(_env("CODEX_GROUP_CHAT_STATE_PATH", str(REPO_ROOT / ".codex_group_chat_bridge_state.json"))).expanduser()
+FINISH_OUTBOX_PATH = Path(_env("CODEX_GROUP_CHAT_FINISH_OUTBOX_PATH", str(STATE_PATH.with_name("finish_outbox.json")))).expanduser()
+FINISH_OUTBOX_MAX_ITEMS = max(20, int(float(_env("CODEX_GROUP_CHAT_FINISH_OUTBOX_MAX_ITEMS", "200") or "200")))
+FINISH_OUTBOX_RETRY_BASE_SECONDS = max(1.0, float(_env("CODEX_GROUP_CHAT_FINISH_OUTBOX_RETRY_BASE_SECONDS", "2") or "2"))
+FINISH_OUTBOX_RETRY_MAX_SECONDS = max(FINISH_OUTBOX_RETRY_BASE_SECONDS, float(_env("CODEX_GROUP_CHAT_FINISH_OUTBOX_RETRY_MAX_SECONDS", "60") or "60"))
+CLAIM_BACKOFF_MAX_SECONDS = max(POLL_SECONDS, float(_env("CODEX_GROUP_CHAT_CLAIM_BACKOFF_MAX_SECONDS", "8") or "8"))
 RESUME_ENABLED = _env_bool("CODEX_GROUP_CHAT_RESUME_ENABLED", True)
 CODING_RESUME_ENABLED = _env_bool("CODEX_GROUP_CHAT_CODING_RESUME_ENABLED", True)
 CODING_SANDBOX = _env("CODEX_GROUP_CHAT_CODING_SANDBOX", "workspace-write") or "workspace-write"
@@ -101,6 +109,10 @@ HTTP = _new_http_session()
 
 
 class TaskCancelled(RuntimeError):
+    pass
+
+
+class TransientHttpStatus(RuntimeError):
     pass
 
 
@@ -152,6 +164,91 @@ def _save_state(state: dict[str, Any]) -> None:
         tmp.replace(STATE_PATH)
     except Exception as e:
         _log(f"state 写入失败: {e}")
+
+
+def _load_finish_outbox() -> dict[str, Any]:
+    try:
+        if not FINISH_OUTBOX_PATH.exists():
+            return {"items": []}
+        data = json.loads(FINISH_OUTBOX_PATH.read_text(encoding="utf-8") or "{}")
+        if not isinstance(data, dict):
+            return {"items": []}
+        items = data.get("items")
+        if not isinstance(items, list):
+            data["items"] = []
+        return data
+    except Exception as e:
+        _log(f"finish outbox 读取失败: {e}")
+        return {"items": []}
+
+
+def _save_finish_outbox(data: dict[str, Any]) -> None:
+    try:
+        FINISH_OUTBOX_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = FINISH_OUTBOX_PATH.with_name(f"{FINISH_OUTBOX_PATH.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data or {"items": []}, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(FINISH_OUTBOX_PATH)
+    except Exception as e:
+        _log(f"finish outbox 写入失败: {e}")
+
+
+def _finish_payload_key(task_id: str, payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload or {}, ensure_ascii=False, sort_keys=True)
+    digest = hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
+    return f"{task_id}:{digest}"
+
+
+def _finish_outbox_count() -> int:
+    try:
+        return len(_load_finish_outbox().get("items") or [])
+    except Exception:
+        return 0
+
+
+def _finish_retry_delay(attempts: int) -> float:
+    return min(
+        FINISH_OUTBOX_RETRY_MAX_SECONDS,
+        FINISH_OUTBOX_RETRY_BASE_SECONDS * (2 ** min(max(0, attempts - 1), 5)),
+    )
+
+
+def _queue_finish_outbox(task_id: str, payload: dict[str, Any], error: BaseException | str = "") -> None:
+    task_id = str(task_id or "").strip()
+    if not task_id or not isinstance(payload, dict):
+        return
+    data = _load_finish_outbox()
+    items = [item for item in (data.get("items") or []) if isinstance(item, dict)]
+    # A successful response is authoritative. If an older transport error for
+    # the same task is queued, drop it instead of letting it race the success.
+    if "response" in payload:
+        items = [
+            item for item in items
+            if not (str(item.get("task_id") or "") == task_id and isinstance(item.get("payload"), dict) and "error" in item["payload"])
+        ]
+    elif any(str(item.get("task_id") or "") == task_id and isinstance(item.get("payload"), dict) and "response" in item["payload"] for item in items):
+        return
+    key = _finish_payload_key(task_id, payload)
+    now = time.time()
+    last_error = str(error or "")[-500:]
+    existing = None
+    for item in items:
+        if str(item.get("key") or "") == key:
+            existing = item
+            break
+    if existing is None:
+        existing = {
+            "key": key,
+            "task_id": task_id,
+            "payload": payload,
+            "created_ts": now,
+            "attempts": 0,
+        }
+        items.append(existing)
+    existing["updated_ts"] = now
+    existing["last_error"] = last_error
+    existing["next_attempt_ts"] = now + _finish_retry_delay(int(float(existing.get("attempts") or 0)) + 1)
+    data["items"] = items[-FINISH_OUTBOX_MAX_ITEMS:]
+    _save_finish_outbox(data)
 
 
 def _reset_state(reason: str) -> dict[str, Any]:
@@ -236,9 +333,12 @@ def _post_json(path: str, body: dict[str, Any]) -> dict[str, Any]:
             except Exception:
                 data = {"raw": r.text}
             if not r.ok:
-                raise RuntimeError(data.get("error") or data.get("message") or f"HTTP {r.status_code}")
+                message = data.get("error") or data.get("message") or f"HTTP {r.status_code}"
+                if r.status_code in {429, 502, 503, 504}:
+                    raise TransientHttpStatus(str(message))
+                raise RuntimeError(message)
             return data if isinstance(data, dict) else {"data": data}
-        except requests.RequestException as e:
+        except (requests.RequestException, TransientHttpStatus) as e:
             last_error = e
             HTTP.close()
             HTTP = _new_http_session()
@@ -266,6 +366,78 @@ def _get_json(path: str) -> dict[str, Any]:
         HTTP.close()
         HTTP = _new_http_session()
         raise
+
+
+def _post_finish_result(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload or {})
+    body["worker_id"] = WORKER_ID
+    return _post_json(f"/api/codex_group_chat/tasks/{task_id}/finish", body)
+
+
+def _finish_or_queue(task_id: str, payload: dict[str, Any]) -> bool:
+    try:
+        _post_finish_result(task_id, payload)
+        return True
+    except Exception as e:
+        message = str(e)
+        if "lease" in message or "任务不存在" in message:
+            _log(f"finish skipped task={task_id} non_retryable={message}")
+            return True
+        _queue_finish_outbox(task_id, payload, e)
+        return False
+
+
+def _heartbeat_task(task_id: str, lease_token: str, status: str = "running") -> None:
+    lease = str(lease_token or "").strip()
+    if not task_id or not lease:
+        return
+    _post_json(f"/api/codex_group_chat/tasks/{task_id}/heartbeat", {
+        "worker_id": WORKER_ID,
+        "worker_version": BRIDGE_VERSION,
+        "worker_status": status,
+        "gateway_url": GATEWAY_URL,
+        "outbox_count": _finish_outbox_count(),
+        "lease_token": lease,
+    })
+
+
+def _flush_finish_outbox(max_items: int = 5) -> int:
+    data = _load_finish_outbox()
+    items = [item for item in (data.get("items") or []) if isinstance(item, dict)]
+    if not items:
+        return 0
+    now = time.time()
+    kept: list[dict[str, Any]] = []
+    changed = False
+    sent = 0
+    for item in items:
+        task_id = str(item.get("task_id") or "").strip()
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        due_ts = float(item.get("next_attempt_ts") or 0)
+        if not task_id or not payload:
+            changed = True
+            continue
+        if sent >= max_items or due_ts > now:
+            kept.append(item)
+            continue
+        try:
+            _post_finish_result(task_id, payload)
+            _log(f"finish outbox flushed task={task_id} kind={'response' if 'response' in payload else 'error'} attempts={int(float(item.get('attempts') or 0)) + 1}")
+            changed = True
+            sent += 1
+        except Exception as e:
+            attempts = int(float(item.get("attempts") or 0)) + 1
+            item["attempts"] = attempts
+            item["updated_ts"] = now
+            item["last_error"] = str(e)[-500:]
+            item["next_attempt_ts"] = now + _finish_retry_delay(attempts)
+            kept.append(item)
+            changed = True
+            sent += 1
+    if changed:
+        data["items"] = kept[-FINISH_OUTBOX_MAX_ITEMS:]
+        _save_finish_outbox(data)
+    return len(kept)
 
 
 def _role_label(role: str) -> str:
@@ -569,6 +741,7 @@ def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 5.
 def _run_codex(task: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     mode = str(task.get("mode") or "daily_chat").strip()
     task_id = str(task.get("id") or "").strip()
+    lease_token = str(task.get("lease_token") or "").strip()
     coding_key = _coding_thread_key(task) if mode == "coding_task" else ""
     if mode == "coding_task":
         if _coding_state_should_reset(state, coding_key):
@@ -628,14 +801,27 @@ def _run_codex(task: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[s
             except Exception:
                 pass
             started_at = time.time()
+            next_heartbeat_at = started_at + HEARTBEAT_SECONDS
             while True:
                 returncode = proc.poll()
                 if returncode is not None:
                     break
+                now = time.time()
+                if lease_token and now >= next_heartbeat_at:
+                    try:
+                        _heartbeat_task(task_id, lease_token, status=f"{mode}_running")
+                    except Exception as e:
+                        message = str(e)
+                        if "lease" in message or "失效" in message or "409" in message:
+                            _terminate_process_tree(proc)
+                            raise TaskCancelled("笨笨任务 lease 已失效")
+                        _log(f"lease heartbeat failed task={task_id} error={e}")
+                    finally:
+                        next_heartbeat_at = now + HEARTBEAT_SECONDS
                 if mode == "coding_task" and _task_cancel_requested(task_id):
                     _terminate_process_tree(proc)
                     raise TaskCancelled("笨笨施工已取消")
-                if time.time() - started_at > CODEX_TIMEOUT_SECONDS:
+                if now - started_at > CODEX_TIMEOUT_SECONDS:
                     _terminate_process_tree(proc)
                     raise TimeoutError(f"codex timed out after {CODEX_TIMEOUT_SECONDS}s")
                 time.sleep(0.5)
@@ -701,9 +887,10 @@ def main() -> int:
     if not isinstance(state, dict) or "created_ts" not in state:
         state = _reset_state("startup")
     _log(
-        "worker=%s gateway=%s repo=%s resume=%s thread=%s agents_md_chars=%s poll=%.2fs idle=%.2fs claim_timeout=%.1fs finish_timeout=%.1fs retries=%s trust_env=%s"
+        "worker=%s version=%s gateway=%s repo=%s resume=%s thread=%s agents_md_chars=%s poll=%.2fs idle=%.2fs claim_timeout=%.1fs finish_timeout=%.1fs retries=%s trust_env=%s outbox=%s"
         % (
             WORKER_ID,
+            BRIDGE_VERSION,
             GATEWAY_URL,
             REPO_ROOT,
             "on" if RESUME_ENABLED else "off",
@@ -715,34 +902,56 @@ def main() -> int:
             FINISH_TIMEOUT_SECONDS,
             POST_RETRY_ATTEMPTS,
             "on" if HTTP_TRUST_ENV else "off",
+            _finish_outbox_count(),
         )
     )
+    consecutive_errors = 0
+    last_loop_error = ""
     while True:
         try:
-            data = _post_json("/api/codex_group_chat/tasks/claim", {"worker_id": WORKER_ID})
+            pending_outbox = _flush_finish_outbox()
+            data = _post_json("/api/codex_group_chat/tasks/claim", {
+                "worker_id": WORKER_ID,
+                "worker_version": BRIDGE_VERSION,
+                "worker_status": "idle" if not pending_outbox else "outbox_retrying",
+                "last_error": last_loop_error,
+                "gateway_url": GATEWAY_URL,
+                "outbox_count": pending_outbox,
+            })
+            consecutive_errors = 0
+            last_loop_error = ""
             task = data.get("task")
             if not task:
                 time.sleep(IDLE_POLL_SECONDS)
                 continue
             task_id = str(task.get("id") or "")
-            _log(f"claimed task={task_id} thread={str(state.get('thread_id') or '')[:8] or '-'}")
+            lease_token = str(task.get("lease_token") or "").strip()
+            _log(f"claimed task={task_id} lease={'on' if lease_token else 'off'} thread={str(state.get('thread_id') or '')[:8] or '-'}")
             try:
                 response, state = _run_codex(task, state)
-                _post_json(f"/api/codex_group_chat/tasks/{task_id}/finish", {"response": response})
-                _log(f"done task={task_id} chars={len(response)} thread={str(state.get('thread_id') or '')[:8] or '-'}")
+                finish_payload = {"response": response}
+                if lease_token:
+                    finish_payload["lease_token"] = lease_token
+                finished = _finish_or_queue(task_id, finish_payload)
+                suffix = "" if finished else " finish_queued=1"
+                _log(f"done task={task_id} chars={len(response)} thread={str(state.get('thread_id') or '')[:8] or '-'}{suffix}")
             except TaskCancelled as e:
                 _log(f"cancelled task={task_id} {e}")
             except Exception as e:
-                try:
-                    _post_json(f"/api/codex_group_chat/tasks/{task_id}/finish", {"error": str(e)})
-                    _log(f"failed task={task_id} error={e}")
-                except Exception as finish_error:
-                    _log(f"failed task={task_id} error={e}; finish_error={finish_error}")
+                finish_payload = {"error": str(e)}
+                if lease_token:
+                    finish_payload["lease_token"] = lease_token
+                finished = _finish_or_queue(task_id, finish_payload)
+                suffix = "" if finished else " finish_error_queued=1"
+                _log(f"failed task={task_id} error={e}{suffix}")
         except KeyboardInterrupt:
             raise
         except Exception as e:
-            _log(f"loop error: {e}")
-            time.sleep(POLL_SECONDS)
+            consecutive_errors += 1
+            last_loop_error = str(e)
+            delay = min(CLAIM_BACKOFF_MAX_SECONDS, POLL_SECONDS * (2 ** min(consecutive_errors, 5)))
+            _log(f"loop error: {e}; retry_in={delay:.1f}s")
+            time.sleep(delay)
 
 
 if __name__ == "__main__":

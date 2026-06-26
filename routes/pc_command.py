@@ -94,7 +94,14 @@ def claim_codex_group_chat_task():
         return token_err
     body = request.get_json(silent=True) or {}
     worker_id = str((body or {}).get("worker_id") or request.headers.get("X-Worker-Id") or "").strip()
-    task = codex_group_chat.claim_next(worker_id=worker_id)
+    worker_meta = {
+        "version": (body or {}).get("worker_version"),
+        "status": (body or {}).get("worker_status"),
+        "last_error": (body or {}).get("last_error"),
+        "gateway_url": (body or {}).get("gateway_url"),
+        "outbox_count": (body or {}).get("outbox_count"),
+    }
+    task = codex_group_chat.claim_next(worker_id=worker_id, worker_meta=worker_meta)
     return jsonify({"ok": True, "task": task})
 
 
@@ -112,6 +119,48 @@ def recent_codex_group_chat_tasks():
     return jsonify({"ok": True, "tasks": codex_group_chat.list_tasks(limit=limit)})
 
 
+@bp.route("/api/codex_group_chat/workers/status", methods=["GET", "OPTIONS"])
+def codex_group_chat_worker_status():
+    if request.method == "OPTIONS":
+        return "", 204
+    token_err = _require_pc_token()
+    if token_err:
+        return token_err
+    try:
+        limit = int(request.args.get("limit") or "20")
+    except Exception:
+        limit = 20
+    return jsonify({"ok": True, "workers": codex_group_chat.list_workers(limit=limit)})
+
+
+@bp.route("/api/codex_group_chat/tasks/<task_id>/heartbeat", methods=["POST", "OPTIONS"])
+def heartbeat_codex_group_chat_task(task_id: str):
+    if request.method == "OPTIONS":
+        return "", 204
+    token_err = _require_pc_token()
+    if token_err:
+        return token_err
+    body = request.get_json(silent=True) or {}
+    worker_id = str((body or {}).get("worker_id") or request.headers.get("X-Worker-Id") or "").strip()
+    worker_meta = {
+        "version": (body or {}).get("worker_version"),
+        "status": (body or {}).get("worker_status"),
+        "last_error": (body or {}).get("last_error"),
+        "gateway_url": (body or {}).get("gateway_url"),
+        "outbox_count": (body or {}).get("outbox_count"),
+    }
+    lease_token = str((body or {}).get("lease_token") or "").strip()
+    task = codex_group_chat.heartbeat_task(
+        task_id,
+        lease_token=lease_token,
+        worker_id=worker_id,
+        worker_meta=worker_meta,
+    )
+    if not task:
+        return jsonify({"ok": False, "error": "任务 lease 已失效或不存在"}), 409
+    return jsonify({"ok": True, "task": task})
+
+
 @bp.route("/api/codex_group_chat/tasks/<task_id>/finish", methods=["GET", "POST", "OPTIONS"])
 def finish_codex_group_chat_task(task_id: str):
     if request.method == "OPTIONS":
@@ -127,9 +176,19 @@ def finish_codex_group_chat_task(task_id: str):
     body = request.get_json(silent=True) or {}
     response = str((body or {}).get("response") or "")
     error = str((body or {}).get("error") or "")
-    task = codex_group_chat.finish_task(task_id, response=response, error=error)
+    worker_id = str((body or {}).get("worker_id") or request.headers.get("X-Worker-Id") or "").strip()
+    lease_token = str((body or {}).get("lease_token") or "").strip()
+    task = codex_group_chat.finish_task(
+        task_id,
+        response=response,
+        error=error,
+        worker_id=worker_id,
+        lease_token=lease_token,
+    )
     if not task:
         return jsonify({"ok": False, "error": "任务不存在"}), 404
+    if task.get("finish_rejected"):
+        return jsonify({"ok": False, "error": task.get("error") or "lease_conflict", "task": task}), 409
     return jsonify({"ok": True, "task": task})
 
 
