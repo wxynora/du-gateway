@@ -10,6 +10,7 @@ import {
   MuteIconMini,
   NotebookPenIconMini,
   SpeakerIconMini,
+  ToggleRightIcon,
   UserRoundCogIconMini,
 } from "./icons";
 import { SwitchSettingRow } from "./SettingsRows";
@@ -153,6 +154,8 @@ export function PromptManagerScreen({ onClose }: { onClose: () => void }) {
   const [silenceSaving, setSilenceSaving] = useState(false);
   const [millionEnabled, setMillionEnabled] = useState(false);
   const [millionSaving, setMillionSaving] = useState(false);
+  const [blockEnabled, setBlockEnabled] = useState(false);
+  const [blockSaving, setBlockSaving] = useState(false);
 
   const isDirty = !!detail && draft !== detail.content;
   const selectedTitle = detail?.label || "Prompt 管理";
@@ -160,15 +163,17 @@ export function PromptManagerScreen({ onClose }: { onClose: () => void }) {
   async function loadList() {
     setLoading(true);
     try {
-      const [list, silence, million] = await Promise.all([
+      const [list, silence, million, block] = await Promise.all([
         apiJson<{ ok?: boolean; sections?: PromptSection[]; error?: string }>("/miniapp-api/prompt-manager"),
         apiJson<ModeResponse>("/miniapp-api/silence-mode"),
         apiJson<ModeResponse>("/miniapp-api/million-plan-mode"),
+        apiJson<ModeResponse>("/miniapp-api/sumitalk-block-mode"),
       ]);
       if (!list?.ok) throw new Error(list?.error || "加载失败");
       setSections(mergePromptSections(list.sections || []));
       if (silence?.ok) setSilenceEnabled(!!silence.enabled);
       if (million?.ok) setMillionEnabled(!!million.enabled);
+      if (block?.ok) setBlockEnabled(!!block.enabled);
     } catch (e: any) {
       toast(`加载失败：${e?.message || e}`);
     } finally {
@@ -196,12 +201,13 @@ export function PromptManagerScreen({ onClose }: { onClose: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function saveMode(kind: "silence" | "million", next: boolean) {
+  async function saveMode(kind: "silence" | "million" | "block", next: boolean) {
     const isSilence = kind === "silence";
-    const prev = isSilence ? silenceEnabled : millionEnabled;
-    const setEnabled = isSilence ? setSilenceEnabled : setMillionEnabled;
-    const setBusy = isSilence ? setSilenceSaving : setMillionSaving;
-    const path = isSilence ? "/miniapp-api/silence-mode" : "/miniapp-api/million-plan-mode";
+    const isBlock = kind === "block";
+    const prev = isSilence ? silenceEnabled : (isBlock ? blockEnabled : millionEnabled);
+    const setEnabled = isSilence ? setSilenceEnabled : (isBlock ? setBlockEnabled : setMillionEnabled);
+    const setBusy = isSilence ? setSilenceSaving : (isBlock ? setBlockSaving : setMillionSaving);
+    const path = isSilence ? "/miniapp-api/silence-mode" : (isBlock ? "/miniapp-api/sumitalk-block-mode" : "/miniapp-api/million-plan-mode");
     setEnabled(next);
     setBusy(true);
     try {
@@ -212,7 +218,13 @@ export function PromptManagerScreen({ onClose }: { onClose: () => void }) {
       });
       if (!j?.ok) throw new Error(j?.error || "保存失败");
       setEnabled(!!j.enabled);
-      toast(isSilence ? (j.enabled ? "禁言模式已开启" : "禁言模式已关闭") : (j.enabled ? "百万计划游戏模式已开启" : "百万计划游戏模式已关闭"));
+      toast(
+        isSilence
+          ? (j.enabled ? "禁言模式已开启" : "禁言模式已关闭")
+          : isBlock
+            ? (j.enabled ? "拉黑模式已开启" : "拉黑模式已关闭")
+            : (j.enabled ? "百万计划游戏模式已开启" : "百万计划游戏模式已关闭")
+      );
     } catch (e: any) {
       setEnabled(prev);
       toast(`保存失败：${e?.message || e}`);
@@ -298,6 +310,13 @@ export function PromptManagerScreen({ onClose }: { onClose: () => void }) {
               enabled={silenceEnabled}
               disabled={silenceSaving}
               onToggle={(v) => void saveMode("silence", v)}
+            />
+            <SwitchSettingRow
+              icon={<ToggleRightIcon />}
+              label="拉黑模式"
+              enabled={blockEnabled}
+              disabled={blockSaving}
+              onToggle={(v) => void saveMode("block", v)}
             />
             <SwitchSettingRow
               icon={<CodeIcon />}

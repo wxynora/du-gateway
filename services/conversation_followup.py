@@ -369,7 +369,11 @@ def _has_new_user_activity(window_id: str, since_iso: str) -> bool:
             continue
         msgs = r.get("messages") or []
         for msg in msgs:
-            if isinstance(msg, dict) and str(msg.get("role") or "").strip().lower() == "user":
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("source") or "") == "sumitalk_block_mode":
+                continue
+            if str(msg.get("role") or "").strip().lower() == "user":
                 return True
     return False
 
@@ -528,6 +532,16 @@ def _archive_wakeup_after_delivery(
                 reply_channel=str(reply_channel or "").strip(),
                 skip_dynamic_layer=True,
             )
+            if str(reply_channel or "").strip().lower() == "sumitalk":
+                try:
+                    from services.sumitalk_block_mode import maybe_auto_reply_after_sumitalk_assistant
+
+                    maybe_auto_reply_after_sumitalk_assistant(
+                        incoming_message_id=f"wakeup-{str(wakeup_kind or '').strip()}-{int(archived.get('round_index') or 0)}",
+                        created_at=now_beijing_iso(),
+                    )
+                except Exception as e:
+                    sumitalk_logger.warning("block_mode_wakeup_auto_reply_failed window_id=%s error=%s", window_id, e)
             return True
     except Exception:
         logger.warning("后端事件投递后归档失败 window_id=%s kind=%s", window_id, kind, exc_info=True)
@@ -929,6 +943,16 @@ def tick_conversation_followups() -> dict:
             item["sent_at"] = now_iso
             item["sent_preview"] = text[:120]
             sent += 1
+            if _normalize_reply_channel(str(item.get("reply_channel") or "sumitalk"), default="sumitalk", allow_tg=True) == "sumitalk":
+                try:
+                    from services.sumitalk_block_mode import maybe_auto_reply_after_sumitalk_assistant
+
+                    maybe_auto_reply_after_sumitalk_assistant(
+                        incoming_message_id=f"followup-{str(item.get('chain_id') or '').strip()}-{int(item.get('followup_index') or 1)}",
+                        created_at=now_beijing_iso(),
+                    )
+                except Exception as e:
+                    sumitalk_logger.warning("block_mode_followup_auto_reply_failed chain_id=%s error=%s", item.get("chain_id"), e)
         else:
             item["last_error"] = "dispatch_failed"
             pending += 1

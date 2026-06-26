@@ -5,7 +5,8 @@ from pathlib import Path
 from flask import jsonify, request
 
 from services import prompt_manager
-from storage import million_plan_mode_store, r2_store, silence_mode_store
+from services import sumitalk_block_mode
+from storage import million_plan_mode_store, r2_store, silence_mode_store, sumitalk_block_mode_store
 from utils.time_aware import now_beijing_iso
 
 
@@ -186,3 +187,28 @@ def register_routes(bp) -> None:
             enabled = bool(raw)
         state = million_plan_mode_store.set_enabled(enabled, updated_at=now_beijing_iso())
         return jsonify({"ok": True, **state})
+
+    @bp.route("/sumitalk-block-mode", methods=["GET"])
+    def miniapp_get_sumitalk_block_mode():
+        state = sumitalk_block_mode_store.get_state()
+        return jsonify({"ok": True, **state})
+
+    @bp.route("/sumitalk-block-mode", methods=["PUT"])
+    def miniapp_put_sumitalk_block_mode():
+        data = request.get_json(silent=True) or {}
+        raw = data.get("enabled")
+        if isinstance(raw, str):
+            enabled = raw.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            enabled = bool(raw)
+        previous = sumitalk_block_mode_store.get_state()
+        state = sumitalk_block_mode_store.set_enabled(enabled, updated_at=now_beijing_iso())
+        notice = {"context_ok": False, "created_at": ""}
+        if enabled and not previous.get("enabled"):
+            notice = sumitalk_block_mode.send_block_notice(
+                created_at=state.get("updated_at") or now_beijing_iso(),
+                reason="sumitalk_block_mode_enabled",
+            )
+            if notice.get("context_ok"):
+                state = sumitalk_block_mode_store.mark_initial_notice_sent(notice.get("created_at") or now_beijing_iso())
+        return jsonify({"ok": True, **state, "notice": notice})

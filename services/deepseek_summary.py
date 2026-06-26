@@ -236,6 +236,8 @@ def build_summary_prompt(
             pass
         msgs = r.get("messages", [])
         for m in msgs:
+            if isinstance(m, dict) and (m.get("skip_memory_summary") or m.get("source") == "sumitalk_block_mode"):
+                continue
             role = (m.get("role", "unknown") or "").strip().lower()
             content = m.get("content")
             if isinstance(content, list):
@@ -1120,6 +1122,8 @@ def fetch_daily_whisper_from_summary(current_summary: str, recent_4_rounds: list
     try:
         for r in recent_4_rounds or []:
             for m in (r.get("messages") or []):
+                if isinstance(m, dict) and (m.get("skip_memory_summary") or m.get("source") == "sumitalk_block_mode"):
+                    continue
                 role = (m.get("role") or "").strip().lower()
                 who = "渡" if role == "assistant" else ("老婆" if role == "user" else role)
                 content = m.get("content")
