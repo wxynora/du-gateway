@@ -87,7 +87,10 @@ function stableDisplayPartId(...values: any[]): string {
 }
 
 function displayPartKey(part: ChatDisplayPart): string {
-  if (part.kind === "tool_call") return `tool:${part.callId || part.id || part.name}`;
+  if (part.kind === "tool_call") {
+    const fallbackKey = `${part.round || ""}:${part.name}`;
+    return `tool:${part.callId || fallbackKey || part.id}`;
+  }
   return `text:${stableDisplayPartId(part.text)}`;
 }
 
@@ -256,6 +259,7 @@ export function applySumiTalkChatEventToMessages(currentMessages: ChatDraftMessa
   let changed = false;
   const next = list.map((msg) => {
     if (msg.role !== "assistant") return msg;
+    if (msg.status === "sent" || msg.status === "failed") return msg;
     const matchesJob = jid && String(msg.jobId || "").trim() === jid;
     const matchesClient = cid && String(msg.clientRequestId || "").trim() === cid;
     if (!matchesJob && !matchesClient) return msg;
@@ -363,6 +367,7 @@ export function applyAssistantTerminalMessage(
   const cid = String(clientRequestId || "").trim();
   const list = Array.isArray(currentMessages) ? currentMessages : [];
   if (cid && list.some((msg) => msg.role === "assistant" && msg.clientRequestId === cid && msg.status === "sent")) {
+    if (assistantMessage.status !== "sent") return list;
     return list.map((msg) => {
       if (msg.role !== "assistant" || msg.clientRequestId !== cid || msg.status !== "sent") return msg;
       const mergedParts = mergeChatDisplayParts(msg.displayParts, assistantMessage.displayParts);
@@ -379,13 +384,16 @@ export function applyAssistantTerminalMessage(
   const next = list.map((msg) => {
     if (!cid || msg.role !== "assistant" || msg.clientRequestId !== cid || msg.status === "sent") return msg;
     replaced = true;
+    const displayParts = assistantMessage.status === "failed"
+      ? normalizeChatDisplayParts(assistantMessage.displayParts || [])
+      : mergeChatDisplayParts(msg.displayParts, assistantMessage.displayParts);
     return {
       ...assistantMessage,
       id: msg.id,
       createdAt: msg.createdAt,
       clientRequestId: cid,
       jobId: assistantMessage.jobId || msg.jobId,
-      displayParts: mergeChatDisplayParts(msg.displayParts, assistantMessage.displayParts),
+      displayParts,
     };
   });
   if (!replaced) next.push(assistantMessage);

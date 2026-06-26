@@ -1836,3 +1836,10 @@ npm -C miniapp run android
 - 已完成：`chatStore.ts` / `nativeChatStore.ts` / `chatHistoryDb.ts` 增加按消息 id 删除本地历史的抽象；实现上复用现有 `upsertMessages` 写 `deletedAt` tombstone，不新增 native 插件方法，尽量兼容已经安装的 Android 壳。
 - 已验证：`npm -C miniapp run build` 通过并重建 `miniapp_static`；`git diff --check` 通过；`npx tsc --noEmit --pretty false` 只剩既有 `src/ui/PromptManagerScreen.tsx:92` 的 `editable?: boolean` 类型问题，和本轮取消发送队列改动无关。
 - 未完成 / 下次继续：本轮只修私聊 Du 的聚合取消/编辑/删除语义，不改群聊取消笨笨任务、不改后端 job 取消语义，也不把“待定”持久化成可见消息状态；后续如需更严谨，可为 `flushingItems` 做服务端 operation 回查去重，降低崩溃恢复后人工重发的重复风险。
+
+当前状态（2026-06-26 MiniApp 工具调用流式展示稳定性）：
+- 已完成：`MainChatScreen.tsx` 的 SumiTalk 流式事件只更新当前 UI，不再每个事件都后台写本地历史，避免半截内容与最终回复保存乱序；同时按 `window_id` 过滤错窗口事件。
+- 已完成：`chatMessages.ts` 不再让 `sent/failed` 终态助手消息继续吃迟到流式事件；失败/取消消息不会继承半截工具调用链；工具调用在缺少 `tool_call_id` 时用 `round + name` 做兜底合并 key。
+- 已完成：`PromptManagerScreen.tsx` 给远端自定义 prompt 段落补 `editable: true` 默认值，修掉 `tsc` 既有阻断点。
+- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`git diff --check`、`npm -C miniapp run build` 通过；`miniapp_static/index.html` 已指向新入口 `index-Mpj23jq8.js`。本轮只改 MiniApp 前端和静态包，没有改 SumiTalk 后端队列/worker，线上只需重启 `du-gateway.service`。
+- 未完成 / 下次继续：没有做后端 token 级流式；当前“流式展示”仍是按 SumiTalk job events 一轮一轮追加可见内容和工具调用状态。

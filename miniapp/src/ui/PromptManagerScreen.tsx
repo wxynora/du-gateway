@@ -89,7 +89,7 @@ function mergePromptSections(remoteSections: PromptSection[]) {
     };
   });
   for (const item of remoteSections) {
-    if (!PROMPT_SECTION_CATALOG.some((base) => base.id === item.id)) rows.push(item);
+    if (!PROMPT_SECTION_CATALOG.some((base) => base.id === item.id)) rows.push({ ...item, editable: item.editable ?? true });
   }
   return rows;
 }

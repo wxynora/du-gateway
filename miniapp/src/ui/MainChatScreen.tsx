@@ -2122,13 +2122,15 @@ export function MainChatScreen({
   });
 
   function applyStreamingSumiTalkChatEvent(event: SumiTalkChatRealtimeEvent): boolean {
+    const eventWindowId = String(event?.window_id || (event as any)?.windowId || "").trim();
+    const currentWindowId = String(windowId || "__default__").trim() || "__default__";
+    if (eventWindowId && eventWindowId !== currentWindowId) return false;
     const current = messagesRef.current;
     const beforeSignature = historySnapshotSignature(current);
     const nextMessages = applySumiTalkChatEventToMessages(current, event);
     if (historySnapshotSignature(nextMessages) === beforeSignature) return false;
     messagesRef.current = nextMessages;
     setMessages(nextMessages);
-    saveDisplayHistoryInBackground(nextMessages, { localDeviceId: deviceId });
     if (realModeEnabledRef.current) void refreshRealBodyStatus();
     return true;
   }
