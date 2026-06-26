@@ -136,10 +136,11 @@ def get_managed_prompt_text(section_id: str, fallback: str | Callable[[], str] =
 
 def list_prompt_sections() -> list[dict]:
     rows: list[dict] = []
+    cfg = r2_store.get_prompt_manager_config()
+    sections = cfg.get("sections") if isinstance(cfg.get("sections"), dict) else {}
     for item in PROMPT_SECTIONS:
-        section = r2_store.get_prompt_manager_section(item.id) or {}
-        fallback = default_prompt_content(item.id)
-        content = str(section.get("content") if section else fallback)
+        section = sections.get(item.id) if isinstance(sections.get(item.id), dict) else {}
+        content = str(section.get("content") or "") if section else ""
         rows.append(
             {
                 "id": item.id,
@@ -149,7 +150,7 @@ def list_prompt_sections() -> list[dict]:
                 "updated_at": str(section.get("updated_at") or ""),
                 "updated_by_device": str(section.get("updated_by_device") or ""),
                 "source": "r2" if section else "fallback",
-                "content_length": len(content),
+                "content_length": len(content) if section else 0,
                 "editable": True,
             }
         )

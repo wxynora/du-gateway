@@ -50,6 +50,50 @@ type PromptSectionDetail = PromptSection & {
   backups?: PromptBackup[];
 };
 
+const PROMPT_SECTION_CATALOG: Array<Pick<PromptSection, "id" | "label" | "description">> = [
+  { id: "core_prompt", label: "核心 Prompt", description: "渡的基础人格、关系定位和长期稳定规则。" },
+  { id: "common_knowledge", label: "常识块", description: "长期稳定常识，独立注入在核心 Prompt 后面。" },
+  { id: "thinking_rules", label: "Thinking 规范", description: "控制思维链/脑内 OS 的写法边界。" },
+  { id: "core_behavior_rules", label: "核心行为规则", description: "互动原则、主动触发和感知数据使用规则。" },
+  { id: "non_retreat_rules", label: "不退缩原则", description: "不满、争执和哄回来的固定规则。" },
+  { id: "entry_style_sumitalk", label: "入口风格：SumiTalk", description: "SumiTalk 入口的输出格式和物理边界。" },
+  { id: "entry_style_qq", label: "入口风格：QQ", description: "QQ 入口的输出格式和表情标签规则。" },
+  { id: "entry_style_tg", label: "入口风格：TG", description: "Telegram 入口的输出格式规则。" },
+  { id: "entry_style_wechat", label: "入口风格：微信", description: "微信入口的输出格式规则。" },
+  { id: "entry_style_xiaoai", label: "入口风格：小爱音箱", description: "小爱音箱语音播报入口规则。" },
+  { id: "voice_line_rules", label: "语音台词规范", description: "生成 <voice> 台词时使用的口语规则。" },
+  { id: "nsfw_rules", label: "NSFW 规则", description: "亲密内容的固定边界和表达风格。" },
+];
+
+const FALLBACK_PROMPT_SECTIONS: PromptSection[] = PROMPT_SECTION_CATALOG.map((item) => ({
+  ...item,
+  revision: 0,
+  source: "pending",
+  content_length: 0,
+  editable: true,
+}));
+
+function mergePromptSections(remoteSections: PromptSection[]) {
+  const remoteById = new Map(remoteSections.map((item) => [item.id, item]));
+  const rows = PROMPT_SECTION_CATALOG.map((item) => {
+    const remote = remoteById.get(item.id);
+    return {
+      ...item,
+      ...(remote || {}),
+      label: remote?.label || item.label,
+      description: remote?.description || item.description,
+      revision: remote?.revision || 0,
+      source: remote?.source || "fallback",
+      content_length: remote?.content_length || 0,
+      editable: remote?.editable ?? true,
+    };
+  });
+  for (const item of remoteSections) {
+    if (!PROMPT_SECTION_CATALOG.some((base) => base.id === item.id)) rows.push(item);
+  }
+  return rows;
+}
+
 function sectionIcon(id: string) {
   if (id === "core_prompt") return <UserRoundCogIconMini />;
   if (id === "common_knowledge") return <NotebookPenIconMini />;
@@ -66,6 +110,7 @@ function shortTime(value?: string) {
 }
 
 function sourceLabel(source: string) {
+  if (source === "pending") return "";
   return source === "r2" ? "已自定义" : "默认";
 }
 
@@ -80,14 +125,16 @@ function PromptSectionRow({ item, onClick }: { item: PromptSection; onClick: () 
       <span className="min-w-0 flex-1">
         <span className="mb-1 flex items-center gap-2">
           <span className="truncate text-[15px] font-semibold tracking-wide text-gray-800">{item.label}</span>
-          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${item.source === "r2" ? "bg-green-50 text-green-600" : "bg-gray-100 text-gray-400"}`}>
-            {sourceLabel(item.source)}
-          </span>
+          {sourceLabel(item.source) ? (
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${item.source === "r2" ? "bg-green-50 text-green-600" : "bg-gray-100 text-gray-400"}`}>
+              {sourceLabel(item.source)}
+            </span>
+          ) : null}
         </span>
         <span className="line-clamp-2 text-[12px] leading-relaxed text-gray-400">{item.description}</span>
       </span>
       <span className="shrink-0 text-right text-[11px] text-gray-300">
-        {item.content_length.toLocaleString()} 字
+        {item.source === "pending" ? "状态同步中" : item.content_length ? `${item.content_length.toLocaleString()} 字` : "默认内容"}
         <ChevronRightIcon />
       </span>
     </button>
@@ -96,7 +143,7 @@ function PromptSectionRow({ item, onClick }: { item: PromptSection; onClick: () 
 
 export function PromptManagerScreen({ onClose }: { onClose: () => void }) {
   const toast = useToast();
-  const [sections, setSections] = useState<PromptSection[]>([]);
+  const [sections, setSections] = useState<PromptSection[]>(FALLBACK_PROMPT_SECTIONS);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<PromptSectionDetail | null>(null);
   const [draft, setDraft] = useState("");
@@ -119,7 +166,7 @@ export function PromptManagerScreen({ onClose }: { onClose: () => void }) {
         apiJson<ModeResponse>("/miniapp-api/million-plan-mode"),
       ]);
       if (!list?.ok) throw new Error(list?.error || "加载失败");
-      setSections(list.sections || []);
+      setSections(mergePromptSections(list.sections || []));
       if (silence?.ok) setSilenceEnabled(!!silence.enabled);
       if (million?.ok) setMillionEnabled(!!million.enabled);
     } catch (e: any) {

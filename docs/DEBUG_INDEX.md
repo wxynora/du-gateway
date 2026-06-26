@@ -843,8 +843,9 @@ rg -n "core-prompt|核心|入口风格|SumiTalk|禁言|silence" routes services 
 - 已完成：设置页的旧「核心 Prompt」入口改为「Prompt 管理」，前端入口为 `miniapp/src/ui/PromptManagerScreen.tsx`；页面顶部只保留「禁言模式」「百万计划游戏模式」两个开关，二者不进入可编辑提示词列表。
 - 已完成：可编辑提示词白名单集中在 `services/prompt_manager.py::PROMPT_SECTIONS`，包括核心 Prompt、常识块、思维链规则、核心行为规则、不退缩原则、SumiTalk/QQ/TG/微信/小爱入口风格、语音台词规范、NSFW 规则；保存写入 R2 `global/prompt_manager_config.json`，旧版本自动备份到 `global/prompt_manager_backups/`，并提供单条回滚。
 - 已完成：运行时读取统一走 `services.prompt_manager.get_managed_prompt_text()`；`pipeline/pipeline.py`、`services/entry_style_prompt.py`、`services/voice_line_prompt.py`、`services/chat_prompt_injections.py`、`services/telegram_bot.py` 已接入覆盖值，未配置时回退现有文件/常量。
+- 已完成：Prompt 管理入口列表改为前端常驻 catalog，首屏不再依赖接口现拉；`/miniapp-api/prompt-manager` 只补 revision/source/content_length 等状态元数据，不再为了列表读取整段 fallback prompt。点进某个条目时才拉完整内容和备份。
 - 已验证：`.venv/bin/python -m py_compile storage/r2_store.py services/prompt_manager.py services/voice_line_prompt.py services/entry_style_prompt.py services/chat_prompt_injections.py services/telegram_bot.py pipeline/pipeline.py routes/miniapp/settings.py app.py`、`npm run build`、`import app`、`git diff --check` 通过。
-- 未完成 / 下次继续：当前只完成本地代码与静态构建产物，尚未 push / 重启线上；不要把禁言模式或百万计划游戏模式改成可编辑 Prompt，它俩只保持开关语义。
+- 未完成 / 下次继续：不要把禁言模式或百万计划游戏模式改成可编辑 Prompt，它俩只保持开关语义；如果后续新增提示词条目，前端 `PROMPT_SECTION_CATALOG` 和后端 `PROMPT_SECTIONS` 需要同步维护。
 
 当前状态（2026-05-12）：
 - 已完成：`AGENTS.md` 已补“提示词写法规则”，并把现有 AGENTS 表述收成第二人称/无人称风格；刚才误把参考段落的具体互动内容写进去，已删除，只保留写法口吻规则。
