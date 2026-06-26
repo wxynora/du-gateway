@@ -140,7 +140,7 @@ def _memory_search_text(mem: dict) -> str:
 
 
 def _freshness_score(mem: dict) -> float:
-    ts = parse_iso_to_beijing(mem.get("last_mentioned") or mem.get("created_at") or "")
+    ts = parse_iso_to_beijing(_memory_event_timestamp(mem))
     if ts is None:
         return 0.0
     days = max(0, (_now_beijing() - ts).days)
@@ -200,6 +200,7 @@ def search_dynamic_memories(
         if keyword_score <= 0:
             continue
         final_score = semantic_score * 0.7 + min(keyword_score, 3.0) * 0.15 + _freshness_score(mem) * 0.1 + _weight_score(mem) * 0.05
+        event_at = _memory_event_timestamp(mem)
         row = {
             "id": str(mem.get("id") or "").strip(),
             "content": str(mem.get("content") or "").strip(),
@@ -208,7 +209,10 @@ def search_dynamic_memories(
             "target_type": str(mem.get("target_type") or "").strip(),
             "importance": int(mem.get("importance") or 0),
             "mention_count": int(mem.get("mention_count") or 0),
+            "created_at": str(mem.get("created_at") or "").strip(),
+            "updated_at": str(mem.get("updated_at") or "").strip(),
             "last_mentioned": str(mem.get("last_mentioned") or mem.get("created_at") or "").strip(),
+            "event_at": event_at,
             "semantic_score": round(semantic_score, 4),
             "final_score": round(final_score, 4),
             "_keyword_score": keyword_score,
@@ -221,7 +225,7 @@ def search_dynamic_memories(
             -float(x.get("final_score") or 0.0),
             -float(x.get("semantic_score") or 0.0),
             -int(x.get("importance") or 0),
-            str(x.get("last_mentioned") or ""),
+            str(x.get("event_at") or ""),
         )
     )
     trimmed = []

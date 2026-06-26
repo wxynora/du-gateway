@@ -142,7 +142,14 @@ def rebuild(
                 "scene_type": str((m or {}).get("scene_type") or "").strip(),
                 "target_type": str((m or {}).get("target_type") or "").strip(),
                 "created_at": (m or {}).get("created_at") or "",
+                "updated_at": (m or {}).get("updated_at") or "",
                 "last_mentioned": (m or {}).get("last_mentioned") or "",
+                "event_at": (
+                    (m or {}).get("updated_at")
+                    or (m or {}).get("created_at")
+                    or (m or {}).get("last_mentioned")
+                    or ""
+                ),
             },
         }
         batch_by_tag.setdefault(tag, []).append(rec)

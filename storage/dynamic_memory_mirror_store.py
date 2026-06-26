@@ -129,6 +129,7 @@ def ensure_schema() -> None:
                     importance REAL NOT NULL DEFAULT 0,
                     mention_count INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT '',
                     last_mentioned TEXT NOT NULL DEFAULT '',
                     content_hash TEXT NOT NULL DEFAULT '',
                     source_snapshot_hash TEXT NOT NULL DEFAULT '',
@@ -195,6 +196,18 @@ def ensure_schema() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_sync_runs_finished
                     ON sync_runs(finished_at);
+                """
+            )
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(dynamic_memory_items)").fetchall()
+            }
+            if "updated_at" not in columns:
+                conn.execute("ALTER TABLE dynamic_memory_items ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_dynamic_memory_items_event_time
+                    ON dynamic_memory_items(active, updated_at, created_at)
                 """
             )
             try:
@@ -411,11 +424,11 @@ def sync_memories(
                             (
                                 memory_id, content, retrieval_text, tag,
                                 emotion_label, scene_type, target_type,
-                                importance, mention_count, created_at, last_mentioned,
+                                importance, mention_count, created_at, updated_at, last_mentioned,
                                 content_hash, source_snapshot_hash, ids_hash, memory_count,
                                 active, deleted_at, synced_at, raw_json
                             )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?)
                         """,
                         (
                             memory_id,
@@ -428,6 +441,7 @@ def sync_memories(
                             _as_float(memory.get("importance"), 0.0),
                             _as_int(memory.get("mention_count"), 0),
                             str(memory.get("created_at") or ""),
+                            str(memory.get("updated_at") or memory.get("created_at") or ""),
                             str(memory.get("last_mentioned") or ""),
                             content_hash,
                             source_hash,
@@ -552,7 +566,7 @@ def list_items(limit: int = 50, *, active_only: bool = True) -> list[dict[str, A
             SELECT *
             FROM dynamic_memory_items
             {where}
-            ORDER BY last_mentioned DESC, created_at DESC
+            ORDER BY COALESCE(NULLIF(updated_at, ''), NULLIF(created_at, ''), last_mentioned) DESC
             LIMIT ?
             """,
             (lim,),
@@ -560,6 +574,7 @@ def list_items(limit: int = 50, *, active_only: bool = True) -> list[dict[str, A
         out = []
         for row in rows:
             item = dict(row)
+            item["event_at"] = str(item.get("updated_at") or item.get("created_at") or item.get("last_mentioned") or "")
             item["raw_json"] = _json_loads(item.get("raw_json"), {})
             item["keywords"] = [
                 dict(term)
@@ -608,7 +623,10 @@ def _candidate_row(row: sqlite3.Row) -> dict[str, Any]:
         "tag": str(row["tag"] or ""),
         "importance": _as_float(row["importance"], 0.0),
         "mention_count": _as_int(row["mention_count"], 0),
+        "created_at": str(row["created_at"] or ""),
+        "updated_at": str(row["updated_at"] or ""),
         "last_mentioned": str(row["last_mentioned"] or row["created_at"] or ""),
+        "event_at": str(row["updated_at"] or row["created_at"] or row["last_mentioned"] or ""),
         "content_hash": str(row["content_hash"] or ""),
     }
 

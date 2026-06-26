@@ -27,6 +27,16 @@ def _memory_source_label(memory_id: str) -> str:
     return "core_cache" if mid.startswith("core::") else "dynamic_memory"
 
 
+def _memory_event_timestamp(mem: dict) -> str:
+    return str(
+        (mem or {}).get("updated_at")
+        or (mem or {}).get("created_at")
+        or (mem or {}).get("promoted_at")
+        or (mem or {}).get("last_mentioned")
+        or ""
+    ).strip()
+
+
 def lookup_referenced_memory_details(memory_ids: list[str]) -> list[dict]:
     ids: list[str] = []
     seen: set[str] = set()
@@ -54,7 +64,10 @@ def lookup_referenced_memory_details(memory_ids: list[str]) -> list[dict]:
                 "tag": str(mem.get("tag") or "").strip(),
                 "importance": int(mem.get("importance") or 0),
                 "mention_count": int(mem.get("mention_count") or 0),
+                "created_at": str(mem.get("created_at") or "").strip(),
+                "updated_at": str(mem.get("updated_at") or "").strip(),
                 "last_mentioned": str(mem.get("last_mentioned") or mem.get("created_at") or "").strip(),
+                "event_at": _memory_event_timestamp(mem),
                 "emotion_label": str(mem.get("emotion_label") or "").strip(),
                 "scene_type": str(mem.get("scene_type") or "").strip(),
                 "target_type": str(mem.get("target_type") or "").strip(),
@@ -79,6 +92,10 @@ def lookup_referenced_memory_details(memory_ids: list[str]) -> list[dict]:
                 "mention_count": int(item.get("mention_count") or 0),
                 "promoted_by": str(item.get("promoted_by") or "").strip(),
                 "promoted_at": str(item.get("promoted_at") or "").strip(),
+                "created_at": str(item.get("created_at") or "").strip(),
+                "updated_at": str(item.get("updated_at") or "").strip(),
+                "last_mentioned": str(item.get("last_mentioned") or "").strip(),
+                "event_at": _memory_event_timestamp(item),
                 "emotion_label": str(item.get("emotion_label") or "").strip(),
                 "scene_type": str(item.get("scene_type") or "").strip(),
                 "target_type": str(item.get("target_type") or "").strip(),

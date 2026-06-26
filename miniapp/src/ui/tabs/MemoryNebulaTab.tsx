@@ -24,7 +24,9 @@ type DynamicMemory = {
   scene_type?: string;
   target_type?: string;
   created_at?: string;
+  updated_at?: string;
   last_mentioned?: string;
+  event_at?: string;
 };
 
 type RecalledLine =
@@ -398,7 +400,7 @@ function collectNodes(data: MemoryDebugResp | null, dynamicData: DynamicMemoryRe
       id,
       ...pos,
       title: formatMemoryCoord({
-        time: item.last_mentioned || item.created_at || eventIndex.timestamps.get(id),
+        time: item.event_at || item.updated_at || item.created_at || item.last_mentioned || eventIndex.timestamps.get(id),
         importance: item.importance,
         score: eventIndex.scores.get(id) ?? null,
         mentionCount: item.mention_count,

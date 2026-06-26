@@ -2239,7 +2239,9 @@ def _upsert_dynamic_memory_index(mem: dict) -> None:
                 "scene_type": str(mem.get("scene_type") or "").strip(),
                 "target_type": str(mem.get("target_type") or "").strip(),
                 "created_at": mem.get("created_at") or "",
+                "updated_at": mem.get("updated_at") or "",
                 "last_mentioned": mem.get("last_mentioned") or "",
+                "event_at": _memory_event_timestamp(mem),
             },
         }
         ok = upsert_records(tag, [rec])
