@@ -184,6 +184,8 @@ def ensure_schema() -> None:
                     sleep_source TEXT NOT NULL DEFAULT '',
                     reserved_at TEXT NOT NULL DEFAULT '',
                     last_sent_at TEXT NOT NULL DEFAULT '',
+                    post_wakeup_pending INTEGER NOT NULL DEFAULT 0,
+                    post_wakeup_sent_at TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS idx_spring_dream_sessions_updated

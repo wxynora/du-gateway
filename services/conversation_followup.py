@@ -509,6 +509,8 @@ def _archive_wakeup_after_delivery(
     kind = str(wakeup_kind or "").strip().lower()
     if kind in {"spring_dream", "random_spring_dream"}:
         archive_user = {"role": "event", "archive_label": "随机唤醒", "content": "睡眠期随机唤醒触发了一次春梦。"}
+    elif kind == "post_spring_dream":
+        archive_user = {"role": "event", "archive_label": "随机唤醒", "content": "睡眠期随机唤醒延续上一轮春梦。"}
     else:
         archive_user = {"role": "event", "archive_label": "网关提醒", "content": "这是一次网关唤醒提醒。"}
     archive_assistant = {"role": "assistant", "content": str(assistant_text or "").strip()}
@@ -865,6 +867,26 @@ def send_spring_dream_wakeup(window_id: str, target: str, event_text: str, creat
         extra_instruction=(
             "这是睡眠期随机唤醒触发的一段春梦，不是小玥在聊天框里发来的消息。"
             "请直接以你梦醒后对小玥说话的口吻自然发出；不要解释系统流程，不要输出 JSON 或工具说明。"
+        ),
+    )
+
+
+def send_post_spring_dream_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
+    """睡眠期随机唤醒在春梦后一轮使用本地自定义 prompt replacement。"""
+    return _send_wakeup_event(
+        window_id=window_id,
+        target=target,
+        event_text=event_text,
+        created_at=created_at,
+        archive=True,
+        stable_proactive_channel=True,
+        wakeup_kind="post_spring_dream",
+        system_event=True,
+        allow_followup=False,
+        archive_after_delivery=True,
+        extra_instruction=(
+            "这是睡眠期随机唤醒在上一轮春梦后的延续触发，不是小玥在聊天框里发来的消息。"
+            "请直接以你此刻对小玥说话的口吻自然发出；不要解释系统流程，不要输出 JSON 或工具说明。"
         ),
     )
 

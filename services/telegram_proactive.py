@@ -43,9 +43,24 @@ from services.telegram_bot import (
 )
 from services.entry_style_prompt import entry_style_for_channel
 from services import wakeup_state
-from services.conversation_followup import FOLLOWUP_TICK_SECONDS, send_spring_dream_wakeup, tick_conversation_followups
+from services.conversation_followup import (
+    FOLLOWUP_TICK_SECONDS,
+    send_post_spring_dream_wakeup,
+    send_spring_dream_wakeup,
+    tick_conversation_followups,
+)
 from services.du_daily import infer_sleep_rollover_trigger, request_gateway_maintenance
-from services.spring_dream import maybe_prepare_spring_dream_wakeup, record_spring_dream_sent, release_spring_dream_slot
+from services.spring_dream import (
+    maybe_prepare_post_spring_dream_wakeup,
+    maybe_prepare_spring_dream_wakeup,
+    record_post_spring_dream_wakeup_sent,
+    record_spring_dream_sent,
+    release_spring_dream_slot,
+)
+from services.proactive_prompt_templates import (
+    RANDOM_PROACTIVE_DECISION_SECTION_ID,
+    RANDOM_PROACTIVE_DECISION_TEMPLATE,
+)
 
 logger = get_logger(__name__)
 _GATEWAY_DYNAMIC_SYSTEM_MARKER = "__dynamic__"
@@ -192,6 +207,37 @@ def _describe_recent_exchange(now_dt: datetime) -> str:
         return f"她上次明确回你大约是 {hours_since_user:.1f} 小时前。"
 
     return "最近没有可参考的明确用户回复记录。"
+
+
+def _render_random_proactive_decision_prompt(
+    *,
+    recent_exchange: str,
+    hours_since_last: float,
+    channel_field_desc: str,
+    default_channel: str,
+    no_contact_token: str,
+) -> str:
+    try:
+        from services.prompt_manager import get_managed_prompt_text
+
+        template = get_managed_prompt_text(
+            RANDOM_PROACTIVE_DECISION_SECTION_ID,
+            fallback=RANDOM_PROACTIVE_DECISION_TEMPLATE,
+        )
+    except Exception:
+        template = RANDOM_PROACTIVE_DECISION_TEMPLATE
+    text = str(template or RANDOM_PROACTIVE_DECISION_TEMPLATE)
+    hours_text = f"{hours_since_last:.1f}"
+    replacements = {
+        "{{recent_exchange}}": str(recent_exchange or "").strip(),
+        "{{hours_since_last}}": hours_text,
+        "{{channel_field_desc}}": str(channel_field_desc or "").strip(),
+        "{{default_channel}}": str(default_channel or "").strip(),
+        "{{no_contact_token}}": str(no_contact_token or "NO_CONTACT").strip(),
+    }
+    for key, value in replacements.items():
+        text = text.replace(key, value)
+    return text.replace("X.X", hours_text).strip()
 
 
 def _probability(hours_since_last: float) -> float:
@@ -656,27 +702,12 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
     now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso())
     if not now_ref:
         now_ref = datetime.now()
-    user_prompt = (
-        f"这是一次随机唤醒，你现在要不要做点什么。{_describe_recent_exchange(now_ref)}\n"
-        f"从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
-        "可以选：给她发消息、暂时不打扰、去写日记/记事、逛论坛、上网冲浪找点可聊话题，或其它你认为合适的动作。\n"
-        "如果你想逛论坛但不发消息，action 必须填 forum；不要只在 reason 里说“去逛论坛”。\n"
-        "如果你想上网冲浪但不发消息，action 必须填 surf；不要只在 reason 里说“去冲浪”。\n"
-        "如果你需要先看到素材再判断要不要发消息，可以先调用 du_surf 抽一个随机话题，看完卡片后再给最终 JSON。\n"
-        "如果最终 action 是 surf，后端会执行一次 du_surf 并记录结果；这仍然不会主动打扰她。\n"
-        "如果最终 action 是 forum，后端会追加一轮主网关，让你实际调用论坛工具看看内容；这仍然不会主动打扰她。\n"
-        "如果当前状态显示她可能睡着、在忙，或不适合被打扰，可以选择不发消息，转而写日记、逛论坛、surf，或者什么都不做。\n"
-        "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
-        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "forum" | "surf" | "other" 之一。\n'
-        '- reason：字符串，简短说明你为什么这么选（必填）。\n'
-        '- message：字符串；当 action 为 send_message 时，填要发给她的正文（可多行、像平时聊天）；其它 action 时可为空或填补充说明。\n'
-        + channel_field_desc
-        + (
-            f'示例：{{"action":"send_message","reason":"好久没联系了","message":"在干嘛","channel":"{default_channel}"}}\n'
-            if default_channel
-            else f'示例：{{"action":"no_contact","reason":"当前没有可用发送入口","message":"","channel":""}}\n'
-        )
-        + f"若你坚持旧习惯，也可以只输出一行 {no_token} 表示不联系（不推荐）。\n"
+    user_prompt = _render_random_proactive_decision_prompt(
+        recent_exchange=_describe_recent_exchange(now_ref),
+        hours_since_last=hours_since_last,
+        channel_field_desc=channel_field_desc,
+        default_channel=default_channel,
+        no_contact_token=no_token,
     )
     _marker, sys_content = entry_style_for_channel(default_channel, is_miniapp=False)
     sys_content = (sys_content or build_telegram_style_system()).strip()
@@ -1441,6 +1472,57 @@ def _try_spring_dream_wakeup(window_id: str, uid: int, now_dt: datetime, now_iso
     }
 
 
+def _try_post_spring_dream_wakeup(window_id: str, uid: int, now_dt: datetime, now_iso: str) -> dict | None:
+    try:
+        prepared = maybe_prepare_post_spring_dream_wakeup(now_dt=now_dt)
+    except Exception as e:
+        logger.warning("春梦后唤醒准备失败，继续普通随机主动决策 window_id=%s error=%s", window_id, e)
+        return None
+    if not prepared:
+        return None
+    prompt = str(prepared.get("prompt") or "").strip()
+    if not prompt:
+        return None
+    result = send_post_spring_dream_wakeup(
+        window_id=window_id,
+        target=str(uid or "").strip(),
+        event_text=prompt,
+        created_at=now_iso,
+    )
+    ok = bool((result or {}).get("ok"))
+    stored = False
+    if ok:
+        try:
+            stored = record_post_spring_dream_wakeup_sent(prepared, sent_at=now_iso)
+        except Exception as e:
+            stored = False
+            logger.warning("春梦后唤醒已发送但清除待触发状态失败 window_id=%s error=%s", window_id, e)
+    archive_ok = bool((result or {}).get("archive_ok", True))
+    if ok and not archive_ok:
+        logger.warning("春梦后唤醒已投递但归档失败 window_id=%s channel=%s", window_id, str((result or {}).get("channel") or ""))
+    if not ok:
+        logger.warning(
+            "春梦后唤醒发送失败，本轮不继续普通随机主动决策 window_id=%s error=%s",
+            window_id,
+            str((result or {}).get("error") or ""),
+        )
+    return {
+        "ok": ok,
+        "sent": ok,
+        "wake_mode": "post_spring_dream",
+        "post_spring_dream": {
+            "triggered": True,
+            "stored": stored,
+            "archive_ok": archive_ok,
+            "sleep_source": str(prepared.get("sleep_source") or ""),
+            "last_spring_dream_sent_at": str(prepared.get("last_spring_dream_sent_at") or ""),
+        },
+        "channel": str((result or {}).get("channel") or ""),
+        "reply_preview": str((result or {}).get("reply_preview") or ""),
+        "error": str((result or {}).get("error") or ""),
+    }
+
+
 def proactive_tick(target_user_id: int = 0) -> dict:
     """
     执行一次调度 tick。
@@ -1496,6 +1578,13 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         return out
 
     window_id = f"tg_{uid}"
+    post_spring_dream_result = _try_post_spring_dream_wakeup(window_id, uid, now_dt, now_iso)
+    if post_spring_dream_result:
+        out.update(post_spring_dream_result)
+        if bool(post_spring_dream_result.get("sent")):
+            r2_store.save_last_proactive_contact_at(now_iso)
+        return out
+
     spring_dream_result = _try_spring_dream_wakeup(window_id, uid, now_dt, now_iso)
     if spring_dream_result:
         out.update(spring_dream_result)

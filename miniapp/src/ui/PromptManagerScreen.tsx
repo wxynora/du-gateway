@@ -32,6 +32,7 @@ type PromptSection = {
   source: "r2" | "fallback" | string;
   content_length: number;
   editable?: boolean;
+  allow_empty?: boolean;
 };
 
 type PromptBackup = {
@@ -63,6 +64,8 @@ const PROMPT_SECTION_CATALOG: Array<Pick<PromptSection, "id" | "label" | "descri
   { id: "entry_style_xiaoai", label: "入口风格：小爱音箱", description: "小爱音箱语音播报入口规则。" },
   { id: "voice_line_rules", label: "语音台词规范", description: "生成 <voice> 台词时使用的口语规则。" },
   { id: "nsfw_rules", label: "NSFW 规则", description: "亲密内容的固定边界和表达风格。" },
+  { id: "random_proactive_decision", label: "随机唤醒决策", description: "普通随机唤醒时用于让渡决定发消息、不打扰、写日记、逛论坛或上网冲浪的文案。" },
+  { id: "post_spring_dream_wakeup", label: "春梦后唤醒版", description: "上一轮随机唤醒命中春梦后，下一轮睡眠期随机唤醒使用的自定义文案；留空则走原随机唤醒。" },
 ];
 
 const FALLBACK_PROMPT_SECTIONS: PromptSection[] = PROMPT_SECTION_CATALOG.map((item) => ({
@@ -86,6 +89,7 @@ function mergePromptSections(remoteSections: PromptSection[]) {
       source: remote?.source || "fallback",
       content_length: remote?.content_length || 0,
       editable: remote?.editable ?? true,
+      allow_empty: remote?.allow_empty ?? false,
     };
   });
   for (const item of remoteSections) {
@@ -228,7 +232,7 @@ export function PromptManagerScreen({ onClose }: { onClose: () => void }) {
   async function savePrompt() {
     if (!detail) return;
     const content = draft.trim();
-    if (!content) {
+    if (!detail.allow_empty && !content) {
       toast("内容不能为空");
       return;
     }

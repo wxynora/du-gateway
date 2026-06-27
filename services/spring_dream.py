@@ -10,6 +10,7 @@ from utils.time_aware import now_beijing_iso
 
 SPRING_DREAM_PROBABILITY = 0.35
 SPRING_DREAM_MAX_PER_SLEEP = 3
+POST_SPRING_DREAM_WAKEUP_SECTION_ID = "post_spring_dream_wakeup"
 
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY = False
@@ -447,12 +448,26 @@ def _ensure_schema() -> None:
                     sleep_source TEXT NOT NULL DEFAULT '',
                     reserved_at TEXT NOT NULL DEFAULT '',
                     last_sent_at TEXT NOT NULL DEFAULT '',
+                    post_wakeup_pending INTEGER NOT NULL DEFAULT 0,
+                    post_wakeup_sent_at TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS idx_spring_dream_sessions_updated
                     ON spring_dream_sessions(updated_at);
                 """
             )
+            columns = {
+                str(row["name"] or "")
+                for row in conn.execute("PRAGMA table_info(spring_dream_sessions)").fetchall()
+            }
+            if "post_wakeup_pending" not in columns:
+                conn.execute(
+                    "ALTER TABLE spring_dream_sessions ADD COLUMN post_wakeup_pending INTEGER NOT NULL DEFAULT 0"
+                )
+            if "post_wakeup_sent_at" not in columns:
+                conn.execute(
+                    "ALTER TABLE spring_dream_sessions ADD COLUMN post_wakeup_sent_at TEXT NOT NULL DEFAULT ''"
+                )
         _SCHEMA_READY = True
 
 
@@ -483,6 +498,8 @@ def _session_row(session_key: str) -> dict:
         "sleep_source": str(row["sleep_source"] or ""),
         "reserved_at": str(row["reserved_at"] or ""),
         "last_sent_at": str(row["last_sent_at"] or ""),
+        "post_wakeup_pending": int(row["post_wakeup_pending"] or 0),
+        "post_wakeup_sent_at": str(row["post_wakeup_sent_at"] or ""),
         "updated_at": str(row["updated_at"] or ""),
     }
 
@@ -552,9 +569,10 @@ def _reserve_spring_dream_slot(
                     """
                     INSERT INTO spring_dream_sessions (
                         sleep_session_key, count, max_per_sleep, last_theme_id,
-                        sleep_source, reserved_at, last_sent_at, updated_at
+                        sleep_source, reserved_at, last_sent_at,
+                        post_wakeup_pending, post_wakeup_sent_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, '', ?)
+                    VALUES (?, ?, ?, ?, ?, ?, '', 0, '', ?)
                     """,
                     (clean_key, count_after, limit, theme_id, str(sleep_source or "").strip(), now_iso, now_iso),
                 )
@@ -702,7 +720,95 @@ def record_spring_dream_sent(prepared: dict, *, sent_at: str = "") -> bool:
         conn.execute(
             """
             UPDATE spring_dream_sessions
-            SET last_sent_at=?, updated_at=?
+            SET last_sent_at=?, post_wakeup_pending=1, updated_at=?
+            WHERE sleep_session_key=?
+            """,
+            (now_iso, now_iso, session_key),
+        )
+    return True
+
+
+def _strip_prompt_comment_lines(text: str) -> str:
+    lines = []
+    for raw in str(text or "").splitlines():
+        line = str(raw or "")
+        if line.lstrip().startswith("#"):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def load_post_spring_dream_wakeup_prompt() -> str:
+    try:
+        from services.prompt_manager import get_prompt_override_text
+
+        text = get_prompt_override_text(POST_SPRING_DREAM_WAKEUP_SECTION_ID)
+    except Exception:
+        text = None
+    if text is None:
+        return ""
+    return _strip_prompt_comment_lines(text)
+
+
+def _clear_post_spring_dream_wakeup_pending(session_key: str, *, updated_at: str = "") -> bool:
+    clean_key = str(session_key or "").strip()
+    if not clean_key:
+        return False
+    now_iso = str(updated_at or "").strip() or now_beijing_iso()
+    _ensure_schema()
+    with runtime_sqlite.connect() as conn:
+        conn.execute(
+            """
+            UPDATE spring_dream_sessions
+            SET post_wakeup_pending=0, updated_at=?
+            WHERE sleep_session_key=?
+            """,
+            (now_iso, clean_key),
+        )
+    return True
+
+
+def maybe_prepare_post_spring_dream_wakeup(*, now_dt: datetime) -> Optional[dict]:
+    try:
+        from services.pixel_home import build_sleep_wakeup_state
+
+        sleep_state = build_sleep_wakeup_state(now_dt)
+    except Exception:
+        return None
+    night_date = str((sleep_state or {}).get("night_date") or "").strip()
+    if not bool((sleep_state or {}).get("is_sleeping")):
+        _reset_night_sessions(night_date)
+        return None
+    session_key = str((sleep_state or {}).get("sleep_session_key") or "").strip()
+    if not session_key:
+        return None
+    session_key = _recent_session_key_for_night(night_date) or session_key
+    row = _session_row(session_key)
+    if not row or int(row.get("post_wakeup_pending") or 0) <= 0:
+        return None
+    prompt = load_post_spring_dream_wakeup_prompt()
+    if not prompt:
+        _clear_post_spring_dream_wakeup_pending(session_key)
+        return None
+    return {
+        "prompt": prompt,
+        "sleep_session_key": session_key,
+        "sleep_source": str((sleep_state or {}).get("source") or row.get("sleep_source") or "").strip(),
+        "last_spring_dream_sent_at": str(row.get("last_sent_at") or ""),
+    }
+
+
+def record_post_spring_dream_wakeup_sent(prepared: dict, *, sent_at: str = "") -> bool:
+    session_key = str((prepared or {}).get("sleep_session_key") or "").strip()
+    if not session_key:
+        return False
+    now_iso = str(sent_at or "").strip() or now_beijing_iso()
+    _ensure_schema()
+    with runtime_sqlite.connect() as conn:
+        conn.execute(
+            """
+            UPDATE spring_dream_sessions
+            SET post_wakeup_pending=0, post_wakeup_sent_at=?, updated_at=?
             WHERE sleep_session_key=?
             """,
             (now_iso, now_iso, session_key),

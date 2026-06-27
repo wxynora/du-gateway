@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Callable
 
 from storage import r2_store
+from services.proactive_prompt_templates import (
+    RANDOM_PROACTIVE_DECISION_SECTION_ID,
+    RANDOM_PROACTIVE_DECISION_TEMPLATE,
+)
 
 
 @dataclass(frozen=True)
@@ -14,6 +18,7 @@ class PromptSectionDef:
     label: str
     description: str
     max_chars: int = 120_000
+    allow_empty: bool = False
 
 
 PROMPT_SECTIONS: tuple[PromptSectionDef, ...] = (
@@ -29,6 +34,19 @@ PROMPT_SECTIONS: tuple[PromptSectionDef, ...] = (
     PromptSectionDef("entry_style_xiaoai", "入口风格：小爱音箱", "小爱音箱语音播报入口规则。", 30_000),
     PromptSectionDef("voice_line_rules", "语音台词规范", "生成 <voice> 台词时使用的口语规则。", 30_000),
     PromptSectionDef("nsfw_rules", "NSFW 规则", "亲密内容的固定边界和表达风格。", 80_000),
+    PromptSectionDef(
+        RANDOM_PROACTIVE_DECISION_SECTION_ID,
+        "随机唤醒决策",
+        "普通随机唤醒时用于让渡决定发消息、不打扰、写日记、逛论坛或上网冲浪的文案。",
+        80_000,
+    ),
+    PromptSectionDef(
+        "post_spring_dream_wakeup",
+        "春梦后唤醒版",
+        "上一轮随机唤醒命中春梦后，下一轮睡眠期随机唤醒使用的自定义文案；留空则走原随机唤醒。",
+        80_000,
+        True,
+    ),
 )
 PROMPT_SECTION_MAP = {item.id: item for item in PROMPT_SECTIONS}
 
@@ -98,6 +116,10 @@ def default_prompt_content(section_id: str) -> str:
         return _read_text_file("prompts/du_common_knowledge.md")
     if sid == "nsfw_rules":
         return _read_text_file("prompts/du_nsfw_prompt.txt")
+    if sid == "post_spring_dream_wakeup":
+        return ""
+    if sid == RANDOM_PROACTIVE_DECISION_SECTION_ID:
+        return RANDOM_PROACTIVE_DECISION_TEMPLATE
     if sid == "voice_line_rules":
         try:
             import services.voice_line_prompt as voice_mod
@@ -152,6 +174,7 @@ def list_prompt_sections() -> list[dict]:
                 "source": "r2" if section else "fallback",
                 "content_length": len(content) if section else 0,
                 "editable": True,
+                "allow_empty": bool(item.allow_empty),
             }
         )
     return rows
@@ -175,6 +198,7 @@ def get_prompt_section_detail(section_id: str) -> dict | None:
         "content": content,
         "content_length": len(content),
         "max_chars": definition.max_chars,
+        "allow_empty": bool(definition.allow_empty),
         "backups": r2_store.list_prompt_manager_backups(definition.id, limit=20),
     }
 
@@ -187,7 +211,7 @@ def validate_prompt_content(section_id: str, content: str) -> str:
         return "内容包含非法控制字符"
     if len(str(content or "")) > definition.max_chars:
         return f"内容过长，最多 {definition.max_chars} 字符"
-    if not str(content or "").strip():
+    if not definition.allow_empty and not str(content or "").strip():
         return "内容不能为空"
     return ""
 

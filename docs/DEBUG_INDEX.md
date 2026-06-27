@@ -168,6 +168,12 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：`services/spring_dream.py::build_spring_dream_prompt()` 按辛玥给定方向改为“潜意识的欲望解构”口径：强调当前正深陷梦境、碎片只是梦深处的边缘素材，要求完整细腻拓展、不要机械复述拼凑，并强化梦境里的失控欲望与感官特写。春梦仍只改随机唤醒命中的 prompt replacement，不新增通道、队列或归档路径。
 - 已验证：`.venv/bin/python -m py_compile services/spring_dream.py`、`git diff --check -- services/spring_dream.py docs/DEBUG_INDEX.md` 通过；smoke 确认生成 prompt 使用新标题和防复述/拓展要求。
 
+当前状态（2026-06-27 春梦后唤醒版 Prompt 管理）：
+- 已完成：`services/spring_dream.py` 在春梦成功发送后给当前睡眠 session 标记 `post_wakeup_pending=1`；下一次睡眠期随机唤醒会先检查 Prompt 管理里的 `post_spring_dream_wakeup`，有内容才用「春梦后唤醒版」替换本轮唤醒 prompt，发送成功后清掉 pending。该替换不改春梦本身，也不新增独立通道或队列。
+- 已完成：`services/prompt_manager.py` 和 `miniapp/src/ui/PromptManagerScreen.tsx` 新增「春梦后唤醒版」入口，允许保存为空；空内容表示关闭该替换，下一次随机唤醒继续走原有普通随机唤醒链路。旧本地占位文件已删除，不再从 `prompts/` 回退读取。
+- 已完成：`services/proactive_prompt_templates.py` 新增「随机唤醒决策」默认短模板，并接入 Prompt 管理；普通随机唤醒文案不再硬编码在 `services/telegram_proactive.py::_ask_du_should_contact()`，保存后可通过 App 修改。模板支持 `{{recent_exchange}}`、`{{hours_since_last}}`、`{{channel_field_desc}}`、`{{default_channel}}`、`{{no_contact_token}}`，并兼容把文案里的 `X.X` 替换成实际小时数；已删除“系统节流角度”那句。
+- 已验证：`.venv/bin/python -m py_compile services/proactive_prompt_templates.py services/spring_dream.py services/telegram_proactive.py services/conversation_followup.py services/prompt_manager.py storage/runtime_sqlite.py routes/miniapp/settings.py`、`npm --prefix miniapp run build`、`git diff --check` 通过；`.venv/bin/python` smoke 确认 Prompt 管理列表包含「春梦后唤醒版」和「随机唤醒决策」、空内容只允许春梦后唤醒版、普通随机唤醒模板会替换小时数且不含“系统节流角度”。
+
 当前状态（2026-06-24 小家事件沿用最近聊天入口）：
 - 已完成：新增 `services/reply_channel_context.py` 统一解析最近真实聊天入口；`routes/miniapp/dashboard.py` 的小家状态/道具事件、`routes/miniapp/private_draw.py` 的小纸条发送，以及 `routes/miniapp/device_actions.py` 的弹窗/查岗回执都改为沿用最近真实聊天 channel，不再把小家事件来源当成 SumiTalk，也不再让小家事件固定走 QQ 主动入口；这些事件类回包解析出最近入口后会锁定该 channel，不跨到其它入口兜底。
 - 已完成：`services/conversation_followup.py` 新增 `send_pixel_home_wakeup()`；小家事件按 system event 送入网关，正文提示为“小家里的状态或道具事件，不是她在聊天框里说的话”，避免归档和生成时把它当成小玥普通聊天正文。
