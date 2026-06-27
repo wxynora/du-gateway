@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { apiJson } from "./api";
 import { FullScreenPane } from "./FullScreenPane";
 import {
@@ -44,6 +44,8 @@ type PromptBackup = {
   created_at?: string;
   reason?: string;
 };
+
+type BackHandler = () => boolean;
 
 type PromptSectionDetail = PromptSection & {
   content: string;
@@ -145,7 +147,13 @@ function PromptSectionRow({ item, onClick }: { item: PromptSection; onClick: () 
   );
 }
 
-export function PromptManagerScreen({ onClose }: { onClose: () => void }) {
+export function PromptManagerScreen({
+  onClose,
+  backHandlerRef,
+}: {
+  onClose: () => void;
+  backHandlerRef?: React.MutableRefObject<BackHandler | null>;
+}) {
   const toast = useToast();
   const [sections, setSections] = useState<PromptSection[]>(FALLBACK_PROMPT_SECTIONS);
   const [selectedId, setSelectedId] = useState("");
@@ -282,14 +290,27 @@ export function PromptManagerScreen({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const goBackInsidePromptManager = useCallback(() => {
+    if (!selectedId) return false;
+    if (isDirty && !window.confirm("有未保存修改，确认返回列表吗？")) return true;
+    setSelectedId("");
+    setDetail(null);
+    setDraft("");
+    return true;
+  }, [isDirty, selectedId]);
+
+  useEffect(() => {
+    if (!backHandlerRef) return;
+    backHandlerRef.current = goBackInsidePromptManager;
+    return () => {
+      if (backHandlerRef.current === goBackInsidePromptManager) {
+        backHandlerRef.current = null;
+      }
+    };
+  }, [backHandlerRef, goBackInsidePromptManager]);
+
   function handleBack() {
-    if (selectedId) {
-      if (isDirty && !window.confirm("有未保存修改，确认返回列表吗？")) return;
-      setSelectedId("");
-      setDetail(null);
-      setDraft("");
-      return;
-    }
+    if (goBackInsidePromptManager()) return;
     onClose();
   }
 

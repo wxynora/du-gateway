@@ -143,6 +143,7 @@ export function AppShell({
   const [activeScreen, setActiveScreen] = useState<ChatScreenId>(null);
   const wenyouBackHandlerRef = useRef<(() => boolean) | null>(null);
   const callHubBackHandlerRef = useRef<BackHandler | null>(null);
+  const promptManagerBackHandlerRef = useRef<BackHandler | null>(null);
   const secretDrawerBackHandlerRef = useRef<BackHandler | null>(null);
   const [groupFreeChatEnabled, setGroupFreeChatEnabled] = useState(() => readStoredBoolean(GROUP_FREE_CHAT_MODE_STORAGE_KEY, true));
   const [sharedChatWindowId, setSharedChatWindowId] = useState("");
@@ -471,6 +472,7 @@ export function AppShell({
         return;
       }
       if (showPromptManager) {
+        if (promptManagerBackHandlerRef.current?.()) return;
         setShowPromptManager(false);
         return;
       }
@@ -844,7 +846,7 @@ export function AppShell({
           <LazyPane><SettingsUpstream /></LazyPane>
         </FullScreenPane>
       ) : null}
-      {showPromptManager ? <PromptManagerScreen onClose={() => setShowPromptManager(false)} /> : null}
+      {showPromptManager ? <PromptManagerScreen onClose={() => setShowPromptManager(false)} backHandlerRef={promptManagerBackHandlerRef} /> : null}
       {showSchedule ? (
         <FullScreenPane title="日历" accent="neutral" onBack={() => setShowSchedule(false)}>
           <LazyPane><ScheduleTab /></LazyPane>
