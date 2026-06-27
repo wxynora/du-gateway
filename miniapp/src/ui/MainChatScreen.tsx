@@ -872,6 +872,8 @@ export function MainChatScreen({
   myAvatarImage,
   duAvatarImage,
   benbenAvatarImage,
+  appBackgroundImage,
+  appBackgroundOpacity,
   chatBackgroundImage,
   groupFreeChatEnabled = true,
   onBack,
@@ -898,6 +900,8 @@ export function MainChatScreen({
   myAvatarImage: string;
   duAvatarImage: string;
   benbenAvatarImage: string;
+  appBackgroundImage: string;
+  appBackgroundOpacity: number;
   chatBackgroundImage: string;
   groupFreeChatEnabled?: boolean;
   onBack: () => void;
@@ -3958,8 +3962,10 @@ export function MainChatScreen({
   const activeSearchMatch = searchMatches.length ? searchMatches[activeSearchDisplayIndex] : null;
   const activeSearchMatchId = activeSearchMatch?.id || "";
   const transparentBubbleClass = TRANSPARENT_BUBBLE_CLASS;
-  const hasCustomChatBackground = Boolean(String(chatBackgroundImage || "").trim());
-  const chatBackgroundAlpha = Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100));
+  const effectiveChatBackgroundImage = String(chatBackgroundImage || "").trim() || String(appBackgroundImage || "").trim();
+  const effectiveChatBackgroundOpacity = String(chatBackgroundImage || "").trim() ? chatBackgroundOpacity : appBackgroundOpacity;
+  const hasCustomChatBackground = Boolean(effectiveChatBackgroundImage);
+  const chatBackgroundAlpha = Math.max(0.2, Math.min(1, effectiveChatBackgroundOpacity / 100));
   const chatBackgroundOverlayAlpha = 1 - chatBackgroundAlpha;
   const chatChromeClass = hasCustomChatBackground
     ? "border-transparent bg-transparent"
@@ -4106,7 +4112,7 @@ export function MainChatScreen({
         <>
           <div
             className="pointer-events-none absolute left-0 top-0 z-0 w-full bg-cover bg-center"
-            style={{ backgroundImage: `url(${chatBackgroundImage})`, height: chatBackgroundCanvasHeight }}
+            style={{ backgroundImage: `url(${effectiveChatBackgroundImage})`, height: chatBackgroundCanvasHeight }}
           />
           <div
             className="pointer-events-none absolute left-0 top-0 z-0 w-full"

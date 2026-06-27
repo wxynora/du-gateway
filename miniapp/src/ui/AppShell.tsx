@@ -64,6 +64,8 @@ import {
 import type { CallHubInitialView } from "./tabs/CallHubScreen";
 
 const LISTEN_BACKGROUND_STORAGE_KEY = "miniapp.listenWithDu.backgroundImage";
+const APP_BACKGROUND_STORAGE_KEY = "miniapp.ui.appBackgroundImage";
+const APP_BACKGROUND_OPACITY_STORAGE_KEY = "miniapp.ui.appBackgroundOpacity";
 const GROUP_FREE_CHAT_MODE_STORAGE_KEY = "miniapp.ui.groupFreeChatMode";
 
 function nextBubbleStyle(style: BubbleStyleKey): BubbleStyleKey {
@@ -170,6 +172,9 @@ export function AppShell({
   const [chatBackgroundOpacity, setChatBackgroundOpacity] = useState(() =>
     clampStoredNumber(readStoredNumber("miniapp.ui.chatBackgroundOpacity", 100), 20, 100, 100),
   );
+  const [appBackgroundOpacity, setAppBackgroundOpacity] = useState(() =>
+    clampStoredNumber(readStoredNumber(APP_BACKGROUND_OPACITY_STORAGE_KEY, 100), 20, 100, 100),
+  );
   const [userBubbleStyle, setUserBubbleStyle] = useState<BubbleStyleKey>(() =>
     readStoredString("miniapp.ui.userBubbleStyle", "default", BUBBLE_STYLE_KEYS),
   );
@@ -213,6 +218,13 @@ export function AppShell({
       return "";
     }
   });
+  const [appBackgroundImage, setAppBackgroundImage] = useState(() => {
+    try {
+      return localStorage.getItem(APP_BACKGROUND_STORAGE_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
   const [listenBackgroundImage, setListenBackgroundImage] = useState(() => {
     try {
       return localStorage.getItem(LISTEN_BACKGROUND_STORAGE_KEY) || "";
@@ -223,6 +235,7 @@ export function AppShell({
   const myAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const duAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const benbenAvatarInputRef = useRef<HTMLInputElement | null>(null);
+  const appBackgroundInputRef = useRef<HTMLInputElement | null>(null);
   const backgroundInputRef = useRef<HTMLInputElement | null>(null);
   const listenBackgroundInputRef = useRef<HTMLInputElement | null>(null);
   const [avatarCropDraft, setAvatarCropDraft] = useState<{
@@ -342,6 +355,7 @@ export function AppShell({
       localStorage.setItem("miniapp.ui.timeFormat", chatTimeFormat);
       localStorage.setItem("miniapp.ui.expandReasoning", expandReasoningByDefault ? "1" : "0");
       localStorage.setItem("miniapp.ui.chatBackgroundOpacity", String(chatBackgroundOpacity));
+      localStorage.setItem(APP_BACKGROUND_OPACITY_STORAGE_KEY, String(appBackgroundOpacity));
       localStorage.setItem("miniapp.ui.userBubbleStyle", userBubbleStyle);
       localStorage.setItem("miniapp.ui.assistantBubbleStyle", assistantBubbleStyle);
       localStorage.setItem(GROUP_FREE_CHAT_MODE_STORAGE_KEY, groupFreeChatEnabled ? "1" : "0");
@@ -349,6 +363,7 @@ export function AppShell({
       localStorage.setItem("miniapp.ui.duAvatar", duAvatarImage);
       localStorage.setItem("miniapp.ui.benbenAvatar", benbenAvatarImage);
       localStorage.setItem("miniapp.ui.groupChatTitle", limitGroupChatTitle(groupChatTitle));
+      localStorage.setItem(APP_BACKGROUND_STORAGE_KEY, appBackgroundImage);
       localStorage.setItem("miniapp.ui.chatBackgroundImage", chatBackgroundImage);
       localStorage.setItem(LISTEN_BACKGROUND_STORAGE_KEY, listenBackgroundImage);
     } catch {}
@@ -362,6 +377,7 @@ export function AppShell({
     chatTimeFormat,
     expandReasoningByDefault,
     chatBackgroundOpacity,
+    appBackgroundOpacity,
     userBubbleStyle,
     assistantBubbleStyle,
     groupFreeChatEnabled,
@@ -369,6 +385,7 @@ export function AppShell({
     duAvatarImage,
     benbenAvatarImage,
     groupChatTitle,
+    appBackgroundImage,
     chatBackgroundImage,
     listenBackgroundImage,
   ]);
@@ -386,9 +403,14 @@ export function AppShell({
     }
   }
 
-  async function handleImageSelection(file: File | undefined, kind: AvatarImageKind | "background" | "listenBackground") {
+  async function handleImageSelection(file: File | undefined, kind: AvatarImageKind | "appBackground" | "background" | "listenBackground") {
     if (!file) return;
     try {
+      if (kind === "appBackground") {
+        setAppBackgroundImage(await buildBackgroundDataUrl(file));
+        toast("全局背景已更新");
+        return;
+      }
       if (kind === "background") {
         setChatBackgroundImage(await buildBackgroundDataUrl(file));
         toast("聊天背景已更新");
@@ -700,9 +722,20 @@ export function AppShell({
     showListenWithDu ||
     showDiagnostics ||
     showCallHub;
+  const hasAppBackground = Boolean(String(appBackgroundImage || "").trim());
+  const appBackgroundAlpha = Math.max(0.2, Math.min(1, appBackgroundOpacity / 100));
+  const appBackgroundOverlayAlpha = 1 - appBackgroundAlpha;
 
   return (
-    <div className="relative min-h-dvh safe-bottom overflow-hidden bg-[#FDFDFD] text-gray-900">
+    <div
+      className={`relative min-h-dvh safe-bottom overflow-hidden text-gray-900 ${hasAppBackground ? "bg-transparent" : "bg-[#FDFDFD]"}`}
+      style={
+        {
+          "--sumi-app-pane-bg": hasAppBackground ? "transparent" : "#FDFDFD",
+          "--sumi-app-header-bg": hasAppBackground ? "rgba(255,255,255,0.72)" : "#fff",
+        } as React.CSSProperties
+      }
+    >
       <style>
         {`@font-face {
           font-family: 'SumiChatScript';
@@ -712,6 +745,18 @@ export function AppShell({
           font-display: swap;
         }`}
       </style>
+      {hasAppBackground ? (
+        <>
+          <div
+            className="pointer-events-none fixed inset-0 z-0 bg-cover bg-center"
+            style={{ backgroundImage: `url(${appBackgroundImage})` }}
+          />
+          <div
+            className="pointer-events-none fixed inset-0 z-0"
+            style={{ backgroundColor: `rgba(253,253,253,${appBackgroundOverlayAlpha})` }}
+          />
+        </>
+      ) : null}
       {activeScreen === "du" ? (
         <MainChatScreen
           title="渡"
@@ -733,6 +778,8 @@ export function AppShell({
           myAvatarImage={myAvatarImage}
           duAvatarImage={duAvatarImage}
           benbenAvatarImage={benbenAvatarImage}
+          appBackgroundImage={appBackgroundImage}
+          appBackgroundOpacity={appBackgroundOpacity}
           chatBackgroundImage={chatBackgroundImage}
           onBack={() => setActiveScreen(null)}
           onOpenStickers={() => setPanel("stickers")}
@@ -761,6 +808,8 @@ export function AppShell({
           myAvatarImage={myAvatarImage}
           duAvatarImage={duAvatarImage}
           benbenAvatarImage={benbenAvatarImage}
+          appBackgroundImage={appBackgroundImage}
+          appBackgroundOpacity={appBackgroundOpacity}
           chatBackgroundImage={chatBackgroundImage}
           groupFreeChatEnabled={groupFreeChatEnabled}
           onBack={() => setActiveScreen(null)}
@@ -775,7 +824,7 @@ export function AppShell({
       ) : null}
       {!activeScreen ? (
         <>
-          <div className="relative min-h-dvh overflow-y-auto pb-[104px]">
+          <div className="relative z-10 min-h-dvh overflow-y-auto pb-[104px]">
             {renderMainTab()}
           </div>
           {!hasSecondaryPageOpen ? <BottomNav current={mainTab} onChange={setMainTab} /> : null}
@@ -878,6 +927,8 @@ export function AppShell({
             onToggleExpandReasoningByDefault={setExpandReasoningByDefault}
             chatBackgroundOpacity={chatBackgroundOpacity}
             onChangeChatBackgroundOpacity={setChatBackgroundOpacity}
+            appBackgroundOpacity={appBackgroundOpacity}
+            onChangeAppBackgroundOpacity={setAppBackgroundOpacity}
             userBubbleStyle={userBubbleStyle}
             onCycleUserBubbleStyle={() => setUserBubbleStyle(nextBubbleStyle)}
             assistantBubbleStyle={assistantBubbleStyle}
@@ -886,12 +937,18 @@ export function AppShell({
             duAvatarImage={duAvatarImage}
             benbenAvatarImage={benbenAvatarImage}
             groupChatTitle={groupChatTitle}
+            appBackgroundImage={appBackgroundImage}
             chatBackgroundImage={chatBackgroundImage}
             listenBackgroundImage={listenBackgroundImage}
             onPickMyAvatar={() => myAvatarInputRef.current?.click()}
             onPickDuAvatar={() => duAvatarInputRef.current?.click()}
             onPickBenbenAvatar={() => benbenAvatarInputRef.current?.click()}
             onChangeGroupChatTitle={(next) => setGroupChatTitle(limitGroupChatTitle(next))}
+            onPickAppBackground={() => appBackgroundInputRef.current?.click()}
+            onClearAppBackground={() => {
+              setAppBackgroundImage("");
+              toast("全局背景已恢复默认");
+            }}
             onPickChatBackground={() => backgroundInputRef.current?.click()}
             onPickListenBackground={() => listenBackgroundInputRef.current?.click()}
           />
@@ -980,6 +1037,16 @@ export function AppShell({
         className="hidden"
         onChange={(e) => {
           void handleImageSelection(e.target.files?.[0], "benbenAvatar");
+          e.currentTarget.value = "";
+        }}
+      />
+      <input
+        ref={appBackgroundInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          void handleImageSelection(e.target.files?.[0], "appBackground");
           e.currentTarget.value = "";
         }}
       />

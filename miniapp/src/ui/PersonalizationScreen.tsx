@@ -252,6 +252,8 @@ export function PersonalizationScreen({
   onToggleExpandReasoningByDefault,
   chatBackgroundOpacity,
   onChangeChatBackgroundOpacity,
+  appBackgroundOpacity,
+  onChangeAppBackgroundOpacity,
   userBubbleStyle,
   onCycleUserBubbleStyle,
   assistantBubbleStyle,
@@ -260,12 +262,15 @@ export function PersonalizationScreen({
   duAvatarImage,
   benbenAvatarImage,
   groupChatTitle,
+  appBackgroundImage,
   chatBackgroundImage,
   listenBackgroundImage,
   onPickMyAvatar,
   onPickDuAvatar,
   onPickBenbenAvatar,
   onChangeGroupChatTitle,
+  onPickAppBackground,
+  onClearAppBackground,
   onPickChatBackground,
   onPickListenBackground,
 }: {
@@ -287,6 +292,8 @@ export function PersonalizationScreen({
   onToggleExpandReasoningByDefault: (next: boolean) => void;
   chatBackgroundOpacity: number;
   onChangeChatBackgroundOpacity: (next: number) => void;
+  appBackgroundOpacity: number;
+  onChangeAppBackgroundOpacity: (next: number) => void;
   userBubbleStyle: BubbleStyleKey;
   onCycleUserBubbleStyle: () => void;
   assistantBubbleStyle: BubbleStyleKey;
@@ -295,12 +302,15 @@ export function PersonalizationScreen({
   duAvatarImage: string;
   benbenAvatarImage: string;
   groupChatTitle: string;
+  appBackgroundImage: string;
   chatBackgroundImage: string;
   listenBackgroundImage: string;
   onPickMyAvatar: () => void;
   onPickDuAvatar: () => void;
   onPickBenbenAvatar: () => void;
   onChangeGroupChatTitle: (next: string) => void;
+  onPickAppBackground: () => void;
+  onClearAppBackground: () => void;
   onPickChatBackground: () => void;
   onPickListenBackground: () => void;
 }) {
@@ -398,6 +408,27 @@ export function PersonalizationScreen({
               disabled={savingTtsEmotion}
               last
             />
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">App 全局背景</h2>
+          <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
+            <div className="mb-5 rounded-[20px] bg-[#F8FAFC] p-4">
+              <p className="mb-3 text-[12px] font-medium text-gray-400">会作为普通页面背景；聊天页没有单独背景时也会使用它</p>
+              <div
+                className="h-[112px] rounded-[18px] bg-[linear-gradient(180deg,#F8FAFC_0%,#EEF2F7_100%)]"
+                style={{
+                  opacity: Math.max(0.2, Math.min(1, appBackgroundOpacity / 100)),
+                  backgroundImage: appBackgroundImage ? `url(${appBackgroundImage})` : "linear-gradient(180deg,#F8FAFC_0%,#EEF2F7_100%)",
+                  backgroundSize: "cover",
+                  backgroundPosition: "center",
+                }}
+              />
+            </div>
+            <PersonalizationRow title="背景图设置" value={appBackgroundImage ? "已设置" : "默认"} onClick={onPickAppBackground} />
+            <PersonalizationSliderRow title="背景透明度" value={`${appBackgroundOpacity}%`} min={20} max={100} step={1} currentValue={appBackgroundOpacity} onChange={onChangeAppBackgroundOpacity} />
+            {appBackgroundImage ? <PersonalizationRow title="清除全局背景" value="恢复默认" onClick={onClearAppBackground} last /> : null}
           </div>
         </section>
 

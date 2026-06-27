@@ -139,7 +139,7 @@ class ProactiveDecision:
     should_send: bool
     text: str = ""
     reason: str = ""      # 技术向：contact / no_contact / gateway_status / …
-    action: str = ""      # 业务向：send_message / no_contact / diary / forum / surf / other / error / …
+    action: str = ""      # 业务向：send_message / no_contact / diary / forum / surf / drawer / other / error / …
     du_reason: str = ""   # 渡在 JSON 里写的理由
     channel: str = ""           # 发送入口：wechat / qq；SumiTalk 暂不参与主动消息
 
@@ -280,6 +280,7 @@ _ACTION_LABEL_CN = {
     "diary": "写日记",
     "forum": "逛论坛",
     "surf": "随机冲浪",
+    "drawer": "整理秘密抽屉",
     "other": "其它",
     "error": "调用失败",
     "empty": "空回复",
@@ -293,6 +294,7 @@ _SELF_ACTION_TOOL_LABELS = {
     "forum_read_feed": "逛了论坛信息流",
     "forum_open_thread": "看了论坛帖子",
     "du_surf": "随机冲浪看了素材",
+    "secret_drawer": "整理了秘密抽屉",
     "note_write": "写了便签",
 }
 
@@ -429,7 +431,7 @@ def _looks_like_control_json_reply(text: str) -> bool:
 def _sanitize_control_reply_for_delivery(text: str) -> str:
     """
     最后一层外发保险：控制 JSON 不能作为用户可见正文发出去。
-    send_message 只取 message；diary/forum/no_contact/surf/other 说明本轮不该发。
+    send_message 只取 message；diary/forum/no_contact/surf/drawer/other 说明本轮不该发。
     """
     raw = str(text or "").strip()
     if not raw:
@@ -521,6 +523,12 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
         "forum_open_thread": "forum",
         "逛论坛": "forum",
         "看论坛": "forum",
+        "secret_drawer": "drawer",
+        "drawer": "drawer",
+        "random_drawer": "drawer",
+        "整理抽屉": "drawer",
+        "秘密抽屉": "drawer",
+        "翻抽屉": "drawer",
     }
     action = alias.get(action, action)
     none_like = {"no_contact", "none", "silent", "skip"}
@@ -551,6 +559,8 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
         return ProactiveDecision(False, message, "forum", action="forum", du_reason=du_reason or "（未说明）", channel=channel)
     if action == "surf":
         return ProactiveDecision(False, message, "surf", action="surf", du_reason=du_reason or "（未说明）", channel=channel)
+    if action == "drawer":
+        return ProactiveDecision(False, message, "drawer", action="drawer", du_reason=du_reason or "（未说明）", channel=channel)
     if action == "other":
         return ProactiveDecision(False, message, "other", action="other", du_reason=du_reason or "（未说明）", channel=channel)
 
@@ -1293,6 +1303,78 @@ def _run_proactive_forum_action(
         return {"ok": False, "error": str(e)[:160], "reply_preview": ""}
 
 
+def _run_proactive_drawer_action(
+    *,
+    window_id: str,
+    hours_since_last: float,
+    initial_reason: str,
+    now_dt: Optional[datetime] = None,
+) -> dict:
+    """随机唤醒选择 drawer 时，再走一轮主网关，提醒渡直接整理/翻秘密抽屉。"""
+    url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
+    channels = _available_channels()
+    default_channel = _preferred_proactive_channel(channels)
+    now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso()) or datetime.now()
+    user_prompt = (
+        "你刚才在随机唤醒里选择了整理秘密抽屉/随机翻旧条目。\n"
+        "现在不是重新做选择，也不要输出 JSON；请直接去秘密抽屉做一件小事。\n"
+        "可以调用 secret_drawer：优先看 stats；如果有待整理条目，就 list 后 update 补标题、标签或 why；"
+        "如果没有待整理，就 random 翻一条旧记录，必要时 update 置顶、封存或补一句为什么存。\n"
+        "做完后用一句很短的话说明你做了什么；如果工具失败，也用一句话说明失败原因。\n"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
+        f"你刚才选择秘密抽屉的理由：{str(initial_reason or '').strip() or '（未说明）'}"
+    )
+    _marker, sys_content = entry_style_for_channel(default_channel, is_miniapp=False)
+    sys_content = (sys_content or build_telegram_style_system()).strip()
+    body = {
+        "model": _get_chat_model(),
+        "messages": [
+            {"role": "system", "content": sys_content},
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Window-Id": window_id,
+        "X-Reply-Channel": default_channel,
+        "X-Reply-Target": str(TELEGRAM_PROACTIVE_TARGET_USER_ID or "").strip(),
+        "X-Force-Last4": "1",
+        "X-DU-GATEWAY-WAKEUP": "1",
+        "X-DU-WAKEUP-KIND": "proactive_drawer",
+        "X-Skip-Dynamic-Memory": "1",
+        "X-Skip-Post-Archive-Dynamic-Memory": "1",
+    }
+    try:
+        logger.info(
+            "主动秘密抽屉执行轮请求 window_id=%s model=%s reason_chars=%s",
+            window_id,
+            body.get("model") or "",
+            len(str(initial_reason or "")),
+        )
+        r = requests.post(url, headers=headers, json=body, timeout=180)
+        if r.status_code != 200:
+            logger.warning(
+                "主动秘密抽屉执行轮失败 status=%s body_preview=%s",
+                r.status_code,
+                (r.text or "")[:300],
+            )
+            return {
+                "ok": False,
+                "error": f"http_{r.status_code}",
+                "reply_preview": (r.text or "")[:160],
+            }
+        data = r.json() if r.content else None
+        msg = (data or {}).get("choices") and (data.get("choices") or [{}])[0].get("message") or {}
+        content = (msg or {}).get("content")
+        text = (content or "").strip() if isinstance(content, str) else str(content or "").strip()
+        logger.info("主动秘密抽屉执行轮完成 window_id=%s reply_preview=%s", window_id, text[:120])
+        return {"ok": bool(text), "reply_preview": text[:240], "error": "" if text else "empty_reply"}
+    except Exception as e:
+        logger.warning("主动秘密抽屉执行轮异常: %s", e)
+        return {"ok": False, "error": str(e)[:160], "reply_preview": ""}
+
+
 def _ask_du_after_surf_result(
     *,
     window_id: str,
@@ -1322,7 +1404,7 @@ def _ask_du_after_surf_result(
         f"你刚才选择冲浪的理由：{str(initial_reason or '').strip() or '（未说明）'}\n\n"
         f"{_format_proactive_surf_result_for_du(surf_result)}\n\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
-        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "forum" | "other" 之一。不要再填 "surf"。\n'
+        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "forum" | "drawer" | "other" 之一。不要再填 "surf"。\n'
         '- reason：字符串，简短说明你为什么这么选（必填）。\n'
         '- message：字符串；当 action 为 send_message 时，填要发给她的正文；其它 action 时可为空或填补充说明。\n'
         + channel_field_desc
@@ -1602,6 +1684,8 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     initial_forum_reason = ""
     diary_summary = None
     initial_diary_reason = ""
+    drawer_summary = None
+    initial_drawer_reason = ""
     if (decision.action or "").strip().lower() == "surf":
         initial_surf_reason = (decision.du_reason or decision.reason or "").strip()
         surf_summary = _run_proactive_surf_action()
@@ -1644,9 +1728,23 @@ def proactive_tick(target_user_id: int = 0) -> dict:
             now_dt=now_dt,
         )
         out["diary"] = diary_summary
-        out["du_initial_action"] = "diary"
-        out["du_initial_reason"] = initial_diary_reason
+        if not surf_summary:
+            out["du_initial_action"] = "diary"
+            out["du_initial_reason"] = initial_diary_reason
         out["diary_execution_ok"] = bool((diary_summary or {}).get("ok"))
+    if (decision.action or "").strip().lower() == "drawer" and not drawer_summary:
+        initial_drawer_reason = (decision.du_reason or decision.reason or "").strip()
+        drawer_summary = _run_proactive_drawer_action(
+            window_id=window_id,
+            hours_since_last=hours,
+            initial_reason=initial_drawer_reason,
+            now_dt=now_dt,
+        )
+        out["drawer"] = drawer_summary
+        if not surf_summary:
+            out["du_initial_action"] = "drawer"
+            out["du_initial_reason"] = initial_drawer_reason
+        out["drawer_execution_ok"] = bool((drawer_summary or {}).get("ok"))
 
     # 随机唤醒主动决策：记下本轮决策（闹钟不走这里）
     try:
@@ -1665,6 +1763,9 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         if diary_summary:
             diary_act = "diary->executed" if diary_summary.get("ok") else "diary->failed"
             act_store = f"surf->{diary_act}" if surf_summary else diary_act
+        if drawer_summary:
+            drawer_act = "drawer->executed" if drawer_summary.get("ok") else "drawer->failed"
+            act_store = f"surf->{drawer_act}" if surf_summary else drawer_act
         reason_store = (decision.du_reason or decision.reason or "").strip() or "—"
         if surf_summary:
             topic = str(surf_summary.get("topic") or "").strip()
@@ -1706,6 +1807,8 @@ def proactive_tick(target_user_id: int = 0) -> dict:
                     f"最初想写日记：{initial_diary_reason or '（未说明）'}；"
                     f"已追加执行轮提醒渡去写。"
                 )
+                if surf_summary:
+                    reason_store = f"先冲浪后决定写日记；{reason_store}"
                 if reply_preview:
                     pv = reply_preview[:120]
             else:
@@ -1713,6 +1816,28 @@ def proactive_tick(target_user_id: int = 0) -> dict:
                     f"最初想写日记：{initial_diary_reason or '（未说明）'}；"
                     f"追加执行轮失败：{str(diary_summary.get('error') or 'unknown')[:80]}"
                 )
+                if surf_summary:
+                    reason_store = f"先冲浪后决定写日记；{reason_store}"
+                if reply_preview and not pv:
+                    pv = reply_preview[:120]
+        if drawer_summary:
+            reply_preview = str(drawer_summary.get("reply_preview") or "").strip()
+            if drawer_summary.get("ok"):
+                reason_store = (
+                    f"最初想整理秘密抽屉：{initial_drawer_reason or '（未说明）'}；"
+                    f"已追加执行轮提醒渡去整理/翻旧条目。"
+                )
+                if surf_summary:
+                    reason_store = f"先冲浪后决定整理秘密抽屉；{reason_store}"
+                if reply_preview:
+                    pv = reply_preview[:120]
+            else:
+                reason_store = (
+                    f"最初想整理秘密抽屉：{initial_drawer_reason or '（未说明）'}；"
+                    f"追加执行轮失败：{str(drawer_summary.get('error') or 'unknown')[:80]}"
+                )
+                if surf_summary:
+                    reason_store = f"先冲浪后决定整理秘密抽屉；{reason_store}"
                 if reply_preview and not pv:
                     pv = reply_preview[:120]
         r2_store.append_proactive_decision_memory(

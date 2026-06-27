@@ -655,6 +655,9 @@ def _compact_gateway_event_for_archive(user_msg: dict, *, wakeup_kind: str = "")
     elif kind in {"proactive_forum", "random_forum"}:
         label = "随机唤醒执行"
         content = "你刚才选择了逛论坛，现在去逛。"
+    elif kind in {"proactive_drawer", "random_drawer"}:
+        label = "随机唤醒执行"
+        content = "你刚才选择了整理秘密抽屉，现在去整理/翻旧条目。"
     elif kind in {"spring_dream", "random_spring_dream"}:
         label = "随机唤醒"
         content = "睡眠期随机唤醒触发了一次春梦。"
@@ -701,6 +704,7 @@ def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:
         "diary": "去写日记/记事",
         "forum": "逛论坛",
         "surf": "随机冲浪",
+        "drawer": "整理秘密抽屉",
         "other": "先做其它动作",
     }.get(action, action or "记录判断")
     lines = [f"决策：{action_label}。"]
