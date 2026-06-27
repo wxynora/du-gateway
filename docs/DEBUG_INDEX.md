@@ -64,10 +64,10 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已完成：diary 执行轮不要求 JSON、不外发给辛玥，走 `X-DU-GATEWAY-WAKEUP=1` 和 `X-DU-WAKEUP-KIND=proactive_diary`，让正常工具注入链路可用，优先由渡调用 `notion_diary_create`，必要时用 `note_write`；`routes/chat.py::_compact_gateway_event_for_archive()` 将该内部提醒压成“随机唤醒执行：你刚才选择了写日记，现在去写”，避免整段内部 prompt 污染 last4。
 - 已验证：`python3 -m py_compile services/telegram_proactive.py routes/chat.py`、`git diff --check -- services/telegram_proactive.py routes/chat.py` 通过。本轮未实测线上 Notion 写入，部署后看 `主动写日记执行轮请求/完成` 日志和 `notion_diary_create` 工具调用确认。
 
-当前状态（2026-06-27 随机唤醒秘密抽屉 + App 全局背景）：
+当前状态（2026-06-27 随机唤醒秘密抽屉 + 一级页背景）：
 - 已完成：随机唤醒决策新增 `drawer` 动作，默认提示词列出“整理秘密抽屉/随机翻旧条目”；`_parse_proactive_model_reply()` 兼容 `drawer`、`secret_drawer`、`整理抽屉`、`秘密抽屉`、`翻抽屉` 等别名，解析到后不会外发消息。
 - 已完成：`services/telegram_proactive.py::proactive_tick()` 在最终选择 `drawer` 时追加 `_run_proactive_drawer_action()` 执行轮，走主网关、`X-DU-WAKEUP-KIND=proactive_drawer`、跳过动态记忆总结，让渡实际调用现有 `secret_drawer` 工具查看 stats、整理待整理条目或随机翻旧记录；`routes/chat.py` 会把该内部提醒压成“随机唤醒执行：你刚才选择了整理秘密抽屉，现在去整理/翻旧条目”。
-- 已完成：MiniApp 个性化新增「App 全局背景」设置，支持选择全局背景图、透明度和清除；普通全屏页会透出全局背景，聊天页在没有单独聊天背景时使用全局背景，已有聊天背景仍优先。
+- 已完成：MiniApp 个性化新增「一级页背景」设置，支持选择背景图、透明度和清除；只作用于会话、日常、工具、设置这些一级页面，一级页列表/会话列表半透明透出背景；聊天页仍只使用独立聊天背景，普通全屏子页面保持干净底色。
 - 已验证：`.venv/bin/python -m py_compile services/proactive_prompt_templates.py services/telegram_proactive.py routes/chat.py`、`drawer` 解析 smoke、`npm -C miniapp run build`、`git diff --check` 通过；本轮未实测线上 `secret_drawer` 工具调用，部署后看 `主动秘密抽屉执行轮请求/完成` 日志确认。
 
 当前状态（2026-06-11 R2 TTL 清理入口）：

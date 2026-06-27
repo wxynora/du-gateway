@@ -872,8 +872,6 @@ export function MainChatScreen({
   myAvatarImage,
   duAvatarImage,
   benbenAvatarImage,
-  appBackgroundImage,
-  appBackgroundOpacity,
   chatBackgroundImage,
   groupFreeChatEnabled = true,
   onBack,
@@ -900,8 +898,6 @@ export function MainChatScreen({
   myAvatarImage: string;
   duAvatarImage: string;
   benbenAvatarImage: string;
-  appBackgroundImage: string;
-  appBackgroundOpacity: number;
   chatBackgroundImage: string;
   groupFreeChatEnabled?: boolean;
   onBack: () => void;
@@ -3962,8 +3958,8 @@ export function MainChatScreen({
   const activeSearchMatch = searchMatches.length ? searchMatches[activeSearchDisplayIndex] : null;
   const activeSearchMatchId = activeSearchMatch?.id || "";
   const transparentBubbleClass = TRANSPARENT_BUBBLE_CLASS;
-  const effectiveChatBackgroundImage = String(chatBackgroundImage || "").trim() || String(appBackgroundImage || "").trim();
-  const effectiveChatBackgroundOpacity = String(chatBackgroundImage || "").trim() ? chatBackgroundOpacity : appBackgroundOpacity;
+  const effectiveChatBackgroundImage = String(chatBackgroundImage || "").trim();
+  const effectiveChatBackgroundOpacity = chatBackgroundOpacity;
   const hasCustomChatBackground = Boolean(effectiveChatBackgroundImage);
   const chatBackgroundAlpha = Math.max(0.2, Math.min(1, effectiveChatBackgroundOpacity / 100));
   const chatBackgroundOverlayAlpha = 1 - chatBackgroundAlpha;

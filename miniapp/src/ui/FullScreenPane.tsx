@@ -61,8 +61,7 @@ export function FullScreenPane({
 
   return (
     <div
-      className={`absolute inset-0 z-30 flex w-full max-w-full flex-col overflow-x-hidden ${headerTone === "dark" ? "bg-[#04051a]" : ""}`}
-      style={headerTone === "dark" ? undefined : { backgroundColor: "var(--sumi-app-pane-bg, #FDFDFD)" }}
+      className={`absolute inset-0 z-30 flex w-full max-w-full flex-col overflow-x-hidden ${headerTone === "dark" ? "bg-[#04051a]" : "bg-[#FDFDFD]"}`}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -73,7 +72,7 @@ export function FullScreenPane({
       {headerMode === "simple" ? (
         <div
           className={`px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] ${headerTone === "dark" ? "border-b border-white/10 bg-[#050720] text-[#f0f0d0]" : "border-b border-gray-100/50 backdrop-blur-md"}`}
-          style={headerTone === "dark" ? undefined : { backgroundColor: "var(--sumi-app-header-bg, #fff)" }}
+          style={headerTone === "dark" ? undefined : { backgroundColor: "#fff" }}
         >
           <div className="flex items-center justify-between gap-3">
             <button className={`flex min-w-0 items-center gap-2 ${headerTone === "dark" ? "text-[#f0f0d0]" : "text-gray-900"}`} onClick={onBack}>
@@ -86,7 +85,7 @@ export function FullScreenPane({
       ) : (
         <div
           className="absolute top-0 z-20 flex w-full items-center gap-2 border-b border-gray-100/50 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md"
-          style={{ backgroundColor: "var(--sumi-app-header-bg, rgba(255,255,255,0.8))" }}
+          style={{ backgroundColor: "rgba(255,255,255,0.8)" }}
         >
           <button className="shrink-0 rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
             <ChevronLeftIcon />

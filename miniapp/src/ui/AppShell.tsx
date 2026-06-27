@@ -106,6 +106,7 @@ type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "study-ro
 type AvatarImageKind = "myAvatar" | "duAvatar" | "benbenAvatar";
 type ChatScreenId = "du" | "group" | "wenyou" | null;
 type BackHandler = () => boolean;
+type AppBackgroundTone = "light" | "dark";
 type ModeResponse = {
   ok?: boolean;
   enabled?: boolean;
@@ -225,6 +226,7 @@ export function AppShell({
       return "";
     }
   });
+  const [appBackgroundTone, setAppBackgroundTone] = useState<AppBackgroundTone>("light");
   const [listenBackgroundImage, setListenBackgroundImage] = useState(() => {
     try {
       return localStorage.getItem(LISTEN_BACKGROUND_STORAGE_KEY) || "";
@@ -390,6 +392,57 @@ export function AppShell({
     listenBackgroundImage,
   ]);
 
+  useEffect(() => {
+    const src = String(appBackgroundImage || "").trim();
+    if (!src) {
+      setAppBackgroundTone("light");
+      return;
+    }
+
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (cancelled) return;
+      try {
+        const size = 24;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          setAppBackgroundTone("light");
+          return;
+        }
+        ctx.drawImage(image, 0, 0, size, size);
+        const pixels = ctx.getImageData(0, 0, size, size).data;
+        let total = 0;
+        let count = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+          const alpha = pixels[i + 3] / 255;
+          if (alpha <= 0.05) continue;
+          const r = pixels[i];
+          const g = pixels[i + 1];
+          const b = pixels[i + 2];
+          total += (0.2126 * r + 0.7152 * g + 0.0722 * b) * alpha + 253 * (1 - alpha);
+          count += 1;
+        }
+        const imageLum = count ? total / count : 253;
+        const bgAlpha = Math.max(0.2, Math.min(1, appBackgroundOpacity / 100));
+        const effectiveLum = imageLum * bgAlpha + 253 * (1 - bgAlpha);
+        setAppBackgroundTone(effectiveLum < 142 ? "dark" : "light");
+      } catch {
+        setAppBackgroundTone("light");
+      }
+    };
+    image.onerror = () => {
+      if (!cancelled) setAppBackgroundTone("light");
+    };
+    image.src = src;
+    return () => {
+      cancelled = true;
+    };
+  }, [appBackgroundImage, appBackgroundOpacity]);
+
   function applyAvatarImage(kind: AvatarImageKind, dataUrl: string) {
     if (kind === "myAvatar") {
       setMyAvatarImage(dataUrl);
@@ -408,7 +461,7 @@ export function AppShell({
     try {
       if (kind === "appBackground") {
         setAppBackgroundImage(await buildBackgroundDataUrl(file));
-        toast("全局背景已更新");
+        toast("一级页背景已更新");
         return;
       }
       if (kind === "background") {
@@ -576,12 +629,30 @@ export function AppShell({
     showDiagnostics,
   ]);
 
+  const hasAppBackground = Boolean(String(appBackgroundImage || "").trim());
+  const hasDarkAppBackground = hasAppBackground && appBackgroundTone === "dark";
+  const appBackgroundAlpha = Math.max(0.2, Math.min(1, appBackgroundOpacity / 100));
+  const appBackgroundOverlayAlpha = 1 - appBackgroundAlpha;
+  const mainPageClass = `min-h-dvh px-4 pb-6 ${hasAppBackground ? "bg-transparent" : "bg-[#FDFDFD]"}`;
+  const mainPageStyle = {
+    paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)",
+    "--sumi-main-row-text": hasDarkAppBackground ? "rgba(255,255,255,0.92)" : "#1f2937",
+    "--sumi-main-row-muted": hasDarkAppBackground ? "rgba(255,255,255,0.58)" : "#9ca3af",
+    "--sumi-main-row-border": hasDarkAppBackground ? "rgba(255,255,255,0.12)" : "#f9fafb",
+  } as React.CSSProperties;
+  const mainTitleClass = `mb-6 text-[22px] font-medium tracking-tight ${hasDarkAppBackground ? "text-white drop-shadow-[0_1px_10px_rgba(0,0,0,0.35)]" : "text-gray-900"}`;
+  const mainListCardClass = hasAppBackground
+    ? hasDarkAppBackground
+      ? "overflow-hidden rounded-[28px] border border-white/16 bg-black/28 shadow-[0_10px_30px_-8px_rgba(0,0,0,0.35)]"
+      : "overflow-hidden rounded-[28px] border border-white/70 bg-white/74 shadow-[0_10px_30px_-8px_rgba(15,23,42,0.14)]"
+    : "overflow-hidden rounded-[28px] border border-gray-100/60 bg-white shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]";
+
   const renderMainTab = () => {
     if (mainTab === "daily") {
       return (
-        <div className="bg-[#FDFDFD] px-4 pb-6" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}>
-          <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">日常</h1>
-          <div className="overflow-hidden rounded-[28px] border border-gray-100/60 bg-white shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
+        <div className={mainPageClass} style={mainPageStyle}>
+          <h1 className={mainTitleClass}>日常</h1>
+          <div className={mainListCardClass}>
             <ListRow
               icon={<SunIconMini />}
               label="渡的一天"
@@ -637,9 +708,9 @@ export function AppShell({
     }
     if (mainTab === "tools") {
       return (
-        <div className="bg-[#FDFDFD] px-4 pb-6" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}>
-          <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">工具</h1>
-          <div className="overflow-hidden rounded-[28px] border border-gray-100/60 bg-white shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
+        <div className={mainPageClass} style={mainPageStyle}>
+          <h1 className={mainTitleClass}>工具</h1>
+          <div className={mainListCardClass}>
             <ListRow icon={<FileTextIcon />} label="日志" onClick={() => setPanel("logs")} />
             <ListRow icon={<GitMergeIcon />} label="思维链" onClick={() => setPanel("reasoning")} />
             <ListRow icon={<BrainIconMini />} label="记忆调试" onClick={() => setPanel("memory-debug")} />
@@ -655,9 +726,9 @@ export function AppShell({
     }
     if (mainTab === "settings") {
       return (
-        <div className="bg-[#FDFDFD] px-4 pb-6" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}>
-          <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">设置</h1>
-          <div className="overflow-hidden rounded-[28px] border border-gray-100/60 bg-white shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
+        <div className={mainPageClass} style={mainPageStyle}>
+          <h1 className={mainTitleClass}>设置</h1>
+          <div className={mainListCardClass}>
             {Capacitor.getPlatform() === "android" ? (
               <FloatingBallSettingRow enabled={floatingBallEnabled} onToggle={(v) => void setFloatingBallNative(v)} />
             ) : null}
@@ -701,6 +772,8 @@ export function AppShell({
           if (!todayNoteRefreshing) void loadDailyWhisper(true);
         }}
         todayNoteRefreshing={todayNoteRefreshing}
+        hasAppBackground={hasAppBackground}
+        hasDarkAppBackground={hasDarkAppBackground}
       />
     );
   };
@@ -722,20 +795,8 @@ export function AppShell({
     showListenWithDu ||
     showDiagnostics ||
     showCallHub;
-  const hasAppBackground = Boolean(String(appBackgroundImage || "").trim());
-  const appBackgroundAlpha = Math.max(0.2, Math.min(1, appBackgroundOpacity / 100));
-  const appBackgroundOverlayAlpha = 1 - appBackgroundAlpha;
-
   return (
-    <div
-      className={`relative min-h-dvh safe-bottom overflow-hidden text-gray-900 ${hasAppBackground ? "bg-transparent" : "bg-[#FDFDFD]"}`}
-      style={
-        {
-          "--sumi-app-pane-bg": hasAppBackground ? "transparent" : "#FDFDFD",
-          "--sumi-app-header-bg": hasAppBackground ? "rgba(255,255,255,0.72)" : "#fff",
-        } as React.CSSProperties
-      }
-    >
+    <div className="relative min-h-dvh safe-bottom overflow-hidden bg-[#FDFDFD] text-gray-900">
       <style>
         {`@font-face {
           font-family: 'SumiChatScript';
@@ -745,18 +806,6 @@ export function AppShell({
           font-display: swap;
         }`}
       </style>
-      {hasAppBackground ? (
-        <>
-          <div
-            className="pointer-events-none fixed inset-0 z-0 bg-cover bg-center"
-            style={{ backgroundImage: `url(${appBackgroundImage})` }}
-          />
-          <div
-            className="pointer-events-none fixed inset-0 z-0"
-            style={{ backgroundColor: `rgba(253,253,253,${appBackgroundOverlayAlpha})` }}
-          />
-        </>
-      ) : null}
       {activeScreen === "du" ? (
         <MainChatScreen
           title="渡"
@@ -778,8 +827,6 @@ export function AppShell({
           myAvatarImage={myAvatarImage}
           duAvatarImage={duAvatarImage}
           benbenAvatarImage={benbenAvatarImage}
-          appBackgroundImage={appBackgroundImage}
-          appBackgroundOpacity={appBackgroundOpacity}
           chatBackgroundImage={chatBackgroundImage}
           onBack={() => setActiveScreen(null)}
           onOpenStickers={() => setPanel("stickers")}
@@ -808,8 +855,6 @@ export function AppShell({
           myAvatarImage={myAvatarImage}
           duAvatarImage={duAvatarImage}
           benbenAvatarImage={benbenAvatarImage}
-          appBackgroundImage={appBackgroundImage}
-          appBackgroundOpacity={appBackgroundOpacity}
           chatBackgroundImage={chatBackgroundImage}
           groupFreeChatEnabled={groupFreeChatEnabled}
           onBack={() => setActiveScreen(null)}
@@ -825,9 +870,23 @@ export function AppShell({
       {!activeScreen ? (
         <>
           <div className="relative z-10 min-h-dvh overflow-y-auto pb-[104px]">
-            {renderMainTab()}
+            {hasAppBackground ? (
+              <>
+                <div
+                  className="pointer-events-none fixed inset-0 z-0 bg-cover bg-center"
+                  style={{ backgroundImage: `url(${appBackgroundImage})` }}
+                />
+                <div
+                  className="pointer-events-none fixed inset-0 z-0"
+                  style={{ backgroundColor: `rgba(253,253,253,${appBackgroundOverlayAlpha})` }}
+                />
+              </>
+            ) : null}
+            <div className="relative z-10">
+              {renderMainTab()}
+            </div>
           </div>
-          {!hasSecondaryPageOpen ? <BottomNav current={mainTab} onChange={setMainTab} /> : null}
+          {!hasSecondaryPageOpen ? <BottomNav current={mainTab} onChange={setMainTab} hasAppBackground={hasAppBackground} darkBackground={hasDarkAppBackground} /> : null}
         </>
       ) : null}
 
@@ -947,7 +1006,7 @@ export function AppShell({
             onPickAppBackground={() => appBackgroundInputRef.current?.click()}
             onClearAppBackground={() => {
               setAppBackgroundImage("");
-              toast("全局背景已恢复默认");
+              toast("一级页背景已恢复默认");
             }}
             onPickChatBackground={() => backgroundInputRef.current?.click()}
             onPickListenBackground={() => listenBackgroundInputRef.current?.click()}

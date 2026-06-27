@@ -24,14 +24,14 @@ export function FloatingBallSettingRow({
   onToggle: (next: boolean) => void;
 }) {
   return (
-    <div className="flex min-h-[60px] w-full items-center border-b border-gray-50 px-4 py-4">
-      <span className="mr-4 text-gray-400">
+    <div className="flex min-h-[60px] w-full items-center border-b border-gray-50 px-4 py-4" style={{ borderBottomColor: "var(--sumi-main-row-border, #f9fafb)" }}>
+      <span className="mr-4 text-gray-400" style={{ color: "var(--sumi-main-row-muted, #9ca3af)" }}>
         <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
           <circle cx="12" cy="12" r="8" opacity="0.35" />
           <circle cx="12" cy="12" r="3" />
         </svg>
       </span>
-      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">显示悬浮球</span>
+      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800" style={{ color: "var(--sumi-main-row-text, #1f2937)" }}>显示悬浮球</span>
       <button
         type="button"
         role="switch"
@@ -63,9 +63,12 @@ export function SwitchSettingRow({
   last?: boolean;
 }) {
   return (
-    <div className={`flex min-h-[60px] w-full items-center px-4 py-4 ${last ? "" : "border-b border-gray-50"} ${disabled ? "opacity-60" : ""}`}>
-      <span className="mr-4 text-gray-400">{icon}</span>
-      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">{label}</span>
+    <div
+      className={`flex min-h-[60px] w-full items-center px-4 py-4 ${last ? "" : "border-b border-gray-50"} ${disabled ? "opacity-60" : ""}`}
+      style={last ? undefined : { borderBottomColor: "var(--sumi-main-row-border, #f9fafb)" }}
+    >
+      <span className="mr-4 text-gray-400" style={{ color: "var(--sumi-main-row-muted, #9ca3af)" }}>{icon}</span>
+      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800" style={{ color: "var(--sumi-main-row-text, #1f2937)" }}>{label}</span>
       <button
         type="button"
         role="switch"
@@ -96,10 +99,11 @@ export function ListRow({
   return (
     <button
       className={`flex min-h-[60px] w-full items-center px-4 py-4 text-left transition-colors active:bg-gray-50 ${last ? "" : "border-b border-gray-50"}`}
+      style={last ? undefined : { borderBottomColor: "var(--sumi-main-row-border, #f9fafb)" }}
       onClick={onClick}
     >
-      <span className="mr-4 text-gray-400">{icon}</span>
-      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">{label}</span>
+      <span className="mr-4 text-gray-400" style={{ color: "var(--sumi-main-row-muted, #9ca3af)" }}>{icon}</span>
+      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800" style={{ color: "var(--sumi-main-row-text, #1f2937)" }}>{label}</span>
       <ChevronRightIcon />
     </button>
   );

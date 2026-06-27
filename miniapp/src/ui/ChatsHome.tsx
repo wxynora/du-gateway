@@ -56,6 +56,8 @@ export function ChatsHome({
   onOpenWenyou,
   onRefreshTodayNote,
   todayNoteRefreshing,
+  hasAppBackground = false,
+  hasDarkAppBackground = false,
 }: {
   dailyWhisper: string;
   duAvatarImage: string;
@@ -68,6 +70,8 @@ export function ChatsHome({
   onOpenWenyou: () => void;
   onRefreshTodayNote: () => void;
   todayNoteRefreshing: boolean;
+  hasAppBackground?: boolean;
+  hasDarkAppBackground?: boolean;
 }) {
   const groupDisplayTitle = getDisplayGroupChatTitle(groupTitle);
   const [duPreview, setDuPreview] = useState("主会话");
@@ -159,11 +163,17 @@ export function ChatsHome({
 
   return (
     <div
-      className="bg-white pb-8"
-      style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)", fontFamily: "'Microsoft YaHei', sans-serif" }}
+      className={`${hasAppBackground ? "bg-transparent" : "bg-white"} pb-8`}
+      style={{
+        paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)",
+        fontFamily: "'Microsoft YaHei', sans-serif",
+        "--sumi-main-row-text": hasDarkAppBackground ? "rgba(255,255,255,0.92)" : "#111827",
+        "--sumi-main-row-muted": hasDarkAppBackground ? "rgba(255,255,255,0.58)" : "#4b5563",
+        "--sumi-main-row-border": hasDarkAppBackground ? "rgba(255,255,255,0.12)" : "#f9fafb",
+      } as React.CSSProperties}
     >
       <div className="px-4">
-        <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">会话</h1>
+        <h1 className={`mb-6 text-[22px] font-medium tracking-tight ${hasDarkAppBackground ? "text-white drop-shadow-[0_1px_10px_rgba(0,0,0,0.35)]" : "text-gray-900"}`}>会话</h1>
         <div className="w-full max-w-[600px]">
           <AnniversaryTopBar dayCount={anniversaryDayCount} />
           <div className="mt-3 w-full max-w-[375px]">
@@ -176,9 +186,9 @@ export function ChatsHome({
         </div>
       </div>
 
-      <div className="mt-6 h-2 bg-[#F8F9FA]" />
+      <div className={`mt-6 h-2 ${hasAppBackground ? hasDarkAppBackground ? "bg-black/16" : "bg-white/28" : "bg-[#F8F9FA]"}`} />
 
-      <div className="bg-white">
+      <div className={hasAppBackground ? hasDarkAppBackground ? "border-y border-white/16 bg-black/28" : "border-y border-white/55 bg-white/74" : "bg-white"}>
         <ChatEntryRow
           title="渡"
           preview={duPreview}
@@ -368,7 +378,7 @@ function ChatEntryRow({
       ? { shell: "bg-[#FFF3D7] text-[#8A5A10]" }
       : { shell: "bg-[#F0F4F8] text-[#4A5568]" };
   return (
-    <button className="flex w-full items-center px-4 py-3.5 text-left transition-colors active:bg-gray-50" onClick={onClick}>
+    <button className="flex w-full items-center px-4 py-3.5 text-left transition-colors active:bg-white/12" onClick={onClick}>
       <div className="relative shrink-0">
         {avatarImage ? (
           <div className="h-[48px] w-[48px] overflow-hidden rounded-2xl shadow-sm">
@@ -385,12 +395,12 @@ function ChatEntryRow({
           </div>
         ) : null}
       </div>
-      <div className={`ml-3 min-w-0 flex-1 pt-0.5 ${pinned ? "border-b border-gray-50 pb-3.5" : ""}`}>
+      <div className={`ml-3 min-w-0 flex-1 pt-0.5 ${pinned ? "border-b border-gray-50 pb-3.5" : ""}`} style={pinned ? { borderBottomColor: "var(--sumi-main-row-border, #f9fafb)" } : undefined}>
         <div className="mb-1 flex items-baseline justify-between">
-          <span className="text-[16px] font-medium text-gray-900">{title}</span>
-          <span className="text-[11px] font-normal text-gray-900">{time}</span>
+          <span className="text-[16px] font-medium text-gray-900" style={{ color: "var(--sumi-main-row-text, #111827)" }}>{title}</span>
+          <span className="text-[11px] font-normal text-gray-900" style={{ color: "var(--sumi-main-row-muted, #111827)" }}>{time}</span>
         </div>
-        <p className="truncate text-[13px] font-normal text-gray-600">{preview}</p>
+        <p className="truncate text-[13px] font-normal text-gray-600" style={{ color: "var(--sumi-main-row-muted, #4b5563)" }}>{preview}</p>
       </div>
     </button>
   );

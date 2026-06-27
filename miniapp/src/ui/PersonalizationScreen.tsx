@@ -412,10 +412,10 @@ export function PersonalizationScreen({
         </section>
 
         <section>
-          <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">App 全局背景</h2>
+          <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">一级页背景</h2>
           <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
             <div className="mb-5 rounded-[20px] bg-[#F8FAFC] p-4">
-              <p className="mb-3 text-[12px] font-medium text-gray-400">会作为普通页面背景；聊天页没有单独背景时也会使用它</p>
+              <p className="mb-3 text-[12px] font-medium text-gray-400">用于会话、日常、工具、设置这些一级页面</p>
               <div
                 className="h-[112px] rounded-[18px] bg-[linear-gradient(180deg,#F8FAFC_0%,#EEF2F7_100%)]"
                 style={{
