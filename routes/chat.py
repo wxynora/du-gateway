@@ -60,7 +60,7 @@ from pipeline.pipeline import (
     step_inject_wenyou_player_tools,
     step_inject_gateway_tools,
     step_inject_notion_search,
-    step_inject_notion_tools,
+    step_inject_chat_tools,
     step_inject_forum_tools,
     step_inject_amap_mcp_tools,
     step_inject_websearch_tools,
@@ -1195,7 +1195,7 @@ def _stream_with_r2_archive(
                     yield _sse_delta_chunk_bytes(cap_hint)
                     content_parts.append(cap_hint)
                     break
-                from services.notion_tools import execute_tool
+                from services.chat_tools import execute_tool
                 _append_visible_tool_round_content(tool_visible_content_parts, parsed.get("content") or "")
                 msg = {"content": parsed.get("content") or None, "tool_calls": tool_calls}
                 if parsed.get("reasoning"):
@@ -1775,7 +1775,7 @@ def chat_completions():
         body = step_inject_gateway_tools(body)
         if not du_daily_maintenance:
             body = step_inject_notion_search(body, window_id)
-            body = step_inject_notion_tools(body)
+            body = step_inject_chat_tools(body)
             body = step_inject_forum_tools(body)
             body = step_inject_amap_mcp_tools(body)
             body = step_inject_websearch_tools(body)
@@ -1962,7 +1962,7 @@ def chat_completions():
                             "text": visible_tool_content,
                         },
                     )
-            from services.notion_tools import execute_tool
+            from services.chat_tools import execute_tool
             current_round = tool_rounds_used + 1
             body = _append_tool_results_and_continue(
                 body,

@@ -1,4 +1,8 @@
-# 渡通过工具调用 Notion API：检索、读正文、交换日记、日程本（NOTION_TOOLS_ENABLED=1）
+# 渡可用的聊天工具集合。
+#
+# 历史上这个模块叫 notion_tools，后来承载了 note_write、Stay with Du、
+# 每日气泡、天气黄历、论坛/冲浪等非 Notion 工具。先迁到中性名字；
+# 交换日记迁移完成后，再继续拆掉其中的 Notion 运行链路。
 import json
 from typing import Any, Dict, FrozenSet, List, Optional, Set
 
@@ -20,7 +24,6 @@ _ALL_EXTENDED_NAMES: FrozenSet[str] = frozenset(
 )
 
 from config import (
-    NOTION_EXCHANGE_DIARY_DATABASE_ID,
     NOTION_NOTEBOOK_DATABASE_ID,
     NOTION_NOTEBOOK_PAGE_ID,
     NOTION_SCHEDULE_DATABASE_ID,
@@ -166,6 +169,200 @@ def _note_time_to_iso(note_time: str | None) -> str:
         return now_beijing_iso()
     return dt.strftime("%Y-%m-%dT%H:%M:%S+08:00")
 
+
+def _tool_args(arguments: dict) -> dict:
+    return arguments if isinstance(arguments, dict) else {}
+
+
+def _first_arg(arguments: dict, *keys: str) -> str:
+    for key in keys:
+        value = arguments.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _clip_tool_text(value: Any, limit: int = 160) -> str:
+    text = str(value or "").replace("\r", "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _tool_int(value: Any, default: int, *, min_value: int = 1, max_value: int = 200) -> int:
+    try:
+        n = int(float(str(value or default).strip()))
+    except Exception:
+        n = default
+    return max(min_value, min(max_value, n))
+
+
+def _exchange_diary_time(entry: dict) -> str:
+    created = str((entry or {}).get("created_at") or "").strip()
+    if created:
+        return iso_to_display_time(created) or created
+    return str((entry or {}).get("diary_date") or "").strip()
+
+
+def _format_exchange_diary_list_item(entry: dict) -> str:
+    content = _clip_tool_text(entry.get("content") or entry.get("excerpt"), 2400)
+    comments = [
+        c for c in (entry.get("comments") or [])
+        if isinstance(c, dict) and not str(c.get("deleted_at") or "").strip()
+    ]
+    recent_comments = comments[-5:]
+    comment_lines = [_format_exchange_diary_comment(comment) for comment in recent_comments]
+    if comments and len(comments) > len(recent_comments):
+        comment_lines.insert(0, f"- 还有 {len(comments) - len(recent_comments)} 条更早评论未展示")
+    comments_text = "\n  ".join(comment_lines) if comment_lines else "暂无"
+    return (
+        f"- 时间={_exchange_diary_time(entry)} | "
+        f"标题={_clip_tool_text(entry.get('title'), 60) or '无标题'} | "
+        f"作者={str(entry.get('author') or '').strip() or 'du'} | "
+        f"心情={str(entry.get('mood') or entry.get('emoji') or '').strip() or '无'} | "
+        f"正文={content or '无'} | "
+        f"评论数={int(entry.get('comment_count') or 0)} | "
+        f"id={entry.get('id')}\n"
+        f"  评论：{comments_text}"
+    )
+
+
+def _format_exchange_diary_comment(comment: dict) -> str:
+    reply_to = str(comment.get("reply_to_comment_id") or "").strip()
+    reply_text = f" 回复={reply_to}" if reply_to else ""
+    return (
+        f"- id={str(comment.get('id') or '').strip() or 'unknown'}{reply_text} "
+        f"作者={str(comment.get('author') or '').strip() or 'du'} "
+        f"时间={iso_to_display_time(str(comment.get('created_at') or '').strip()) or str(comment.get('created_at') or '').strip()} "
+        f"内容={_clip_tool_text(comment.get('content'), 240)}"
+    )
+
+
+def _execute_exchange_diary_create(arguments: dict) -> str:
+    from storage import exchange_diary_store
+
+    args = _tool_args(arguments)
+    title = _first_arg(args, "title", "标题", "__")
+    content = _first_arg(args, "content", "正文", "body", "___")
+    if not title and not content:
+        return "标题和正文至少填一个"
+    payload = {
+        "title": title or _clip_tool_text(content, 40),
+        "content": content or title,
+        "mood": _first_arg(args, "mood", "emoji", "心情emoji", "__emoji"),
+        "author": _first_arg(args, "author", "creator", "创建者", "___1") or "du",
+        "diary_date": _first_arg(args, "diary_date", "diaryDate", "date", "日期"),
+        "source": _first_arg(args, "source") or "du_tool",
+        "client_request_id": _first_arg(args, "client_request_id", "clientRequestId"),
+        "source_window_id": _first_arg(args, "source_window_id", "sourceWindowId"),
+    }
+    item = exchange_diary_store.create_entry(payload)
+    if not item:
+        return "交换日记写入失败。"
+    return (
+        "已写入交换日记："
+        f"id={item.get('id')} | "
+        f"标题={_clip_tool_text(item.get('title'), 60)} | "
+        f"作者={item.get('author')} | "
+        f"时间={_exchange_diary_time(item)}"
+    )
+
+
+def _execute_exchange_diary_list(arguments: dict) -> str:
+    from storage import exchange_diary_store
+
+    args = _tool_args(arguments)
+    data = exchange_diary_store.list_entries(
+        limit=_tool_int(args.get("limit"), 5, min_value=1, max_value=20),
+        cursor=_first_arg(args, "cursor"),
+        month=_first_arg(args, "month", "月份"),
+        author=_first_arg(args, "author", "creator", "创建者"),
+        include_deleted=False,
+        compact=False,
+    )
+    items = data.get("items") if isinstance(data, dict) else []
+    if not items:
+        return "暂无交换日记。"
+    lines = [_format_exchange_diary_list_item(item) for item in items if isinstance(item, dict)]
+    next_cursor = str((data or {}).get("next_cursor") or "").strip()
+    if next_cursor:
+        lines.append(f"还有更多，next_cursor={next_cursor}")
+    return "\n".join(lines)
+
+
+def _execute_exchange_diary_read(arguments: dict) -> str:
+    from storage import exchange_diary_store
+
+    args = _tool_args(arguments)
+    entry_id = _first_arg(args, "id", "entry_id", "page_id")
+    if not entry_id:
+        return "id 不能为空"
+    item = exchange_diary_store.get_entry(entry_id, include_deleted=False)
+    if not item:
+        return f"未找到交换日记：id={entry_id}"
+    lines = [
+        f"id={item.get('id')}",
+        f"作者={item.get('author')}",
+        f"时间={_exchange_diary_time(item)}",
+        f"标题={item.get('title') or '无标题'}",
+        f"心情={item.get('mood') or item.get('emoji') or '无'}",
+        "正文：",
+        _clip_tool_text(item.get("content"), 5000) or "（无正文）",
+    ]
+    comments = [
+        c for c in (item.get("comments") or [])
+        if isinstance(c, dict) and not str(c.get("deleted_at") or "").strip()
+    ]
+    if comments:
+        lines.append("评论：")
+        lines.extend(_format_exchange_diary_comment(c) for c in comments[-20:])
+    else:
+        lines.append("评论：暂无")
+    return "\n".join(lines)
+
+
+def _execute_exchange_diary_comment_create(arguments: dict) -> str:
+    from storage import exchange_diary_store
+
+    args = _tool_args(arguments)
+    entry_id = _first_arg(args, "entry_id", "id", "page_id")
+    content = _first_arg(args, "content", "comment", "正文")
+    reply_to_comment_id = _first_arg(
+        args,
+        "reply_to_comment_id",
+        "replyToCommentId",
+        "parent_comment_id",
+        "parentCommentId",
+    )
+    if not entry_id:
+        return "entry_id 不能为空"
+    if not content:
+        return "content 不能为空"
+    item = exchange_diary_store.add_comment(
+        entry_id,
+        {
+            "content": content,
+            "emoji": _first_arg(args, "emoji", "mood", "心情emoji"),
+            "author": _first_arg(args, "author", "creator", "创建者") or "du",
+            "reply_to_comment_id": reply_to_comment_id,
+        },
+    )
+    if not item:
+        return f"评论写入失败：未找到日记、内容为空或 reply_to_comment_id 无效，entry_id={entry_id}"
+    comments = [
+        c for c in (item.get("comments") or [])
+        if isinstance(c, dict) and not str(c.get("deleted_at") or "").strip()
+    ]
+    latest = comments[-1] if comments else {}
+    action_text = "已回复交换日记评论：" if str(latest.get("reply_to_comment_id") or "").strip() else "已评论交换日记："
+    return (
+        action_text +
+        f"entry_id={item.get('id')} | "
+        f"comment_id={latest.get('id') or 'unknown'} | "
+        f"reply_to_comment_id={latest.get('reply_to_comment_id') or ''} | "
+        f"评论数={int(item.get('comment_count') or len(comments))}"
+    )
+
 NOTION_RICH_TEXT_MAX = 2000
 # Notion 标题/单段内容上限，严格 ≤2000 避免 400；留余量防编码计数差异
 NOTION_TITLE_MAX = 1990
@@ -201,88 +398,129 @@ def write_notebook_entry_to_database(content: str, note_time: str | None = None)
     return True, ""
 
 
-def get_notion_tools_for_inject(mode: str = "expanded", active_groups: Optional[Set[str]] = None) -> List[dict]:
+def get_chat_tools_for_inject(
+    mode: str = "expanded",
+    active_groups: Optional[Set[str]] = None,
+    include_notion_runtime: bool = True,
+) -> List[dict]:
     """返回要注入到 chat 的 tools 列表。mode=daily|expanded。"""
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "notion_search",
-                "description": "在 Notion 中按关键词检索页面/数据库，返回匹配条目的标题与链接。需要查 Notion 里有什么内容时调用。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "搜索关键词，如「小本本」「日记」「会议」"},
-                    },
-                    "required": ["query"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "notion_read_page_body",
-                "description": "读取指定 Notion 页面的标题和正文内容（块文本）。用于查看某页的完整内容。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "page_id": {"type": "string", "description": "Notion 页面 ID（32 位十六进制，可从链接或 notion_search 得到）"},
-                    },
-                    "required": ["page_id"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "notion_append_to_page",
-                "description": "向指定 Notion 页面追加一段内容（段落块，带时间戳）。用于写日记、记笔记等。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "page_id": {"type": "string", "description": "Notion 页面 ID（32 位十六进制，可从页面 URL 取）"},
-                        "content": {"type": "string", "description": "要追加的正文内容"},
-                    },
-                    "required": ["page_id", "content"],
-                },
-            },
-        },
-    ]
-    if NOTION_EXCHANGE_DIARY_DATABASE_ID:
+    tools: List[dict] = []
+    if include_notion_runtime:
         tools.extend([
             {
                 "type": "function",
                 "function": {
-                    "name": "notion_diary_list",
-                    "description": "列出交换日记条目（标题、心情emoji、正文、提交时间、创建者）。用于读日记内容。",
+                    "name": "notion_search",
+                    "description": "在 Notion 中按关键词检索页面/数据库，返回匹配条目的标题与链接。需要查 Notion 里有什么内容时调用。",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "limit": {"type": "integer", "description": "最多返回条数，默认 20", "default": 20},
+                            "query": {"type": "string", "description": "搜索关键词，如「小本本」「日记」「会议」"},
                         },
-                        "required": [],
+                        "required": ["query"],
                     },
                 },
             },
             {
                 "type": "function",
                 "function": {
-                    "name": "notion_diary_create",
-                    "description": "在交换日记里新建一条。创建者传「渡」表示渡写的，传「辛玥」表示代老婆记。",
+                    "name": "notion_read_page_body",
+                    "description": "读取指定 Notion 页面的标题和正文内容（块文本）。用于查看某页的完整内容。",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "title": {"type": "string", "description": "日记标题（必填其一）"},
-                            "content": {"type": "string", "description": "正文内容（必填其一）"},
-                            "emoji": {"type": "string", "description": "可选心情，如 😊"},
-                            "creator": {"type": "string", "description": "创建者：渡 或 辛玥，默认渡", "default": "渡"},
+                            "page_id": {"type": "string", "description": "Notion 页面 ID（32 位十六进制，可从链接或 notion_search 得到）"},
                         },
-                        "required": ["title", "content"],
+                        "required": ["page_id"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "notion_append_to_page",
+                    "description": "向指定 Notion 页面追加一段内容（段落块，带时间戳）。用于写日记、记笔记等。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "page_id": {"type": "string", "description": "Notion 页面 ID（32 位十六进制，可从页面 URL 取）"},
+                            "content": {"type": "string", "description": "要追加的正文内容"},
+                        },
+                        "required": ["page_id", "content"],
                     },
                 },
             },
         ])
-    if NOTION_SCHEDULE_DATABASE_ID:
+    tools.extend([
+        {
+            "type": "function",
+            "function": {
+                "name": "exchange_diary_create",
+                "description": "写一条交换日记，存入 MiniApp/R2 的交换日记库。默认作者为 du；如果是替辛玥记录，author 传 xy。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "日记标题，可空；不传时会从正文生成短标题"},
+                        "content": {"type": "string", "description": "正文内容"},
+                        "mood": {"type": "string", "description": "可选心情 emoji"},
+                        "author": {"type": "string", "description": "作者：du 或 xy，默认 du", "default": "du"},
+                        "diary_date": {"type": "string", "description": "可选日记日期，YYYY-MM-DD；不传用今天"},
+                    },
+                    "required": ["content"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "exchange_diary_list",
+                "description": "查看交换日记。author 不传或传空时，把 du/xy 的日记混在一起按时间倒序取 limit 条；author=du 只看渡写的；author=xy 只看辛玥写的。返回里直接包含正文、最近评论和 comment id；需要看某一条的完整评论细节时再用 exchange_diary_read。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "description": "最多返回条数，默认 5，最大 20", "default": 5},
+                        "month": {"type": "string", "description": "可选月份筛选，如 2026-06"},
+                        "author": {"type": "string", "description": "可选：du / xy；不传或传空则混合时间线"},
+                        "cursor": {"type": "string", "description": "可选翻页游标，来自上次返回的 next_cursor"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "exchange_diary_read",
+                "description": "按 id 读取一条交换日记的完整正文和已有评论；id 来自 exchange_diary_list。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "description": "交换日记 id，例如 ed_20260627_xxxxxxxx"},
+                    },
+                    "required": ["id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "exchange_diary_comment_create",
+                "description": "评论或回复一条交换日记。先用 exchange_diary_list 找到日记 id；不填 reply_to_comment_id 就是发普通评论，填 reply_to_comment_id 就是回复那条评论。默认作者为 du。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "entry_id": {"type": "string", "description": "要评论的交换日记 id"},
+                        "content": {"type": "string", "description": "评论正文"},
+                        "emoji": {"type": "string", "description": "可选心情 emoji"},
+                        "reply_to_comment_id": {"type": "string", "description": "可选。填某条评论的 id 表示回复那条评论；不填就是直接评论日记"},
+                        "author": {"type": "string", "description": "作者：du 或 xy，默认 du", "default": "du"},
+                    },
+                    "required": ["entry_id", "content"],
+                },
+            },
+        },
+    ])
+    if include_notion_runtime and NOTION_SCHEDULE_DATABASE_ID:
         tools.extend([
             {
                 "type": "function",
@@ -337,7 +575,7 @@ def get_notion_tools_for_inject(mode: str = "expanded", active_groups: Optional[
                 },
             },
         ])
-    if NOTION_NOTEBOOK_DATABASE_ID or NOTION_NOTEBOOK_PAGE_ID:
+    if include_notion_runtime and (NOTION_NOTEBOOK_DATABASE_ID or NOTION_NOTEBOOK_PAGE_ID):
         params = {
             "content": {"type": "string", "description": "要记下的内容"},
             "note_time": {
@@ -468,7 +706,17 @@ def get_notion_tools_for_inject(mode: str = "expanded", active_groups: Optional[
         return tools
 
     # 日常最小集：只保留高频（日记 + 报时），其余在触发词命中后走 expanded 注入
-    keep_names = {"notion_diary_list", "notion_diary_create", "get_time_info", "note_write", "stay_with_du_write", "stay_with_du_delete", "daily_whisper_write"}
+    keep_names = {
+        "exchange_diary_create",
+        "exchange_diary_list",
+        "exchange_diary_read",
+        "exchange_diary_comment_create",
+        "get_time_info",
+        "note_write",
+        "stay_with_du_write",
+        "stay_with_du_delete",
+        "daily_whisper_write",
+    }
     daily_tools = []
     for t in tools:
         fn = (t.get("function") or {}) if isinstance(t, dict) else {}
@@ -571,6 +819,21 @@ def execute_tool(name: str, arguments: dict) -> str:
     ):
         return execute_forum_tool(name, arguments)
     try:
+        if name == "exchange_diary_create":
+            return _execute_exchange_diary_create(arguments)
+
+        if name == "exchange_diary_list":
+            return _execute_exchange_diary_list(arguments)
+
+        if name == "exchange_diary_read":
+            return _execute_exchange_diary_read(arguments)
+
+        if name == "exchange_diary_comment_create":
+            return _execute_exchange_diary_comment_create(arguments)
+
+        if str(name or "").strip().startswith("notion_") and not NOTION_TOOLS_ENABLED:
+            return json.dumps({"error": f"Notion 工具已关闭: {name}"}, ensure_ascii=False)
+
         if name == "notion_search":
             query = (arguments.get("query") or "").strip()
             if not query:
@@ -616,91 +879,6 @@ def execute_tool(name: str, arguments: dict) -> str:
             content = (arguments.get("content") or "").strip()
             ok, msg = _append_content_to_page(page_id, content)
             return msg
-
-        if name == "notion_diary_list":
-            if not NOTION_EXCHANGE_DIARY_DATABASE_ID:
-                return "未配置交换日记数据库"
-            name_to_id, name_to_type, err = notion_client.get_database_schema(NOTION_EXCHANGE_DIARY_DATABASE_ID)
-            if err:
-                return json.dumps({"error": str(err)}, ensure_ascii=False)
-            limit = int(arguments.get("limit") or 20)
-            _name_to_type = name_to_type or {}
-            sorts = None
-            if "提交时间" in name_to_id:
-                sorts = [{"property": name_to_id["提交时间"], "direction": "descending"}]
-            data, err = notion_client.query_database(
-                NOTION_EXCHANGE_DIARY_DATABASE_ID,
-                sorts=sorts,
-                page_size=limit,
-            )
-            if err:
-                return json.dumps({"error": str(err)}, ensure_ascii=False)
-            lines = []
-            for page in (data or {}).get("results") or []:
-                pid = page.get("id")
-                title = _extract_first_nonempty_prop(page, name_to_id, ["标题", "Title", "名称"], "title")
-                body = _extract_first_nonempty_prop(page, name_to_id, ["正文", "Content", "内容", "Body"], "rich_text")
-                emoji = _extract_first_nonempty_prop(page, name_to_id, ["心情emoji", "emoji"], "rich_text")
-                created_type = _name_to_type.get("提交时间", "created_time")
-                created = _extract_prop_from_page(page, name_to_id.get("提交时间") or "", created_type) if name_to_id.get("提交时间") else ""
-                creator = _extract_first_nonempty_prop(page, name_to_id, ["创建者", "Creator"], "select")
-                # 不再截断正文，避免模型拿不到完整日记。
-                lines.append(
-                    f"page_id={pid} | 标题={title} | 创建者={creator} | 提交时间={created} | 心情={emoji} | 正文={body}"
-                )
-            return "\n\n".join(lines) if lines else "暂无日记条目。"
-
-        if name == "notion_diary_create":
-            if not NOTION_EXCHANGE_DIARY_DATABASE_ID:
-                return "未配置交换日记数据库"
-            if not isinstance(arguments, dict):
-                logger.warning("notion_diary_create arguments 不是 dict，类型=%s", type(arguments).__name__)
-                arguments = {}
-            # 排查「渡说都写了但报至少填一个」：打工具入参和解析结果，便于看 Notion 日志
-            logger.info("notion_diary_create 入参 keys=%s", list(arguments.keys()))
-            name_to_id, _, err = notion_client.get_database_schema(NOTION_EXCHANGE_DIARY_DATABASE_ID)
-            if err:
-                return json.dumps({"error": str(err)}, ensure_ascii=False)
-            # schema 已改为英文 key（title/content/creator/emoji）避免渡搞混；兼容旧的中文与 __/___ 等
-            def _get_arg(*keys):
-                for k in keys:
-                    v = arguments.get(k)
-                    if v is not None and str(v).strip():
-                        return str(v).strip()
-                return ""
-            title = _get_arg("title", "标题", "__")
-            body = _get_arg("content", "正文", "body", "___")
-            creator = _get_arg("creator", "创建者", "___1") or "渡"
-            emoji = _get_arg("emoji", "心情emoji", "__emoji")
-            logger.info("notion_diary_create 解析后 title_len=%s body_len=%s title_preview=%s", len(title), len(body), (title or "")[:80])
-            if not title and not body:
-                return "标题和正文至少填一个"
-            # 解析「标题」「正文」对应的 Notion 属性 id（数据库列名可能是中文或英文）
-            title_prop_id = name_to_id.get("标题") or name_to_id.get("Title") or name_to_id.get("名称")
-            body_prop_id = name_to_id.get("正文") or name_to_id.get("Content") or name_to_id.get("Body") or name_to_id.get("内容")
-            if not title_prop_id and not body_prop_id:
-                return "交换日记数据库里需要有一列叫「标题」或 Title、一列叫「正文」或 Content，请检查 Notion 列名。"
-            props = {}
-            if title_prop_id:
-                props[title_prop_id] = _prop_title(title or body[:50])
-            if body_prop_id:
-                props[body_prop_id] = _prop_rich(body)
-            if name_to_id.get("创建者") or name_to_id.get("Creator"):
-                creator_id = name_to_id.get("创建者") or name_to_id.get("Creator")
-                props[creator_id] = _prop_select(creator)
-            if emoji:
-                emoji_id = name_to_id.get("心情emoji") or name_to_id.get("emoji")
-                if emoji_id:
-                    props[emoji_id] = _prop_rich(emoji)
-            _, err = notion_client.create_page(
-                parent={"database_id": NOTION_EXCHANGE_DIARY_DATABASE_ID},
-                properties=props,
-            )
-            if err:
-                err_msg = err.get("error", str(err)) if isinstance(err, dict) else str(err)
-                logger.warning("Notion 交换日记写入失败 err=%s", err_msg)
-                return f"Notion 写入失败：{err_msg}"
-            return "已写入交换日记。"
 
         if name == "notion_schedule_list":
             if not NOTION_SCHEDULE_DATABASE_ID:

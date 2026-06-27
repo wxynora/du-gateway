@@ -25,6 +25,7 @@ _RUNTIME_TABLES = (
     "schedule_fired_keys",
     "conversation_followups",
     "spring_dream_sessions",
+    "exchange_diary_entries",
 )
 
 
@@ -190,6 +191,39 @@ def ensure_schema() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_spring_dream_sessions_updated
                     ON spring_dream_sessions(updated_at);
+
+                CREATE TABLE IF NOT EXISTS exchange_diary_entries (
+                    id TEXT PRIMARY KEY,
+                    entry_key TEXT NOT NULL,
+                    diary_date TEXT NOT NULL DEFAULT '',
+                    author TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    excerpt TEXT NOT NULL DEFAULT '',
+                    content TEXT NOT NULL DEFAULT '',
+                    mood TEXT NOT NULL DEFAULT '',
+                    comment_count INTEGER NOT NULL DEFAULT 0,
+                    latest_comment_at TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
+                    client_request_id TEXT NOT NULL DEFAULT '',
+                    created_by_device_id TEXT NOT NULL DEFAULT '',
+                    source_window_id TEXT NOT NULL DEFAULT '',
+                    source_notion_page_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    deleted_at TEXT NOT NULL DEFAULT '',
+                    entry_json TEXT NOT NULL DEFAULT '{}',
+                    r2_synced_at TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_exchange_diary_visible_date
+                    ON exchange_diary_entries(deleted_at, diary_date DESC, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_exchange_diary_author_date
+                    ON exchange_diary_entries(author, diary_date DESC, created_at DESC);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_diary_client_request
+                    ON exchange_diary_entries(client_request_id)
+                    WHERE client_request_id != '';
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_diary_notion_page
+                    ON exchange_diary_entries(source_notion_page_id)
+                    WHERE source_notion_page_id != '';
                 """
             )
         _SCHEMA_READY = True

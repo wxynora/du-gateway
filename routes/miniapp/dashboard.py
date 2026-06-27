@@ -224,7 +224,7 @@ def _summarize_alarm_actions(msgs: list[dict]) -> list[str]:
             if not name:
                 continue
             label = ""
-            if name == "notion_diary_create":
+            if name == "exchange_diary_create":
                 label = "写了日记"
             elif name == "daily_whisper_write":
                 label = "写了气泡"
@@ -232,7 +232,14 @@ def _summarize_alarm_actions(msgs: list[dict]) -> list[str]:
                 label = "看了论坛"
             elif name == "note_write":
                 label = "写了便签"
-            elif name in {"schedule_list", "get_time_info", "search_memory", "notion_diary_list"}:
+            elif name in {
+                "schedule_list",
+                "get_time_info",
+                "search_memory",
+                "exchange_diary_list",
+                "exchange_diary_read",
+                "exchange_diary_comment_create",
+            }:
                 label = ""
             if label and label not in labels:
                 labels.append(label)

@@ -2759,20 +2759,22 @@ def step_inject_gateway_tools(body: dict) -> dict:
     return _append_tool_schemas(body, tools)
 
 
-def step_inject_notion_tools(body: dict) -> dict:
+def step_inject_chat_tools(body: dict) -> dict:
     """
-    当 NOTION_TOOLS_ENABLED=1 时，向 body 注入 Notion 工具。
-    基础工具（日记、小本本、记事本、气泡、天气黄历等）常驻注入；
-    扩展工具（日程、notion 检索/读页/追加页面）暂不注入。
+    注入聊天工具集合。
+    交换日记、记事本等网关原生工具不再受 NOTION_TOOLS_ENABLED 影响；
+    该开关只控制 Notion runtime 工具是否注入。
     """
     from config import NOTION_TOOLS_ENABLED
 
-    if not NOTION_TOOLS_ENABLED:
-        return body
-    from services.notion_tools import get_notion_tools_for_inject
+    from services.chat_tools import get_chat_tools_for_inject
 
     active_groups: set = set()
-    tools = get_notion_tools_for_inject(mode="expanded", active_groups=active_groups)
+    tools = get_chat_tools_for_inject(
+        mode="expanded",
+        active_groups=active_groups,
+        include_notion_runtime=NOTION_TOOLS_ENABLED,
+    )
     if not tools:
         return body
     return _append_tool_schemas(body, tools)

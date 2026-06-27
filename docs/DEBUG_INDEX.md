@@ -40,7 +40,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 唤醒/续话 | `services/conversation_followup.py`、`services/reply_channel_context.py` | 事件唤醒、弹窗回执、查岗回应、延迟续话、最近真实聊天入口解析 |
 | 设备工具 | `services/device_action_tools.py` | 弹窗、截图、系统闹钟等工具执行和卡片 |
 | 论坛 MCP 工具 | `services/mcp_forum_tools.py`、`services/forum_mcp_client.py` | 论坛高层工具、`cli/get_guide` 映射、外部 SSE MCP 调用 |
-| 随机冲浪工具 | `services/du_surf.py`、`services/gateway_tools.py`、`services/notion_tools.py` | `du_surf` 网关工具，按兴趣池/时间段抽话题，复用 Tavily 轻搜摘要，清洗成可聊卡片；不作为 `web_search` 精确事实查询 |
+| 随机冲浪工具 | `services/du_surf.py`、`services/gateway_tools.py`、`services/chat_tools.py` | `du_surf` 网关工具，按兴趣池/时间段抽话题，复用 Tavily 轻搜摘要，清洗成可聊卡片；不作为 `web_search` 精确事实查询 |
 | 设备状态注入 | `storage/sense_store.py`、`services/sense_context.py` | 电量、亮屏、前台 app、位置、睡眠分段累计等 sense 存储与注入 |
 | 主动触发规则 | `services/proactive_trigger_engine.py` | 睡眠、亮屏、使用时长等硬触发 |
 | Telegram Bot | `routes/telegram_webhook.py`、`services/telegram_update_queue.py`、`scripts/run_telegram_webhook_worker.py`、`services/telegram_bot.py` | Webhook 入队、持久队列、独立 worker 消费、TG 风格 system/上下文/发送，图片与 md/txt 文档附件处理 |
@@ -52,7 +52,29 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已完成：兴趣组为 `ai_relationship`、`ai_tools`、`switch`、`humor`、`digital`、`cooking`；默认按北京时间时间段加权随机抽 topic，也支持显式传 `topic`，输出 `topic/query/group/time_period/cards/skipped/usage_note`。
 - 已完成：随机唤醒决策文案已把“上网冲浪找点可聊话题”列为可选动作；渡可以先调用 `du_surf` 看卡片，再决定 `send_message/no_contact/diary/surf/other`，如果只是自己冲浪不打扰则填 `surf`。
 - 已完成：配置项为 `DU_SURF_ENABLED`、`DU_SURF_TIMEOUT_SECONDS`、`DU_SURF_MAX_CARDS`、`DU_SURF_CACHE_TTL_SECONDS`；缺 `TAVILY_API_KEY` 时返回 `TAVILY_API_KEY_MISSING`，不会假装有内容。
-- 已验证：`.venv/bin/python -m py_compile config.py services/du_surf.py services/gateway_tools.py services/notion_tools.py services/telegram_proactive.py pipeline/pipeline.py routes/chat.py` 通过；离线 monkeypatch smoke 覆盖缺 key、正常卡片、硬噪音过滤、网关注入和 `execute_tool("du_surf")` 分发。
+- 已验证：`.venv/bin/python -m py_compile config.py services/du_surf.py services/gateway_tools.py services/chat_tools.py services/telegram_proactive.py pipeline/pipeline.py routes/chat.py` 通过；离线 monkeypatch smoke 覆盖缺 key、正常卡片、硬噪音过滤、网关注入和 `execute_tool("du_surf")` 分发。
+
+当前状态（2026-06-27 混合聊天工具命名收束）：
+- 已完成：历史遗留的混合工具分发器已统一为 `services/chat_tools.py`；`pipeline/pipeline.py::step_inject_chat_tools()` 负责聊天工具注入；`routes/chat.py` 的工具注入与工具执行导入改走 `services.chat_tools`。
+- 已完成：交换日记迁入 App/R2 后，`NOTION_TOOLS_ENABLED` 只控制 Notion runtime 工具；`exchange_diary_*`、`note_write`、Stay with Du、气泡等网关原生聊天工具不再被 Notion 开关挡住。执行端也会按开关硬拦未注入的 `notion_*` 调用。
+- 已完成：交换日记迁入 App/R2 的当前方案已整理到 `docs/exchange_diary_app_notion_migration_plan.md`；临时迁移产物已按收束要求删除，不再作为仓库文件保留。
+- 未完成 / 下次继续：`services/chat_tools.py` 内仍含通用 Notion 检索/日程/小本本工具分支，`pipeline/pipeline.py::step_inject_notion_search()` 仍是独立 Notion 检索注入入口；这些不是交换日记链路，本轮不顺手删。
+
+当前状态（2026-06-27 MiniApp 交换日记 App 后端接入一期）：
+- 已完成：MiniApp「日常」新增「交换日记」入口，接入 `miniapp/src/ui/tabs/ExchangeDiaryTab.tsx`；页面默认打开「渡的Diary」，可切换「我的Diary」。
+- 已完成：UI 参考 `/Users/doraemon/Downloads/ui合集/交换日记.html` 的纸条时间线结构：白色蕾丝头部、粉色分段开关、点阵浅底、中心虚线、爱心纸条标记、渡的蓝色便签/我的奶黄色便签、详情层和评论区。移动端保留左右交错，只缩小偏移，避免原参考窄屏单列；列表卡片只露出标题、emoji 和小时间，正文与评论留在详情里；右下角加号固定新建「我的Diary」，编辑已有条目时才允许切换作者。
+- 已完成：新增 `storage/exchange_diary_store.py`、`routes/miniapp/exchange_diary.py`，在 `/miniapp-api/exchange-diary` 提供列表、详情、新建、编辑、软删除、评论写入；普通 App API 不暴露已删除条目读取，也不暴露 R2 rebuild 入口；`storage/runtime_sqlite.py` 新增 `exchange_diary_entries` 热镜像表，R2 key 按 `exchange_diary/v1/manifest.json`、`months/YYYY-MM.json`、`entries/YYYY/MM/*.json` 拆分。
+- 已完成：`ExchangeDiaryTab.tsx` 已去掉本地示例数据源，切换作者会请求后端 compact 列表；点开纸条后再请求详情，正文和评论只在详情接口返回。列表/详情请求都有前端序号保护，避免切换作者时旧响应覆盖新页面；App 新建和评论默认作者为 `xy`。
+- 已完成：R2 现在是交换日记权威写入面；新建、编辑、删除、评论必须先同步 R2 成功再写 SQLite 热镜像，失败时 MiniApp API 返回 `sync_failed`/503，不再悄悄落本地假成功。带 `client_request_id` 的新建和评论使用稳定 id，R2 局部写成功后重试不会随机生成重复对象；编辑、删除、评论会在写锁内重新读取当前条目，降低并发覆盖风险。日常冷启动列表仍只按最近 6 个月轻量回填。
+- 已完成：旧 Notion 交换日记已迁移到新 R2/SQLite 交换日记库。dry-run 统计为 123 条，字段匹配 `标题/正文/创建者/心情emoji/提交时间`，`source_notion_page_id` 去重 123；实际写入后本地热索引校验为 `notion_import=123`、`distinct_source_notion_page_id=123`，月份分布：2026-06 30 条、2026-05 30 条、2026-04 37 条、2026-03 26 条。临时迁移产物已删除，不再 push。
+- 已验证：`.venv/bin/python -m py_compile storage/exchange_diary_store.py routes/miniapp/exchange_diary.py routes/miniapp_api.py storage/runtime_sqlite.py services/chat_tools.py services/telegram_proactive.py routes/miniapp/dashboard.py` 通过；临时 `RUNTIME_STATE_DB=/tmp/...` smoke 覆盖新建、Notion page id 幂等、compact 列表、详情、评论幂等、编辑和软删除，不污染真实运行库；`.venv/bin/python -c "import app"` 通过；`npm -C miniapp run build` 通过并重建 `miniapp_static`；`git diff --check` 通过。
+- 未完成 / 下次继续：通用 Notion runtime / search / schedule / notebook 相关链路还没有删除；交换日记自己的旧 Notion 兼容入口和专用配置已移除。
+
+当前状态（2026-06-27 交换日记工具迁移）：
+- 已完成：`services/chat_tools.py` 新增并注入 `exchange_diary_create/list/read/comment_create`，执行走 `storage.exchange_diary_store`；旧兼容入口已关闭，不再注入也不再执行。
+- 已完成：`exchange_diary_list` 工具说明已明确：`author` 不传或传空时是 du/xy 混合时间线，传 `du` / `xy` 才按作者过滤；渡用工具 list 时直接返回正文、最近评论和 comment id，默认 5 条、最大 20 条，避免为了看正文再多调一次 read；`exchange_diary_read` 保留给查看单条完整评论细节。`exchange_diary_comment_create` 是给渡用来评论/回复日记的工具，先 list 拿 entry id 和 comment id；不填 `reply_to_comment_id` 是普通评论，填了就是回复那条评论。
+- 已完成：随机唤醒写日记执行轮优先提示渡调用 `exchange_diary_create`；dashboard 动作摘要只把 `exchange_diary_create` 显示为“写了日记”，列表/读取/评论工具不展示。
+- 已验证：`.venv/bin/python -m py_compile services/chat_tools.py services/telegram_proactive.py routes/miniapp/dashboard.py` 通过；后续综合验证见上一段交换日记当前状态。
 
 当前状态（2026-06-18 随机唤醒 surf 动作落地）：
 - 已完成：`services/telegram_proactive.py` 的随机主动决策新增 `surf` 动作；提示词要求只想冲浪不外发时填 `action=surf`，不要只在 reason 里写“去冲浪”。`proactive_tick()` 解析到 `surf` 后会由后端实际执行一次 `du_surf`，再把 topic、卡片标题、摘要、正文片段和可聊点回喂给渡，让渡基于素材输出最终 `send_message/no_contact/diary/other` 决策；如果最终发消息，仍走既有主动投递链路，否则不打扰。
@@ -61,8 +83,8 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 
 当前状态（2026-06-22 随机唤醒 diary 执行轮）：
 - 已完成：`services/telegram_proactive.py::proactive_tick()` 在随机主动决策最终选择 `diary` 时会追加一轮 `_run_proactive_diary_action()`，用主网关提醒渡“刚才选择了写日记，现在直接去写”，不再只存一条 `{"action":"diary"}` 决策就结束；如果先 `surf`、看完素材后最终又选 `diary`，也会触发同一执行轮。
-- 已完成：diary 执行轮不要求 JSON、不外发给辛玥，走 `X-DU-GATEWAY-WAKEUP=1` 和 `X-DU-WAKEUP-KIND=proactive_diary`，让正常工具注入链路可用，优先由渡调用 `notion_diary_create`，必要时用 `note_write`；`routes/chat.py::_compact_gateway_event_for_archive()` 将该内部提醒压成“随机唤醒执行：你刚才选择了写日记，现在去写”，避免整段内部 prompt 污染 last4。
-- 已验证：`python3 -m py_compile services/telegram_proactive.py routes/chat.py`、`git diff --check -- services/telegram_proactive.py routes/chat.py` 通过。本轮未实测线上 Notion 写入，部署后看 `主动写日记执行轮请求/完成` 日志和 `notion_diary_create` 工具调用确认。
+- 已完成：diary 执行轮不要求 JSON、不外发给辛玥，走 `X-DU-GATEWAY-WAKEUP=1` 和 `X-DU-WAKEUP-KIND=proactive_diary`，让正常工具注入链路可用，并明确要求渡调用 `exchange_diary_create` 写交换日记；`routes/chat.py::_compact_gateway_event_for_archive()` 将该内部提醒压成“随机唤醒执行：你刚才选择了写日记，现在去写”，避免整段内部 prompt 污染 last4。
+- 已验证：`python3 -m py_compile services/telegram_proactive.py routes/chat.py`、`git diff --check -- services/telegram_proactive.py routes/chat.py` 通过。部署后看 `主动写日记执行轮请求/完成` 日志和 `exchange_diary_create` 工具调用确认。
 
 当前状态（2026-06-27 随机唤醒秘密抽屉 + 一级页背景）：
 - 已完成：随机唤醒决策新增 `drawer` 动作，默认提示词列出“整理秘密抽屉/随机翻旧条目”；`_parse_proactive_model_reply()` 兼容 `drawer`、`secret_drawer`、`整理抽屉`、`秘密抽屉`、`翻抽屉` 等别名，解析到后不会外发消息。
@@ -150,7 +172,7 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：新增渡可调用的网关工具 `sex_play_draw`，不依赖 Notion 开关；可见 `action` 为 `draw` / `redraw` / `done`：`draw` 抽一张临时纸条，已有纸条时不覆盖；`redraw` 不采用当前这张并重抽；`done` 结束本轮并清掉当前纸条。旧 `void_redraw` 仍作为兼容别名处理，但不再展示给渡，避免“作废/有效/完成”让渡误以为一抽定终身。
 - 已完成：后端抽签池与 `miniapp/src/ui/tabs/PixelHomeTab.tsx` 的小家私密抽屉玩法池保持同一套口径；抽出的纸条仍写入 `services/pixel_home.py` 的 `active_private_draw`，后续动态小家状态会自然注入当前有效纸条。
 - 已完成：当前纸条会区分来源：小玥从页面抽出并发给渡时保存 `drawn_by=xinyue` / `source=private_draw_page`；渡用 `sex_play_draw` 抽出时保存 `drawn_by=du` / `source=sex_play_draw`。动态区会写明来源，避免把渡抽的说成小玥抽的，或把小玥发来的说成渡自己抽的。
-- 已验证：`.venv/bin/python -m py_compile services/pixel_home.py routes/miniapp/private_draw.py services/conversation_followup.py routes/chat.py services/gateway_tools.py services/notion_tools.py pipeline/pipeline.py` 通过；mock 小家存储烟测确认 `drawn_by=xinyue` 和 `drawn_by=du` 会注入不同来源说明，`redraw` 可重抽、`void_redraw` 仍兼容、`done` 后清掉当前纸条；前端发送唤醒文案确认是“小玥抽出来发给你看的结果”；`rg` 确认旧工具名和旧“她/小家私密抽签页刚抽出”文案无残留。
+- 已验证：`.venv/bin/python -m py_compile services/pixel_home.py routes/miniapp/private_draw.py services/conversation_followup.py routes/chat.py services/gateway_tools.py services/chat_tools.py pipeline/pipeline.py` 通过；mock 小家存储烟测确认 `drawn_by=xinyue` 和 `drawn_by=du` 会注入不同来源说明，`redraw` 可重抽、`void_redraw` 仍兼容、`done` 后清掉当前纸条；前端发送唤醒文案确认是“小玥抽出来发给你看的结果”；`rg` 确认旧工具名和旧“她/小家私密抽签页刚抽出”文案无残留。
 - 未完成 / 下次继续：本轮不改前端私密抽屉 UI，不改真实 R2 里的当前纸条，也不处理 APK/Android 入口。
 
 当前状态（2026-06-13 sex play 抽签一致性过滤）：
@@ -1297,7 +1319,7 @@ npm -C miniapp run android
 
 当前状态（2026-05-22 文游装备栏移除）：
 - 已完成：按用户决定删除默认装备养成链路，背包物品统一走“使用 / 出售 / 转交”；后端移除穿戴、维修、锻造、拆解入口和装备加成计算，`/wenyou/item/equip`、`/wenyou/item/repair` 不再注册；AI 玩家 `inventory_action` 只保留 `use/sell`；内容表 `item_type` 收敛为 `consumable/tool/material/special`，奖励表 `gear` 分类改为 `tool_item`；前端个人空间背包不再显示装备/维修动作，角色面板不再展示装备摘要；相关 wenyou 文档和本索引已同步到无装备栏版本。
-- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py services/notion_tools.py routes/chat.py` 通过；`import app / services.wenyou_service / routes.miniapp.wenyou` 通过；mock 烟测覆盖装备/维修路由不存在、出售路由存在、工具道具按背包使用扣耐久、不写入 `equipment/gear`、AI 工具 schema 无 `slot`；`npm --prefix miniapp run build` 通过；`git diff --check` 针对本轮文游文件通过。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py services/chat_tools.py routes/chat.py` 通过；`import app / services.wenyou_service / routes.miniapp.wenyou` 通过；mock 烟测覆盖装备/维修路由不存在、出售路由存在、工具道具按背包使用扣耐久、不写入 `equipment/gear`、AI 工具 schema 无 `slot`；`npm --prefix miniapp run build` 通过；`git diff --check` 针对本轮文游文件通过。
 - 未完成 / 不要碰：仍不清理大量既有 `miniapp_static/assets/*` 旧 hash 产物；非文游脏文件继续保持原样。`services/wenyou_service.py` 里保留少量旧存档兼容清理，只负责丢弃历史 `gear/equipment/weapons` 字段，不是新功能入口。
 
 当前状态（2026-05-22 文游成长简化与残留复扫）：
@@ -1491,7 +1513,7 @@ npm -C miniapp run android
 
 当前状态（2026-05-28 小爱音箱外放工具）：
 - 已完成：新增 `xiaoai_speak` 网关工具，作为渡可调用的“小爱音箱外放/弹窗提醒”能力；`storage/xiaoai_store.py` 在原小爱状态文件里增加短 TTL 播放队列，`routes/xiaoai_api.py` 增加 `/api/xiaoai/actions`、`/api/xiaoai/actions/claim`、`/api/xiaoai/actions/<id>/result` 和 `/api/xiaoai/speak`；`pipeline/pipeline.py` 用 `step_inject_gateway_tools()` 常驻注入，不依赖 Notion 开关；主触发规则也明确 `xiaoai_speak` 可用于普通消息/弹窗可能被忽略时的升级提醒，例如叫看手机、催睡、喝水、洗澡后回来、起床或离开小红书，但必须短句、避开隐私社死、不要连续轰炸；MiGPT runner 每 `XIAOAI_ACTION_POLL_MS` 轮询队列，播放 `play_url`/`speak_text` 并回报成功失败。
-- 已验证：`.venv/bin/python -m py_compile storage/xiaoai_store.py routes/xiaoai_api.py services/gateway_tools.py pipeline/pipeline.py routes/chat.py services/notion_tools.py` 通过；`node --check connectors/xiaoai_migpt/src/runner.mjs` 通过。
+- 已验证：`.venv/bin/python -m py_compile storage/xiaoai_store.py routes/xiaoai_api.py services/gateway_tools.py pipeline/pipeline.py routes/chat.py services/chat_tools.py` 通过；`node --check connectors/xiaoai_migpt/src/runner.mjs` 通过。
 - 未完成 / 下次继续：外放工具默认要求 runner 在线且 MiniMax TTS 能生成公网可访问的 mp3；若 action 卡在 pending，先查 Mac Docker runner 是否在线并确认 `/api/xiaoai/actions/claim` 是否被轮询。
 
 当前状态（2026-05-28 小爱外放工具实机验证）：
@@ -1530,7 +1552,7 @@ npm -C miniapp run android
 
 当前状态（2026-05-28 mijiaAPI 家居控制工具）：
 - 已完成：`services/gateway_tools.py` 新增 `xiaoai_run_command` 工具，底层调用 `mijiaAPI --run "<自然语言家居命令>"`，用于让小爱执行米家/红外设备控制；新增配置 `MIJIA_API_COMMAND`、`MIJIA_API_AUTH_PATH`、`MIJIA_WIFISPEAKER_NAME`、`MIJIA_API_QUIET`、`MIJIA_API_TIMEOUT_SECONDS`；`requirements.txt` 增加 `mijiaapi>=3.1.0`。工具常驻注入，不依赖 MiGPT runner；`speaker_name` 可由工具参数临时覆盖，默认走 `MIJIA_WIFISPEAKER_NAME`。
-- 已验证：`.venv/bin/python -m py_compile config.py services/gateway_tools.py pipeline/pipeline.py routes/chat.py services/notion_tools.py` 通过；smoke 确认 `step_inject_gateway_tools()` 同时注入 `xiaoai_speak` 与 `xiaoai_run_command`，命令构造为 `mijiaAPI --run ... --wifispeaker_name ... --quiet`。
+- 已验证：`.venv/bin/python -m py_compile config.py services/gateway_tools.py pipeline/pipeline.py routes/chat.py services/chat_tools.py` 通过；smoke 确认 `step_inject_gateway_tools()` 同时注入 `xiaoai_speak` 与 `xiaoai_run_command`，命令构造为 `mijiaAPI --run ... --wifispeaker_name ... --quiet`。
 - 未完成 / 下次继续：未在服务器安装/登录 mijiaAPI，也未实机执行家居命令；生产需要安装 `mijiaapi`、完成小米账号 auth、配置 `MIJIA_WIFISPEAKER_NAME` 后重启 du-gateway。
 
 当前状态（2026-05-28 mijiaAPI 台灯实测脚本）：
@@ -1848,7 +1870,7 @@ npm -C miniapp run android
 - 已完成：聊天注入链新增 `###秘密抽屉` 短概况，只给总数、分类、置顶、暗格和待整理数量以及隐藏保存格式；工具注入只保留一个 `secret_drawer`，schema 只暴露 `action` 和 `payload`，用 `action=stats/list/get/update/delete/restore/random/set_pin` 区分操作；保存当前聊天只走 `DU_SECRET_SAVE` 隐藏标记，不注入保存工具；PIN 由渡自己用 `set_pin` 设置，前端只负责输入 PIN；对渡可见的工具说明统一叫「暗格」，不再叫「锁中锁」。
 - 已完成：隐藏块剥离接入 `services/chat_sidecars.py` 和流式可见文本处理，避免 `DU_SECRET_SAVE` 标记在 App / TG / QQ 正文里露出；非流式 forced SSE 路径会先剥离隐藏块再转发，不重复保存。
 - 已完成：`HiddenBlockParser` 增加 `split_all()`，`DU_SECRET_SAVE` 支持一次回复里多个完整隐藏块；后续块也会剥离并逐个保存，不会露到客户端或进可见正文。
-- 已验证：`.venv/bin/python -m py_compile storage/secret_drawer_store.py services/secret_drawer.py routes/miniapp/secret_drawer.py routes/miniapp_api.py services/chat_sidecars.py services/pc_command_handler.py pipeline/pipeline.py routes/chat.py services/gateway_tools.py services/notion_tools.py` 通过；本地 monkeypatch R2 smoke 覆盖隐藏块剥离、保存本轮消息+图片、工具保存 media_refs、待整理/置顶筛选、标签统计、软删除读取与恢复、MiniApp PIN/items/random/restore；`python3 -m py_compile storage/secret_drawer_store.py routes/miniapp/secret_drawer.py services/secret_drawer.py` 和 `npm -C miniapp run build` 通过并重建 `miniapp_static`。
+- 已验证：`.venv/bin/python -m py_compile storage/secret_drawer_store.py services/secret_drawer.py routes/miniapp/secret_drawer.py routes/miniapp_api.py services/chat_sidecars.py services/pc_command_handler.py pipeline/pipeline.py routes/chat.py services/gateway_tools.py services/chat_tools.py` 通过；本地 monkeypatch R2 smoke 覆盖隐藏块剥离、保存本轮消息+图片、工具保存 media_refs、待整理/置顶筛选、标签统计、软删除读取与恢复、MiniApp PIN/items/random/restore；`python3 -m py_compile storage/secret_drawer_store.py routes/miniapp/secret_drawer.py services/secret_drawer.py` 和 `npm -C miniapp run build` 通过并重建 `miniapp_static`。
 - 未完成 / 下次继续：当前前端是偷看/浏览 UI，不提供编辑、删除、恢复；也不提供设置 PIN 的入口，PIN 设置由渡走 `secret_drawer` 的 `set_pin`。后端仍是 R2 JSON 单对象低频写入，只有进程内锁；当前单 worker 可接受，但没有做 D1/SQLite、跨进程版本锁/CAS 或物理删除。
 
 当前状态（2026-06-26 MiniApp 语音通话链路收束）：

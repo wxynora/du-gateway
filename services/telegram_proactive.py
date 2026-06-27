@@ -289,7 +289,7 @@ _ACTION_LABEL_CN = {
 
 
 _SELF_ACTION_TOOL_LABELS = {
-    "notion_diary_create": "写了交换日记",
+    "exchange_diary_create": "写了交换日记",
     "daily_whisper_write": "写了气泡",
     "forum_read_feed": "逛了论坛信息流",
     "forum_open_thread": "看了论坛帖子",
@@ -1176,7 +1176,7 @@ def _run_proactive_diary_action(
     user_prompt = (
         "你刚才在随机唤醒里选择了写日记/记事。\n"
         "现在不是重新做选择，也不要输出 JSON；请直接去写。\n"
-        "优先调用 notion_diary_create 写一条交换日记；如果你觉得更适合短记事，再用 note_write。\n"
+        "请调用 exchange_diary_create 写一条交换日记。\n"
         "写完后用一句很短的话说明已经写好；如果工具失败，也用一句话说明失败原因。\n"
         f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
         f"你刚才选择写日记的理由：{str(initial_reason or '').strip() or '（未说明）'}"

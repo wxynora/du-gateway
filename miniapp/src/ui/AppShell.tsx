@@ -87,6 +87,7 @@ const MemoryDebugTab = lazy(() => import("./tabs/MemoryDebugTab").then((m) => ({
 const MemoryNebulaTab = lazy(() => import("./tabs/MemoryNebulaTab").then((m) => ({ default: m.MemoryNebulaTab })));
 const DuDayTab = lazy(() => import("./tabs/DuDayTab").then((m) => ({ default: m.DuDayTab })));
 const DuNotebookTab = lazy(() => import("./tabs/DuNotebookTab").then((m) => ({ default: m.DuNotebookTab })));
+const ExchangeDiaryTab = lazy(() => import("./tabs/ExchangeDiaryTab").then((m) => ({ default: m.ExchangeDiaryTab })));
 const BudgetCheckInTab = lazy(() => import("./tabs/BudgetCheckInTab").then((m) => ({ default: m.BudgetCheckInTab })));
 const WenyouTab = lazy(() => import("./tabs/WenyouTab").then((m) => ({ default: m.WenyouTab })));
 const StickersTab = lazy(() => import("./tabs/StickersTab").then((m) => ({ default: m.StickersTab })));
@@ -132,6 +133,7 @@ export function AppShell({
   const [showAlarm, setShowAlarm] = useState(false);
   const [showPersonalization, setShowPersonalization] = useState(false);
   const [showDuDay, setShowDuDay] = useState(false);
+  const [showExchangeDiary, setShowExchangeDiary] = useState(false);
   const [showStayWithDu, setShowStayWithDu] = useState(false);
   const [showPixelHome, setShowPixelHome] = useState(false);
   const [showMemoryNebula, setShowMemoryNebula] = useState(false);
@@ -148,6 +150,7 @@ export function AppShell({
   const callHubBackHandlerRef = useRef<BackHandler | null>(null);
   const promptManagerBackHandlerRef = useRef<BackHandler | null>(null);
   const secretDrawerBackHandlerRef = useRef<BackHandler | null>(null);
+  const exchangeDiaryBackHandlerRef = useRef<BackHandler | null>(null);
   const [groupFreeChatEnabled, setGroupFreeChatEnabled] = useState(() => readStoredBoolean(GROUP_FREE_CHAT_MODE_STORAGE_KEY, true));
   const [sharedChatWindowId, setSharedChatWindowId] = useState("");
   const [dailyWhisper, setDailyWhisper] = useState("");
@@ -567,6 +570,11 @@ export function AppShell({
         setShowDuDay(false);
         return;
       }
+      if (showExchangeDiary) {
+        if (exchangeDiaryBackHandlerRef.current?.()) return;
+        setShowExchangeDiary(false);
+        return;
+      }
       if (showStayWithDu) {
         setShowStayWithDu(false);
         return;
@@ -618,6 +626,7 @@ export function AppShell({
     showCallHub,
     showPromptManager,
     showCoRead,
+    showExchangeDiary,
     showListenWithDu,
     showDuDay,
     showMemoryNebula,
@@ -677,6 +686,11 @@ export function AppShell({
               icon={<BookOpenIcon />}
               label="和渡一起读"
               onClick={() => setShowCoRead(true)}
+            />
+            <ListRow
+              icon={<NotebookPenIconMini />}
+              label="交换日记"
+              onClick={() => setShowExchangeDiary(true)}
             />
             <ListRow
               icon={<HeadphonesIconMini />}
@@ -788,6 +802,7 @@ export function AppShell({
     showAlarm ||
     showPersonalization ||
     showDuDay ||
+    showExchangeDiary ||
     showStayWithDu ||
     showPixelHome ||
     showMemoryNebula ||
@@ -1017,6 +1032,9 @@ export function AppShell({
         <FullScreenPane title="渡的一天" accent="neutral" headerMode="simple" onBack={() => setShowDuDay(false)}>
           <LazyPane><DuDayTab /></LazyPane>
         </FullScreenPane>
+      ) : null}
+      {showExchangeDiary ? (
+        <LazyPane><ExchangeDiaryTab onBack={() => setShowExchangeDiary(false)} backHandlerRef={exchangeDiaryBackHandlerRef} /></LazyPane>
       ) : null}
       {showStayWithDu ? (
         <FullScreenPane title="Stay with Du" accent="neutral" headerMode="simple" onBack={() => setShowStayWithDu(false)}>

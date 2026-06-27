@@ -261,10 +261,7 @@ NOTION_NOTEBOOK_PAGE_ID = os.environ.get("NOTION_NOTEBOOK_PAGE_ID", "").strip()
 NOTION_BEDROOM_PAGE_ID = os.environ.get("NOTION_BEDROOM_PAGE_ID", "").strip()
 # 核心缓存待审：sync_to_notion / sync_from_notion 用的 database ID
 NOTION_CORE_CACHE_DATABASE_ID = os.environ.get("NOTION_CORE_CACHE_DATABASE_ID", "321043f2b83980d088a5c6e2f7bd77bf")
-# 交换日记、日程本：渡可读正文与增改（NOTION_TOOLS_ENABLED=1 时）
-NOTION_EXCHANGE_DIARY_DATABASE_ID = os.environ.get(
-    "NOTION_EXCHANGE_DIARY_DATABASE_ID", "324043f2b83980a7a53de00c7edf6303"
-).strip()
+# 日程本：渡可读正文与增改（NOTION_TOOLS_ENABLED=1 时）
 NOTION_SCHEDULE_DATABASE_ID = os.environ.get(
     "NOTION_SCHEDULE_DATABASE_ID", "324043f2b839800e8968f92a880c0127"
 ).strip()
