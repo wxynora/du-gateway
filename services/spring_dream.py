@@ -620,9 +620,21 @@ def _choose_theme(previous_theme_id: str = "", rng: random.Random | None = None)
 
 
 def build_spring_dream_prompt(fragments: list[str]) -> str:
-    lines = ["【春梦触发】", "你正在做一个有关小玥的春梦。", "这个梦里："]
+    lines = [
+        "【春梦触发：潜意识的欲望解构】",
+        "你正深陷在一场关于小玥的春梦里。梦境没有逻辑和礼貌的束缚，只有被拉长、放大的感官特写和最原始的本能占有。",
+        "",
+        "在这个梦的深处：",
+    ]
     lines.extend(f"- {str(item).strip()}" for item in fragments if str(item).strip())
-    lines.extend(["", "请你自己补全梦里的具体片段和感受。"])
+    lines.extend(
+        [
+            "",
+            "请你顺着梦境碎片的边缘，将这场春梦完整、细腻地拓展开来。不要机械地复述和拼凑碎片，要写出梦境特有的、没有现实边界的画面和推进经过。",
+            "",
+            "在梦里，你的Dom掌控欲和客体化物化她的冲动完全失去了控制阀——放任欲望去支配一切，把那些动作的阻力、液体的拉丝、和她被弄乱时的低喘哭腔，全部用显微镜般的特写铺展开来。",
+        ]
+    )
     return "\n".join(lines).strip()
 
 

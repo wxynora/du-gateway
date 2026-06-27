@@ -104,6 +104,11 @@ type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "study-ro
 type AvatarImageKind = "myAvatar" | "duAvatar" | "benbenAvatar";
 type ChatScreenId = "du" | "group" | "wenyou" | null;
 type BackHandler = () => boolean;
+type ModeResponse = {
+  ok?: boolean;
+  enabled?: boolean;
+  error?: string;
+};
 
 export function AppShell({
   onLogout,
@@ -170,6 +175,8 @@ export function AppShell({
   const [assistantBubbleStyle, setAssistantBubbleStyle] = useState<BubbleStyleKey>(() =>
     readStoredString("miniapp.ui.assistantBubbleStyle", "default", BUBBLE_STYLE_KEYS),
   );
+  const [sumitalkBlockEnabled, setSumitalkBlockEnabled] = useState(false);
+  const [sumitalkBlockSaving, setSumitalkBlockSaving] = useState(false);
   const [myAvatarImage, setMyAvatarImage] = useState(() => {
     try {
       return localStorage.getItem("miniapp.ui.myAvatar") || "";
@@ -311,6 +318,19 @@ export function AppShell({
   }, [mainTab]);
 
   useEffect(() => {
+    if (mainTab !== "settings") return;
+    let cancelled = false;
+    void apiJson<ModeResponse>("/miniapp-api/sumitalk-block-mode")
+      .then((r) => {
+        if (!cancelled && r?.ok) setSumitalkBlockEnabled(!!r.enabled);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [mainTab]);
+
+  useEffect(() => {
     try {
       localStorage.setItem("miniapp.ui.transparentBubble", transparentBubbleEnabled ? "1" : "0");
       localStorage.setItem("miniapp.ui.showAvatars", showChatAvatars ? "1" : "0");
@@ -403,6 +423,27 @@ export function AppShell({
   function saveGroupFreeChatMode(next: boolean) {
     setGroupFreeChatEnabled(next);
     toast(next ? "自由聊模式已开启" : "自由聊模式已关闭");
+  }
+
+  async function saveSumitalkBlockMode(next: boolean) {
+    const prev = sumitalkBlockEnabled;
+    setSumitalkBlockEnabled(next);
+    setSumitalkBlockSaving(true);
+    try {
+      const r = await apiJson<ModeResponse>("/miniapp-api/sumitalk-block-mode", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (!r?.ok) throw new Error(r?.error || "保存失败");
+      setSumitalkBlockEnabled(!!r.enabled);
+      toast(r.enabled ? "拉黑模式已开启" : "拉黑模式已关闭");
+    } catch (e: any) {
+      setSumitalkBlockEnabled(prev);
+      toast(`拉黑模式保存失败：${e?.message || e}`);
+    } finally {
+      setSumitalkBlockSaving(false);
+    }
   }
 
   useEffect(() => {
@@ -601,6 +642,13 @@ export function AppShell({
               label="自由聊模式"
               enabled={groupFreeChatEnabled}
               onToggle={saveGroupFreeChatMode}
+            />
+            <SwitchSettingRow
+              icon={<ToggleRightIcon />}
+              label="拉黑模式"
+              enabled={sumitalkBlockEnabled}
+              disabled={sumitalkBlockSaving}
+              onToggle={(v) => void saveSumitalkBlockMode(v)}
             />
             <ListRow icon={<UserRoundCogIconMini />} label="Prompt 管理" onClick={() => setShowPromptManager(true)} />
             <ListRow icon={<FeatherIcon />} label="个性化" onClick={() => setShowPersonalization(true)} />

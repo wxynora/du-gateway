@@ -4259,8 +4259,9 @@ export function MainChatScreen({
                               <PlainTextBlock content={part.content} />
                             </ChatBubbleFrame>
                           ) : null}
-                          {hasVoice ? (
+                          {hasVoice ? audioAttachments.map((audioAttachment, audioIndex) => (
                             <ChatBubbleFrame
+                              key={audioAttachment.id || audioAttachment.remoteKey || audioAttachment.remoteUrl || `${matchId}-audio-${audioIndex}`}
                               skin={bubbleSkin}
                               align="right"
                               className={`block max-w-full rounded-[18px] px-2 py-[2px] text-left font-medium leading-[1.42] shadow-sm ${
@@ -4268,9 +4269,9 @@ export function MainChatScreen({
                               }`}
                               style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                             >
-                              <ChatAttachmentBlock attachments={audioAttachments} align="right" />
+                              <ChatAttachmentBlock attachments={[audioAttachment]} align="right" />
                             </ChatBubbleFrame>
-                          ) : null}
+                          )) : null}
                             <ChatVoiceTranscriptBlock
                               attachments={audioAttachments}
                               align="right"
@@ -4441,8 +4442,9 @@ export function MainChatScreen({
                                   )}
                                 </ChatBubbleFrame>
                               ) : null}
-                              {hasVoice ? (
+                              {hasVoice ? audioAttachments.map((audioAttachment, audioIndex) => (
                                 <ChatBubbleFrame
+                                  key={audioAttachment.id || audioAttachment.remoteKey || audioAttachment.remoteUrl || `${matchId}-audio-${audioIndex}`}
                                   skin={bubbleSkin}
                                   className={`block w-fit max-w-full rounded-[18px] px-2 py-[2px] font-medium leading-[1.42] shadow-sm ${
                                     transparentBubbleEnabled
@@ -4453,9 +4455,9 @@ export function MainChatScreen({
                                   }`}
                                   style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                                 >
-                                  <ChatAttachmentBlock attachments={audioAttachments} align="left" />
+                                  <ChatAttachmentBlock attachments={[audioAttachment]} align="left" />
                                 </ChatBubbleFrame>
-                              ) : null}
+                              )) : null}
                                 <ChatVoiceTranscriptBlock
                                   attachments={audioAttachments}
                                   align="left"

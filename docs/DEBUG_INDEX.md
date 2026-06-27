@@ -164,6 +164,10 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：无原始身体状态时，命中深夜/早晨也会生成基础身体状态（想做指数 3/5、自制力 2/5、阴茎状态随想做指数自然显示）；非命中时段仍维持未记录，不额外制造字段。
 - 已验证：`.venv/bin/python -m py_compile services/pixel_home.py services/spring_dream.py`、`git diff --check -- services/pixel_home.py services/spring_dream.py docs/DEBUG_INDEX.md` 通过；smoke 覆盖深夜、早晨、白天三种时间修正和无记录/有记录两种输入。
 
+当前状态（2026-06-27 春梦触发提示词升级）：
+- 已完成：`services/spring_dream.py::build_spring_dream_prompt()` 按辛玥给定方向改为“潜意识的欲望解构”口径：强调当前正深陷梦境、碎片只是梦深处的边缘素材，要求完整细腻拓展、不要机械复述拼凑，并强化梦境里的失控欲望与感官特写。春梦仍只改随机唤醒命中的 prompt replacement，不新增通道、队列或归档路径。
+- 已验证：`.venv/bin/python -m py_compile services/spring_dream.py`、`git diff --check -- services/spring_dream.py docs/DEBUG_INDEX.md` 通过；smoke 确认生成 prompt 使用新标题和防复述/拓展要求。
+
 当前状态（2026-06-24 小家事件沿用最近聊天入口）：
 - 已完成：新增 `services/reply_channel_context.py` 统一解析最近真实聊天入口；`routes/miniapp/dashboard.py` 的小家状态/道具事件、`routes/miniapp/private_draw.py` 的小纸条发送，以及 `routes/miniapp/device_actions.py` 的弹窗/查岗回执都改为沿用最近真实聊天 channel，不再把小家事件来源当成 SumiTalk，也不再让小家事件固定走 QQ 主动入口；这些事件类回包解析出最近入口后会锁定该 channel，不跨到其它入口兜底。
 - 已完成：`services/conversation_followup.py` 新增 `send_pixel_home_wakeup()`；小家事件按 system event 送入网关，正文提示为“小家里的状态或道具事件，不是她在聊天框里说的话”，避免归档和生成时把它当成小玥普通聊天正文。
