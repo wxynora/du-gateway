@@ -229,8 +229,6 @@ def list_models_for_item_detail(it: dict) -> dict:
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-        if is_pioneer_url(url):
-            headers["X-API-Key"] = api_key
     models_url = _chat_url_to_models_url(url)
     try:
         resp = requests.get(models_url, headers=headers, timeout=20)
