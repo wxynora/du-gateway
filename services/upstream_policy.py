@@ -1,5 +1,7 @@
+import json
 import re
-from urllib.parse import urlparse
+import time
+from urllib.parse import urlparse, urlunparse
 
 from config import (
     TARGET_AI_URL,
@@ -151,6 +153,24 @@ def _is_claude_proxy_model(model: str) -> bool:
     return str(model or "").strip().lower().startswith("claude-")
 
 
+def should_route_pioneer_claude_via_anthropic(body: dict, upstream_url: str) -> bool:
+    if not is_pioneer_url(upstream_url):
+        return False
+    return _is_claude_proxy_model((body or {}).get("model") or "")
+
+
+def pioneer_anthropic_messages_url(upstream_url: str) -> str:
+    parsed = urlparse(str(upstream_url or "").strip())
+    if not parsed.scheme or not parsed.netloc:
+        return upstream_url
+    path = parsed.path or ""
+    if path.startswith("/v1/") or path == "/v1":
+        path = "/v1/messages"
+    else:
+        path = "/v1/messages"
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", parsed.query, parsed.fragment))
+
+
 def _message_content_text(msg: dict) -> str:
     content = (msg or {}).get("content")
     if isinstance(content, str):
@@ -250,7 +270,22 @@ def _strip_gateway_cache_markers(messages: list[dict]) -> None:
         msg.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
 
 
+def _set_cache_control_on_last_tool(body: dict, ttl: str) -> None:
+    tools = (body or {}).get("tools")
+    if not isinstance(tools, list) or not tools:
+        return
+    copied_tools = [dict(tool) if isinstance(tool, dict) else tool for tool in tools]
+    for idx in range(len(copied_tools) - 1, -1, -1):
+        tool = copied_tools[idx]
+        if isinstance(tool, dict):
+            tool["cache_control"] = _cache_control(ttl)
+            copied_tools[idx] = tool
+            body["tools"] = copied_tools
+            return
+
+
 def _apply_pioneer_claude_prompt_cache(body: dict, ttl: str) -> dict:
+    _set_cache_control_on_last_tool(body, ttl)
     messages = [dict(m) for m in ((body or {}).get("messages") or []) if isinstance(m, dict)]
     if not messages:
         return body
@@ -299,6 +334,325 @@ def _apply_pioneer_claude_prompt_cache(body: dict, ttl: str) -> dict:
     _strip_gateway_cache_markers(messages)
     body["messages"] = messages
     return body
+
+
+def _safe_json_loads(value, default=None):
+    if default is None:
+        default = {}
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(str(value or ""))
+    except Exception:
+        return default
+
+
+def _content_to_text(content) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                typ = str(item.get("type") or "").strip().lower()
+                if typ in {"text", "input_text"}:
+                    parts.append(str(item.get("text") or ""))
+                elif typ == "tool_result":
+                    parts.append(str(item.get("content") or ""))
+        return "\n".join(part for part in parts if part)
+    try:
+        return json.dumps(content, ensure_ascii=False, default=str)
+    except Exception:
+        return str(content)
+
+
+def _openai_content_to_anthropic_blocks(content) -> list[dict]:
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    if not isinstance(content, list):
+        return [{"type": "text", "text": str(content)}]
+    out: list[dict] = []
+    for part in content:
+        if isinstance(part, str):
+            if part:
+                out.append({"type": "text", "text": part})
+            continue
+        if not isinstance(part, dict):
+            continue
+        typ = str(part.get("type") or "").strip().lower()
+        if typ in {"text", "input_text"}:
+            block = {"type": "text", "text": str(part.get("text") or "")}
+            if isinstance(part.get("cache_control"), dict):
+                block["cache_control"] = dict(part.get("cache_control") or {})
+            out.append(block)
+        elif typ in {"thinking", "redacted_thinking", "tool_use", "tool_result"}:
+            out.append(dict(part))
+        elif typ == "image":
+            out.append(dict(part))
+        elif typ == "image_url":
+            url = ""
+            image_url = part.get("image_url")
+            if isinstance(image_url, dict):
+                url = str(image_url.get("url") or "")
+            else:
+                url = str(part.get("url") or "")
+            match = re.match(r"^data:(image/[^;]+);base64,(.+)$", url)
+            if match:
+                out.append(
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": match.group(1), "data": match.group(2)},
+                    }
+                )
+            elif url:
+                out.append({"type": "text", "text": f"[图片：{url}]"})
+    return out
+
+
+def _openai_tools_to_anthropic(tools) -> list[dict] | None:
+    if not isinstance(tools, list):
+        return None
+    out: list[dict] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
+            fn = tool.get("function") or {}
+            item = {
+                "name": str(fn.get("name") or ""),
+                "description": str(fn.get("description") or ""),
+                "input_schema": fn.get("parameters") if isinstance(fn.get("parameters"), dict) else {"type": "object", "properties": {}},
+            }
+            if isinstance(tool.get("cache_control"), dict):
+                item["cache_control"] = dict(tool.get("cache_control") or {})
+            if item["name"]:
+                out.append(item)
+        elif tool.get("name") and isinstance(tool.get("input_schema"), dict):
+            out.append(dict(tool))
+    return out or None
+
+
+def _openai_tool_choice_to_anthropic(choice):
+    if not choice or choice == "auto":
+        return None
+    if choice == "none":
+        return {"type": "none"}
+    if isinstance(choice, dict):
+        fn = choice.get("function") if isinstance(choice.get("function"), dict) else {}
+        name = str(fn.get("name") or choice.get("name") or "").strip()
+        if name:
+            return {"type": "tool", "name": name}
+    return {"type": "auto"}
+
+
+def _append_anthropic_message(messages: list[dict], role: str, content: list[dict]) -> None:
+    blocks = [block for block in (content or []) if isinstance(block, dict)]
+    if not blocks:
+        blocks = [{"type": "text", "text": ""}]
+    if messages and messages[-1].get("role") == role:
+        prev = messages[-1].get("content")
+        if isinstance(prev, list):
+            prev.extend(blocks)
+            return
+    messages.append({"role": role, "content": blocks})
+
+
+def pioneer_openai_to_anthropic_request(body: dict) -> dict:
+    oai = dict(body or {})
+    messages: list[dict] = []
+    system_blocks: list[dict] = []
+    pending_tool_results: list[dict] = []
+
+    def flush_tool_results() -> None:
+        nonlocal pending_tool_results
+        if pending_tool_results:
+            _append_anthropic_message(messages, "user", pending_tool_results)
+            pending_tool_results = []
+
+    for msg in oai.get("messages") or []:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "").strip().lower()
+        if role == "system":
+            blocks = _openai_content_to_anthropic_blocks(msg.get("content"))
+            for block in blocks:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    system_blocks.append(block)
+            continue
+        if role in {"tool", "function"}:
+            tool_use_id = str(msg.get("tool_call_id") or msg.get("id") or msg.get("name") or "").strip()
+            if tool_use_id:
+                pending_tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": _content_to_text(msg.get("content")),
+                    }
+                )
+            continue
+        if role == "user":
+            flush_tool_results()
+            _append_anthropic_message(messages, "user", _openai_content_to_anthropic_blocks(msg.get("content")))
+            continue
+        if role == "assistant":
+            flush_tool_results()
+            content = _openai_content_to_anthropic_blocks(msg.get("content"))
+            if isinstance(msg.get("thinking_blocks"), list):
+                content = [dict(x) for x in msg.get("thinking_blocks") if isinstance(x, dict)] + content
+            for call in msg.get("tool_calls") or []:
+                if not isinstance(call, dict) or call.get("type") != "function":
+                    continue
+                fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+                name = str(fn.get("name") or "").strip()
+                if not name:
+                    continue
+                content.append(
+                    {
+                        "type": "tool_use",
+                        "id": str(call.get("id") or name),
+                        "name": name,
+                        "input": _safe_json_loads(fn.get("arguments"), {}),
+                    }
+                )
+            if content:
+                _append_anthropic_message(messages, "assistant", content)
+    flush_tool_results()
+
+    out = {
+        "model": oai.get("model"),
+        "max_tokens": oai.get("max_tokens") or oai.get("max_completion_tokens") or 8192,
+        "messages": messages,
+    }
+    if system_blocks:
+        out["system"] = system_blocks
+    if isinstance(oai.get("thinking"), dict):
+        out["thinking"] = dict(oai.get("thinking") or {})
+    if isinstance(oai.get("output_config"), dict):
+        out["output_config"] = dict(oai.get("output_config") or {})
+    elif oai.get("reasoning_effort"):
+        out["output_config"] = {"effort": oai.get("reasoning_effort")}
+    for key in ("temperature", "top_p"):
+        if oai.get(key) is not None:
+            out[key] = oai.get(key)
+    if oai.get("stream"):
+        out["stream"] = True
+    if oai.get("stop") is not None:
+        stop = oai.get("stop")
+        out["stop_sequences"] = stop if isinstance(stop, list) else [stop]
+    tools = _openai_tools_to_anthropic(oai.get("tools"))
+    if tools:
+        out["tools"] = tools
+    tool_choice = _openai_tool_choice_to_anthropic(oai.get("tool_choice"))
+    if tool_choice:
+        out["tool_choice"] = tool_choice
+    if oai.get("parallel_tool_calls") is False:
+        out["disable_parallel_tool_use"] = True
+    return out
+
+
+def _convert_anthropic_usage(usage) -> dict:
+    usage = usage if isinstance(usage, dict) else {}
+    input_tokens = int(usage.get("input_tokens") or 0)
+    output_tokens = int(usage.get("output_tokens") or 0)
+    cache_creation = int(usage.get("cache_creation_input_tokens") or 0)
+    cache_read = int(usage.get("cache_read_input_tokens") or 0)
+    out = {
+        "prompt_tokens": input_tokens,
+        "completion_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "cache_creation_input_tokens": cache_creation,
+        "cache_read_input_tokens": cache_read,
+        "anthropic_created": cache_creation,
+        "anthropic_read": cache_read,
+        "prompt_tokens_details": {"cached_tokens": cache_read},
+    }
+    if isinstance(usage.get("output_tokens_details"), dict):
+        out["output_tokens_details"] = usage.get("output_tokens_details")
+    if isinstance(usage.get("iterations"), list):
+        out["iterations"] = usage.get("iterations")
+        out["anthropic_iterations"] = usage.get("iterations")
+    return out
+
+
+def pioneer_anthropic_to_openai_response(data: dict, request_model: str = "") -> dict:
+    if not isinstance(data, dict):
+        return data
+    if isinstance(data.get("choices"), list):
+        return data
+    actual_model = str(data.get("model") or "").strip() or str(request_model or "").strip()
+    text_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    thinking_blocks: list[dict] = []
+    fallback_blocks: list[dict] = []
+    tool_calls: list[dict] = []
+    for part in data.get("content") or []:
+        if not isinstance(part, dict):
+            continue
+        typ = str(part.get("type") or "").strip()
+        if typ == "text":
+            text_parts.append(str(part.get("text") or ""))
+        elif typ == "thinking":
+            thinking_blocks.append(dict(part))
+            text = str(part.get("thinking") or part.get("text") or "").strip()
+            if text:
+                reasoning_parts.append(text)
+        elif typ == "redacted_thinking":
+            thinking_blocks.append(dict(part))
+        elif typ == "fallback":
+            fallback_blocks.append(dict(part))
+        elif typ == "tool_use":
+            tool_calls.append(
+                {
+                    "id": str(part.get("id") or part.get("name") or ""),
+                    "type": "function",
+                    "function": {
+                        "name": str(part.get("name") or ""),
+                        "arguments": json.dumps(part.get("input") or {}, ensure_ascii=False),
+                    },
+                }
+            )
+    message = {
+        "role": "assistant",
+        "content": "".join(text_parts) if text_parts else (None if tool_calls else ""),
+    }
+    if reasoning_parts:
+        message["reasoning_content"] = "\n\n".join(reasoning_parts)
+    if thinking_blocks:
+        message["thinking_blocks"] = thinking_blocks
+    if fallback_blocks:
+        message["anthropic_fallback_blocks"] = fallback_blocks
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    stop_reason = str(data.get("stop_reason") or "").strip()
+    if stop_reason == "tool_use":
+        finish_reason = "tool_calls"
+    elif stop_reason == "max_tokens":
+        finish_reason = "length"
+    else:
+        finish_reason = "stop"
+    resp = {
+        "id": "chatcmpl-" + str(data.get("id") or int(time.time() * 1000)),
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": actual_model,
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+        "usage": _convert_anthropic_usage(data.get("usage") or data.get("token_usage")),
+    }
+    if request_model and actual_model and actual_model != request_model:
+        resp["requested_model"] = request_model
+    resp["anthropic_model"] = actual_model
+    for key in ("pioneer_inference_id", "pioneer_routed_model", "pioneer_savings"):
+        if data.get(key) is not None:
+            resp[key] = data.get(key)
+    if fallback_blocks:
+        resp["anthropic_fallback_blocks"] = fallback_blocks
+    return resp
 
 
 def _normalize_claude_adaptive_effort(model: str, effort: str) -> str:

@@ -179,6 +179,10 @@ from services.upstream_policy import (
     get_active_upstream_url as _get_active_upstream_url,
     get_forward_targets as _get_forward_targets,
     is_local_claude_oauth_proxy_url as _is_local_claude_oauth_proxy_url,
+    pioneer_anthropic_messages_url as _pioneer_anthropic_messages_url,
+    pioneer_anthropic_to_openai_response as _pioneer_anthropic_to_openai_response,
+    pioneer_openai_to_anthropic_request as _pioneer_openai_to_anthropic_request,
+    should_route_pioneer_claude_via_anthropic as _should_route_pioneer_claude_via_anthropic,
 )
 from storage.upstream_store import pioneer_claude_model_options as _pioneer_claude_model_options
 from utils.log import get_logger
@@ -1407,6 +1411,8 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
         req_headers = {"Content-Type": "application/json"}
         if api_key:
             req_headers["Authorization"] = f"Bearer {api_key}"
+            if is_pioneer_url(url):
+                req_headers["X-API-Key"] = api_key
         for h in ("Accept", "Accept-Encoding"):
             if request.headers.get(h):
                 req_headers[h] = request.headers.get(h)
@@ -1421,7 +1427,14 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                     logger.info("转发已设 max_tokens=%s（原=%s）", MAX_COMPLETION_TOKENS, cur)
             body_send = _apply_active_model_request_policy(body_send, url)
             target_url = url
-            body_send = _apply_openrouter_request_policy(body_send, url)
+            pioneer_anthropic_request_model = ""
+            pioneer_anthropic_mode = _should_route_pioneer_claude_via_anthropic(body_send, url)
+            if pioneer_anthropic_mode:
+                pioneer_anthropic_request_model = str(body_send.get("model") or "").strip()
+                body_send = _pioneer_openai_to_anthropic_request(body_send)
+                target_url = _pioneer_anthropic_messages_url(url)
+            else:
+                body_send = _apply_openrouter_request_policy(body_send, url)
             is_sumitalk_forward = str(headers.get("X-Reply-Channel") or request.headers.get("X-Reply-Channel") or "").strip().lower() == "sumitalk"
             upstream_started = time.time()
             if is_sumitalk_forward:
@@ -1475,6 +1488,8 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                 continue
             # 只有 2xx 算成功，其余（4xx/5xx/429 等）直接失败（不再自动 fallback）
             if 200 <= r.status_code < 300:
+                if pioneer_anthropic_mode:
+                    data = _pioneer_anthropic_to_openai_response(data or {}, pioneer_anthropic_request_model)
                 cache_debug = _build_cache_debug_entry(body_send, target_url, prompt_cache_profile, data or {})
                 usage_debug = cache_debug.get("usage") or {}
                 profile_debug = cache_debug.get("request") or {}
@@ -1848,10 +1863,13 @@ def chat_completions():
     prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
     client_requested_stream = bool(body.get("stream"))
     openrouter_forced_nonstream = client_requested_stream and is_openrouter_url(active_upstream_url)
-    if openrouter_forced_nonstream:
+    pioneer_forced_nonstream = client_requested_stream and is_pioneer_url(active_upstream_url)
+    forced_nonstream = openrouter_forced_nonstream or pioneer_forced_nonstream
+    if forced_nonstream:
         body["stream"] = False
         logger.info(
-            "OpenRouter 上游强制非流式转发，稍后按 SSE 回给客户端 window_id=%s model=%s",
+            "%s 上游强制非流式转发，稍后按 SSE 回给客户端 window_id=%s model=%s",
+            "OpenRouter" if openrouter_forced_nonstream else "Pioneer",
             window_id,
             body.get("model") or "",
         )
@@ -1893,7 +1911,7 @@ def chat_completions():
                 err,
             )
         logger.error("Chat 转发失败 error=%s", err, exc_info=True)
-        if openrouter_forced_nonstream:
+        if forced_nonstream:
             return _stream_response(_sse_error(err))
         return jsonify({"error": err}), status
     if status >= 400:
@@ -1906,7 +1924,7 @@ def chat_completions():
                 list(resp_json.keys()) if isinstance(resp_json, dict) else [],
             )
         logger.warning("Chat 上游返回异常 status=%s", status)
-        if openrouter_forced_nonstream:
+        if forced_nonstream:
             return _stream_response(_sse_error(_extract_upstream_error_detail(resp_json, status) or "upstream error"))
         return jsonify(resp_json or {"error": "upstream error"}), status
     # 非流式 + 有 Notion 工具时：若上游返回 tool_calls，执行工具并继续请求，直到无 tool_calls 或达到最大轮数
@@ -2294,6 +2312,6 @@ def chat_completions():
             finish_reason,
             tool_rounds_used,
         )
-    if openrouter_forced_nonstream:
+    if forced_nonstream:
         return _stream_response(_sse_from_nonstream_response(resp_json))
     return jsonify(resp_json), 200
