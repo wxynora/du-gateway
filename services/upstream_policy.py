@@ -23,6 +23,16 @@ _CLAUDE_OPUS_46_RE = re.compile(r"claude-opus-4-6(?:\b|-|$)", re.IGNORECASE)
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
+_GATEWAY_DYNAMIC_SYSTEM_HINTS = (
+    "【渡的心事",
+    "【渡的日常",
+    "今日：",
+    "听了老婆的话，我想起来",
+    "【指代提醒】",
+    "老婆当前状态",
+    "【当前是在 RikkaHub 和渡聊天】",
+    "【Notion 相关】",
+)
 
 
 def get_forward_targets(request_model: str = None):
@@ -171,40 +181,46 @@ def pioneer_anthropic_messages_url(upstream_url: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, path, "", parsed.query, parsed.fragment))
 
 
-def _message_content_text(msg: dict) -> str:
-    content = (msg or {}).get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict) and str(item.get("type") or "").strip().lower() in {"text", "input_text"}:
-                parts.append(str(item.get("text") or ""))
-        return "\n".join(x for x in parts if x)
-    return str(content or "")
-
-
-def _looks_like_summary_cache_message(msg: dict) -> bool:
-    text = _message_content_text(msg).strip()
-    return bool((msg or {}).get(_SUMMARY_CACHE_SYSTEM_MARKER) or text.startswith("【近期记忆】"))
-
-
-def _looks_like_recent_summary_message(msg: dict) -> bool:
-    text = _message_content_text(msg).strip()
-    return bool((msg or {}).get(_SUMMARY_RECENT_SYSTEM_MARKER) or text.startswith("【近期记忆（最近）】"))
-
-
-def _looks_like_dynamic_message(msg: dict) -> bool:
-    return bool((msg or {}).get(_DYNAMIC_SYSTEM_MARKER) or _looks_like_recent_summary_message(msg))
-
-
 def _cache_control(ttl: str) -> dict:
     out = {"type": "ephemeral"}
     if ttl:
         out["ttl"] = ttl
     return out
+
+
+def _cacheable_block_text(item: dict) -> str:
+    return str((item or {}).get("text") or "").lstrip()
+
+
+def _looks_like_summary_cache_block(item: dict) -> bool:
+    return bool((item or {}).get(_SUMMARY_CACHE_SYSTEM_MARKER) or _cacheable_block_text(item).startswith("【近期记忆】"))
+
+
+def _looks_like_recent_summary_block(item: dict) -> bool:
+    return bool((item or {}).get(_SUMMARY_RECENT_SYSTEM_MARKER) or _cacheable_block_text(item).startswith("【近期记忆（最近）】"))
+
+
+def _looks_like_dynamic_system_block(item: dict) -> bool:
+    text = _cacheable_block_text(item)
+    if not text:
+        return False
+    return any(text.startswith(hint) for hint in _GATEWAY_DYNAMIC_SYSTEM_HINTS)
+
+
+def _strip_ttl_from_cache_control(obj: dict) -> None:
+    def process(items) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("cache_control"), dict):
+                item["cache_control"].pop("ttl", None)
+
+    if isinstance((obj or {}).get("system"), list):
+        process(obj.get("system"))
+    if isinstance((obj or {}).get("messages"), list):
+        for msg in obj.get("messages") or []:
+            if isinstance(msg, dict) and isinstance(msg.get("content"), list):
+                process(msg.get("content"))
 
 
 def _split_summary_text(value: str) -> tuple[str, str]:
@@ -224,41 +240,107 @@ def _split_summary_text(value: str) -> tuple[str, str]:
     return stable_text, recent_text
 
 
-def _text_blocks_from_content(content) -> list:
-    if isinstance(content, str):
-        return [{"type": "text", "text": content}]
-    if isinstance(content, list):
-        out = []
-        for item in content:
-            if isinstance(item, str):
-                out.append({"type": "text", "text": item})
-            elif isinstance(item, dict):
-                out.append(dict(item))
-        return out
-    return [{"type": "text", "text": str(content or "")}]
-
-
-def _set_cache_control_on_message(msg: dict, ttl: str) -> None:
-    blocks = _text_blocks_from_content((msg or {}).get("content"))
-    for block in reversed(blocks):
-        if isinstance(block, dict) and str(block.get("type") or "").strip().lower() in {"text", "input_text"}:
-            block["cache_control"] = _cache_control(ttl)
-            break
-    msg["content"] = blocks
-
-
-def _set_summary_cache_control_on_message(msg: dict, ttl: str) -> None:
-    content = (msg or {}).get("content")
-    if isinstance(content, str):
-        stable_text, recent_text = _split_summary_text(content)
-        if recent_text:
-            blocks = []
-            if stable_text:
-                blocks.append({"type": "text", "text": stable_text, "cache_control": _cache_control(ttl)})
-            blocks.append({"type": "text", "text": recent_text, "cache_control": _cache_control(ttl)})
-            msg["content"] = blocks
+def _split_gateway_summary_blocks(system_blocks: list[dict], start_idx: int = 0) -> None:
+    if not isinstance(system_blocks, list):
+        return
+    for idx in range(start_idx, len(system_blocks)):
+        item = system_blocks[idx]
+        if not isinstance(item, dict) or not _looks_like_summary_cache_block(item):
+            continue
+        next_item = system_blocks[idx + 1] if idx + 1 < len(system_blocks) else None
+        if isinstance(next_item, dict) and _looks_like_recent_summary_block(next_item):
             return
-    _set_cache_control_on_message(msg, ttl)
+        stable_text, recent_text = _split_summary_text(str(item.get("text") or ""))
+        if not recent_text:
+            return
+        item["text"] = stable_text
+        item[_SUMMARY_CACHE_SYSTEM_MARKER] = True
+        system_blocks.insert(
+            idx + 1,
+            {
+                "type": "text",
+                "text": recent_text,
+                _SUMMARY_RECENT_SYSTEM_MARKER: True,
+            },
+        )
+        return
+
+
+def _find_cacheable_system_before(system_blocks: list[dict], end_idx: int, start_idx: int = 0) -> dict | None:
+    for idx in range(end_idx - 1, start_idx - 1, -1):
+        item = system_blocks[idx]
+        if (
+            isinstance(item, dict)
+            and not item.get(_DYNAMIC_SYSTEM_MARKER)
+            and not item.get(_SUMMARY_RECENT_SYSTEM_MARKER)
+            and not _looks_like_recent_summary_block(item)
+        ):
+            return item
+    return None
+
+
+def apply_pioneer_anthropic_prompt_cache(body: dict, ttl: str = PIONEER_CLAUDE_CACHE_TTL) -> dict:
+    body = dict(body or {})
+    cache_control = _cache_control(ttl)
+
+    def set_cache_control(item) -> None:
+        if isinstance(item, dict):
+            item["cache_control"] = dict(cache_control)
+
+    if isinstance(body.get("tools"), list) and body.get("tools"):
+        set_cache_control(body["tools"][-1])
+
+    if isinstance(body.get("system"), str):
+        body["system"] = [{"type": "text", "text": body.get("system") or ""}]
+
+    _strip_ttl_from_cache_control(body)
+
+    if isinstance(body.get("system"), list) and body.get("system"):
+        system_blocks = body["system"]
+        start_idx = 0
+        _split_gateway_summary_blocks(system_blocks, start_idx)
+
+        summary_idx = -1
+        for idx in range(start_idx, len(system_blocks)):
+            item = system_blocks[idx]
+            if isinstance(item, dict) and _looks_like_summary_cache_block(item):
+                summary_idx = idx
+                break
+
+        if summary_idx >= start_idx:
+            set_cache_control(_find_cacheable_system_before(system_blocks, summary_idx, start_idx))
+            set_cache_control(system_blocks[summary_idx])
+            recent_idx = -1
+            for idx in range(summary_idx + 1, len(system_blocks)):
+                item = system_blocks[idx]
+                if isinstance(item, dict) and _looks_like_recent_summary_block(item):
+                    recent_idx = idx
+                    break
+            if recent_idx > summary_idx:
+                set_cache_control(system_blocks[recent_idx])
+        else:
+            static_system = None
+            for idx in range(start_idx, len(system_blocks)):
+                item = system_blocks[idx]
+                if not isinstance(item, dict):
+                    continue
+                if (
+                    item.get(_DYNAMIC_SYSTEM_MARKER)
+                    or item.get(_SUMMARY_RECENT_SYSTEM_MARKER)
+                    or _looks_like_dynamic_system_block(item)
+                    or _looks_like_recent_summary_block(item)
+                ):
+                    break
+                static_system = item
+            set_cache_control(static_system)
+
+        for item in system_blocks:
+            if isinstance(item, dict):
+                item.pop(_DYNAMIC_SYSTEM_MARKER, None)
+                item.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
+                item.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
+
+    return body
 
 
 def _strip_gateway_cache_markers(messages: list[dict]) -> None:
@@ -268,72 +350,6 @@ def _strip_gateway_cache_markers(messages: list[dict]) -> None:
         msg.pop(_DYNAMIC_SYSTEM_MARKER, None)
         msg.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         msg.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
-
-
-def _set_cache_control_on_last_tool(body: dict, ttl: str) -> None:
-    tools = (body or {}).get("tools")
-    if not isinstance(tools, list) or not tools:
-        return
-    copied_tools = [dict(tool) if isinstance(tool, dict) else tool for tool in tools]
-    for idx in range(len(copied_tools) - 1, -1, -1):
-        tool = copied_tools[idx]
-        if isinstance(tool, dict):
-            tool["cache_control"] = _cache_control(ttl)
-            copied_tools[idx] = tool
-            body["tools"] = copied_tools
-            return
-
-
-def _apply_pioneer_claude_prompt_cache(body: dict, ttl: str) -> dict:
-    _set_cache_control_on_last_tool(body, ttl)
-    messages = [dict(m) for m in ((body or {}).get("messages") or []) if isinstance(m, dict)]
-    if not messages:
-        return body
-    leading_system_indexes: list[int] = []
-    for idx, msg in enumerate(messages):
-        if str(msg.get("role") or "").strip().lower() != "system":
-            break
-        leading_system_indexes.append(idx)
-    if not leading_system_indexes:
-        body["messages"] = messages
-        return body
-
-    summary_idx = -1
-    for idx in leading_system_indexes[1:]:
-        if _looks_like_summary_cache_message(messages[idx]):
-            summary_idx = idx
-            break
-
-    if summary_idx > 0:
-        cacheable_idx = -1
-        for idx in reversed([x for x in leading_system_indexes if x < summary_idx]):
-            msg = messages[idx]
-            if not _looks_like_dynamic_message(msg):
-                cacheable_idx = idx
-                break
-        if cacheable_idx >= 0:
-            _set_cache_control_on_message(messages[cacheable_idx], ttl)
-        _set_summary_cache_control_on_message(messages[summary_idx], ttl)
-        recent_idx = -1
-        for idx in [x for x in leading_system_indexes if x > summary_idx]:
-            if _looks_like_recent_summary_message(messages[idx]):
-                recent_idx = idx
-                break
-        if recent_idx > summary_idx:
-            _set_cache_control_on_message(messages[recent_idx], ttl)
-    else:
-        cacheable_idx = -1
-        for idx in leading_system_indexes:
-            msg = messages[idx]
-            if _looks_like_dynamic_message(msg):
-                break
-            cacheable_idx = idx
-        if cacheable_idx >= 0:
-            _set_cache_control_on_message(messages[cacheable_idx], ttl)
-
-    _strip_gateway_cache_markers(messages)
-    body["messages"] = messages
-    return body
 
 
 def _safe_json_loads(value, default=None):
@@ -480,10 +496,16 @@ def pioneer_openai_to_anthropic_request(body: dict) -> dict:
             continue
         role = str(msg.get("role") or "").strip().lower()
         if role == "system":
-            blocks = _openai_content_to_anthropic_blocks(msg.get("content"))
-            for block in blocks:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    system_blocks.append(block)
+            text = _content_to_text(msg.get("content"))
+            if text:
+                block = {"type": "text", "text": text}
+                if msg.get(_DYNAMIC_SYSTEM_MARKER):
+                    block[_DYNAMIC_SYSTEM_MARKER] = True
+                if msg.get(_SUMMARY_CACHE_SYSTEM_MARKER):
+                    block[_SUMMARY_CACHE_SYSTEM_MARKER] = True
+                if msg.get(_SUMMARY_RECENT_SYSTEM_MARKER):
+                    block[_SUMMARY_RECENT_SYSTEM_MARKER] = True
+                system_blocks.append(block)
             continue
         if role in {"tool", "function"}:
             tool_use_id = str(msg.get("tool_call_id") or msg.get("id") or msg.get("name") or "").strip()
@@ -670,7 +692,7 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
         active = get_active_item() or {}
         active_url = str(active.get("url") or "").strip()
         if active_url and active_url == str(upstream_url or "").strip():
-            model = str(get_cached_active_model(refresh_if_missing=False) or "").strip()
+            model = str(get_cached_active_model(refresh_if_missing=True) or "").strip()
             if model:
                 body["model"] = model
             if is_local_cliproxyapi_url(upstream_url):
@@ -687,7 +709,6 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
                 effective_model = model or request_model
                 if _is_claude_proxy_model(effective_model):
                     body["model"] = effective_model
-                    body = _apply_pioneer_claude_prompt_cache(body, PIONEER_CLAUDE_CACHE_TTL)
                 else:
                     _strip_gateway_cache_markers(body.get("messages") or [])
                 if _is_claude_adaptive_thinking_model(effective_model):

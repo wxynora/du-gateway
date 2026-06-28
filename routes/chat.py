@@ -173,6 +173,7 @@ from services.reasoning_utils import (
 from services.upstream_policy import (
     apply_active_model_request_policy as _apply_active_model_request_policy,
     apply_openrouter_request_policy as _apply_openrouter_request_policy,
+    apply_pioneer_anthropic_prompt_cache as _apply_pioneer_anthropic_prompt_cache,
     build_upstream_error_hint as _build_upstream_error_hint,
     chat_url_to_models_url as _chat_url_to_models_url,
     extract_upstream_error_detail as _extract_upstream_error_detail,
@@ -1432,6 +1433,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
             if pioneer_anthropic_mode:
                 pioneer_anthropic_request_model = str(body_send.get("model") or "").strip()
                 body_send = _pioneer_openai_to_anthropic_request(body_send)
+                body_send = _apply_pioneer_anthropic_prompt_cache(body_send)
                 target_url = _pioneer_anthropic_messages_url(url)
             else:
                 body_send = _apply_openrouter_request_policy(body_send, url)
