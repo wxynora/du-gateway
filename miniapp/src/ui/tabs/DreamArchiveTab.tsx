@@ -89,6 +89,18 @@ const STAR_LAYOUT = [
   { col: 12, row: 9, rot: -12, scale: 0.76, offset: -3 },
 ];
 
+const BOTTLE_STAR_LAYOUT = [
+  { left: 24, bottom: 20, size: 30, rot: -18, opacity: 0.82 },
+  { left: 44, bottom: 16, size: 48, rot: 14, opacity: 0.96 },
+  { left: 34, bottom: 28, size: 20, rot: 31, opacity: 0.7 },
+  { left: 58, bottom: 24, size: 62, rot: -10, opacity: 1 },
+  { left: 71, bottom: 18, size: 34, rot: 26, opacity: 0.84 },
+  { left: 49, bottom: 39, size: 16, rot: -34, opacity: 0.62 },
+  { left: 66, bottom: 43, size: 24, rot: 8, opacity: 0.76 },
+  { left: 30, bottom: 42, size: 52, rot: -28, opacity: 0.9 },
+  { left: 78, bottom: 33, size: 18, rot: 42, opacity: 0.68 },
+];
+
 const dreamArchiveCss = `
 .dreamArchiveRoot {
   --bg: #0A0A0C;
@@ -525,10 +537,10 @@ const dreamArchiveCss = `
 
 .dreamArchiveBottle {
   position: relative;
-  left: 14px;
-  width: 166px;
-  height: 264px;
-  margin: 96px auto 38px;
+  left: 18px;
+  width: 192px;
+  height: 306px;
+  margin: 84px auto 28px;
   background:
     radial-gradient(ellipse at 30% 28%, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.05) 30%, transparent 62%),
     radial-gradient(ellipse at 52% 86%, rgba(253,230,138,0.18) 0%, rgba(253,230,138,0.05) 36%, transparent 68%),
@@ -561,7 +573,7 @@ const dreamArchiveCss = `
   content: '';
   position: absolute;
   inset: 10px 11px 12px;
-  border-radius: 34px 34px 24px 24px / 44px 44px 24px 24px;
+  border-radius: 40px 40px 28px 28px / 52px 52px 28px 28px;
   border: 1px solid rgba(255,255,255,0.13);
   pointer-events: none;
   background:
@@ -571,10 +583,10 @@ const dreamArchiveCss = `
 .dreamArchiveBottle::after {
   content: '';
   position: absolute;
-  right: 34px;
-  top: 26px;
-  width: 16px;
-  height: 78px;
+  right: 39px;
+  top: 32px;
+  width: 18px;
+  height: 82px;
   background: linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0.18) 38%, rgba(255,255,255,0.04) 100%);
   border-radius: 999px;
   filter: blur(2px);
@@ -584,11 +596,11 @@ const dreamArchiveCss = `
 
 .dreamArchiveBottleNeck {
   position: absolute;
-  top: -42px;
+  top: -46px;
   left: 50%;
   transform: translateX(-50%);
-  width: 92px;
-  height: 48px;
+  width: 100px;
+  height: 52px;
   background:
     repeating-linear-gradient(180deg, rgba(255,255,255,0.2) 0 3px, rgba(255,255,255,0.04) 3px 7px),
     linear-gradient(90deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.19) 36%, rgba(255,255,255,0.04) 100%);
@@ -635,8 +647,8 @@ const dreamArchiveCss = `
 .dreamArchiveBottleRibbon {
   position: absolute;
   left: 50%;
-  top: -142px;
-  width: 330px;
+  top: -148px;
+  width: 356px;
   max-width: none;
   height: auto;
   display: block;
@@ -649,10 +661,10 @@ const dreamArchiveCss = `
 
 .dreamArchiveBottleDust {
   position: absolute;
-  left: 18px;
-  right: 18px;
-  bottom: 30px;
-  height: 132px;
+  left: 20px;
+  right: 20px;
+  bottom: 34px;
+  height: 158px;
   pointer-events: none;
   z-index: 1;
   opacity: 0.88;
@@ -668,29 +680,28 @@ const dreamArchiveCss = `
 
 .dreamArchiveBottleStars {
   position: absolute;
-  bottom: 24px;
-  left: 0;
-  right: 0;
-  height: 64%;
-  display: flex;
-  flex-wrap: wrap-reverse;
-  justify-content: center;
-  align-content: flex-start;
-  padding: 14px 22px 8px;
-  gap: 1px;
+  inset: 0;
   z-index: 2;
+  pointer-events: none;
 }
 
 .dreamArchiveBottleStar {
-  width: 34px;
-  height: 34px;
-  margin: -4px;
+  position: absolute;
+  width: var(--star-size);
+  height: var(--star-size);
   border: 0;
   background: transparent;
   padding: 0;
-  animation: dreamArchiveSoftFloat 6.4s ease-in-out infinite;
+  transform: translate(-50%, 50%) rotate(var(--star-rot));
+  animation: dreamArchiveBottleStarFloat 6.4s ease-in-out infinite;
   animation-delay: var(--star-delay, 0s);
   will-change: transform;
+  pointer-events: auto;
+}
+
+@keyframes dreamArchiveBottleStarFloat {
+  0%, 100% { transform: translate(-50%, 50%) translate3d(0, 0, 0) rotate(var(--star-rot, 0deg)); }
+  50% { transform: translate(-50%, 50%) translate3d(2px, -6px, 0) rotate(calc(var(--star-rot, 0deg) + 4deg)); }
 }
 
 @keyframes dreamArchiveBottleGlow {
@@ -1506,24 +1517,29 @@ export function DreamArchiveTab({
           <div className="dreamArchiveBottleNeck" />
           <div className="dreamArchiveBottleDust" aria-hidden="true" />
           <div className="dreamArchiveBottleStars">
-            {inspirationStars.length ? inspirationStars.map((star, index) => (
-              <button
-                className="dreamArchiveBottleStar"
-                type="button"
-                key={`${star.id}-${index}`}
-                style={{
-                  width: `${20 + (index % 5) * 5}px`,
-                  height: `${20 + (index % 5) * 5}px`,
-                  transform: `rotate(${index * 31}deg)`,
-                  opacity: 0.68 + (index % 3) * 0.12,
-                  "--star-delay": `${-(index % 6) * 0.35}s`,
-                } as React.CSSProperties}
-                onClick={() => setPanel({ type: "fragment", star })}
-                aria-label={star.label}
-              >
-                <StarSvg gold={star.color === "gold" || index % 3 === 0} />
-              </button>
-            )) : null}
+            {inspirationStars.length ? inspirationStars.map((star, index) => {
+              const layout = BOTTLE_STAR_LAYOUT[index % BOTTLE_STAR_LAYOUT.length];
+              const layer = Math.floor(index / BOTTLE_STAR_LAYOUT.length);
+              return (
+                <button
+                  className="dreamArchiveBottleStar"
+                  type="button"
+                  key={`${star.id}-${index}`}
+                  style={{
+                    left: `${Math.min(84, Math.max(18, layout.left + (layer % 2 ? 5 : -3) * layer))}%`,
+                    bottom: `${Math.min(70, layout.bottom + layer * 9)}%`,
+                    opacity: Math.max(0.5, layout.opacity - layer * 0.08),
+                    "--star-size": `${Math.max(16, layout.size - layer * 5)}px`,
+                    "--star-rot": `${layout.rot + layer * 19}deg`,
+                    "--star-delay": `${-(index % 6) * 0.35}s`,
+                  } as React.CSSProperties}
+                  onClick={() => setPanel({ type: "fragment", star })}
+                  aria-label={star.label}
+                >
+                  <StarSvg gold={star.color === "gold" || index % 3 === 0} />
+                </button>
+              );
+            }) : null}
           </div>
         </div>
         <div className="dreamArchiveInspirationActions" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 20 }}>
