@@ -1909,3 +1909,9 @@ npm -C miniapp run android
 - 已完成：`finish_task()` 校验 lease；旧 token 或缺 token 的新任务 finish 会返回/传递 `lease_conflict`，路由给 409，bridge 不会把这类非重试错误写进 finish outbox。任务完成后会清掉 lease 字段，`done/cancelled` 终态仍保持不可覆盖。
 - 已验证：`.venv/bin/python -m py_compile services/codex_group_chat.py routes/pc_command.py scripts/codex_group_chat_bridge.py` 和 `python3 -m py_compile ...` 均通过；临时 `_TASK_FILE` smoke 覆盖旧 bridge 兼容 finish、新 bridge claim 带 token、heartbeat 续租、lease 过期后被新 worker 重领、旧 token finish 被拒、新 token finish 成功且迟到 error 不覆盖；bridge smoke 覆盖 heartbeat 请求体和 `lease_conflict` 不进入 outbox。
 - 未完成 / 下次继续：仍未迁 SQLite 或跨进程文件锁；当前 JSON 队列依赖生产 gunicorn 单 worker 更稳。前端还没有展示“bridge 离线/lease 失效/回写重试中”的状态文案。
+
+当前状态（2026-06-27 MiniApp 聊天快乐体字体）：
+- 已完成：新增本地字体资产 `miniapp/src/assets/fonts/zcool-kuaile-regular.ttf`，来源为 Google Fonts 的 ZCOOL KuaiLe / 站酷快乐体；同时保留 `zcool-kuaile-OFL.txt` 授权文本。字体仅作为聊天字体可选项，不替换默认字体。
+- 已完成：`CHAT_FONT_KEYS` 新增 `kuaile`，个性化页聊天字体轮换会显示“快乐体”；`AppShell.tsx` 注册 `SumiZcoolKuaiLe`，`resolveChatFontFamily()` 将该 key 映射到新字体，并保留苹方、微软雅黑、Noto Sans SC 兜底。
+- 已验证：`git diff --check -- miniapp/src/ui/AppShell.tsx miniapp/src/ui/chatAppearance.ts miniapp/src/ui/chatMessages.ts docs/DEBUG_INDEX.md` 通过；`npm -C miniapp run build -- --outDir /tmp/du-miniapp-font-build --emptyOutDir` 通过并确认新字体进入临时构建产物。注意：`miniapp/vite.config.ts` 写死 `outDir: ../miniapp_static`，默认 build 仍会改写静态目录；`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 当前被既有 `PromptManagerScreen.tsx allow_empty` 类型问题挡住，和字体改动无关。
+- 未完成 / 下次继续：本轮不调整全局 UI 字号，也不把字体应用到一级页面标题/列表；如需解决“整个 app 字大”，应单独加界面字号/界面字体设置。当前工作区已有与本轮无关的 `miniapp_static` 构建产物和若干业务源码脏改，提交时要么明确重建并一起推静态包，要么不要混入静态目录。

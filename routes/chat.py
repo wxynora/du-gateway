@@ -627,6 +627,19 @@ def _compact_screen_check_event_text(text: str) -> str:
     return content
 
 
+def _compact_exchange_diary_comment_event_text(text: str) -> str:
+    title = _regex_group(r"日记标题[:：]([^\n]{1,120})", text)
+    comment = _regex_group(r"评论内容[:：]([\s\S]{1,800})", text)
+    if "\n\n" in comment:
+        comment = comment.split("\n\n", 1)[0]
+    comment = _compact_archive_line(comment, 160)
+    if title and comment:
+        return f"小玥评论了交换日记「{_compact_archive_line(title, 80)}」：{comment}。"
+    if comment:
+        return f"小玥评论了交换日记：{comment}。"
+    return "小玥刚刚评论了你的交换日记。"
+
+
 def _wakeup_kind_for_archive() -> str:
     return str(request.headers.get("X-DU-WAKEUP-KIND") or "").strip().lower()
 
@@ -649,6 +662,9 @@ def _compact_gateway_event_for_archive(user_msg: dict, *, wakeup_kind: str = "")
     elif kind in {"private_draw", "private_slip"}:
         label = "私密抽签"
         content = "小玥发来一次 sex play 抽签结果。"
+    elif kind in {"exchange_diary_comment", "diary_comment"}:
+        label = "交换日记评论"
+        content = _compact_exchange_diary_comment_event_text(text)
     elif kind in {"proactive_diary", "random_diary"}:
         label = "随机唤醒执行"
         content = "你刚才选择了写日记，现在去写。"
@@ -837,6 +853,10 @@ def _disable_followup_request() -> bool:
     return (request.headers.get("X-DU-DISABLE-FOLLOWUP") or "").strip().lower() in ("1", "true", "yes")
 
 
+def _allow_tool_only_reply_request() -> bool:
+    return (request.headers.get("X-Allow-Tool-Only-Reply") or "").strip().lower() in ("1", "true", "yes")
+
+
 def _is_delayed_followup_generation_request() -> bool:
     if not _is_followup_generation_request():
         return False
@@ -849,6 +869,8 @@ def _is_delayed_followup_generation_request() -> bool:
 def _inject_qq_group_activity_context(body: dict) -> dict:
     if _is_du_daily_maintenance_request() or not _is_gateway_wakeup_request():
         return body
+    if (request.headers.get("X-Skip-QQ-Group-Activity") or "").strip().lower() in ("1", "true", "yes"):
+        return body
     system_text = _build_qq_group_activity_context_for_wakeup()
     if not system_text:
         return body
@@ -857,6 +879,21 @@ def _inject_qq_group_activity_context(body: dict) -> dict:
     body["messages"] = [{"role": "system", "content": system_text, "__dynamic__": True}] + list(messages)
     logger.info("qq_group_activity_context_injected chars=%s", len(system_text))
     return body
+
+
+def _tool_trace_has_function(tool_trace: list, name: str) -> bool:
+    expected = str(name or "").strip()
+    if not expected:
+        return False
+    for item in tool_trace or []:
+        if not isinstance(item, dict):
+            continue
+        fn = item.get("function")
+        if isinstance(fn, dict) and str(fn.get("name") or "").strip() == expected:
+            return True
+        if str(item.get("name") or "").strip() == expected:
+            return True
+    return False
 
 
 def _maybe_clear_qq_group_activity_context_for_private_reply(
@@ -1943,6 +1980,8 @@ def chat_completions():
     tool_rounds_used = 0
     tool_empty_final_retry_used = False
     tool_midstream_retry_used = False
+    allow_tool_only_reply = _allow_tool_only_reply_request()
+    tool_only_reply_done = False
     while True:
         msg = (resp_json or {}).get("choices") and (resp_json.get("choices") or [{}])[0].get("message")
         tool_calls = (msg or {}).get("tool_calls")
@@ -1990,6 +2029,7 @@ def chat_completions():
         if (
             tool_rounds_used > 0
             and (not tool_empty_final_retry_used)
+            and (not allow_tool_only_reply)
             and _should_retry_tool_empty_final(visible_content_text)
         ):
             logger.warning("工具续轮最终正文为空，非流式路径触发一次强制收口补问")
@@ -2023,7 +2063,21 @@ def chat_completions():
             if tool_rounds_used > 0:
                 _emit_sumitalk_reasoning_event(msg, tool_rounds_used + 1)
             break
-    if resp_json:
+    if allow_tool_only_reply and resp_json and tool_rounds_used > 0:
+        tool_trace_for_tool_only = _collect_tool_trace_from_messages(body.get("messages") or [])
+        if _tool_trace_has_function(tool_trace_for_tool_only, "exchange_diary_comment_create"):
+            try:
+                choices = resp_json.get("choices") or []
+                if choices:
+                    final_msg = dict((choices[0] or {}).get("message") or {})
+                    final_msg["content"] = "（已回复交换日记评论）"
+                    final_msg["tool_only_reply_done"] = True
+                    choices[0]["message"] = final_msg
+                    resp_json["choices"] = choices
+                    tool_only_reply_done = True
+            except Exception:
+                logger.warning("标记交换日记评论工具-only 回复失败 window_id=%s", window_id, exc_info=True)
+    if resp_json and not tool_only_reply_done:
         resp_json = _merge_visible_tool_round_content_into_response(resp_json, accumulated_tool_visible_parts)
     if resp_json and tool_rounds_used > 0:
         final_msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}

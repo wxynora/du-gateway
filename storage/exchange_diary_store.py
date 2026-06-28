@@ -508,15 +508,15 @@ def soft_delete_entry(entry_id: str) -> dict | None:
     return item
 
 
-def add_comment(entry_id: str, data: dict) -> dict | None:
+def add_comment_result(entry_id: str, data: dict) -> dict:
     src = data if isinstance(data, dict) else {}
     comment = _normalize_comment({**src, "created_at": src.get("created_at") or now_beijing_iso(), "updated_at": now_beijing_iso()})
     if not comment.get("content"):
-        return None
+        return {"item": None, "comment": {}, "created": False, "error": "empty_content"}
     with _WRITE_LOCK:
         current = get_entry(entry_id, include_deleted=False)
         if not current:
-            return None
+            return {"item": None, "comment": {}, "created": False, "error": "missing_entry"}
         comments = [c for c in current.get("comments") or [] if isinstance(c, dict)]
         reply_to = str(comment.get("reply_to_comment_id") or "").strip()
         if reply_to:
@@ -526,20 +526,26 @@ def add_comment(entry_id: str, data: dict) -> dict | None:
                 if str(c.get("id") or "").strip() and not str(c.get("deleted_at") or "").strip()
             }
             if reply_to not in active_comment_ids:
-                return None
+                return {"item": None, "comment": {}, "created": False, "error": "invalid_reply_to"}
         cid = str(comment.get("client_request_id") or "").strip()
         if cid:
             for existing in comments:
                 if str(existing.get("client_request_id") or "").strip() == cid:
-                    return current
+                    return {"item": current, "comment": existing, "created": False, "error": ""}
         comments.append(comment)
         item = normalize_entry({**current, "comments": comments, "updated_at": now_beijing_iso()})
         synced = _sync_r2(item)
         if not synced:
-            return None
+            return {"item": None, "comment": {}, "created": False, "error": "sync_failed"}
         item["r2_synced_at"] = now_beijing_iso()
         _upsert_sqlite(item)
-    return item
+    return {"item": item, "comment": comment, "created": True, "error": ""}
+
+
+def add_comment(entry_id: str, data: dict) -> dict | None:
+    result = add_comment_result(entry_id, data)
+    item = result.get("item") if isinstance(result, dict) else None
+    return item if isinstance(item, dict) else None
 
 
 def _query_entries(

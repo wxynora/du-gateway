@@ -567,6 +567,9 @@ def _send_wakeup_event(
     lock_preferred_channel: bool = False,
     allow_followup: bool = True,
     archive_after_delivery: bool = False,
+    allow_tool_only_reply: bool = False,
+    skip_qq_group_activity: bool = False,
+    system_event_user_summary: str = "",
 ) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。事件唤醒默认归档，避免后续对话断层。"""
     try:
@@ -621,7 +624,10 @@ def _send_wakeup_event(
         body["messages"].append(
             {
                 "role": "user",
-                "content": "请根据上面的系统提示生成要发送给她的回复。这是一条后端技术触发，不是她说的话。",
+                "content": (
+                    str(system_event_user_summary or "").strip()
+                    or "请根据上面的系统提示生成要发送给她的回复。这是一条后端技术触发，不是她说的话。"
+                ),
             }
         )
     else:
@@ -644,6 +650,10 @@ def _send_wakeup_event(
         headers["X-DU-FOLLOWUP-ARCHIVE"] = "1"
     if not allow_followup:
         headers["X-DU-DISABLE-FOLLOWUP"] = "1"
+    if allow_tool_only_reply:
+        headers["X-Allow-Tool-Only-Reply"] = "1"
+    if skip_qq_group_activity:
+        headers["X-Skip-QQ-Group-Activity"] = "1"
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     try:
         r = requests.post(url, headers=headers, json=body, timeout=120)
@@ -652,6 +662,19 @@ def _send_wakeup_event(
             return {"ok": False, "error": f"gateway_http_{r.status_code}"}
         data = r.json() if r.content else {}
         msg = (((data or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+        if isinstance(msg, dict) and bool(msg.get("tool_only_reply_done")):
+            return {
+                "ok": True,
+                "channel": "",
+                "attempted_channels": [],
+                "preferred_channel": preferred_channel,
+                "preferred_channel_at": str(preferred_meta.get("at") or ""),
+                "locked_channel": bool(lock_preferred_channel),
+                "tool_only": True,
+                "archive_ok": True,
+                "reply_preview": str(msg.get("content") or "")[:120],
+                "error": "",
+            }
         content = msg.get("content")
         if isinstance(content, list):
             parts = []
@@ -774,6 +797,40 @@ def send_private_draw_wakeup(
         preferred_target_override=target,
         preferred_meta_override=preferred_meta,
         lock_preferred_channel=bool(preferred_channel),
+    )
+
+
+def send_exchange_diary_comment_wakeup(
+    window_id: str,
+    target: str,
+    event_text: str,
+    created_at: str | None = None,
+    preferred_channel: str = "",
+    preferred_meta: dict | None = None,
+) -> dict:
+    """立即让渡看到小玥的新日记评论，并自己决定回评论或直接发消息。"""
+    return _send_wakeup_event(
+        window_id=window_id,
+        target=target,
+        event_text=event_text,
+        created_at=created_at,
+        archive=True,
+        extra_instruction=(
+            "这是小玥刚刚写在交换日记下面的评论，不是聊天框正文。"
+            "请你自己决定：如果想回在日记下面，就调用 exchange_diary_comment_create 回复这条评论，"
+            "调用工具后不要再额外输出聊天正文；如果想直接找她说话，就不要调用工具，"
+            "直接写要发给她的一两句话。不要解释工具或系统流程。"
+        ),
+        wakeup_kind="exchange_diary_comment",
+        system_event=True,
+        system_event_user_summary=event_text,
+        preferred_channel_override=preferred_channel,
+        preferred_target_override=target,
+        preferred_meta_override=preferred_meta,
+        lock_preferred_channel=bool(preferred_channel),
+        allow_followup=False,
+        allow_tool_only_reply=True,
+        skip_qq_group_activity=True,
     )
 
 

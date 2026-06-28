@@ -54,10 +54,11 @@ type ApiDiaryEntry = {
   comments?: ApiDiaryComment[];
 };
 
-type ListResp = { ok?: boolean; items?: ApiDiaryEntry[]; error?: string };
+type ListResp = { ok?: boolean; items?: ApiDiaryEntry[]; next_cursor?: string; nextCursor?: string; error?: string };
 type ItemResp = { ok?: boolean; item?: ApiDiaryEntry; error?: string; server_item?: ApiDiaryEntry };
 
 const EXCHANGE_DIARY_API = "/miniapp-api/exchange-diary";
+const LIST_PAGE_SIZE = 20;
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -129,11 +130,15 @@ export function ExchangeDiaryTab({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<EditorDraft | null>(null);
   const [commentDraft, setCommentDraft] = useState("");
+  const [commentRequestId, setCommentRequestId] = useState("");
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [loadMoreError, setLoadMoreError] = useState("");
+  const [nextCursor, setNextCursor] = useState("");
+  const [loadingMore, setLoadingMore] = useState(false);
   const listRequestSeqRef = useRef(0);
   const detailRequestSeqRef = useRef(0);
 
@@ -143,23 +148,48 @@ export function ExchangeDiaryTab({
     [entries, selectedId],
   );
 
-  async function loadEntries(author: Author = activeAuthor) {
+  async function loadEntries(author: Author = activeAuthor, cursor = "") {
     const seq = listRequestSeqRef.current + 1;
     listRequestSeqRef.current = seq;
-    setLoading(true);
-    setError("");
+    const isLoadMore = Boolean(cursor);
+    if (isLoadMore) {
+      setLoadingMore(true);
+      setLoadMoreError("");
+    } else {
+      setLoading(true);
+      setNextCursor("");
+      setLoadMoreError("");
+    }
+    if (!isLoadMore) setError("");
     try {
-      const params = new URLSearchParams({ author, limit: "80" });
+      const params = new URLSearchParams({ author, limit: String(LIST_PAGE_SIZE) });
+      if (cursor) params.set("cursor", cursor);
       const data = await apiJson<ListResp>(`${EXCHANGE_DIARY_API}?${params.toString()}`);
       if (seq !== listRequestSeqRef.current) return;
       const next = (data.items || []).map(fromApiEntry);
-      setEntries(next);
+      setNextCursor(String(data.next_cursor || data.nextCursor || ""));
+      if (isLoadMore) {
+        setEntries((prev) => {
+          const seen = new Set(prev.map((entry) => entry.id));
+          return [...prev, ...next.filter((entry) => !seen.has(entry.id))];
+        });
+      } else {
+        setEntries(next);
+      }
     } catch (err) {
       if (seq !== listRequestSeqRef.current) return;
-      setError(err instanceof Error ? err.message : String(err));
-      setEntries([]);
+      const message = err instanceof Error ? err.message : String(err);
+      if (isLoadMore) {
+        setLoadMoreError(message);
+      } else {
+        setError(message);
+      }
+      if (!isLoadMore) setEntries([]);
     } finally {
-      if (seq === listRequestSeqRef.current) setLoading(false);
+      if (seq === listRequestSeqRef.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   }
 
@@ -168,6 +198,7 @@ export function ExchangeDiaryTab({
     detailRequestSeqRef.current = seq;
     setSelectedId(id);
     setCommentDraft("");
+    setCommentRequestId("");
     setDetailLoading(true);
     setDetailError("");
     try {
@@ -198,6 +229,7 @@ export function ExchangeDiaryTab({
       detailRequestSeqRef.current += 1;
       setSelectedId(null);
       setCommentDraft("");
+      setCommentRequestId("");
       setDetailLoading(false);
       setDetailError("");
       return true;
@@ -214,6 +246,10 @@ export function ExchangeDiaryTab({
   }, [backHandlerRef, draft, selectedId]);
 
   useEffect(() => {
+    setEntries([]);
+    setNextCursor("");
+    setLoadMoreError("");
+    setError("");
     void loadEntries(activeAuthor);
   }, [activeAuthor]);
 
@@ -311,19 +347,22 @@ export function ExchangeDiaryTab({
     if (saving) return;
     const content = commentDraft.trim();
     if (!content) return;
+    const requestId = commentRequestId || makeId("exchange_diary_comment");
+    if (!commentRequestId) setCommentRequestId(requestId);
     setSaving(true);
     setError("");
     try {
       const data = await apiJson<ItemResp>(`${EXCHANGE_DIARY_API}/${encodeURIComponent(entry.id)}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ author: "xy", content, client_request_id: makeId("exchange_diary_comment") }),
+        body: JSON.stringify({ author: "xy", content, client_request_id: requestId }),
       });
       const item = data.item ? fromApiEntry(data.item) : null;
       if (item) {
         setEntries((prev) => prev.map((old) => (old.id === item.id ? item : old)));
       }
       setCommentDraft("");
+      setCommentRequestId("");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -392,6 +431,17 @@ export function ExchangeDiaryTab({
             </button>
           </article>
         ))}
+        {loadMoreError ? <div className="exchange-diary-status inline error">{loadMoreError}</div> : null}
+        {!loading && nextCursor ? (
+          <button
+            className="exchange-diary-load-more"
+            type="button"
+            onClick={() => void loadEntries(activeAuthor, nextCursor)}
+            disabled={loadingMore}
+          >
+            {loadingMore ? "翻页中..." : "继续翻"}
+          </button>
+        ) : null}
       </main>
 
       <button
@@ -407,7 +457,14 @@ export function ExchangeDiaryTab({
       </button>
 
       {selected ? (
-        <div className="exchange-diary-overlay active" onClick={() => setSelectedId(null)}>
+        <div
+          className="exchange-diary-overlay active"
+          onClick={() => {
+            setSelectedId(null);
+            setCommentDraft("");
+            setCommentRequestId("");
+          }}
+        >
           <div className="exchange-diary-detail-card" onClick={(event) => event.stopPropagation()}>
             <div className="exchange-diary-entry-header">
               <span className="exchange-diary-entry-title">{selected.title}</span>
@@ -431,11 +488,15 @@ export function ExchangeDiaryTab({
               <div className="exchange-diary-comment-box">
                 <textarea
                   value={commentDraft}
-                  onChange={(event) => setCommentDraft(event.target.value)}
+                  onChange={(event) => {
+                    setCommentDraft(event.target.value);
+                    setCommentRequestId("");
+                  }}
                   placeholder="写一句评论..."
                   rows={2}
+                  disabled={saving}
                 />
-                <button type="button" onClick={() => addComment(selected)} disabled={saving}>保存评论</button>
+                <button type="button" onClick={() => addComment(selected)} disabled={saving || !commentDraft.trim()}>保存评论</button>
               </div>
             </div>
 
@@ -676,6 +737,24 @@ function ExchangeDiaryStyles() {
         margin: 0 0 14px;
         width: 100%;
         max-width: none;
+      }
+
+      .exchange-diary-load-more {
+        position: relative;
+        z-index: 2;
+        display: block;
+        margin: -8px auto 40px;
+        padding: 8px 20px;
+        border: 1px solid rgba(213, 168, 176, 0.38);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.72);
+        color: var(--text-light);
+        font-size: 13px;
+        letter-spacing: 0;
+      }
+
+      .exchange-diary-load-more:disabled {
+        opacity: 0.55;
       }
 
       .exchange-diary-entry {

@@ -55,6 +55,7 @@ import {
 import { SumiOverlay } from "../plugins/sumi-overlay";
 import { buildBackgroundDataUrl, fileToDataUrl } from "./imageDataUrl";
 import chatScriptFontUrl from "../assets/fonts/cookie-regular.ttf?url";
+import chatKuaiLeFontUrl from "../assets/fonts/zcool-kuaile-regular.ttf?url";
 import { clampStoredNumber, readStoredBoolean, readStoredNumber, readStoredString } from "./uiStorage";
 import {
   VOICE_CALL_PENDING_INVITE_KEY,
@@ -816,6 +817,13 @@ export function AppShell({
         {`@font-face {
           font-family: 'SumiChatScript';
           src: url("${chatScriptFontUrl}") format("truetype");
+          font-style: normal;
+          font-weight: 400;
+          font-display: swap;
+        }
+        @font-face {
+          font-family: 'SumiZcoolKuaiLe';
+          src: url("${chatKuaiLeFontUrl}") format("truetype");
           font-style: normal;
           font-weight: 400;
           font-display: swap;
