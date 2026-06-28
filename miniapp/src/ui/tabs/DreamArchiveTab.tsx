@@ -75,30 +75,32 @@ const DREAM_LOCAL_FRAGMENTS_KEY = "miniapp.springDream.localFragments";
 const DREAM_INSPIRATION_KEY = "miniapp.springDream.inspirationStars";
 
 const STAR_LAYOUT = [
-  { col: 2, row: 1, rot: -18, scale: 0.82, offset: 0 },
-  { col: 9, row: 1, rot: 24, scale: 0.72, offset: 10 },
-  { col: 5, row: 2, rot: 9, scale: 0.92, offset: -4 },
-  { col: 11, row: 3, rot: -31, scale: 0.78, offset: 7 },
-  { col: 1, row: 4, rot: 42, scale: 0.7, offset: -2 },
-  { col: 7, row: 4, rot: -8, scale: 0.86, offset: 8 },
-  { col: 4, row: 5, rot: 18, scale: 0.68, offset: -6 },
-  { col: 10, row: 6, rot: -44, scale: 0.8, offset: 2 },
-  { col: 6, row: 7, rot: 33, scale: 0.74, offset: 11 },
-  { col: 2, row: 8, rot: -27, scale: 0.88, offset: -5 },
-  { col: 8, row: 8, rot: 12, scale: 0.7, offset: 4 },
-  { col: 12, row: 9, rot: -12, scale: 0.76, offset: -3 },
+  { col: 2, row: 1, rot: -21, scale: 1.34, offset: 0, opacity: 0.96 },
+  { col: 8, row: 1, rot: 32, scale: 0.58, offset: 13, opacity: 0.58 },
+  { col: 5, row: 2, rot: 8, scale: 0.94, offset: -7, opacity: 0.82 },
+  { col: 11, row: 3, rot: -38, scale: 1.18, offset: 5, opacity: 0.9 },
+  { col: 1, row: 4, rot: 46, scale: 0.66, offset: -4, opacity: 0.62 },
+  { col: 7, row: 4, rot: -10, scale: 1.52, offset: 12, opacity: 1 },
+  { col: 4, row: 5, rot: 24, scale: 0.76, offset: -10, opacity: 0.68 },
+  { col: 10, row: 6, rot: -49, scale: 1.06, offset: 1, opacity: 0.86 },
+  { col: 6, row: 7, rot: 35, scale: 0.6, offset: 15, opacity: 0.54 },
+  { col: 2, row: 8, rot: -28, scale: 1.24, offset: -6, opacity: 0.92 },
+  { col: 8, row: 8, rot: 13, scale: 0.72, offset: 6, opacity: 0.64 },
+  { col: 12, row: 9, rot: -16, scale: 1.42, offset: -2, opacity: 0.96 },
+  { col: 4, row: 10, rot: 41, scale: 0.55, offset: 10, opacity: 0.5 },
+  { col: 9, row: 11, rot: -33, scale: 0.98, offset: -8, opacity: 0.78 },
 ];
 
 const BOTTLE_STAR_LAYOUT = [
-  { left: 24, bottom: 20, size: 30, rot: -18, opacity: 0.82 },
-  { left: 44, bottom: 16, size: 48, rot: 14, opacity: 0.96 },
-  { left: 34, bottom: 28, size: 20, rot: 31, opacity: 0.7 },
-  { left: 58, bottom: 24, size: 62, rot: -10, opacity: 1 },
-  { left: 71, bottom: 18, size: 34, rot: 26, opacity: 0.84 },
-  { left: 49, bottom: 39, size: 16, rot: -34, opacity: 0.62 },
-  { left: 66, bottom: 43, size: 24, rot: 8, opacity: 0.76 },
-  { left: 30, bottom: 42, size: 52, rot: -28, opacity: 0.9 },
-  { left: 78, bottom: 33, size: 18, rot: 42, opacity: 0.68 },
+  { left: 47, bottom: 17, size: 92, rot: -15, opacity: 1, gold: true },
+  { left: 23, bottom: 36, size: 24, rot: 34, opacity: 0.58, gold: false },
+  { left: 74, bottom: 41, size: 86, rot: 18, opacity: 0.98, gold: true },
+  { left: 50, bottom: 60, size: 22, rot: -28, opacity: 0.52, gold: false },
+  { left: 25, bottom: 64, size: 70, rot: -24, opacity: 0.9, gold: true },
+  { left: 87, bottom: 67, size: 20, rot: 42, opacity: 0.5, gold: false },
+  { left: 59, bottom: 80, size: 60, rot: 13, opacity: 0.82, gold: true },
+  { left: 17, bottom: 86, size: 18, rot: -36, opacity: 0.44, gold: false },
+  { left: 83, bottom: 88, size: 26, rot: 25, opacity: 0.46, gold: false },
 ];
 
 const dreamArchiveCss = `
@@ -504,8 +506,8 @@ const dreamArchiveCss = `
   --star-offset: 0px;
   --star-drift: -7px;
   position: relative;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   cursor: pointer;
   filter: drop-shadow(0 0 5px rgba(255,255,255,0.1));
   transition: transform 0.2s;
@@ -536,11 +538,12 @@ const dreamArchiveCss = `
 }
 
 .dreamArchiveBottle {
+  --bottle-scale: 1.2;
   position: relative;
   left: 18px;
   width: 192px;
   height: 306px;
-  margin: 84px auto 28px;
+  margin: 78px auto 8px;
   background:
     radial-gradient(ellipse at 30% 28%, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.05) 30%, transparent 62%),
     radial-gradient(ellipse at 52% 86%, rgba(253,230,138,0.18) 0%, rgba(253,230,138,0.05) 36%, transparent 68%),
@@ -552,7 +555,7 @@ const dreamArchiveCss = `
   border-right-color: rgba(181,210,255,0.2);
   backdrop-filter: blur(12px) saturate(1.2);
   overflow: visible;
-  transform: rotate(14deg);
+  transform: scale(var(--bottle-scale)) rotate(14deg);
   transform-origin: 50% 2%;
   animation: dreamArchiveBottleFloat 5.8s ease-in-out infinite;
   will-change: transform;
@@ -565,8 +568,8 @@ const dreamArchiveCss = `
 }
 
 @keyframes dreamArchiveBottleFloat {
-  0%, 100% { transform: translateY(0) rotate(14deg); }
-  50% { transform: translateY(-4px) rotate(15deg); }
+  0%, 100% { transform: translateY(0) scale(var(--bottle-scale)) rotate(14deg); }
+  50% { transform: translateY(-4px) scale(var(--bottle-scale)) rotate(15deg); }
 }
 
 .dreamArchiveBottle::before {
@@ -681,7 +684,7 @@ const dreamArchiveCss = `
 .dreamArchiveBottleStars {
   position: absolute;
   inset: 0;
-  z-index: 2;
+  z-index: 3;
   pointer-events: none;
 }
 
@@ -689,6 +692,9 @@ const dreamArchiveCss = `
   position: absolute;
   width: var(--star-size);
   height: var(--star-size);
+  left: var(--star-left);
+  bottom: var(--star-bottom);
+  opacity: var(--star-opacity);
   border: 0;
   background: transparent;
   padding: 0;
@@ -1481,20 +1487,21 @@ export function DreamArchiveTab({
                 key={`${star.id}-${index}`}
                 className="dreamArchivePaperStar"
                 type="button"
-                style={{
-                  gridColumn: `${layout.col} / span 2`,
-                  gridRow: `${cycle * 10 + layout.row} / span 1`,
-                  "--star-rot": `${layout.rot + index * 7}deg`,
-                  "--star-scale": `${layout.scale}`,
-                  "--star-offset": `${layout.offset}px`,
-                  "--star-drift": `${-5 - (index % 3) * 2}px`,
-                  "--star-delay": `${-(index % 7) * 0.38}s`,
-                } as React.CSSProperties}
-                onClick={() => setPanel({ type: "fragment", star })}
-                aria-label={star.label || "梦境碎片"}
-              >
-                <StarSvg gold={star.color === "gold"} />
-              </button>
+                  style={{
+                    gridColumn: `${layout.col} / span 2`,
+                    gridRow: `${cycle * 10 + layout.row} / span 1`,
+                    "--star-rot": `${layout.rot + index * 7}deg`,
+                    "--star-scale": `${layout.scale}`,
+                    "--star-offset": `${layout.offset}px`,
+                    "--star-drift": `${-5 - (index % 3) * 2}px`,
+                    "--star-delay": `${-(index % 7) * 0.38}s`,
+                    opacity: layout.opacity,
+                  } as React.CSSProperties}
+                  onClick={() => setPanel({ type: "fragment", star })}
+                  aria-label={star.label || "梦境碎片"}
+                >
+                  <StarSvg gold={star.color === "gold" || index % 5 === 0} />
+                </button>
             );
           })}
           {!fragmentStars.length ? (
@@ -1526,17 +1533,17 @@ export function DreamArchiveTab({
                   type="button"
                   key={`${star.id}-${index}`}
                   style={{
-                    left: `${Math.min(84, Math.max(18, layout.left + (layer % 2 ? 5 : -3) * layer))}%`,
-                    bottom: `${Math.min(70, layout.bottom + layer * 9)}%`,
-                    opacity: Math.max(0.5, layout.opacity - layer * 0.08),
-                    "--star-size": `${Math.max(16, layout.size - layer * 5)}px`,
+                    "--star-left": `${Math.min(88, Math.max(14, layout.left + (layer % 2 ? 4 : -4) * layer))}%`,
+                    "--star-bottom": `${Math.min(92, layout.bottom + layer * 10)}%`,
+                    "--star-opacity": Math.max(0.42, layout.opacity - layer * 0.08),
+                    "--star-size": `${Math.max(layout.gold ? 46 : 14, layout.size - layer * 6)}px`,
                     "--star-rot": `${layout.rot + layer * 19}deg`,
                     "--star-delay": `${-(index % 6) * 0.35}s`,
                   } as React.CSSProperties}
                   onClick={() => setPanel({ type: "fragment", star })}
                   aria-label={star.label}
                 >
-                  <StarSvg gold={star.color === "gold" || index % 3 === 0} />
+                  <StarSvg gold={layout.gold} />
                 </button>
               );
             }) : null}
