@@ -92,15 +92,15 @@ const STAR_LAYOUT = [
 ];
 
 const BOTTLE_STAR_LAYOUT = [
-  { left: 47, bottom: 17, size: 92, rot: -15, opacity: 1, gold: true },
-  { left: 23, bottom: 36, size: 24, rot: 34, opacity: 0.58, gold: false },
-  { left: 74, bottom: 41, size: 86, rot: 18, opacity: 0.98, gold: true },
-  { left: 50, bottom: 60, size: 22, rot: -28, opacity: 0.52, gold: false },
-  { left: 25, bottom: 64, size: 70, rot: -24, opacity: 0.9, gold: true },
-  { left: 87, bottom: 67, size: 20, rot: 42, opacity: 0.5, gold: false },
-  { left: 59, bottom: 80, size: 60, rot: 13, opacity: 0.82, gold: true },
-  { left: 17, bottom: 86, size: 18, rot: -36, opacity: 0.44, gold: false },
-  { left: 83, bottom: 88, size: 26, rot: 25, opacity: 0.46, gold: false },
+  { left: 45, bottom: 20, size: 72, rot: -15, opacity: 1, gold: true },
+  { left: 25, bottom: 32, size: 20, rot: 34, opacity: 0.58, gold: false },
+  { left: 68, bottom: 39, size: 66, rot: 18, opacity: 0.98, gold: true },
+  { left: 49, bottom: 54, size: 18, rot: -28, opacity: 0.52, gold: false },
+  { left: 32, bottom: 60, size: 58, rot: -24, opacity: 0.9, gold: true },
+  { left: 80, bottom: 62, size: 18, rot: 42, opacity: 0.5, gold: false },
+  { left: 59, bottom: 73, size: 50, rot: 13, opacity: 0.82, gold: true },
+  { left: 22, bottom: 78, size: 16, rot: -36, opacity: 0.44, gold: false },
+  { left: 75, bottom: 82, size: 20, rot: 25, opacity: 0.46, gold: false },
 ];
 
 const dreamArchiveCss = `
@@ -537,6 +537,13 @@ const dreamArchiveCss = `
   margin-top: 2px;
 }
 
+.dreamArchiveInspirationActions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 70px;
+}
+
 .dreamArchiveBottle {
   --bottle-scale: 1.2;
   position: relative;
@@ -664,19 +671,19 @@ const dreamArchiveCss = `
 
 .dreamArchiveBottleDust {
   position: absolute;
-  left: 20px;
-  right: 20px;
-  bottom: 34px;
-  height: 158px;
+  left: 26px;
+  right: 28px;
+  bottom: 14px;
+  height: 128px;
   pointer-events: none;
   z-index: 1;
   opacity: 0.88;
   background:
-    radial-gradient(circle at 50% 30%, rgba(255,255,255,0.95) 0 2px, transparent 3px),
-    radial-gradient(circle at 22% 66%, rgba(253,230,138,0.95) 0 2px, transparent 3px),
-    radial-gradient(circle at 72% 72%, rgba(255,255,255,0.86) 0 1px, transparent 2px),
-    radial-gradient(circle at 62% 50%, rgba(253,230,138,0.8) 0 1px, transparent 2px),
-    radial-gradient(ellipse at 50% 100%, rgba(253,230,138,0.42) 0%, rgba(84,142,199,0.12) 42%, transparent 72%);
+    radial-gradient(circle at 50% 16%, rgba(255,255,255,0.95) 0 2px, transparent 3px),
+    radial-gradient(circle at 20% 48%, rgba(253,230,138,0.95) 0 2px, transparent 3px),
+    radial-gradient(circle at 76% 58%, rgba(255,255,255,0.86) 0 1px, transparent 2px),
+    radial-gradient(circle at 58% 38%, rgba(253,230,138,0.8) 0 1px, transparent 2px),
+    radial-gradient(ellipse at 50% 92%, rgba(253,230,138,0.56) 0%, rgba(253,230,138,0.22) 34%, rgba(84,142,199,0.12) 58%, transparent 78%);
   filter: drop-shadow(0 0 10px rgba(253,230,138,0.36));
   animation: dreamArchiveBottleGlow 4.8s ease-in-out infinite alternate;
 }
@@ -1549,7 +1556,7 @@ export function DreamArchiveTab({
             }) : null}
           </div>
         </div>
-        <div className="dreamArchiveInspirationActions" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 20 }}>
+        <div className="dreamArchiveInspirationActions">
           <button className="dreamArchiveGhost" type="button" onClick={() => setPanel({ type: "write" })}>写一颗</button>
           <button className="dreamArchiveGhost" type="button" onClick={() => updateInspirationStars([])}>清空瓶子</button>
         </div>
