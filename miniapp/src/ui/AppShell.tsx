@@ -43,6 +43,7 @@ import {
   HeartIconMini,
   HomeIconMini,
   LogoutIconMini,
+  MoonIconMini,
   NotebookPenIconMini,
   PhoneIconMini,
   SmartphoneIconMini,
@@ -87,6 +88,7 @@ const AlarmTab = lazy(() => import("./tabs/AlarmTab").then((m) => ({ default: m.
 const MemoryDebugTab = lazy(() => import("./tabs/MemoryDebugTab").then((m) => ({ default: m.MemoryDebugTab })));
 const MemoryNebulaTab = lazy(() => import("./tabs/MemoryNebulaTab").then((m) => ({ default: m.MemoryNebulaTab })));
 const DuDayTab = lazy(() => import("./tabs/DuDayTab").then((m) => ({ default: m.DuDayTab })));
+const DreamArchiveTab = lazy(() => import("./tabs/DreamArchiveTab").then((m) => ({ default: m.DreamArchiveTab })));
 const DuNotebookTab = lazy(() => import("./tabs/DuNotebookTab").then((m) => ({ default: m.DuNotebookTab })));
 const ExchangeDiaryTab = lazy(() => import("./tabs/ExchangeDiaryTab").then((m) => ({ default: m.ExchangeDiaryTab })));
 const BudgetCheckInTab = lazy(() => import("./tabs/BudgetCheckInTab").then((m) => ({ default: m.BudgetCheckInTab })));
@@ -104,7 +106,7 @@ const ReportingManagementScreen = lazy(() => import("./tabs/ReportingManagementS
 const ChatStorageManagementScreen = lazy(() => import("./tabs/ChatStorageManagementScreen").then((m) => ({ default: m.ChatStorageManagementScreen })));
 const SecretDrawerTab = lazy(() => import("./tabs/SecretDrawerTab").then((m) => ({ default: m.SecretDrawerTab })));
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "study-room" | "budget-checkin" | "secret-drawer" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "dream-archive" | "du-notebook" | "study-room" | "budget-checkin" | "secret-drawer" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
 type AvatarImageKind = "myAvatar" | "duAvatar" | "benbenAvatar";
 type ChatScreenId = "du" | "group" | "wenyou" | null;
 type BackHandler = () => boolean;
@@ -669,6 +671,11 @@ export function AppShell({
               onClick={() => setShowDuDay(true)}
             />
             <ListRow
+              icon={<MoonIconMini />}
+              label="梦境"
+              onClick={() => setPanel("dream-archive")}
+            />
+            <ListRow
               icon={<HeartIconMini />}
               label="Stay with Du"
               onClick={() => setShowStayWithDu(true)}
@@ -931,6 +938,11 @@ export function AppShell({
       {panel === "du-notebook" ? (
         <FullScreenPane title="渡的记事本" accent="neutral" onBack={() => setPanel(null)}>
           <LazyPane><DuNotebookTab /></LazyPane>
+        </FullScreenPane>
+      ) : null}
+      {panel === "dream-archive" ? (
+        <FullScreenPane title="梦境" accent="neutral" headerMode="simple" onBack={() => setPanel(null)}>
+          <LazyPane><DreamArchiveTab /></LazyPane>
         </FullScreenPane>
       ) : null}
       {panel === "study-room" ? (

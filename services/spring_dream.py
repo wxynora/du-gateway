@@ -4,13 +4,19 @@ import random
 import threading
 from datetime import datetime
 from typing import Callable, Optional
+from uuid import uuid4
 
 from storage import runtime_sqlite
+from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
 
 SPRING_DREAM_PROBABILITY = 0.35
 SPRING_DREAM_MAX_PER_SLEEP = 3
 POST_SPRING_DREAM_WAKEUP_SECTION_ID = "post_spring_dream_wakeup"
+SPRING_DREAM_ARCHIVE_R2_PREFIX = "spring_dream_archives"
+SPRING_DREAM_ARCHIVE_RECENT_LIMIT = 100
+
+logger = get_logger(__name__)
 
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY = False
@@ -454,6 +460,30 @@ def _ensure_schema() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_spring_dream_sessions_updated
                     ON spring_dream_sessions(updated_at);
+
+                CREATE TABLE IF NOT EXISTS spring_dream_archives (
+                    id TEXT PRIMARY KEY,
+                    window_id TEXT NOT NULL DEFAULT '',
+                    sleep_session_key TEXT NOT NULL DEFAULT '',
+                    theme_id TEXT NOT NULL DEFAULT '',
+                    sleep_source TEXT NOT NULL DEFAULT '',
+                    channel TEXT NOT NULL DEFAULT '',
+                    target TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT '',
+                    sent_at TEXT NOT NULL DEFAULT '',
+                    content TEXT NOT NULL DEFAULT '',
+                    prompt TEXT NOT NULL DEFAULT '',
+                    fragments_json TEXT NOT NULL DEFAULT '[]',
+                    meta_json TEXT NOT NULL DEFAULT '{}',
+                    r2_key TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_spring_dream_archives_sent
+                    ON spring_dream_archives(sent_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_spring_dream_archives_session
+                    ON spring_dream_archives(sleep_session_key, sent_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_spring_dream_archives_window
+                    ON spring_dream_archives(window_id, sent_at DESC);
                 """
             )
             columns = {
@@ -701,6 +731,7 @@ def maybe_prepare_spring_dream_wakeup(
     return {
         "prompt": build_spring_dream_prompt(fragments),
         "theme_id": str(theme.get("id") or "").strip(),
+        "fragments": fragments,
         "sleep_session_key": session_key,
         "sleep_source": str((sleep_state or {}).get("source") or "").strip(),
         "count_before": int(reserved.get("count_before") or 0),
@@ -726,6 +757,239 @@ def record_spring_dream_sent(prepared: dict, *, sent_at: str = "") -> bool:
             (now_iso, now_iso, session_key),
         )
     return True
+
+
+def _archive_id(sent_at: str) -> str:
+    compact = "".join(ch for ch in str(sent_at or "") if ch.isdigit())[:14]
+    if not compact:
+        compact = "".join(ch for ch in now_beijing_iso() if ch.isdigit())[:14]
+    return f"spring_{compact}_{uuid4().hex[:8]}"
+
+
+def _safe_key_part(text: str, fallback: str = "unknown") -> str:
+    clean = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(text or "").strip())
+    clean = clean.strip("_")
+    return clean[:96] or fallback
+
+
+def _archive_summary(entry: dict) -> dict:
+    content = str((entry or {}).get("content") or "").strip()
+    return {
+        "id": str((entry or {}).get("id") or ""),
+        "window_id": str((entry or {}).get("window_id") or ""),
+        "sleep_session_key": str((entry or {}).get("sleep_session_key") or ""),
+        "theme_id": str((entry or {}).get("theme_id") or ""),
+        "channel": str((entry or {}).get("channel") or ""),
+        "sent_at": str((entry or {}).get("sent_at") or ""),
+        "r2_key": str((entry or {}).get("r2_key") or ""),
+        "preview": content[:160],
+    }
+
+
+def _write_archive_index(client, key: str, summary: dict, *, limit: int) -> None:
+    from storage import r2_store
+
+    existing = r2_store._read_json(client, key)
+    if not isinstance(existing, dict):
+        existing = {}
+    items = existing.get("items") if isinstance(existing.get("items"), list) else []
+    entry_id = str(summary.get("id") or "")
+    kept = [item for item in items if isinstance(item, dict) and str(item.get("id") or "") != entry_id]
+    kept.insert(0, summary)
+    payload = {
+        "schema_version": 1,
+        "updated_at": now_beijing_iso(),
+        "items": kept[: max(1, int(limit or 1))],
+    }
+    r2_store._write_json(client, key, payload)
+
+
+def _write_spring_dream_archive_r2(entry: dict) -> str:
+    from storage import r2_store
+
+    client = r2_store._s3_client()
+    if not client:
+        return ""
+    sent_at = str((entry or {}).get("sent_at") or "").strip()
+    day = sent_at[:10] if len(sent_at) >= 10 else now_beijing_iso()[:10]
+    entry_id = _safe_key_part(str((entry or {}).get("id") or ""), fallback=_archive_id(sent_at))
+    key = f"{SPRING_DREAM_ARCHIVE_R2_PREFIX}/{day}/{entry_id}.json"
+    payload = dict(entry or {})
+    payload["r2_key"] = key
+    r2_store._write_json(client, key, payload)
+    summary = _archive_summary(payload)
+    try:
+        _write_archive_index(
+            client,
+            f"{SPRING_DREAM_ARCHIVE_R2_PREFIX}/{day}/index.json",
+            summary,
+            limit=24,
+        )
+        _write_archive_index(
+            client,
+            f"{SPRING_DREAM_ARCHIVE_R2_PREFIX}/recent.json",
+            summary,
+            limit=SPRING_DREAM_ARCHIVE_RECENT_LIMIT,
+        )
+    except Exception as e:
+        logger.warning("春梦专用 R2 索引更新失败 key=%s error=%s", key, e)
+    return key
+
+
+def archive_spring_dream_body(
+    *,
+    window_id: str,
+    target: str,
+    channel: str,
+    content: str,
+    prompt: str = "",
+    created_at: str = "",
+    sent_at: str = "",
+    meta: dict | None = None,
+) -> dict:
+    """Write a dedicated spring-dream archive without touching normal conversation archives."""
+    text = str(content or "").strip()
+    if not text:
+        return {"ok": False, "error": "empty_content"}
+    now_iso = now_beijing_iso()
+    sent = str(sent_at or "").strip() or now_iso
+    created = str(created_at or "").strip() or sent
+    meta_payload = dict(meta or {}) if isinstance(meta, dict) else {}
+    fragments = [
+        str(item).strip()
+        for item in (meta_payload.get("fragments") or [])
+        if str(item).strip()
+    ]
+    entry_id = _archive_id(sent)
+    entry = {
+        "schema_version": 1,
+        "id": entry_id,
+        "window_id": str(window_id or "").strip(),
+        "sleep_session_key": str(meta_payload.get("sleep_session_key") or "").strip(),
+        "theme_id": str(meta_payload.get("theme_id") or "").strip(),
+        "sleep_source": str(meta_payload.get("sleep_source") or "").strip(),
+        "channel": str(channel or "").strip(),
+        "target": str(target or "").strip(),
+        "created_at": created,
+        "sent_at": sent,
+        "content": text,
+        "prompt": str(prompt or "").strip(),
+        "fragments": fragments,
+        "meta": meta_payload,
+        "r2_key": "",
+        "updated_at": now_iso,
+    }
+    sqlite_ok = False
+    r2_key = ""
+    _ensure_schema()
+    try:
+        with runtime_sqlite.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO spring_dream_archives (
+                    id, window_id, sleep_session_key, theme_id, sleep_source,
+                    channel, target, created_at, sent_at, content, prompt,
+                    fragments_json, meta_json, r2_key, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry["id"],
+                    entry["window_id"],
+                    entry["sleep_session_key"],
+                    entry["theme_id"],
+                    entry["sleep_source"],
+                    entry["channel"],
+                    entry["target"],
+                    entry["created_at"],
+                    entry["sent_at"],
+                    entry["content"],
+                    entry["prompt"],
+                    runtime_sqlite.json_dumps(entry["fragments"]),
+                    runtime_sqlite.json_dumps(entry["meta"]),
+                    "",
+                    entry["updated_at"],
+                ),
+            )
+        sqlite_ok = True
+    except Exception as e:
+        logger.warning("春梦专用 SQLite 存档失败 id=%s error=%s", entry_id, e)
+    try:
+        r2_key = _write_spring_dream_archive_r2(entry)
+        if r2_key:
+            entry["r2_key"] = r2_key
+            if sqlite_ok:
+                with runtime_sqlite.connect() as conn:
+                    conn.execute(
+                        "UPDATE spring_dream_archives SET r2_key=?, updated_at=? WHERE id=?",
+                        (r2_key, now_beijing_iso(), entry_id),
+                    )
+    except Exception as e:
+        logger.warning("春梦专用 R2 存档失败 id=%s error=%s", entry_id, e)
+    return {
+        "ok": bool(sqlite_ok or r2_key),
+        "sqlite_ok": bool(sqlite_ok),
+        "r2_ok": bool(r2_key),
+        "id": entry_id,
+        "r2_key": r2_key,
+        "error": "" if (sqlite_ok or r2_key) else "archive_failed",
+    }
+
+
+def _archive_row_to_dict(row, *, include_content: bool = False) -> dict:
+    if row is None:
+        return {}
+    content = str(row["content"] or "")
+    item = {
+        "id": str(row["id"] or ""),
+        "window_id": str(row["window_id"] or ""),
+        "sleep_session_key": str(row["sleep_session_key"] or ""),
+        "theme_id": str(row["theme_id"] or ""),
+        "sleep_source": str(row["sleep_source"] or ""),
+        "channel": str(row["channel"] or ""),
+        "target": str(row["target"] or ""),
+        "created_at": str(row["created_at"] or ""),
+        "sent_at": str(row["sent_at"] or ""),
+        "preview": content[:180],
+        "content_chars": len(content),
+        "prompt": str(row["prompt"] or "") if include_content else "",
+        "fragments": runtime_sqlite.json_loads(row["fragments_json"], []),
+        "meta": runtime_sqlite.json_loads(row["meta_json"], {}) if include_content else {},
+        "r2_key": str(row["r2_key"] or ""),
+        "updated_at": str(row["updated_at"] or ""),
+    }
+    if include_content:
+        item["content"] = content
+    return item
+
+
+def list_spring_dream_archives(limit: int = 50) -> list[dict]:
+    _ensure_schema()
+    n = max(1, min(200, int(limit or 50)))
+    with runtime_sqlite.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM spring_dream_archives
+            ORDER BY sent_at DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (n,),
+        ).fetchall()
+    return [_archive_row_to_dict(row) for row in rows]
+
+
+def get_spring_dream_archive(archive_id: str) -> dict:
+    clean = str(archive_id or "").strip()
+    if not clean:
+        return {}
+    _ensure_schema()
+    with runtime_sqlite.connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM spring_dream_archives WHERE id=?",
+            (clean,),
+        ).fetchone()
+    return _archive_row_to_dict(row, include_content=True)
 
 
 def _strip_prompt_comment_lines(text: str) -> str:

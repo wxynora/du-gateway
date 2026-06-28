@@ -571,6 +571,7 @@ def _send_wakeup_event(
     allow_tool_only_reply: bool = False,
     skip_qq_group_activity: bool = False,
     system_event_user_summary: str = "",
+    spring_dream_archive_meta: dict | None = None,
 ) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。事件唤醒默认归档，避免后续对话断层。"""
     try:
@@ -722,6 +723,31 @@ def _send_wakeup_event(
                         wakeup_kind=kind,
                         reply_channel=channel,
                     )
+                spring_archive: dict = {}
+                if kind in {"spring_dream", "random_spring_dream"}:
+                    try:
+                        from services.spring_dream import archive_spring_dream_body
+
+                        spring_archive = archive_spring_dream_body(
+                            window_id=context_window_id,
+                            target=send_target,
+                            channel=channel,
+                            content=outbound,
+                            prompt=prompt,
+                            created_at=created_at or "",
+                            sent_at=now_beijing_iso(),
+                            meta=spring_dream_archive_meta if isinstance(spring_dream_archive_meta, dict) else {},
+                        )
+                        if not bool(spring_archive.get("ok")):
+                            logger.warning(
+                                "春梦专用存档失败 window_id=%s channel=%s archive=%s",
+                                context_window_id,
+                                channel,
+                                spring_archive,
+                            )
+                    except Exception:
+                        spring_archive = {"ok": False, "error": "exception"}
+                        logger.warning("春梦专用存档异常 window_id=%s channel=%s", context_window_id, channel, exc_info=True)
                 return {
                     "ok": True,
                     "channel": channel,
@@ -730,6 +756,9 @@ def _send_wakeup_event(
                     "preferred_channel_at": str(preferred_meta.get("at") or ""),
                     "locked_channel": bool(lock_preferred_channel),
                     "archive_ok": bool(archive_ok),
+                    "spring_dream_archive_ok": bool(spring_archive.get("ok")) if spring_archive else True,
+                    "spring_dream_archive_id": str(spring_archive.get("id") or "") if spring_archive else "",
+                    "spring_dream_archive_r2_key": str(spring_archive.get("r2_key") or "") if spring_archive else "",
                     "reply_preview": outbound[:120],
                     "error": "",
                 }
@@ -909,7 +938,13 @@ def send_proactive_trigger_wakeup(window_id: str, target: str, event_text: str, 
     )
 
 
-def send_spring_dream_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
+def send_spring_dream_wakeup(
+    window_id: str,
+    target: str,
+    event_text: str,
+    created_at: str | None = None,
+    archive_meta: dict | None = None,
+) -> dict:
     """睡眠期随机唤醒命中春梦时，让渡基于梦境触发自然生成一条外发。"""
     return _send_wakeup_event(
         window_id=window_id,
@@ -922,6 +957,7 @@ def send_spring_dream_wakeup(window_id: str, target: str, event_text: str, creat
         system_event=True,
         allow_followup=False,
         archive_after_delivery=True,
+        spring_dream_archive_meta=archive_meta,
         extra_instruction=(
             "这是睡眠期随机唤醒触发的一段春梦，不是小玥在聊天框里发来的消息。"
             "请直接以你梦醒后对小玥说话的口吻自然发出；不要解释系统流程，不要输出 JSON 或工具说明。"

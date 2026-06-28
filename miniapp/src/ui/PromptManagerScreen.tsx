@@ -95,7 +95,9 @@ function mergePromptSections(remoteSections: PromptSection[]) {
     };
   });
   for (const item of remoteSections) {
-    if (!PROMPT_SECTION_CATALOG.some((base) => base.id === item.id)) rows.push({ ...item, editable: item.editable ?? true });
+    if (!PROMPT_SECTION_CATALOG.some((base) => base.id === item.id)) {
+      rows.push({ ...item, editable: item.editable ?? true, allow_empty: item.allow_empty ?? false });
+    }
   }
   return rows;
 }

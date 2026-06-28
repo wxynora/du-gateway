@@ -25,6 +25,7 @@ _RUNTIME_TABLES = (
     "schedule_fired_keys",
     "conversation_followups",
     "spring_dream_sessions",
+    "spring_dream_archives",
     "exchange_diary_entries",
 )
 
@@ -191,6 +192,30 @@ def ensure_schema() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_spring_dream_sessions_updated
                     ON spring_dream_sessions(updated_at);
+
+                CREATE TABLE IF NOT EXISTS spring_dream_archives (
+                    id TEXT PRIMARY KEY,
+                    window_id TEXT NOT NULL DEFAULT '',
+                    sleep_session_key TEXT NOT NULL DEFAULT '',
+                    theme_id TEXT NOT NULL DEFAULT '',
+                    sleep_source TEXT NOT NULL DEFAULT '',
+                    channel TEXT NOT NULL DEFAULT '',
+                    target TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT '',
+                    sent_at TEXT NOT NULL DEFAULT '',
+                    content TEXT NOT NULL DEFAULT '',
+                    prompt TEXT NOT NULL DEFAULT '',
+                    fragments_json TEXT NOT NULL DEFAULT '[]',
+                    meta_json TEXT NOT NULL DEFAULT '{}',
+                    r2_key TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_spring_dream_archives_sent
+                    ON spring_dream_archives(sent_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_spring_dream_archives_session
+                    ON spring_dream_archives(sleep_session_key, sent_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_spring_dream_archives_window
+                    ON spring_dream_archives(window_id, sent_at DESC);
 
                 CREATE TABLE IF NOT EXISTS exchange_diary_entries (
                     id TEXT PRIMARY KEY,

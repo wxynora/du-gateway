@@ -204,6 +204,10 @@ def _exchange_diary_time(entry: dict) -> str:
     return str((entry or {}).get("diary_date") or "").strip()
 
 
+def _exchange_diary_author_label(value: object) -> str:
+    return "辛玥" if str(value or "").strip().lower() == "xy" else "渡"
+
+
 def _format_exchange_diary_list_item(entry: dict) -> str:
     content = _clip_tool_text(entry.get("content") or entry.get("excerpt"), 2400)
     comments = [
@@ -211,7 +215,8 @@ def _format_exchange_diary_list_item(entry: dict) -> str:
         if isinstance(c, dict) and not str(c.get("deleted_at") or "").strip()
     ]
     recent_comments = comments[-5:]
-    comment_lines = [_format_exchange_diary_comment(comment) for comment in recent_comments]
+    comments_by_id = {str(c.get("id") or "").strip(): c for c in comments if str(c.get("id") or "").strip()}
+    comment_lines = [_format_exchange_diary_comment(comment, comments_by_id) for comment in recent_comments]
     if comments and len(comments) > len(recent_comments):
         comment_lines.insert(0, f"- 还有 {len(comments) - len(recent_comments)} 条更早评论未展示")
     comments_text = "\n  ".join(comment_lines) if comment_lines else "暂无"
@@ -227,12 +232,16 @@ def _format_exchange_diary_list_item(entry: dict) -> str:
     )
 
 
-def _format_exchange_diary_comment(comment: dict) -> str:
+def _format_exchange_diary_comment(comment: dict, comments_by_id: dict[str, dict] | None = None) -> str:
     reply_to = str(comment.get("reply_to_comment_id") or "").strip()
-    reply_text = f" 回复={reply_to}" if reply_to else ""
+    reply_text = ""
+    if reply_to:
+        parent = (comments_by_id or {}).get(reply_to) or {}
+        parent_author = _exchange_diary_author_label(parent.get("author")) if parent else "某条评论"
+        reply_text = f" 回复{parent_author}({reply_to})"
     return (
         f"- id={str(comment.get('id') or '').strip() or 'unknown'}{reply_text} "
-        f"作者={str(comment.get('author') or '').strip() or 'du'} "
+        f"作者={_exchange_diary_author_label(comment.get('author'))} "
         f"时间={iso_to_display_time(str(comment.get('created_at') or '').strip()) or str(comment.get('created_at') or '').strip()} "
         f"内容={_clip_tool_text(comment.get('content'), 240)}"
     )
@@ -315,7 +324,8 @@ def _execute_exchange_diary_read(arguments: dict) -> str:
     ]
     if comments:
         lines.append("评论：")
-        lines.extend(_format_exchange_diary_comment(c) for c in comments[-20:])
+        comments_by_id = {str(c.get("id") or "").strip(): c for c in comments if str(c.get("id") or "").strip()}
+        lines.extend(_format_exchange_diary_comment(c, comments_by_id) for c in comments[-20:])
     else:
         lines.append("评论：暂无")
     return "\n".join(lines)
@@ -342,7 +352,6 @@ def _execute_exchange_diary_comment_create(arguments: dict) -> str:
         entry_id,
         {
             "content": content,
-            "emoji": _first_arg(args, "emoji", "mood", "心情emoji"),
             "author": _first_arg(args, "author", "creator", "创建者") or "du",
             "reply_to_comment_id": reply_to_comment_id,
         },
@@ -511,7 +520,6 @@ def get_chat_tools_for_inject(
                     "properties": {
                         "entry_id": {"type": "string", "description": "要评论的交换日记 id"},
                         "content": {"type": "string", "description": "评论正文"},
-                        "emoji": {"type": "string", "description": "可选心情 emoji"},
                         "reply_to_comment_id": {"type": "string", "description": "可选。填某条评论的 id 表示回复那条评论；不填就是直接评论日记"},
                         "author": {"type": "string", "description": "作者：du 或 xy，默认 du", "default": "du"},
                     },

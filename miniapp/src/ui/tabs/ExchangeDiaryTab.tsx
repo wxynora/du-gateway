@@ -9,6 +9,7 @@ type DiaryComment = {
   author: Author;
   content: string;
   createdAt: string;
+  replyToCommentId: string;
 };
 
 type DiaryEntry = {
@@ -36,6 +37,8 @@ type ApiDiaryComment = {
   id?: string;
   author?: string;
   content?: string;
+  reply_to_comment_id?: string;
+  replyToCommentId?: string;
   created_at?: string;
   createdAt?: string;
 };
@@ -92,6 +95,7 @@ function fromApiComment(raw: ApiDiaryComment): DiaryComment {
     author: normalizeAuthor(raw.author),
     content: String(raw.content || ""),
     createdAt: formatDateTime(created).slice(-5) || String(created || ""),
+    replyToCommentId: String(raw.reply_to_comment_id || raw.replyToCommentId || ""),
   };
 }
 
@@ -112,6 +116,13 @@ function fromApiEntry(raw: ApiDiaryEntry): DiaryEntry {
 
 function authorLabel(author: Author): string {
   return author === "du" ? "渡" : "我";
+}
+
+function commentPrefix(comment: DiaryComment, comments: DiaryComment[]): string {
+  const from = authorLabel(comment.author);
+  if (!comment.replyToCommentId) return from;
+  const parent = comments.find((item) => item.id === comment.replyToCommentId);
+  return parent ? `${from} 回复 ${authorLabel(parent.author)}` : `${from} 回复`;
 }
 
 function emptyDraft(author: Author): EditorDraft {
@@ -481,8 +492,15 @@ export function ExchangeDiaryTab({
             <div className="exchange-diary-comments-section">
               <p className="exchange-diary-comments-title">Comments ({selected.comments.length})</p>
               {selected.comments.map((comment) => (
-                <div key={comment.id} className="exchange-diary-comment-row">
-                  <strong>{authorLabel(comment.author)}:</strong> {comment.content}
+                <div
+                  key={comment.id}
+                  className={`exchange-diary-comment-row ${comment.replyToCommentId ? "reply" : ""}`}
+                >
+                  <div className="exchange-diary-comment-meta">
+                    <strong>{commentPrefix(comment, selected.comments)}</strong>
+                    {comment.createdAt ? <span>{comment.createdAt}</span> : null}
+                  </div>
+                  <div className="exchange-diary-comment-content">{comment.content}</div>
                 </div>
               ))}
               <div className="exchange-diary-comment-box">
@@ -994,6 +1012,33 @@ function ExchangeDiaryStyles() {
         margin-bottom: 10px;
         background: var(--bg-cream);
         padding: 10px;
+      }
+
+      .exchange-diary-comment-row.reply {
+        border-left: 2px solid rgba(203, 161, 145, 0.42);
+      }
+
+      .exchange-diary-comment-meta {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 4px;
+        color: var(--text-main);
+      }
+
+      .exchange-diary-comment-meta strong {
+        font-weight: 600;
+      }
+
+      .exchange-diary-comment-meta span {
+        flex: 0 0 auto;
+        color: var(--text-light);
+        font-size: 11px;
+      }
+
+      .exchange-diary-comment-content {
+        line-height: 1.7;
       }
 
       .exchange-diary-comment-box {

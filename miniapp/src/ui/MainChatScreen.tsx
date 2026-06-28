@@ -536,6 +536,33 @@ function stripPreviewUrlsFromMessages(messages: ChatDraftMessage[]): ChatDraftMe
   });
 }
 
+function normalizeVoiceDedupText(value: any): string {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function hasAudioAttachmentForVoiceText(message: ChatDraftMessage | undefined, voiceText: string): boolean {
+  const normalizedVoiceText = normalizeVoiceDedupText(voiceText);
+  if (!message || !normalizedVoiceText) return false;
+  return normalizeChatAttachments(message.attachments).some((attachment) => (
+    attachment.kind === "audio"
+    && normalizeVoiceDedupText(attachment.transcript || attachment.textPreview || "") === normalizedVoiceText
+  ));
+}
+
+function assistantVoiceTtsDedupKey(args: {
+  assistantId: string;
+  clientRequestId: string;
+  operationId?: string;
+  voiceText: string;
+}): string {
+  return [
+    args.assistantId,
+    args.clientRequestId,
+    args.operationId || "",
+    normalizeVoiceDedupText(args.voiceText),
+  ].join("\u0001");
+}
+
 async function compressPrivateModelContentDataImages(modelContent: PrivateModelContent): Promise<PrivateModelContent> {
   if (!Array.isArray(modelContent)) return modelContent;
   let changed = false;
@@ -987,6 +1014,7 @@ export function MainChatScreen({
   const privateInputAggregateFlushingItemsRef = useRef<QueuedPrivateInput[]>([]);
   const privateInputAggregateDeletedMessageIdsRef = useRef<Set<string>>(new Set());
   const privateInputAggregateDeadlineRef = useRef(0);
+  const assistantVoiceTtsInFlightRef = useRef<Set<string>>(new Set());
   const realModeEnabledRef = useRef(realModeEnabled);
   const bubbleTouchRef = useRef<ChatBubbleTouchState | null>(null);
   const remoteHistorySyncingRef = useRef(false);
@@ -2711,13 +2739,38 @@ export function MainChatScreen({
       }, "warning");
       return;
     }
-    logSumiTalkClientEvent("assistant_voice_tts_start", {
+    if (hasAudioAttachmentForVoiceText(initialTarget, voiceText)) {
+      logSumiTalkClientEvent("assistant_voice_tts_skip", {
+        clientRequestId: args.clientRequestId,
+        operationId: args.operationId,
+        jobId: args.jobId,
+        reason: "already_has_audio_before_tts",
+      });
+      return;
+    }
+    const ttsDedupKey = assistantVoiceTtsDedupKey({
+      assistantId: args.assistantId,
       clientRequestId: args.clientRequestId,
       operationId: args.operationId,
-      jobId: args.jobId,
-      voiceChars: voiceText.length,
+      voiceText,
     });
+    if (assistantVoiceTtsInFlightRef.current.has(ttsDedupKey)) {
+      logSumiTalkClientEvent("assistant_voice_tts_skip", {
+        clientRequestId: args.clientRequestId,
+        operationId: args.operationId,
+        jobId: args.jobId,
+        reason: "tts_in_flight",
+      });
+      return;
+    }
+    assistantVoiceTtsInFlightRef.current.add(ttsDedupKey);
     try {
+      logSumiTalkClientEvent("assistant_voice_tts_start", {
+        clientRequestId: args.clientRequestId,
+        operationId: args.operationId,
+        jobId: args.jobId,
+        voiceChars: voiceText.length,
+      });
       const attachment = await createDuReplyAudio(voiceText);
       if (!attachment) return;
       const current = messagesRef.current.find((msg) => msg.id === args.assistantId);
@@ -2728,6 +2781,15 @@ export function MainChatScreen({
           jobId: args.jobId,
           reason: "stale_target_after_tts",
         }, "warning");
+        return;
+      }
+      if (hasAudioAttachmentForVoiceText(current, voiceText)) {
+        logSumiTalkClientEvent("assistant_voice_tts_skip", {
+          clientRequestId: args.clientRequestId,
+          operationId: args.operationId,
+          jobId: args.jobId,
+          reason: "already_has_audio_after_tts",
+        });
         return;
       }
       const nextMessage: ChatDraftMessage = {
@@ -2758,6 +2820,8 @@ export function MainChatScreen({
         jobId: args.jobId,
         error: String(e?.message || e),
       }, "warning");
+    } finally {
+      assistantVoiceTtsInFlightRef.current.delete(ttsDedupKey);
     }
   }
 

@@ -17,6 +17,7 @@ from services.pixel_home import (
     save_actor_state,
     save_du_body_state,
 )
+from services.spring_dream import get_spring_dream_archive, list_spring_dream_archives
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, today_beijing
@@ -430,6 +431,22 @@ def register_routes(bp) -> None:
         today = today_beijing()
         items = _build_du_day_events(today)
         return jsonify({"ok": True, "date": today, "items": items, "count": len(items)})
+
+    @bp.route("/spring-dream-archives", methods=["GET"])
+    def miniapp_spring_dream_archives():
+        try:
+            limit = int(request.args.get("limit") or 50)
+        except Exception:
+            limit = 50
+        items = list_spring_dream_archives(limit=limit)
+        return jsonify({"ok": True, "items": items, "count": len(items)})
+
+    @bp.route("/spring-dream-archives/<archive_id>", methods=["GET"])
+    def miniapp_spring_dream_archive_detail(archive_id: str):
+        item = get_spring_dream_archive(archive_id)
+        if not item:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        return jsonify({"ok": True, "item": item})
 
     @bp.route("/pixel-home-state", methods=["GET"])
     def miniapp_pixel_home_state():

@@ -1513,6 +1513,15 @@ def _try_spring_dream_wakeup(window_id: str, uid: int, now_dt: datetime, now_iso
         target=str(uid or "").strip(),
         event_text=prompt,
         created_at=now_iso,
+        archive_meta={
+            "sleep_session_key": str(prepared.get("sleep_session_key") or ""),
+            "theme_id": str(prepared.get("theme_id") or ""),
+            "fragments": prepared.get("fragments") or [],
+            "sleep_source": str(prepared.get("sleep_source") or ""),
+            "count_before": int(prepared.get("count_before") or 0),
+            "count_after": int(prepared.get("count_after") or 0),
+            "max_per_sleep": int(prepared.get("max_per_sleep") or 0),
+        },
     )
     ok = bool((result or {}).get("ok"))
     stored = False
@@ -1543,6 +1552,9 @@ def _try_spring_dream_wakeup(window_id: str, uid: int, now_dt: datetime, now_iso
             "triggered": True,
             "stored": stored,
             "archive_ok": archive_ok,
+            "body_archive_ok": bool((result or {}).get("spring_dream_archive_ok", True)),
+            "body_archive_id": str((result or {}).get("spring_dream_archive_id") or ""),
+            "body_archive_r2_key": str((result or {}).get("spring_dream_archive_r2_key") or ""),
             "theme_id": str(prepared.get("theme_id") or ""),
             "sleep_source": str(prepared.get("sleep_source") or ""),
             "count": int(prepared.get("count_after") or 0) if ok else int(prepared.get("count_before") or 0),

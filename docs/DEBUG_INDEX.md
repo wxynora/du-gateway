@@ -202,6 +202,17 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：`services/proactive_prompt_templates.py` 新增「随机唤醒决策」默认短模板，并接入 Prompt 管理；普通随机唤醒文案不再硬编码在 `services/telegram_proactive.py::_ask_du_should_contact()`，保存后可通过 App 修改。模板支持 `{{recent_exchange}}`、`{{hours_since_last}}`、`{{channel_field_desc}}`、`{{default_channel}}`、`{{no_contact_token}}`，并兼容把文案里的 `X.X` 替换成实际小时数；已删除“系统节流角度”那句。
 - 已验证：`.venv/bin/python -m py_compile services/proactive_prompt_templates.py services/spring_dream.py services/telegram_proactive.py services/conversation_followup.py services/prompt_manager.py storage/runtime_sqlite.py routes/miniapp/settings.py`、`npm --prefix miniapp run build`、`git diff --check` 通过；`.venv/bin/python` smoke 确认 Prompt 管理列表包含「春梦后唤醒版」和「随机唤醒决策」、空内容只允许春梦后唤醒版、普通随机唤醒模板会替换小时数且不含“系统节流角度”。
 
+当前状态（2026-06-28 春梦专用正文存档）：
+- 已完成：春梦随机唤醒投递成功后，`services/conversation_followup.py::_send_wakeup_event()` 会把实际发出的完整 `outbound` 额外写入 `services/spring_dream.py::archive_spring_dream_body()`；普通正文归档仍继续走原有 `_archive_wakeup_after_delivery()`，专用存档失败只打 warning，不影响消息投递。
+- 已完成：新增 `spring_dream_archives` SQLite 热表，字段包含 `window_id / sleep_session_key / theme_id / channel / sent_at / content / prompt / fragments_json / meta_json / r2_key`；同时 R2 旁路写 `spring_dream_archives/YYYY-MM-DD/<id>.json`，并维护当天 `index.json` 和全局 `spring_dream_archives/recent.json` 轻量索引。
+- 已完成：`services/telegram_proactive.py::_try_spring_dream_wakeup()` 把 session、theme、fragments、count 等元数据传入专用存档，并在 tick result 里带回 `body_archive_ok / body_archive_id / body_archive_r2_key`，方便日志排查。
+- 已验证：`.venv/bin/python -m py_compile services/spring_dream.py services/conversation_followup.py services/telegram_proactive.py storage/runtime_sqlite.py` 通过；临时 SQLite smoke 确认正文长度 805 的内容完整写入 `spring_dream_archives`；mock R2 smoke 确认会写单条全文、当天 `index.json` 和 `recent.json`。
+
+当前状态（2026-06-28 日常「梦境」入口）：
+- 已完成：MiniApp「日常」列表新增「梦境」入口，图标为月亮；新页面 `miniapp/src/ui/tabs/DreamArchiveTab.tsx` 读取春梦专用存档列表，点选后展示完整正文、theme、channel、R2 状态、梦境素材和 prompt。
+- 已完成：`routes/miniapp/dashboard.py` 新增 `/miniapp-api/spring-dream-archives` 和 `/miniapp-api/spring-dream-archives/<id>`；`services/spring_dream.py` 补 `list_spring_dream_archives()` / `get_spring_dream_archive()`，只读专用 SQLite 热表，不改正文归档链路。
+- 已验证：`.venv/bin/python -m py_compile services/spring_dream.py services/conversation_followup.py services/telegram_proactive.py storage/runtime_sqlite.py routes/miniapp/dashboard.py`、`npm --prefix miniapp run build`、`git diff --check` 通过。
+
 当前状态（2026-06-24 小家事件沿用最近聊天入口）：
 - 已完成：新增 `services/reply_channel_context.py` 统一解析最近真实聊天入口；`routes/miniapp/dashboard.py` 的小家状态/道具事件、`routes/miniapp/private_draw.py` 的小纸条发送，以及 `routes/miniapp/device_actions.py` 的弹窗/查岗回执都改为沿用最近真实聊天 channel，不再把小家事件来源当成 SumiTalk，也不再让小家事件固定走 QQ 主动入口；这些事件类回包解析出最近入口后会锁定该 channel，不跨到其它入口兜底。
 - 已完成：`services/conversation_followup.py` 新增 `send_pixel_home_wakeup()`；小家事件按 system event 送入网关，正文提示为“小家里的状态或道具事件，不是她在聊天框里说的话”，避免归档和生成时把它当成小玥普通聊天正文。
@@ -1915,3 +1926,11 @@ npm -C miniapp run android
 - 已完成：`CHAT_FONT_KEYS` 新增 `kuaile`，个性化页聊天字体轮换会显示“快乐体”；`AppShell.tsx` 注册 `SumiZcoolKuaiLe`，`resolveChatFontFamily()` 将该 key 映射到新字体，并保留苹方、微软雅黑、Noto Sans SC 兜底。
 - 已验证：`git diff --check -- miniapp/src/ui/AppShell.tsx miniapp/src/ui/chatAppearance.ts miniapp/src/ui/chatMessages.ts docs/DEBUG_INDEX.md` 通过；`npm -C miniapp run build -- --outDir /tmp/du-miniapp-font-build --emptyOutDir` 通过并确认新字体进入临时构建产物。注意：`miniapp/vite.config.ts` 写死 `outDir: ../miniapp_static`，默认 build 仍会改写静态目录；`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 当前被既有 `PromptManagerScreen.tsx allow_empty` 类型问题挡住，和字体改动无关。
 - 未完成 / 下次继续：本轮不调整全局 UI 字号，也不把字体应用到一级页面标题/列表；如需解决“整个 app 字大”，应单独加界面字号/界面字体设置。当前工作区已有与本轮无关的 `miniapp_static` 构建产物和若干业务源码脏改，提交时要么明确重建并一起推静态包，要么不要混入静态目录。
+
+当前状态（2026-06-28 MiniApp 助手回复语音 TTS 去重）：
+- 已确认：SumiTalk 私聊的 `<voice>` 回复语音会在正常发送完成路径和 operation 恢复/前台补偿路径里都调用 `appendAssistantVoiceOutputAudio()`；原函数只检查目标助手消息是否仍是当前 sent 状态，没有同一段 voiceText 的 in-flight 锁或已有音频检查，所以两条路径并发时会向 `/miniapp-api/chat-media/tts` 发两次同文案请求。
+- 已完成：`miniapp/src/ui/MainChatScreen.tsx` 给助手回复 TTS 增加按 `assistantId + clientRequestId + operationId + voiceText` 的页面内 in-flight 去重；生成前和生成返回后都检查当前助手消息是否已经有相同 transcript 的音频附件，命中时记录 `assistant_voice_tts_skip` 并不再追加第二条音频。
+- 已完成：交换日记评论回复展示修复一并收束：`ExchangeDiaryTab.tsx` 会把 `reply_to_comment_id` 显示成“渡 回复 我/我 回复 渡”；`services/chat_tools.py` 的 `exchange_diary` 工具读评论时会把被回复评论作者映射成可读对象，并不再要求 comment 创建时传 emoji。
+- 已完成：`PromptManagerScreen.tsx` 给未知远端 prompt 段落补 `allow_empty` 默认值，修掉本轮 `tsc --noEmit` 的类型阻断。
+- 已验证：`.venv/bin/python -m py_compile routes/miniapp/dashboard.py services/chat_tools.py services/conversation_followup.py services/spring_dream.py services/telegram_proactive.py storage/runtime_sqlite.py`、`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json --pretty false`、`git diff --check`、`npm --prefix miniapp run build` 均通过，并已重建 `miniapp_static`。
+- 未完成 / 下次继续：本轮不改 TTS 后端、不改 `<voice>` 提示词、不批量清理已经存在的历史重复音频；如果线上仍出现重复，优先看日志里的 `assistant_voice_tts_start / assistant_voice_tts_skip` 是否同一个 `clientRequestId` 被不同路径触发。
