@@ -152,6 +152,7 @@ export function AppShell({
   const wenyouBackHandlerRef = useRef<(() => boolean) | null>(null);
   const callHubBackHandlerRef = useRef<BackHandler | null>(null);
   const promptManagerBackHandlerRef = useRef<BackHandler | null>(null);
+  const dreamArchiveBackHandlerRef = useRef<BackHandler | null>(null);
   const secretDrawerBackHandlerRef = useRef<BackHandler | null>(null);
   const exchangeDiaryBackHandlerRef = useRef<BackHandler | null>(null);
   const [groupFreeChatEnabled, setGroupFreeChatEnabled] = useState(() => readStoredBoolean(GROUP_FREE_CHAT_MODE_STORAGE_KEY, true));
@@ -539,6 +540,9 @@ export function AppShell({
       }
       if (deviceManagerOpen && onCloseDevices) {
         onCloseDevices();
+        return;
+      }
+      if (panel === "dream-archive" && dreamArchiveBackHandlerRef.current?.()) {
         return;
       }
       if (panel === "secret-drawer" && secretDrawerBackHandlerRef.current?.()) {
@@ -941,9 +945,7 @@ export function AppShell({
         </FullScreenPane>
       ) : null}
       {panel === "dream-archive" ? (
-        <FullScreenPane title="梦境" accent="neutral" headerMode="simple" onBack={() => setPanel(null)}>
-          <LazyPane><DreamArchiveTab /></LazyPane>
-        </FullScreenPane>
+        <LazyPane><DreamArchiveTab backHandlerRef={dreamArchiveBackHandlerRef} /></LazyPane>
       ) : null}
       {panel === "study-room" ? (
         <FullScreenPane title="学习" accent="neutral" headerMode="simple" onBack={() => setPanel(null)}>

@@ -15,6 +15,8 @@ SPRING_DREAM_MAX_PER_SLEEP = 3
 POST_SPRING_DREAM_WAKEUP_SECTION_ID = "post_spring_dream_wakeup"
 SPRING_DREAM_ARCHIVE_R2_PREFIX = "spring_dream_archives"
 SPRING_DREAM_ARCHIVE_RECENT_LIMIT = 100
+SPRING_DREAM_INSPIRATION_ID = "default"
+SPRING_DREAM_INSPIRATION_THEME_ID = "selected_inspiration"
 
 logger = get_logger(__name__)
 
@@ -484,6 +486,12 @@ def _ensure_schema() -> None:
                     ON spring_dream_archives(sleep_session_key, sent_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_spring_dream_archives_window
                     ON spring_dream_archives(window_id, sent_at DESC);
+
+                CREATE TABLE IF NOT EXISTS spring_dream_inspiration (
+                    id TEXT PRIMARY KEY,
+                    stars_json TEXT NOT NULL DEFAULT '[]',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
                 """
             )
             columns = {
@@ -509,6 +517,84 @@ def _prune_old_sessions(conn, now_iso: str) -> None:
         "DELETE FROM spring_dream_sessions WHERE updated_at != '' AND updated_at < date(?, '-14 days')",
         (day,),
     )
+
+
+def _normalize_inspiration_stars(raw_items) -> list[dict]:
+    if not isinstance(raw_items, list):
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for idx, item in enumerate(raw_items):
+        if isinstance(item, dict):
+            text = str(item.get("text") or item.get("content") or "").strip()
+            label = str(item.get("label") or item.get("title") or "").strip()
+            color = "gold" if str(item.get("color") or "").strip().lower() == "gold" else "default"
+            raw_id = str(item.get("id") or "").strip()
+        else:
+            text = str(item or "").strip()
+            label = ""
+            color = "default"
+            raw_id = ""
+        if not text:
+            continue
+        key = text[:500]
+        if key in seen:
+            continue
+        seen.add(key)
+        if not label:
+            label = text.replace("\n", " ").strip()[:8] or "梦境碎片"
+        out.append(
+            {
+                "id": raw_id[:80] or f"inspiration-{idx}",
+                "label": label[:24],
+                "text": text[:500],
+                "color": color,
+            }
+        )
+        if len(out) >= 36:
+            break
+    return out
+
+
+def get_spring_dream_inspiration() -> dict:
+    _ensure_schema()
+    with runtime_sqlite.connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM spring_dream_inspiration WHERE id=?",
+            (SPRING_DREAM_INSPIRATION_ID,),
+        ).fetchone()
+    if row is None:
+        return {"stars": [], "fragments": [], "updated_at": ""}
+    stars = _normalize_inspiration_stars(runtime_sqlite.json_loads(row["stars_json"], []))
+    return {
+        "stars": stars,
+        "fragments": [str(item.get("text") or "").strip() for item in stars if str(item.get("text") or "").strip()],
+        "updated_at": str(row["updated_at"] or ""),
+    }
+
+
+def save_spring_dream_inspiration(stars) -> dict:
+    normalized = _normalize_inspiration_stars(stars)
+    now_iso = now_beijing_iso()
+    _ensure_schema()
+    with runtime_sqlite.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO spring_dream_inspiration (id, stars_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET stars_json=excluded.stars_json, updated_at=excluded.updated_at
+            """,
+            (
+                SPRING_DREAM_INSPIRATION_ID,
+                runtime_sqlite.json_dumps(normalized),
+                now_iso,
+            ),
+        )
+    return {
+        "stars": normalized,
+        "fragments": [str(item.get("text") or "").strip() for item in normalized if str(item.get("text") or "").strip()],
+        "updated_at": now_iso,
+    }
 
 
 def _session_row(session_key: str) -> dict:
@@ -571,6 +657,7 @@ def _reserve_spring_dream_slot(
     sleep_source: str,
     max_per_sleep: int,
     rng: random.Random | None = None,
+    theme_override: dict | None = None,
 ) -> dict | None:
     clean_key = str(session_key or "").strip()
     if not clean_key:
@@ -591,7 +678,7 @@ def _reserve_spring_dream_slot(
                 conn.execute("ROLLBACK")
                 return None
             previous_theme = str(row["last_theme_id"] or "") if row is not None else ""
-            theme = _choose_theme(previous_theme, rng=rng)
+            theme = theme_override if isinstance(theme_override, dict) and theme_override.get("fragments") else _choose_theme(previous_theme, rng=rng)
             theme_id = str(theme.get("id") or "").strip()
             count_after = count + 1
             if row is None:
@@ -718,11 +805,26 @@ def maybe_prepare_spring_dream_wakeup(
     if float(roller()) >= threshold:
         return None
 
+    inspiration = get_spring_dream_inspiration()
+    inspiration_fragments = [
+        str(item).strip()
+        for item in (inspiration.get("fragments") or [])
+        if str(item).strip()
+    ]
+    theme_override = None
+    if inspiration_fragments:
+        theme_override = {
+            "id": SPRING_DREAM_INSPIRATION_THEME_ID,
+            "fragments": inspiration_fragments,
+            "source": "miniapp_inspiration",
+        }
+
     reserved = _reserve_spring_dream_slot(
         session_key=session_key,
         sleep_source=str((sleep_state or {}).get("source") or "").strip(),
         max_per_sleep=int(max_per_sleep or SPRING_DREAM_MAX_PER_SLEEP),
         rng=rng,
+        theme_override=theme_override,
     )
     if not reserved:
         return None
@@ -732,6 +834,7 @@ def maybe_prepare_spring_dream_wakeup(
         "prompt": build_spring_dream_prompt(fragments),
         "theme_id": str(theme.get("id") or "").strip(),
         "fragments": fragments,
+        "inspiration_source": "miniapp" if inspiration_fragments else "random",
         "sleep_session_key": session_key,
         "sleep_source": str((sleep_state or {}).get("source") or "").strip(),
         "count_before": int(reserved.get("count_before") or 0),

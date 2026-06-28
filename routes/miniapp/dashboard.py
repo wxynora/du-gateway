@@ -17,7 +17,12 @@ from services.pixel_home import (
     save_actor_state,
     save_du_body_state,
 )
-from services.spring_dream import get_spring_dream_archive, list_spring_dream_archives
+from services.spring_dream import (
+    get_spring_dream_archive,
+    get_spring_dream_inspiration,
+    list_spring_dream_archives,
+    save_spring_dream_inspiration,
+)
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, today_beijing
@@ -447,6 +452,22 @@ def register_routes(bp) -> None:
         if not item:
             return jsonify({"ok": False, "error": "not_found"}), 404
         return jsonify({"ok": True, "item": item})
+
+    @bp.route("/spring-dream-inspiration", methods=["GET"])
+    def miniapp_spring_dream_inspiration_get():
+        data = get_spring_dream_inspiration()
+        return jsonify({"ok": True, **data})
+
+    @bp.route("/spring-dream-inspiration", methods=["PUT"])
+    def miniapp_spring_dream_inspiration_put():
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            data = {}
+        stars = data.get("stars")
+        if stars is None:
+            stars = data.get("fragments")
+        saved = save_spring_dream_inspiration(stars)
+        return jsonify({"ok": True, **saved})
 
     @bp.route("/pixel-home-state", methods=["GET"])
     def miniapp_pixel_home_state():

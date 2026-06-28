@@ -209,9 +209,12 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已验证：`.venv/bin/python -m py_compile services/spring_dream.py services/conversation_followup.py services/telegram_proactive.py storage/runtime_sqlite.py` 通过；临时 SQLite smoke 确认正文长度 805 的内容完整写入 `spring_dream_archives`；mock R2 smoke 确认会写单条全文、当天 `index.json` 和 `recent.json`。
 
 当前状态（2026-06-28 日常「梦境」入口）：
-- 已完成：MiniApp「日常」列表新增「梦境」入口，图标为月亮；新页面 `miniapp/src/ui/tabs/DreamArchiveTab.tsx` 读取春梦专用存档列表，点选后展示完整正文、theme、channel、R2 状态、梦境素材和 prompt。
+- 已完成：MiniApp「日常」列表新增「梦境」入口，图标为月亮；新页面 `miniapp/src/ui/tabs/DreamArchiveTab.tsx` 读取春梦专用存档列表，并按 `/Users/doraemon/Downloads/ui合集/梦境_files/969a8a8f-fcaf-4458-8d29-13dfaaeada4a.html` 的黑底、时间线、五角星碎片、许愿瓶和底部三段切换做视觉结构，不额外扩展自定义审美。
+- 已完成：梦境页改为和小家一样的全屏覆盖，不再套 `FullScreenPane` 顶部返回条；系统返回层级为先关底部弹层，再从「碎片/灵感」回「梦境」，最后退出梦境页。右下角折星加号从参考页 54px 缩到 42px，避免在 MiniApp 里显得过厚。
+- 已完成：新增后端可见的「春梦灵感瓶」：`/miniapp-api/spring-dream-inspiration` GET/PUT 保存当前选入灵感瓶的星星碎片；`services/spring_dream.py::maybe_prepare_spring_dream_wakeup()` 在瓶子非空时使用 `theme_id=selected_inspiration` 和用户选择碎片构造春梦 prompt，空瓶时保持原 `_SPRING_DREAM_THEME_PACKS` 随机逻辑。
+- 已完成：灵感瓶同步闭环补竞态保护：首次 GET 成功后以后端为准，远端空瓶会清空本地缓存；如果 GET 未返回前用户已经放入/清空/手写碎片，则不再用旧远端响应覆盖用户操作，随后按用户当前瓶子同步到后端。PUT 端补非对象 JSON guard，避免异常请求 500。
 - 已完成：`routes/miniapp/dashboard.py` 新增 `/miniapp-api/spring-dream-archives` 和 `/miniapp-api/spring-dream-archives/<id>`；`services/spring_dream.py` 补 `list_spring_dream_archives()` / `get_spring_dream_archive()`，只读专用 SQLite 热表，不改正文归档链路。
-- 已验证：`.venv/bin/python -m py_compile services/spring_dream.py services/conversation_followup.py services/telegram_proactive.py storage/runtime_sqlite.py routes/miniapp/dashboard.py`、`npm --prefix miniapp run build`、`git diff --check` 通过。
+- 已验证：`cd miniapp && npx tsc --noEmit --pretty false`、`.venv/bin/python -m py_compile services/spring_dream.py routes/miniapp/dashboard.py storage/runtime_sqlite.py services/conversation_followup.py services/telegram_proactive.py`、`npm --prefix miniapp run build`、`git diff --check` 通过；临时 SQLite smoke 确认空瓶仍走随机主题、灵感瓶有两条碎片时春梦准备结果为 `theme_id=selected_inspiration` 且 fragments 完全来自瓶子。
 
 当前状态（2026-06-24 小家事件沿用最近聊天入口）：
 - 已完成：新增 `services/reply_channel_context.py` 统一解析最近真实聊天入口；`routes/miniapp/dashboard.py` 的小家状态/道具事件、`routes/miniapp/private_draw.py` 的小纸条发送，以及 `routes/miniapp/device_actions.py` 的弹窗/查岗回执都改为沿用最近真实聊天 channel，不再把小家事件来源当成 SumiTalk，也不再让小家事件固定走 QQ 主动入口；这些事件类回包解析出最近入口后会锁定该 channel，不跨到其它入口兜底。

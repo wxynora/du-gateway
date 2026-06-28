@@ -26,6 +26,7 @@ _RUNTIME_TABLES = (
     "conversation_followups",
     "spring_dream_sessions",
     "spring_dream_archives",
+    "spring_dream_inspiration",
     "exchange_diary_entries",
 )
 
@@ -216,6 +217,12 @@ def ensure_schema() -> None:
                     ON spring_dream_archives(sleep_session_key, sent_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_spring_dream_archives_window
                     ON spring_dream_archives(window_id, sent_at DESC);
+
+                CREATE TABLE IF NOT EXISTS spring_dream_inspiration (
+                    id TEXT PRIMARY KEY,
+                    stars_json TEXT NOT NULL DEFAULT '[]',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
 
                 CREATE TABLE IF NOT EXISTS exchange_diary_entries (
                     id TEXT PRIMARY KEY,
