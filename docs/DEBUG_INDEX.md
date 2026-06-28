@@ -45,7 +45,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 主动触发规则 | `services/proactive_trigger_engine.py` | 睡眠、亮屏、使用时长等硬触发 |
 | Telegram Bot | `routes/telegram_webhook.py`、`services/telegram_update_queue.py`、`scripts/run_telegram_webhook_worker.py`、`services/telegram_bot.py` | Webhook 入队、持久队列、独立 worker 消费、TG 风格 system/上下文/发送，图片与 md/txt 文档附件处理 |
 | 小爱音箱 / MiGPT Next / mijiaAPI | `routes/xiaoai_api.py`、`routes/miniapp/xiaoai.py`、`storage/xiaoai_store.py`、`services/xiaoai_audio_store.py`、`services/gateway_tools.py`、`services/entry_style_prompt.py`、`scripts/test_xiaoai_mijia.py`、`miniapp/src/ui/tabs/XiaoAISettingsTab.tsx`、`connectors/xiaoai_migpt/`、`docs/小爱音箱-MiGPT-Next-接入渡方案.md` | 小爱专用 `/api/xiaoai/message` 入口、`xiaoai_speak` 外放工具、`xiaoai_run_command` mijiaAPI 家居控制工具、`mijia_lamp_get/set` 台灯结构化工具、台灯实测脚本、播放队列、强制 `<voice>` 风格、MiniMax 音频 URL 临时托管、App 工具页、Mac Docker MiGPT runner、接入方案 |
-| Claude OAuth proxy | `scripts/claude_oauth_proxy.js` | 自用 Claude 反代、thinking/cache/tool 格式转换 |
+| Claude OAuth proxy | `scripts/claude_oauth_proxy.js`、`docs/claude_proxy_new_vps_migration_plan.md` | 自用 Claude 反代、thinking/cache/tool 格式转换；旧 VPS 继续用 `127.0.0.1:8082`，新 VPS 单独承载 Claude Code + OAuth proxy 的迁移手册 |
 
 当前状态（2026-06-04 du_surf 随机冲浪工具）：
 - 已完成：新增 `services/du_surf.py` 和 `du_surf` 网关常驻工具；工具独立于 `web_search/read_url`，用于“随机话题抽取 + 轻量搜索 + 可聊卡片”的上网冲浪体验，不用于精确事实核验。
@@ -1944,3 +1944,17 @@ npm -C miniapp run android
 - 已完成：`ChatPresentation.tsx` 给语音条增加 `onDurationLoaded` 回调；读到 metadata 时把实际时长回传。`MainChatScreen.tsx` 接住回调，按 messageId + audio attachment id 把 `durationMs` 写回当前消息并后台保存本地历史；下次恢复历史时直接用缓存的 `durationMs` 展示。
 - 已验证：`git diff --check -- miniapp/src/ui/ChatPresentation.tsx miniapp/src/ui/MainChatScreen.tsx` 和 `npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json --pretty false` 通过。
 - 未完成 / 下次继续：本轮不改后端 `/chat-media/tts` 的音频时长探测，也不批量扫描旧历史；旧语音会在下一次被渲染并读到 metadata 后逐条补上时长。
+
+当前状态（2026-06-28 Pioneer Claude 透传与思维链价格展示）：
+- 已完成：新增 `config.is_pioneer_url()` / `PIONEER_CLAUDE_CACHE_TTL=1h`，只用于识别 Pioneer 和 Claude 缓存 TTL；不做 Pioneer 专属默认模型兜底，也不覆盖其他上游。
+- 已完成：`storage/upstream_store.py` 对 Pioneer `/v1/models` 只保留 `claude-*` 这种 Claude proxy 短模型名，并按 `claude-opus-4-6/4-7/4-8/4-1/sonnet/haiku` 优先排序；`routes/chat.py` 的网关 `/v1/models` 同样过滤 Pioneer，避免外部客户端看到 144 个混杂模型。
+- 已完成：`services/upstream_policy.py` 将 Pioneer 视为 Claude 透传上游：对 leading system 稳定块、近期记忆稳定块/最近块写入 Anthropic content block 形式的 `cache_control: {type:"ephemeral", ttl:"1h"}`，并在发给上游前删除 `__dynamic__ / __summary_cache__ / __summary_recent__` 内部标记；`claude-opus-4-6/7/8` 复用本地 Claude OAuth proxy 的 adaptive thinking 格式。
+- 已完成：MiniApp API 管理的模型弹层按 `Claude / 其他` 分组；Pioneer 后端过滤后通常只显示 Claude 分组。思维链日志后端按 Claude 价格口径计算本轮 `cost.total_usd`，前端 Prompt Cache 卡片只展示总价 `cost=$...`。
+- 已验证：`.venv/bin/python -m py_compile config.py storage/upstream_store.py services/upstream_policy.py routes/chat.py routes/miniapp/reasoning.py`、`git diff --check`、`npm --prefix miniapp run build` 通过；本地真实 Pioneer `/v1/models` 拉取返回 `source=pioneer_claude_models count=9`，首批为 `claude-opus-4-6/4-7/4-8/4-1/sonnet/haiku`；mock 当前 active 为 Pioneer 时，请求体会生成 A 社 content block + `cache_control ttl=1h`，并写入 adaptive thinking。
+- 未完成 / 下次继续：本轮没有发真实 Pioneer chat completion 扣费测试；价格展示暂按 Claude `input 5/M、cache write 10/M、cache read 0.5/M、output 25/M` 计算，只作为思维链日志估算展示。
+
+当前状态（2026-06-28 Claude OAuth proxy 新 VPS 迁移方案）：
+- 已完成：新增 `docs/claude_proxy_new_vps_migration_plan.md`，把“旧 VPS 跑网关、新 VPS 跑 Claude Code + Claude OAuth proxy、旧 VPS 用 SSH tunnel 保持本机 `127.0.0.1:8082`”写成可执行方案；方案包含现有功能保留清单、日志接入与观测、验证、回滚和故障排查。
+- 已完成：`docs/DEBUG_INDEX.md` 的 Claude OAuth proxy 索引项补上迁移方案入口。
+- 已验证：`git diff --check -- docs/claude_proxy_new_vps_migration_plan.md docs/DEBUG_INDEX.md` 通过；本轮只写文档，不改服务、不改 env、不重启。
+- 未完成 / 下次继续：买好新 VPS 后，从方案的“新 VPS 初始化”开始执行；执行前先确认新 VPS IP、旧 VPS SSH alias、旧 VPS 实际运行用户和 proxy 文件路径。

@@ -216,6 +216,10 @@ function isClaudeAdaptiveModel(model: string): boolean {
   return /claude-opus-4-(6|7|8)(\b|-|$)/i.test(String(model || "").trim());
 }
 
+function isClaudeProxyModel(model: string): boolean {
+  return String(model || "").trim().toLowerCase().startsWith("claude-");
+}
+
 function isClaudeOpus46(model: string): boolean {
   return /claude-opus-4-6(\b|-|$)/i.test(String(model || "").trim());
 }
@@ -230,6 +234,15 @@ function thinkingEffortOptionsForModel(options: string[], model: string): string
   const base = options.length ? options : DEFAULT_THINKING_EFFORTS;
   if (!isClaudeOpus46(model)) return base;
   return base.filter((effort) => effort !== "xhigh");
+}
+
+function groupedModelOptions(models: string[]): { label: string; items: string[] }[] {
+  const claude = models.filter(isClaudeProxyModel);
+  const other = models.filter((model) => !isClaudeProxyModel(model));
+  const groups: { label: string; items: string[] }[] = [];
+  if (claude.length) groups.push({ label: "Claude", items: claude });
+  if (other.length) groups.push({ label: "其他", items: other });
+  return groups;
 }
 
 export function SettingsUpstream() {
@@ -433,6 +446,7 @@ export function SettingsUpstream() {
   const canConfirm = pendingIndex !== null && pendingIndex !== active && !submitting && !loading && items.length > 0;
   const canSaveModel = !!pendingModel && pendingModel !== currentModel && !modelSaving && !modelsLoading;
   const modelOptions = pendingModel && !models.includes(pendingModel) ? [pendingModel, ...models] : models;
+  const modelOptionGroups = groupedModelOptions(modelOptions);
   const selectedThinkingModel = pendingModel || currentModel;
   const adaptiveThinkingActive = isClaudeAdaptiveModel(selectedThinkingModel);
   const adaptiveThinkingEffortOptions = thinkingEffortOptionsForModel(thinkingEffortOptions, selectedThinkingModel);
@@ -579,40 +593,47 @@ export function SettingsUpstream() {
                         </div>
                       ) : modelOptions.length ? (
                         <div className="max-h-64 overflow-y-auto bg-white">
-                          {modelOptions.map((m) => {
-                            const selected = m === pendingModel;
-                            const current = m === currentModel;
-                            return (
-                              <button
-                                key={m}
-                                type="button"
-                                disabled={modelSaving}
-                                onClick={() => {
-                                  setPendingModel(m);
-                                  setModelListOpen(false);
-                                }}
-                                className={
-                                  "flex min-h-[46px] w-full items-center gap-3 border-b border-gray-100 px-3 py-2.5 text-left last:border-b-0 active:bg-gray-50 disabled:opacity-60 " +
-                                  (selected ? "bg-gray-50" : "bg-white")
-                                }
-                              >
-                                <span className="min-w-0 flex-1 break-all text-[13px] font-semibold leading-snug text-gray-900">{m}</span>
-                                {current ? <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">当前</span> : null}
-                                <span
-                                  className={
-                                    "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 " +
-                                    (selected ? "border-gray-900 bg-gray-900" : "border-gray-300 bg-white")
-                                  }
-                                >
-                                  {selected ? (
-                                    <svg className="h-3 w-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                                      <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
-                                    </svg>
-                                  ) : null}
-                                </span>
-                              </button>
-                            );
-                          })}
+                          {modelOptionGroups.map((group) => (
+                            <div key={group.label}>
+                              <div className="sticky top-0 z-10 border-b border-gray-100 bg-gray-50/95 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                                {group.label}
+                              </div>
+                              {group.items.map((m) => {
+                                const selected = m === pendingModel;
+                                const current = m === currentModel;
+                                return (
+                                  <button
+                                    key={m}
+                                    type="button"
+                                    disabled={modelSaving}
+                                    onClick={() => {
+                                      setPendingModel(m);
+                                      setModelListOpen(false);
+                                    }}
+                                    className={
+                                      "flex min-h-[46px] w-full items-center gap-3 border-b border-gray-100 px-3 py-2.5 text-left last:border-b-0 active:bg-gray-50 disabled:opacity-60 " +
+                                      (selected ? "bg-gray-50" : "bg-white")
+                                    }
+                                  >
+                                    <span className="min-w-0 flex-1 break-all text-[13px] font-semibold leading-snug text-gray-900">{m}</span>
+                                    {current ? <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">当前</span> : null}
+                                    <span
+                                      className={
+                                        "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 " +
+                                        (selected ? "border-gray-900 bg-gray-900" : "border-gray-300 bg-white")
+                                      }
+                                    >
+                                      {selected ? (
+                                        <svg className="h-3 w-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                                          <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+                                        </svg>
+                                      ) : null}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ))}
                         </div>
                       ) : (
                         <div className="bg-white px-3 py-4 text-center text-[12px] font-medium text-gray-400">未拉到模型</div>

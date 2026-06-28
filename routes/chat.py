@@ -23,6 +23,7 @@ from config import (
     QQ_GROUP_ACTIVITY_REPORT_TOKEN,
     QQ_PROACTIVE_PUSH_TOKEN,
     is_openrouter_url,
+    is_pioneer_url,
     openrouter_models_response,
     is_siliconflow_url,
     siliconflow_models_response,
@@ -179,6 +180,7 @@ from services.upstream_policy import (
     get_forward_targets as _get_forward_targets,
     is_local_claude_oauth_proxy_url as _is_local_claude_oauth_proxy_url,
 )
+from storage.upstream_store import pioneer_claude_model_options as _pioneer_claude_model_options
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -1571,6 +1573,19 @@ def list_models():
         data = r.json() if r.content else None
         # 上游返回 2xx 且带 data 列表则直接用
         if r.status_code == 200 and data and isinstance(data.get("data"), list) and len(data.get("data", [])) > 0:
+            if is_pioneer_url(url):
+                raw_ids = [
+                    str(item.get("id") or "").strip()
+                    for item in data.get("data", [])
+                    if isinstance(item, dict) and str(item.get("id") or "").strip()
+                ]
+                claude_ids = _pioneer_claude_model_options(raw_ids)
+                if not claude_ids:
+                    return jsonify({"error": "Pioneer 未返回 Claude 短模型名"}), 502
+                data = {
+                    "object": "list",
+                    "data": [{"id": model, "object": "model", "created": 0} for model in claude_ids],
+                }
             return jsonify(data), 200
         return jsonify(data or {"error": "上游未返回模型列表"}), r.status_code if r.status_code != 200 else 502
     except Exception as e:
@@ -1840,8 +1855,8 @@ def chat_completions():
             window_id,
             body.get("model") or "",
         )
-    # Claude OAuth 代理自己会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
-    preserve_dynamic_marker = _is_local_claude_oauth_proxy_url(active_upstream_url)
+    # Claude OAuth / Pioneer 透传上游会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
+    preserve_dynamic_marker = _is_local_claude_oauth_proxy_url(active_upstream_url) or is_pioneer_url(active_upstream_url)
     for msg in body.get("messages") or []:
         if not preserve_dynamic_marker:
             msg.pop("__dynamic__", None)

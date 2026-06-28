@@ -11,11 +11,16 @@ from config import (
     OPENROUTER_ULTRA_THINK_ENABLED,
     OPENROUTER_ULTRA_THINK_PROMPT,
     OPENROUTER_CACHE_CONTROL_TYPE,
+    PIONEER_CLAUDE_CACHE_TTL,
     is_openrouter_url,
+    is_pioneer_url,
 )
 
 _CLAUDE_ADAPTIVE_THINKING_RE = re.compile(r"claude-opus-4-(?:6|7|8)(?:\b|-|$)", re.IGNORECASE)
 _CLAUDE_OPUS_46_RE = re.compile(r"claude-opus-4-6(?:\b|-|$)", re.IGNORECASE)
+_DYNAMIC_SYSTEM_MARKER = "__dynamic__"
+_SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
+_SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 
 
 def get_forward_targets(request_model: str = None):
@@ -142,6 +147,160 @@ def _is_claude_adaptive_thinking_model(model: str) -> bool:
     return bool(_CLAUDE_ADAPTIVE_THINKING_RE.search(str(model or "").strip()))
 
 
+def _is_claude_proxy_model(model: str) -> bool:
+    return str(model or "").strip().lower().startswith("claude-")
+
+
+def _message_content_text(msg: dict) -> str:
+    content = (msg or {}).get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and str(item.get("type") or "").strip().lower() in {"text", "input_text"}:
+                parts.append(str(item.get("text") or ""))
+        return "\n".join(x for x in parts if x)
+    return str(content or "")
+
+
+def _looks_like_summary_cache_message(msg: dict) -> bool:
+    text = _message_content_text(msg).strip()
+    return bool((msg or {}).get(_SUMMARY_CACHE_SYSTEM_MARKER) or text.startswith("【近期记忆】"))
+
+
+def _looks_like_recent_summary_message(msg: dict) -> bool:
+    text = _message_content_text(msg).strip()
+    return bool((msg or {}).get(_SUMMARY_RECENT_SYSTEM_MARKER) or text.startswith("【近期记忆（最近）】"))
+
+
+def _looks_like_dynamic_message(msg: dict) -> bool:
+    return bool((msg or {}).get(_DYNAMIC_SYSTEM_MARKER) or _looks_like_recent_summary_message(msg))
+
+
+def _cache_control(ttl: str) -> dict:
+    out = {"type": "ephemeral"}
+    if ttl:
+        out["ttl"] = ttl
+    return out
+
+
+def _split_summary_text(value: str) -> tuple[str, str]:
+    text = str(value or "").strip()
+    if not text:
+        return "", ""
+    text = re.sub(r"【以上为近期记忆】\s*$", "", text).strip()
+    recent_idx = text.find("【最近】")
+    if recent_idx < 0:
+        return str(value or ""), ""
+    stable_raw = text[:recent_idx].strip()
+    recent_raw = text[recent_idx:].strip()
+    if not recent_raw:
+        return str(value or ""), ""
+    stable_text = f"{stable_raw}\n【以上为较稳定的近期记忆】" if stable_raw else ""
+    recent_text = f"\n\n【近期记忆（最近）】\n{recent_raw}\n【以上为最近记忆】"
+    return stable_text, recent_text
+
+
+def _text_blocks_from_content(content) -> list:
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    if isinstance(content, list):
+        out = []
+        for item in content:
+            if isinstance(item, str):
+                out.append({"type": "text", "text": item})
+            elif isinstance(item, dict):
+                out.append(dict(item))
+        return out
+    return [{"type": "text", "text": str(content or "")}]
+
+
+def _set_cache_control_on_message(msg: dict, ttl: str) -> None:
+    blocks = _text_blocks_from_content((msg or {}).get("content"))
+    for block in reversed(blocks):
+        if isinstance(block, dict) and str(block.get("type") or "").strip().lower() in {"text", "input_text"}:
+            block["cache_control"] = _cache_control(ttl)
+            break
+    msg["content"] = blocks
+
+
+def _set_summary_cache_control_on_message(msg: dict, ttl: str) -> None:
+    content = (msg or {}).get("content")
+    if isinstance(content, str):
+        stable_text, recent_text = _split_summary_text(content)
+        if recent_text:
+            blocks = []
+            if stable_text:
+                blocks.append({"type": "text", "text": stable_text, "cache_control": _cache_control(ttl)})
+            blocks.append({"type": "text", "text": recent_text, "cache_control": _cache_control(ttl)})
+            msg["content"] = blocks
+            return
+    _set_cache_control_on_message(msg, ttl)
+
+
+def _strip_gateway_cache_markers(messages: list[dict]) -> None:
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        msg.pop(_DYNAMIC_SYSTEM_MARKER, None)
+        msg.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
+        msg.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
+
+
+def _apply_pioneer_claude_prompt_cache(body: dict, ttl: str) -> dict:
+    messages = [dict(m) for m in ((body or {}).get("messages") or []) if isinstance(m, dict)]
+    if not messages:
+        return body
+    leading_system_indexes: list[int] = []
+    for idx, msg in enumerate(messages):
+        if str(msg.get("role") or "").strip().lower() != "system":
+            break
+        leading_system_indexes.append(idx)
+    if not leading_system_indexes:
+        body["messages"] = messages
+        return body
+
+    summary_idx = -1
+    for idx in leading_system_indexes[1:]:
+        if _looks_like_summary_cache_message(messages[idx]):
+            summary_idx = idx
+            break
+
+    if summary_idx > 0:
+        cacheable_idx = -1
+        for idx in reversed([x for x in leading_system_indexes if x < summary_idx]):
+            msg = messages[idx]
+            if not _looks_like_dynamic_message(msg):
+                cacheable_idx = idx
+                break
+        if cacheable_idx >= 0:
+            _set_cache_control_on_message(messages[cacheable_idx], ttl)
+        _set_summary_cache_control_on_message(messages[summary_idx], ttl)
+        recent_idx = -1
+        for idx in [x for x in leading_system_indexes if x > summary_idx]:
+            if _looks_like_recent_summary_message(messages[idx]):
+                recent_idx = idx
+                break
+        if recent_idx > summary_idx:
+            _set_cache_control_on_message(messages[recent_idx], ttl)
+    else:
+        cacheable_idx = -1
+        for idx in leading_system_indexes:
+            msg = messages[idx]
+            if _looks_like_dynamic_message(msg):
+                break
+            cacheable_idx = idx
+        if cacheable_idx >= 0:
+            _set_cache_control_on_message(messages[cacheable_idx], ttl)
+
+    _strip_gateway_cache_markers(messages)
+    body["messages"] = messages
+    return body
+
+
 def _normalize_claude_adaptive_effort(model: str, effort: str) -> str:
     value = str(effort or "").strip().lower() or "high"
     if value == "xhigh" and _CLAUDE_OPUS_46_RE.search(str(model or "").strip()):
@@ -169,6 +328,20 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
                 output_config = dict(output_config)
                 output_config["effort"] = _normalize_claude_adaptive_effort(model, get_active_claude_thinking_effort())
                 body["output_config"] = output_config
+            if is_pioneer_url(upstream_url):
+                request_model = str(body.get("model") or "").strip()
+                effective_model = model or request_model
+                if _is_claude_proxy_model(effective_model):
+                    body["model"] = effective_model
+                    body = _apply_pioneer_claude_prompt_cache(body, PIONEER_CLAUDE_CACHE_TTL)
+                else:
+                    _strip_gateway_cache_markers(body.get("messages") or [])
+                if _is_claude_adaptive_thinking_model(effective_model):
+                    body["thinking"] = {"type": "adaptive", "display": "summarized"}
+                    output_config = body.get("output_config") if isinstance(body.get("output_config"), dict) else {}
+                    output_config = dict(output_config)
+                    output_config["effort"] = _normalize_claude_adaptive_effort(effective_model, get_active_claude_thinking_effort())
+                    body["output_config"] = output_config
     except Exception:
         pass
     return body

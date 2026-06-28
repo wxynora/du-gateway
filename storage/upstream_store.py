@@ -8,6 +8,7 @@ from config import DATA_DIR, TARGET_AI_URL, TARGET_AI_API_KEY, TARGET_AI_URLS, T
 from config import (
     is_siliconflow_url,
     is_openrouter_url,
+    is_pioneer_url,
     openrouter_model_options,
     siliconflow_model_options,
 )
@@ -17,6 +18,14 @@ UPSTREAMS_FILE = DATA_DIR / "upstreams.json"
 ACTIVE_MODEL_FILE = DATA_DIR / "active_upstream_model.json"
 CLAUDE_THINKING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_CLAUDE_THINKING_EFFORT = "high"
+PIONEER_CLAUDE_MODEL_ORDER = (
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-4-1",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+)
 
 
 def _default_payload():
@@ -93,6 +102,32 @@ def _chat_url_to_models_url(chat_url: str) -> str:
             base = base[: -len(suffix)]
             break
     return base.rstrip("/") + "/v1/models"
+
+
+def _is_claude_proxy_model_id(model: str) -> bool:
+    value = str(model or "").strip().lower()
+    return value.startswith("claude-")
+
+
+def pioneer_claude_model_options(models: list[str]) -> list[str]:
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for model in models or []:
+        model = str(model or "").strip()
+        if not model or not _is_claude_proxy_model_id(model):
+            continue
+        key = model.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(model)
+    if not candidates:
+        return []
+    by_key = {m.lower(): m for m in candidates}
+    out = [by_key[key] for key in PIONEER_CLAUDE_MODEL_ORDER if key in by_key]
+    ordered = {m.lower() for m in out}
+    out.extend(m for m in candidates if m.lower() not in ordered)
+    return out
 
 
 def _load_active_model_payload() -> dict:
@@ -221,12 +256,17 @@ def list_models_for_item_detail(it: dict) -> dict:
                 out.append(str(item.get("id") or "").strip())
             elif isinstance(item, str) and item.strip():
                 out.append(item.strip())
+        source = "upstream_v1_models"
+        if is_pioneer_url(url):
+            pioneer_models = pioneer_claude_model_options(out)
+            out = pioneer_models
+            source = "pioneer_claude_models"
         return {
             "ok": bool(out),
             "models": out,
             "status": int(resp.status_code or 0),
-            "source": "upstream_v1_models",
-            "error": "" if out else "上游 /v1/models 返回空列表",
+            "source": source,
+            "error": "" if out else ("Pioneer 未返回 Claude 短模型名" if is_pioneer_url(url) else "上游 /v1/models 返回空列表"),
         }
     except Exception as e:
         return {

@@ -23,6 +23,10 @@ _REASONING_TEXT_MAX_CHARS = 60000
 _TOOL_ARGUMENTS_MAX_CHARS = 8000
 _TOOL_RESULT_MAX_CHARS = 12000
 _SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
+_CLAUDE_PRICE_INPUT_PER_M = 5.0
+_CLAUDE_PRICE_CACHE_CREATE_1H_PER_M = 10.0
+_CLAUDE_PRICE_CACHE_READ_PER_M = 0.5
+_CLAUDE_PRICE_OUTPUT_PER_M = 25.0
 
 
 def _clip_text(value, max_chars: int) -> str:
@@ -130,6 +134,90 @@ def _sum_usage_thinking_tokens(cache_debug_items: list[dict]) -> tuple[int, bool
         except Exception:
             continue
     return total, has_value
+
+
+def _usage_uncached_input_tokens(usage: dict) -> int:
+    if not isinstance(usage, dict):
+        return 0
+    input_tokens = _positive_int(usage.get("input_tokens"))
+    if input_tokens:
+        return input_tokens
+    prompt_tokens = _positive_int(usage.get("prompt_tokens"))
+    if not prompt_tokens:
+        return 0
+    cache_create = _positive_int(usage.get("cache_creation_input_tokens"))
+    cache_read = _usage_cache_read_tokens(usage)
+    if cache_create or cache_read:
+        return max(0, prompt_tokens - cache_create - cache_read)
+    return prompt_tokens
+
+
+def _usage_cache_read_tokens(usage: dict) -> int:
+    if not isinstance(usage, dict):
+        return 0
+    direct = _positive_int(usage.get("cache_read_input_tokens"))
+    if direct:
+        return direct
+    return _first_positive_usage_value(
+        usage,
+        ("cached_tokens", "prompt_cached_tokens", "input_cached_tokens"),
+    )
+
+
+def _build_claude_cost_stats(cache_debug_items: list[dict]) -> dict:
+    input_tokens = 0
+    cache_create_tokens = 0
+    cache_read_tokens = 0
+    output_tokens = 0
+    usage_entries = 0
+    models: list[str] = []
+    for entry in cache_debug_items or []:
+        if not isinstance(entry, dict):
+            continue
+        usage = entry.get("usage") if isinstance(entry.get("usage"), dict) else {}
+        if not usage or usage.get("usage_returned") is False:
+            continue
+        usage_entries += 1
+        input_tokens += _usage_uncached_input_tokens(usage)
+        cache_create_tokens += _positive_int(usage.get("cache_creation_input_tokens"))
+        cache_read_tokens += _usage_cache_read_tokens(usage)
+        output_tokens += _first_positive_usage_value(usage, ("output_tokens", "completion_tokens"))
+        response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+        request = entry.get("request") if isinstance(entry.get("request"), dict) else {}
+        model = str(response.get("actual_model") or request.get("model") or "").strip()
+        if model and model not in models:
+            models.append(model)
+    if usage_entries <= 0:
+        return {}
+    if not any("claude" in model.lower() for model in models):
+        return {}
+    input_usd = input_tokens * _CLAUDE_PRICE_INPUT_PER_M / 1_000_000
+    cache_create_usd = cache_create_tokens * _CLAUDE_PRICE_CACHE_CREATE_1H_PER_M / 1_000_000
+    cache_read_usd = cache_read_tokens * _CLAUDE_PRICE_CACHE_READ_PER_M / 1_000_000
+    output_usd = output_tokens * _CLAUDE_PRICE_OUTPUT_PER_M / 1_000_000
+    total_usd = input_usd + cache_create_usd + cache_read_usd + output_usd
+    return {
+        "provider": "claude",
+        "currency": "USD",
+        "cache_ttl": "1h",
+        "pricing_per_million": {
+            "input": _CLAUDE_PRICE_INPUT_PER_M,
+            "cache_creation": _CLAUDE_PRICE_CACHE_CREATE_1H_PER_M,
+            "cache_read": _CLAUDE_PRICE_CACHE_READ_PER_M,
+            "output": _CLAUDE_PRICE_OUTPUT_PER_M,
+        },
+        "input_tokens": input_tokens,
+        "cache_creation_input_tokens": cache_create_tokens,
+        "cache_read_input_tokens": cache_read_tokens,
+        "output_tokens": output_tokens,
+        "input_usd": round(input_usd, 8),
+        "cache_creation_usd": round(cache_create_usd, 8),
+        "cache_read_usd": round(cache_read_usd, 8),
+        "output_usd": round(output_usd, 8),
+        "total_usd": round(total_usd, 8),
+        "usage_entries": usage_entries,
+        "models": models,
+    }
 
 
 def _build_output_stats(msg: dict, reasoning_text: str, cache_debug_items: list[dict], reasoning_omitted: bool = False) -> dict:
@@ -445,6 +533,7 @@ def register_routes(bp) -> None:
                         if selected_assistant_msg
                         else {}
                     )
+                    cost_stats = _build_claude_cost_stats(cache_debug_items)
                     out.append(
                         {
                             "window_id": target,
@@ -453,6 +542,7 @@ def register_routes(bp) -> None:
                             "reasoning": reasoning_text,
                             "cache_debug": cache_debug_items,
                             "output_stats": output_stats,
+                            "cost": cost_stats,
                             "tool_calls": tool_calls_out,
                         }
                     )

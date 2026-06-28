@@ -675,6 +675,22 @@ MCP_IP_ALLOWLIST = [x.strip() for x in os.environ.get("MCP_IP_ALLOWLIST", "").sp
 # 反代场景下是否信任 X-Forwarded-For（仅 MCP IP 白名单用）
 MCP_TRUST_PROXY = os.environ.get("MCP_TRUST_PROXY", "").strip().lower() in ("1", "true", "yes")
 
+# -------------------- Pioneer（Claude 透传上游） --------------------
+# 只用于识别 Pioneer 与设置 Claude 缓存 TTL；聊天入口不做 Pioneer 专属 model 兜底或覆盖。
+PIONEER_BASE_HOST = os.environ.get("PIONEER_BASE_HOST", "api.pioneer.ai").strip().lower()
+PIONEER_CLAUDE_CACHE_TTL = os.environ.get("PIONEER_CLAUDE_CACHE_TTL", "1h").strip() or "1h"
+
+
+def is_pioneer_url(url: str) -> bool:
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        host = (urlparse(url).hostname or "").strip().lower()
+    except Exception:
+        return False
+    return bool(host and PIONEER_BASE_HOST and (host == PIONEER_BASE_HOST or host.endswith("." + PIONEER_BASE_HOST)))
+
+
 # -------------------- 硅基流动（SiliconFlow）专用模型列表 --------------------
 # 仅用于硅基流动上游的本地模型列表展示/探活；聊天入口不做硅基专属 model 兜底或覆盖。
 SILICONFLOW_BASE_HOST = os.environ.get("SILICONFLOW_BASE_HOST", "api.siliconflow.cn").strip().lower()

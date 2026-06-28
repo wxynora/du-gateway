@@ -24,6 +24,23 @@ type OutputStats = {
   thinking_ratio?: number;
   reasoning_omitted?: boolean;
 };
+type CostStats = {
+  provider?: string;
+  currency?: string;
+  cache_ttl?: string;
+  pricing_per_million?: Record<string, number>;
+  input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  output_tokens?: number;
+  input_usd?: number;
+  cache_creation_usd?: number;
+  cache_read_usd?: number;
+  output_usd?: number;
+  total_usd?: number;
+  usage_entries?: number;
+  models?: string[];
+};
 type ReasoningItem = {
   window_id?: string;
   index?: number;
@@ -31,6 +48,7 @@ type ReasoningItem = {
   reasoning?: string;
   cache_debug?: PromptCacheDebugEntry[];
   output_stats?: OutputStats;
+  cost?: CostStats;
   tool_calls?: ToolCallItem[];
 };
 type ReasoningResp = { ok?: boolean; window_id?: string; window_ids?: string[]; items?: ReasoningItem[]; count?: number };
@@ -78,6 +96,12 @@ function formatTokenNumber(value: number) {
   return Math.round(value).toLocaleString("en-US");
 }
 
+function formatUsd(value: unknown) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return "$0";
+  return `$${n < 0.0001 ? n.toFixed(6) : n.toFixed(4)}`;
+}
+
 function promptCacheBreakdown(value: unknown): PromptCacheBreakdownItem[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -105,10 +129,11 @@ function outputStatsLine(stats?: OutputStats) {
   return `output${outputPrefix}${tokenCountValue(outputTokens)}`;
 }
 
-function PromptCacheDebugCard({ entries, outputStats }: { entries?: PromptCacheDebugEntry[]; outputStats?: OutputStats }) {
+function PromptCacheDebugCard({ entries, outputStats, cost }: { entries?: PromptCacheDebugEntry[]; outputStats?: OutputStats; cost?: CostStats }) {
   const items = Array.isArray(entries) ? entries.filter(Boolean).slice(-4) : [];
   if (!items.length) return null;
   const outputLine = outputStatsLine(outputStats);
+  const costTotal = Number(cost?.total_usd || 0);
   const latestUsage = items[items.length - 1]?.usage || {};
   const totalInputTokens = tokenNumber(firstUsageValue(latestUsage, ["input_tokens", "prompt_tokens"]));
   const cacheReadTokens =
@@ -131,6 +156,7 @@ function PromptCacheDebugCard({ entries, outputStats }: { entries?: PromptCacheD
             <span>read={formatTokenNumber(cacheReadTokens)}</span>
             <span>create={formatTokenNumber(cacheCreateTokens)}</span>
             <span>output={formatTokenNumber(outputTokens)}</span>
+            {costTotal > 0 ? <span>cost={formatUsd(costTotal)}</span> : null}
           </div>
         </div>
         <span className="shrink-0 text-[10px] text-[#a05a70]">
@@ -139,6 +165,12 @@ function PromptCacheDebugCard({ entries, outputStats }: { entries?: PromptCacheD
         </span>
       </summary>
       <div className="mt-2.5 space-y-2.5 border-t border-[#f6d7df] pt-2.5">
+        {costTotal > 0 ? (
+          <div className="rounded-md border border-[#f6d7df] bg-white/45 px-2 py-1.5 text-[10px] leading-4 text-[#8a4055]">
+            <span className="font-semibold text-[#7a2d45]">Claude cost</span>
+            <span> · {formatUsd(costTotal)}</span>
+          </div>
+        ) : null}
         {items.map((entry, idx) => {
           const req = entry?.request || {};
           const usage = entry?.usage || {};
@@ -389,7 +421,7 @@ export function ReasoningTab() {
                 <div className="mb-3 text-[12px] text-gray-400">本轮未返回思维链文本</div>
               )}
 
-              {hasCacheDebug ? <PromptCacheDebugCard entries={r.cache_debug} outputStats={r.output_stats} /> : null}
+              {hasCacheDebug ? <PromptCacheDebugCard entries={r.cache_debug} outputStats={r.output_stats} cost={r.cost} /> : null}
 
               {Array.isArray(r.tool_calls) && r.tool_calls.length ? (
                 <div className="space-y-3">
