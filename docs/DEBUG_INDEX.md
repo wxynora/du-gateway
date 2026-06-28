@@ -213,6 +213,7 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：梦境页改为和小家一样的全屏覆盖，不再套 `FullScreenPane` 顶部返回条；系统返回层级为先关底部弹层，再从「碎片/灵感」回「梦境」，最后退出梦境页。右下角折星加号从参考页 54px 缩到 42px，避免在 MiniApp 里显得过厚。
 - 已完成：新增后端可见的「春梦灵感瓶」：`/miniapp-api/spring-dream-inspiration` GET/PUT 保存当前选入灵感瓶的星星碎片；`services/spring_dream.py::maybe_prepare_spring_dream_wakeup()` 在瓶子非空时使用 `theme_id=selected_inspiration` 和用户选择碎片构造春梦 prompt，空瓶时保持原 `_SPRING_DREAM_THEME_PACKS` 随机逻辑。
 - 已完成：灵感瓶同步闭环补竞态保护：首次 GET 成功后以后端为准，远端空瓶会清空本地缓存；如果 GET 未返回前用户已经放入/清空/手写碎片，则不再用旧远端响应覆盖用户操作，随后按用户当前瓶子同步到后端。PUT 端补非对象 JSON guard，避免异常请求 500。
+- 已完成：碎片页补后端库来源：`/miniapp-api/spring-dream-fragments` 只读暴露春梦碎片库，MiniApp 成功读取后直接展示后端库；接口同时返回按主题分组的 `packs`，随机打捞只从后端主题包里一次拿同一套碎片，不再跨主题乱拼，也不再用前端清水 fallback 冒充真实碎片。星星池改为小尺寸非叠放错落星图并随星轨轻微漂浮，打捞弹层改为同梦境页时间线结构展示；灵感许愿瓶改为倾斜玻璃星瓶、瓶口使用 `miniapp/src/assets/dream-bottle-ribbon-trimmed.png` 透明丝带贴图，瓶内保留星屑层，不额外新增灵感页背景。
 - 已完成：`routes/miniapp/dashboard.py` 新增 `/miniapp-api/spring-dream-archives` 和 `/miniapp-api/spring-dream-archives/<id>`；`services/spring_dream.py` 补 `list_spring_dream_archives()` / `get_spring_dream_archive()`，只读专用 SQLite 热表，不改正文归档链路。
 - 已验证：`cd miniapp && npx tsc --noEmit --pretty false`、`.venv/bin/python -m py_compile services/spring_dream.py routes/miniapp/dashboard.py storage/runtime_sqlite.py services/conversation_followup.py services/telegram_proactive.py`、`npm --prefix miniapp run build`、`git diff --check` 通过；临时 SQLite smoke 确认空瓶仍走随机主题、灵感瓶有两条碎片时春梦准备结果为 `theme_id=selected_inspiration` 且 fragments 完全来自瓶子。
 
@@ -1937,3 +1938,9 @@ npm -C miniapp run android
 - 已完成：`PromptManagerScreen.tsx` 给未知远端 prompt 段落补 `allow_empty` 默认值，修掉本轮 `tsc --noEmit` 的类型阻断。
 - 已验证：`.venv/bin/python -m py_compile routes/miniapp/dashboard.py services/chat_tools.py services/conversation_followup.py services/spring_dream.py services/telegram_proactive.py storage/runtime_sqlite.py`、`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json --pretty false`、`git diff --check`、`npm --prefix miniapp run build` 均通过，并已重建 `miniapp_static`。
 - 未完成 / 下次继续：本轮不改 TTS 后端、不改 `<voice>` 提示词、不批量清理已经存在的历史重复音频；如果线上仍出现重复，优先看日志里的 `assistant_voice_tts_start / assistant_voice_tts_skip` 是否同一个 `clientRequestId` 被不同路径触发。
+
+当前状态（2026-06-28 MiniApp 语音条时长缓存）：
+- 已确认：语音附件会持久化 `remoteUrl` 和可选 `durationMs`，但 TTS 返回时通常没有 `durationMs`；`ChatVoiceBar` 之前只能等隐藏 `<audio preload="metadata">` 触发 `loadedmetadata` 后才知道秒数，所以历史重新渲染时会先显示 `0"`，再像重新加载一样补时长。
+- 已完成：`ChatPresentation.tsx` 给语音条增加 `onDurationLoaded` 回调；读到 metadata 时把实际时长回传。`MainChatScreen.tsx` 接住回调，按 messageId + audio attachment id 把 `durationMs` 写回当前消息并后台保存本地历史；下次恢复历史时直接用缓存的 `durationMs` 展示。
+- 已验证：`git diff --check -- miniapp/src/ui/ChatPresentation.tsx miniapp/src/ui/MainChatScreen.tsx` 和 `npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json --pretty false` 通过。
+- 未完成 / 下次继续：本轮不改后端 `/chat-media/tts` 的音频时长探测，也不批量扫描旧历史；旧语音会在下一次被渲染并读到 metadata 后逐条补上时长。

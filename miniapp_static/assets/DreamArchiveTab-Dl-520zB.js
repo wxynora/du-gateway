@@ -1,0 +1,820 @@
+import{u as he,r as o,b as w,j as e}from"./index-BTA3q3Cv.js";const ge="/miniapp/assets/dream-bottle-ribbon-trimmed-P7Wvj72D.png",K="miniapp.springDream.localFragments",Z="miniapp.springDream.inspirationStars",G=[{col:2,row:1,rot:-18,scale:.82,offset:0},{col:9,row:1,rot:24,scale:.72,offset:10},{col:5,row:2,rot:9,scale:.92,offset:-4},{col:11,row:3,rot:-31,scale:.78,offset:7},{col:1,row:4,rot:42,scale:.7,offset:-2},{col:7,row:4,rot:-8,scale:.86,offset:8},{col:4,row:5,rot:18,scale:.68,offset:-6},{col:10,row:6,rot:-44,scale:.8,offset:2},{col:6,row:7,rot:33,scale:.74,offset:11},{col:2,row:8,rot:-27,scale:.88,offset:-5},{col:8,row:8,rot:12,scale:.7,offset:4},{col:12,row:9,rot:-12,scale:.76,offset:-3}],xe=`
+.dreamArchiveRoot {
+  --bg: #0A0A0C;
+  --surface: #141418;
+  --text-main: #E5E5E7;
+  --text-muted: #71717A;
+  --accent: #FDE68A;
+  --border: rgba(255, 255, 255, 0.1);
+  --ink: rgba(255, 255, 255, 0.05);
+  --dream-display: 'Cormorant Garamond', 'Playfair Display', 'Noto Serif SC', 'Songti SC', serif;
+  --dream-body: 'Lora', 'Noto Serif SC', 'Songti SC', serif;
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+  background-color: var(--bg);
+  color: var(--text-main);
+  font-family: var(--dream-body);
+  user-select: none;
+}
+
+.dreamArchiveRoot * {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dreamArchiveVortex {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at center, transparent 0%, var(--bg) 80%),
+    repeating-radial-gradient(circle at center, transparent 0, transparent 40px, rgba(255,255,255,0.02) 41px, transparent 42px);
+  z-index: 0;
+  opacity: 0.6;
+}
+
+.dreamArchiveGrain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  opacity: 0.04;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+}
+
+.dreamArchiveHeader {
+  position: relative;
+  z-index: 2;
+  padding: 40px 24px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.dreamArchiveTitleBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.dreamArchiveTitleEn {
+  font-family: var(--dream-display);
+  font-weight: 300;
+  font-size: 10px;
+  letter-spacing: 0.6em;
+  color: var(--text-muted);
+  opacity: 0.6;
+  margin-bottom: 4px;
+  padding-left: 2px;
+}
+
+.dreamArchiveTitle {
+  font-family: var(--dream-display);
+  font-weight: 500;
+  font-size: 32px;
+  letter-spacing: 0.25em;
+  text-shadow: 0 0 20px rgba(255,255,255,0.2);
+  line-height: 1.2;
+}
+
+.dreamArchiveGhost {
+  background: transparent;
+  border: 0.5px solid var(--border);
+  color: var(--text-muted);
+  padding: 8px 16px;
+  font-size: 11px;
+  border-radius: 20px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-family: var(--dream-display);
+}
+
+.dreamArchiveGhost:active {
+  transform: scale(0.97);
+}
+
+.dreamArchiveRoot button:focus {
+  outline: none;
+}
+
+.dreamArchiveNav {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 32px;
+  background: transparent;
+  z-index: 100;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+}
+
+.dreamArchiveTab {
+  padding: 0;
+  font-size: 15px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+  font-family: var(--dream-display);
+  letter-spacing: 0.15em;
+  position: relative;
+  background: none;
+  border: 0;
+}
+
+.dreamArchiveTab.active {
+  color: var(--text-main);
+}
+
+.dreamArchiveTab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 5px;
+  height: 5px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 10px var(--accent), 0 0 20px rgba(253, 230, 138, 0.4);
+}
+
+.dreamArchiveView {
+  position: relative;
+  z-index: 1;
+  display: none;
+  height: calc(100% - 112px);
+  overflow-y: auto;
+  padding: 0 20px 120px;
+  animation: dreamArchiveFadeIn 0.8s ease-out;
+}
+
+.dreamArchiveView.active {
+  display: block;
+}
+
+@keyframes dreamArchiveFadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.dreamArchiveTimeline {
+  position: relative;
+  margin-top: 30px;
+  padding-left: 50px;
+}
+
+.dreamArchiveTimelineSvg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50px;
+  min-height: 340px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.dreamArchiveTimelinePath {
+  fill: none;
+  stroke: rgba(255,255,255,0.15);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dreamArchiveEntry {
+  position: relative;
+  margin-bottom: 40px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: block;
+}
+
+.dreamArchiveEntry:nth-of-type(odd) {
+  transform: translateX(-8px);
+}
+
+.dreamArchiveEntry:nth-of-type(even) {
+  transform: translateX(8px);
+}
+
+.dreamArchiveNode {
+  position: absolute;
+  left: -42px;
+  top: 1px;
+  width: 26px;
+  height: 26px;
+  filter: drop-shadow(0 0 5px rgba(255,255,255,0.1));
+  animation: dreamArchiveSoftFloat 6s ease-in-out infinite;
+  animation-delay: var(--star-delay, 0s);
+  will-change: transform;
+}
+
+.dreamArchiveTime {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.1em;
+  margin-bottom: 6px;
+}
+
+.dreamArchiveDreamTitle {
+  font-family: var(--dream-display);
+  font-size: 18px;
+  color: var(--text-main);
+  margin-bottom: 8px;
+}
+
+.dreamArchivePreview {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dreamArchiveFav {
+  color: var(--accent);
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+.dreamArchiveEmpty {
+  margin: 60px auto 0;
+  max-width: 240px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.8;
+  text-align: center;
+}
+
+.dreamArchiveFragmentView {
+  position: relative;
+  overflow-y: auto;
+  animation: none;
+}
+
+.dreamArchiveInspirationView {
+  position: relative;
+  overflow: visible;
+}
+
+.dreamArchiveInspirationView.active {
+  z-index: 30;
+}
+
+.dreamArchiveBottleLabel,
+.dreamArchiveBottle,
+.dreamArchiveInspirationActions {
+  position: relative;
+  z-index: 1;
+}
+
+.dreamArchiveOrbitField {
+  position: absolute;
+  left: 50%;
+  top: 24px;
+  width: min(132vw, 620px);
+  height: min(86vw, 400px);
+  transform: translateX(-50%) rotate(-11deg);
+  pointer-events: none;
+  opacity: 0.68;
+  z-index: 0;
+  filter: blur(0.1px);
+  animation: dreamArchiveOrbitDrift 9s ease-in-out infinite alternate;
+}
+
+.dreamArchiveOrbitRing {
+  --ring-tilt: -18deg;
+  --ring-scale-y: 1;
+  position: absolute;
+  inset: 8% 13%;
+  border-radius: 50%;
+  background:
+    conic-gradient(
+      from 20deg,
+      transparent 0deg 18deg,
+      rgba(253, 230, 138, 0.55) 18deg 20deg,
+      transparent 20deg 66deg,
+      rgba(255,255,255,0.32) 66deg 68deg,
+      transparent 68deg 136deg,
+      rgba(253, 230, 138, 0.34) 136deg 138deg,
+      transparent 138deg 360deg
+    );
+  -webkit-mask: radial-gradient(ellipse at center, transparent 0 58%, #000 58.6% 59.8%, transparent 60.4%);
+  mask: radial-gradient(ellipse at center, transparent 0 58%, #000 58.6% 59.8%, transparent 60.4%);
+  animation: dreamArchiveOrbitSpin 32s linear infinite;
+}
+
+.dreamArchiveOrbitRing::before,
+.dreamArchiveOrbitRing::after {
+  content: '';
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(253, 230, 138, 0.88);
+  box-shadow:
+    0 0 10px rgba(253, 230, 138, 0.7),
+    34px 12px 0 -1px rgba(255,255,255,0.42),
+    74px 40px 0 -1px rgba(255,255,255,0.24),
+    -52px 34px 0 -1px rgba(255,255,255,0.32),
+    -112px 74px 0 -1px rgba(253,230,138,0.2);
+}
+
+.dreamArchiveOrbitRing::before {
+  top: 18%;
+  left: 76%;
+}
+
+.dreamArchiveOrbitRing::after {
+  right: 18%;
+  bottom: 16%;
+  opacity: 0.7;
+}
+
+.dreamArchiveOrbitRing:nth-child(2) {
+  --ring-tilt: 21deg;
+  --ring-scale-y: 0.84;
+  inset: 18% 4%;
+  animation-duration: 44s;
+  animation-direction: reverse;
+  opacity: 0.58;
+  background:
+    conic-gradient(
+      from 110deg,
+      transparent 0deg 44deg,
+      rgba(255,255,255,0.26) 44deg 46deg,
+      transparent 46deg 160deg,
+      rgba(253, 230, 138, 0.34) 160deg 162deg,
+      transparent 162deg 270deg,
+      rgba(255,255,255,0.2) 270deg 272deg,
+      transparent 272deg 360deg
+    );
+}
+
+.dreamArchiveOrbitRing:nth-child(3) {
+  --ring-tilt: 58deg;
+  --ring-scale-y: 0.72;
+  inset: 30% 24%;
+  animation-duration: 26s;
+  opacity: 0.42;
+}
+
+@keyframes dreamArchiveOrbitSpin {
+  from { transform: rotate(var(--ring-tilt)) scaleY(var(--ring-scale-y)); }
+  to { transform: rotate(calc(var(--ring-tilt) + 360deg)) scaleY(var(--ring-scale-y)); }
+}
+
+@keyframes dreamArchiveOrbitDrift {
+  from { transform: translateX(-50%) translateY(-2px) rotate(-11deg); }
+  to { transform: translateX(-50%) translateY(8px) rotate(-8deg); }
+}
+
+.dreamArchiveStarPool {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: 34px;
+  justify-items: center;
+  align-items: center;
+  gap: 4px 0;
+  min-height: 0;
+  margin-top: 18px;
+  padding: 22px 10px 86px;
+}
+
+.dreamArchivePaperStar {
+  --star-rot: 0deg;
+  --star-scale: 0.82;
+  --star-offset: 0px;
+  --star-drift: -7px;
+  position: relative;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  filter: drop-shadow(0 0 5px rgba(255,255,255,0.1));
+  transition: transform 0.2s;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  animation: dreamArchiveStarFloat 5.8s ease-in-out infinite;
+  animation-delay: var(--star-delay, 0s);
+  transform: translate3d(0, var(--star-offset), 0) rotate(var(--star-rot)) scale(var(--star-scale));
+  will-change: transform;
+}
+
+@keyframes dreamArchiveStarFloat {
+  0%, 100% {
+    transform: translate3d(0, var(--star-offset), 0) rotate(var(--star-rot)) scale(var(--star-scale));
+  }
+  50% {
+    transform: translate3d(0, calc(var(--star-offset) + var(--star-drift)), 0) rotate(calc(var(--star-rot) + 4deg)) scale(var(--star-scale));
+  }
+}
+
+.dreamArchiveBottleLabel {
+  text-align: center;
+  font-family: var(--dream-display);
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.dreamArchiveBottle {
+  position: relative;
+  left: 14px;
+  width: 166px;
+  height: 264px;
+  margin: 96px auto 38px;
+  background:
+    radial-gradient(ellipse at 30% 28%, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.05) 30%, transparent 62%),
+    radial-gradient(ellipse at 52% 86%, rgba(253,230,138,0.18) 0%, rgba(253,230,138,0.05) 36%, transparent 68%),
+    linear-gradient(155deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.025) 48%, rgba(255,255,255,0.07) 100%);
+  border-radius: 42px 42px 32px 32px / 54px 54px 30px 30px;
+  border: 2px solid rgba(237,246,255,0.34);
+  border-top-color: rgba(255,255,255,0.5);
+  border-left-color: rgba(255,255,255,0.42);
+  border-right-color: rgba(181,210,255,0.2);
+  backdrop-filter: blur(12px) saturate(1.2);
+  overflow: visible;
+  transform: rotate(14deg);
+  transform-origin: 50% 2%;
+  animation: dreamArchiveBottleFloat 5.8s ease-in-out infinite;
+  will-change: transform;
+  box-shadow:
+    inset 0 24px 46px rgba(255,255,255,0.09),
+    inset -18px -20px 38px rgba(20,47,88,0.16),
+    inset 18px 0 32px rgba(255,255,255,0.08),
+    0 0 30px rgba(122,176,255,0.18),
+    0 32px 72px rgba(0,0,0,0.5);
+}
+
+@keyframes dreamArchiveBottleFloat {
+  0%, 100% { transform: translateY(0) rotate(14deg); }
+  50% { transform: translateY(-4px) rotate(15deg); }
+}
+
+.dreamArchiveBottle::before {
+  content: '';
+  position: absolute;
+  inset: 10px 11px 12px;
+  border-radius: 34px 34px 24px 24px / 44px 44px 24px 24px;
+  border: 1px solid rgba(255,255,255,0.13);
+  pointer-events: none;
+  background:
+    linear-gradient(154deg, rgba(255,255,255,0.1) 0%, transparent 28%, transparent 70%, rgba(255,255,255,0.04) 100%);
+}
+
+.dreamArchiveBottle::after {
+  content: '';
+  position: absolute;
+  right: 34px;
+  top: 26px;
+  width: 16px;
+  height: 78px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0.18) 38%, rgba(255,255,255,0.04) 100%);
+  border-radius: 999px;
+  filter: blur(2px);
+  transform: rotate(0deg);
+  pointer-events: none;
+}
+
+.dreamArchiveBottleNeck {
+  position: absolute;
+  top: -42px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 92px;
+  height: 48px;
+  background:
+    repeating-linear-gradient(180deg, rgba(255,255,255,0.2) 0 3px, rgba(255,255,255,0.04) 3px 7px),
+    linear-gradient(90deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.19) 36%, rgba(255,255,255,0.04) 100%);
+  border: 1.5px solid rgba(237,246,255,0.32);
+  border-bottom: none;
+  border-radius: 20px 20px 8px 8px;
+  box-shadow:
+    inset 0 2px 8px rgba(255,255,255,0.1),
+    0 4px 20px rgba(0,0,0,0.3);
+  z-index: 12;
+  overflow: hidden;
+}
+
+.dreamArchiveBottleNeck::before {
+  content: '';
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 70px;
+  height: 18px;
+  background: linear-gradient(180deg, rgba(224,192,143,0.76) 0%, rgba(176,138,92,0.42) 100%);
+  border: 1px solid rgba(253,230,180,0.24);
+  border-radius: 10px 10px 4px 4px;
+  box-shadow:
+    0 2px 12px rgba(0,0,0,0.25),
+    inset 0 1px 2px rgba(255,255,255,0.3);
+}
+
+.dreamArchiveBottleNeck::after {
+  content: '';
+  position: absolute;
+  left: -8px;
+  right: -8px;
+  top: 12px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.22);
+  box-shadow:
+    0 10px 0 rgba(255,255,255,0.12),
+    0 20px 0 rgba(255,255,255,0.08);
+}
+
+.dreamArchiveBottleRibbon {
+  position: absolute;
+  left: 50%;
+  top: -142px;
+  width: 330px;
+  max-width: none;
+  height: auto;
+  display: block;
+  transform: translateX(-60%) rotate(-14deg);
+  pointer-events: none;
+  z-index: 18;
+  filter: drop-shadow(0 10px 16px rgba(6,18,42,0.28));
+  transform-origin: 50% 50%;
+}
+
+.dreamArchiveBottleDust {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 30px;
+  height: 132px;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.88;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(255,255,255,0.95) 0 2px, transparent 3px),
+    radial-gradient(circle at 22% 66%, rgba(253,230,138,0.95) 0 2px, transparent 3px),
+    radial-gradient(circle at 72% 72%, rgba(255,255,255,0.86) 0 1px, transparent 2px),
+    radial-gradient(circle at 62% 50%, rgba(253,230,138,0.8) 0 1px, transparent 2px),
+    radial-gradient(ellipse at 50% 100%, rgba(253,230,138,0.42) 0%, rgba(84,142,199,0.12) 42%, transparent 72%);
+  filter: drop-shadow(0 0 10px rgba(253,230,138,0.36));
+  animation: dreamArchiveBottleGlow 4.8s ease-in-out infinite alternate;
+}
+
+.dreamArchiveBottleStars {
+  position: absolute;
+  bottom: 24px;
+  left: 0;
+  right: 0;
+  height: 64%;
+  display: flex;
+  flex-wrap: wrap-reverse;
+  justify-content: center;
+  align-content: flex-start;
+  padding: 14px 22px 8px;
+  gap: 1px;
+  z-index: 2;
+}
+
+.dreamArchiveBottleStar {
+  width: 34px;
+  height: 34px;
+  margin: -4px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  animation: dreamArchiveSoftFloat 6.4s ease-in-out infinite;
+  animation-delay: var(--star-delay, 0s);
+  will-change: transform;
+}
+
+@keyframes dreamArchiveBottleGlow {
+  from { opacity: 0.68; transform: translateY(2px) scale(0.98); }
+  to { opacity: 0.96; transform: translateY(-4px) scale(1.03); }
+}
+
+.dreamArchiveFloat {
+  position: fixed;
+  right: 22px;
+  bottom: 102px;
+  width: 42px;
+  height: 42px;
+  background: var(--text-main);
+  color: var(--bg);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 16px rgba(0,0,0,0.38);
+  z-index: 101;
+  border: none;
+}
+
+.dreamArchiveOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.46);
+  backdrop-filter: blur(3px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.4s;
+  z-index: 999;
+}
+
+.dreamArchiveOverlay.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.dreamArchivePanel {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-height: 68vh;
+  overflow-y: auto;
+  background: rgba(20, 20, 24, 0.72);
+  border-top: 0.5px solid rgba(255,255,255,0.12);
+  padding: 22px 22px 34px;
+  transform: translateY(100%);
+  transition: transform 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+  z-index: 1000;
+  border-radius: 24px 24px 0 0;
+  backdrop-filter: blur(18px) saturate(1.1);
+  box-shadow: 0 -20px 60px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,255,255,0.06);
+}
+
+.dreamArchivePanel.active {
+  transform: translateY(0);
+}
+
+.dreamArchivePanelTitle {
+  font-family: var(--dream-display);
+  font-size: 16px;
+  margin-bottom: 14px;
+  letter-spacing: 0.06em;
+}
+
+.dreamArchivePanelText {
+  color: var(--text-main);
+  font-size: 13px;
+  line-height: 1.72;
+  margin-bottom: 22px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dreamArchivePanelMuted {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.72;
+  margin-bottom: 22px;
+}
+
+.dreamArchivePanelActions {
+  display: flex;
+  gap: 10px;
+}
+
+.dreamArchivePanelActions .dreamArchiveGhost {
+  flex: 1;
+}
+
+.dreamArchiveTextarea {
+  width: 100%;
+  height: 104px;
+  background: rgba(255,255,255,0.045);
+  border: 0.5px solid var(--border);
+  color: white;
+  padding: 12px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  outline: none;
+  resize: none;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.dreamArchiveTagRow {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.dreamArchivePrimary {
+  width: 100%;
+  background: var(--text-main);
+  color: var(--bg);
+}
+
+.dreamArchiveFishGrid {
+  position: relative;
+  margin: 18px 0 22px;
+  padding-left: 50px;
+}
+
+.dreamArchiveFishSvg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 50px;
+  min-height: 340px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.dreamArchiveFishPath {
+  fill: none;
+  stroke: rgba(255,255,255,0.15);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dreamArchiveFishCard {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 42px;
+  margin: 0 0 18px;
+  padding: 0;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  z-index: 1;
+}
+
+.dreamArchiveFishCard:nth-of-type(odd) {
+  transform: translateX(-8px);
+}
+
+.dreamArchiveFishCard:nth-of-type(even) {
+  transform: translateX(8px);
+}
+
+.dreamArchiveFishStar {
+  position: absolute;
+  left: -42px;
+  top: 1px;
+  width: 26px;
+  height: 26px;
+  filter: drop-shadow(0 0 5px rgba(255,255,255,0.1));
+  animation: dreamArchiveSoftFloat 5.6s ease-in-out infinite;
+  animation-delay: var(--star-delay, 0s);
+  will-change: transform;
+}
+
+.dreamArchiveFishText {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  padding-top: 2px;
+}
+
+.dreamArchiveFoldedStar {
+  fill: rgba(229, 229, 231, 0.72);
+  opacity: 0.9;
+  stroke: var(--text-main);
+  stroke-width: 0.6;
+}
+
+.dreamArchiveFoldedStar.gold {
+  fill: var(--accent);
+  opacity: 1;
+  filter: drop-shadow(0 0 8px var(--accent));
+}
+
+@keyframes dreamArchiveSoftFloat {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  50% { transform: translate3d(2px, -6px, 0) rotate(4deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dreamArchiveOrbitField,
+  .dreamArchiveOrbitRing,
+  .dreamArchivePaperStar,
+  .dreamArchiveFishStar,
+  .dreamArchiveNode,
+  .dreamArchiveBottle,
+  .dreamArchiveBottleRibbon,
+  .dreamArchiveBottleStar {
+    animation: none;
+  }
+}
+`;function Q(i){const n=String(i||"").trim();if(!n)return"--:--";const a=n.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);return a?`${a[1]}.${a[2]}.${a[3]} ${a[4]}:${a[5]}`:n.replace("+08:00","").replace("T"," ").slice(0,16)||n}function fe(i){return Array.isArray(i)?i.filter(n=>!!n&&typeof n=="object"&&!!String(n.id||"").trim()).map(n=>({...n,id:String(n.id||"").trim()})):[]}function S(i,n,a=80){if(!Array.isArray(i))return[];const c=new Set,d=[];return i.forEach((l,g)=>{const h=(typeof l=="string"?l:String((l==null?void 0:l.text)||"")).trim();if(!h||c.has(h))return;c.add(h);const v=typeof l=="object"&&l?String(l.label||""):"";d.push({id:typeof l=="object"&&l?String(l.id||`${n}-${g}`):`${n}-${g}`,label:(v.trim()||k(h,"梦境碎片")).slice(0,16),text:h,color:typeof l=="object"&&l&&l.color==="gold"?"gold":"default",theme_id:typeof l=="object"&&l?String(l.theme_id||""):""})}),d.slice(0,a)}function ve(i,n){return Array.isArray(i)?i.map((a,c)=>{const d=a&&typeof a=="object"?a:{},l=String(d.id||d.theme_id||`${n}-${c}`).trim()||`${n}-${c}`,g=Array.isArray(d.stars)?d.stars:d.fragments,y=S(g||[],l,12).map(h=>({...h,theme_id:h.theme_id||l}));return{id:l,stars:y}}).filter(a=>a.stars.length):[]}function ue(i){const n=new Map;return i.forEach((a,c)=>{const d=String(a.theme_id||`pack-${Math.floor(c/5)}`).trim(),l=n.get(d)||[];l.push({...a,theme_id:a.theme_id||d}),n.set(d,l)}),Array.from(n.entries()).map(([a,c])=>({id:a,stars:c}))}function H(i){try{return S(JSON.parse(localStorage.getItem(i)||"[]"),i)}catch{return[]}}function ee(i,n){try{localStorage.setItem(i,JSON.stringify(n.slice(0,80)))}catch{}}function k(i,n){const a=i.replace(/[_#*-]+/g," ").replace(/\s+/g," ").trim();return a?a.length>8?a.slice(0,8):a:n}function re(i,n){const a=k(String(i.theme_id||""),"");if(a)return a;const c=k(String(i.preview||i.content||""),"");return c||`第 ${n+1} 场梦`}function be(i){return String(i.preview||i.content||"没有预览").trim()}function I(i,n,a){return{id:`${a}-${n}-${i.slice(0,8)}`,label:k(i,"梦境碎片"),text:i,color:n%3===1?"gold":"default",theme_id:a}}function j({gold:i=!1}){return e.jsx("svg",{viewBox:"0 0 100 100",className:`dreamArchiveFoldedStar ${i?"gold":""}`,children:e.jsx("path",{d:"M50 5 L61 40 L95 40 L68 60 L78 95 L50 75 L22 95 L32 60 L5 40 L39 40 Z"})})}function Ae(i){if(i<=0)return"";const n=60,a=[[20,14]];for(let c=1;c<i;c+=1){const d=14+(c-1)*n,l=14+c*n;a.push([20,d+26],[c%2===1?12:28,d+46],[20,l])}return a.map(([c,d],l)=>`${l===0?"M":"L"} ${c},${d}`).join(" ")}function we({backHandlerRef:i}){const n=he(),[a,c]=o.useState([]),[d,l]=o.useState(""),[g,y]=o.useState(null),[h,v]=o.useState("dreams"),[m,x]=o.useState(null),[$,D]=o.useState(!1),[te,_]=o.useState(!1),[C,N]=o.useState(""),[T,ae]=o.useState(()=>H(K)),[F,V]=o.useState([]),[ie,ne]=o.useState(!1),[b,Y]=o.useState(()=>H(Z)),[X,se]=o.useState(!1),P=o.useRef(0),z=o.useRef(!1),B=o.useRef(!1),E=o.useRef(JSON.stringify(b)),oe=o.useMemo(()=>a.find(r=>r.id===d)||null,[a,d]),A=g||oe,R=o.useCallback(async()=>{var r;D(!0);try{const t=await w("/miniapp-api/spring-dream-archives?limit=80"),s=fe(t.items);c(s),!d&&((r=s[0])!=null&&r.id)&&l(s[0].id)}catch(t){n(`读取失败：${(t==null?void 0:t.message)||t}`)}finally{D(!1)}},[d,n]);o.useEffect(()=>{R()},[R]),o.useEffect(()=>{let r=!1;const t=String(d||"").trim();if(!t){y(null);return}return _(!0),w(`/miniapp-api/spring-dream-archives/${encodeURIComponent(t)}`).then(s=>{r||y(s.item||null)}).catch(s=>{r||n(`读取详情失败：${(s==null?void 0:s.message)||s}`)}).finally(()=>{r||_(!1)}),()=>{r=!0}},[d,n]),o.useEffect(()=>ee(K,T),[T]),o.useEffect(()=>ee(Z,b),[b]),o.useEffect(()=>{let r=!1;return w("/miniapp-api/spring-dream-fragments?limit=120").then(t=>{if(r)return;const s=ve(t.packs||[],"remote-library");if(s.length){V(s);return}const p=S(t.stars||t.fragments||[],"remote-library",120);p.length&&V(ue(p))}).catch(()=>{}).finally(()=>{r||ne(!0)}),()=>{r=!0}},[]),o.useEffect(()=>{let r=!1;const t=P.current;return w("/miniapp-api/spring-dream-inspiration").then(s=>{if(r)return;const p=S(s.stars||s.fragments||[],"remote-inspiration");E.current=JSON.stringify(p),P.current===t&&Y(p)}).catch(()=>{}).finally(()=>{r||se(!0)}),()=>{r=!0}},[]),o.useEffect(()=>{!X||JSON.stringify(b)===E.current||w("/miniapp-api/spring-dream-inspiration",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({stars:b})}).then(t=>{const s=S(t.stars||t.fragments||[],"saved-inspiration");E.current=JSON.stringify(s),z.current=!1,B.current=!1}).catch(t=>{!z.current||B.current||(B.current=!0,n(`灵感瓶同步失败：${(t==null?void 0:t.message)||t}`))})},[X,b,n]);const J=o.useMemo(()=>F.flatMap(r=>r.stars),[F]),L=o.useMemo(()=>{const r=Array.isArray(A==null?void 0:A.fragments)?A.fragments.filter(Boolean).map((f,u)=>I(String(f),u,"selected")):[],t=a.flatMap(f=>Array.isArray(f.fragments)?f.fragments:[]).filter(Boolean).slice(0,12).map((f,u)=>I(String(f),u,"archive")),s=[...J,...T,...r,...t],p=new Set;return s.filter(f=>{const u=f.text;return p.has(u)?!1:(p.add(u),!0)})},[A==null?void 0:A.fragments,a,J,T]),le=o.useMemo(()=>L.slice(0,60),[L]),de=o.useMemo(()=>F.filter(r=>r.stars.length),[F]),ce=h==="dreams"?"梦境":h==="fragments"?"碎片":"灵感",O=o.useCallback(()=>m?(x(null),!0):h!=="dreams"?(v("dreams"),!0):!1,[m,h]);o.useEffect(()=>{if(i)return i.current=O,()=>{i.current===O&&(i.current=null)}},[i,O]);function pe(r){l(r.id),x({type:"dream",item:r})}function M(r){P.current+=1,z.current=!0,Y(r)}function U(r){r.length&&(M(t=>{const s=[...r,...t],p=new Set;return s.filter(f=>{const u=f.text;return p.has(u)?!1:(p.add(u),!0)}).slice(0,36)}),x(null),v("inspiration"))}function W(r){const t=C.trim();if(!t)return;const s={id:`local-${Date.now()}`,label:k(t,"梦境碎片"),text:t,color:r==="inspiration"?"gold":"default"};r==="fragment"?(ae(p=>[s,...p].slice(0,40)),v("fragments")):(M(p=>[s,...p].slice(0,36)),v("inspiration")),N(""),x(null)}function q(){const r=de;if(!r.length){x({type:"fish",stars:[]});return}const t=r[Math.floor(Math.random()*r.length)],s=((t==null?void 0:t.stars)||[]).slice(0,8);x({type:"fish",stars:s})}function me(){if(!m)return null;if(m.type==="dream"){const r=(g==null?void 0:g.id)===m.item.id?g:m.item,t=Array.isArray(r.fragments)?r.fragments.filter(Boolean):[];return e.jsxs(e.Fragment,{children:[e.jsx("div",{className:"dreamArchiveTime",children:Q(r.sent_at)}),e.jsx("div",{className:"dreamArchivePanelTitle",children:re(r,0)}),e.jsx("div",{className:"dreamArchivePanelText",children:te&&!(g!=null&&g.content)?"读取中":(g==null?void 0:g.content)||r.content||r.preview||"没有正文"}),t.length?e.jsxs("div",{style:{borderTop:"0.5px solid var(--border)",paddingTop:20},children:[e.jsx("div",{style:{fontSize:10,color:"var(--text-muted)",marginBottom:12,letterSpacing:"0.1em"},children:"关联碎片"}),e.jsx("div",{style:{display:"flex",gap:8,flexWrap:"wrap"},children:t.slice(0,6).map((s,p)=>e.jsx("button",{type:"button",style:{width:24,height:24,border:0,padding:0,background:"transparent"},onClick:()=>x({type:"fragment",star:I(String(s),p,"detail")}),"aria-label":String(s),children:e.jsx(j,{gold:p%2===0})},`${s}-${p}`))})]}):null]})}return m.type==="fragment"?e.jsxs(e.Fragment,{children:[e.jsx("p",{className:"dreamArchivePanelMuted",children:m.star.text}),e.jsxs("div",{className:"dreamArchivePanelActions",children:[e.jsx("button",{className:"dreamArchiveGhost",type:"button",onClick:()=>U([m.star]),children:"放进瓶子"}),e.jsx("button",{className:"dreamArchiveGhost",type:"button",onClick:()=>{N(m.star.text),x({type:"fold"})},children:"编辑"})]})]}):m.type==="fold"?e.jsxs(e.Fragment,{children:[e.jsx("div",{className:"dreamArchivePanelTitle",children:"写一颗星"}),e.jsx("textarea",{className:"dreamArchiveTextarea",placeholder:"记录微小的碎片...",value:C,onChange:r=>N(r.target.value)}),e.jsxs("div",{className:"dreamArchiveTagRow",children:[e.jsx("span",{className:"dreamArchiveGhost",style:{borderColor:"var(--accent)",color:"var(--accent)"},children:"场景"}),e.jsx("span",{className:"dreamArchiveGhost",children:"道具"}),e.jsx("span",{className:"dreamArchiveGhost",children:"动作"}),e.jsx("span",{className:"dreamArchiveGhost",children:"氛围"})]}),e.jsx("button",{className:"dreamArchiveGhost dreamArchivePrimary",type:"button",onClick:()=>W("fragment"),children:"放好了"})]}):m.type==="write"?e.jsxs(e.Fragment,{children:[e.jsx("div",{className:"dreamArchivePanelTitle",children:"许一个灵感"}),e.jsx("textarea",{className:"dreamArchiveTextarea",style:{height:80},placeholder:"写下今晚的期待...",value:C,onChange:r=>N(r.target.value)}),e.jsx("button",{className:"dreamArchiveGhost dreamArchivePrimary",type:"button",onClick:()=>W("inspiration"),children:"放入瓶中"})]}):e.jsxs(e.Fragment,{children:[e.jsx("div",{className:"dreamArchivePanelTitle",style:{textAlign:"center"},children:"打捞结果"}),m.stars.length?e.jsxs("div",{className:"dreamArchiveFishGrid",children:[e.jsx("svg",{className:"dreamArchiveFishSvg",viewBox:`0 0 50 ${Math.max(220,m.stars.length*60)}`,style:{height:Math.max(220,m.stars.length*60)},preserveAspectRatio:"none","aria-hidden":"true",children:e.jsx("path",{className:"dreamArchiveFishPath",d:Ae(m.stars.length)})}),m.stars.map((r,t)=>e.jsxs("button",{className:"dreamArchiveFishCard",type:"button",onClick:()=>x({type:"fragment",star:r}),children:[e.jsx("div",{className:"dreamArchiveFishStar",style:{"--star-delay":`${-(t%5)*.42}s`},children:e.jsx(j,{gold:r.color==="gold"})}),e.jsx("div",{className:"dreamArchiveFishText",children:r.text})]},r.id))]}):e.jsx("p",{className:"dreamArchivePanelMuted",style:{textAlign:"center"},children:"还没有可以打捞的碎片"}),e.jsxs("div",{className:"dreamArchivePanelActions",children:[e.jsx("button",{className:"dreamArchiveGhost",type:"button",onClick:()=>U(m.stars),children:"全部收进瓶子"}),e.jsx("button",{className:"dreamArchiveGhost",type:"button",onClick:q,children:"换一批"})]})]})}return e.jsxs("div",{className:"dreamArchiveRoot",children:[e.jsx("style",{children:xe}),e.jsx("div",{className:"dreamArchiveVortex"}),e.jsx("div",{className:"dreamArchiveGrain"}),e.jsxs("header",{className:"dreamArchiveHeader",children:[e.jsxs("div",{className:"dreamArchiveTitleBlock",children:[e.jsx("div",{className:"dreamArchiveTitleEn",children:"DREAM"}),e.jsx("h1",{className:"dreamArchiveTitle",children:ce})]}),e.jsx("button",{className:"dreamArchiveGhost",type:"button",onClick:()=>void R(),disabled:$,children:$?"读取中":e.jsx("svg",{width:"14",height:"14",viewBox:"0 0 24 24",fill:"none",stroke:"currentColor",strokeWidth:"2",children:e.jsx("path",{d:"M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"})})})]}),e.jsx("main",{className:`dreamArchiveView ${h==="dreams"?"active":""}`,children:a.length?e.jsxs("div",{className:"dreamArchiveTimeline",children:[e.jsx("svg",{className:"dreamArchiveTimelineSvg",viewBox:"0 0 50 340",style:{height:Math.max(340,a.length*116)},children:e.jsx("path",{className:"dreamArchiveTimelinePath",d:"M 20,14 L 20,70 L 12,110 L 20,140 L 20,190 L 28,230 L 20,265"})}),a.map((r,t)=>e.jsxs("button",{className:"dreamArchiveEntry",type:"button",onClick:()=>pe(r),children:[e.jsx("div",{className:"dreamArchiveNode",children:e.jsx(j,{gold:r.id===d||t%2===0})}),e.jsxs("div",{className:"dreamArchiveTime",children:[Q(r.sent_at),r.r2_key?e.jsx("span",{className:"dreamArchiveFav",children:"★"}):null]}),e.jsx("div",{className:"dreamArchiveDreamTitle",children:re(r,t)}),e.jsx("div",{className:"dreamArchivePreview",children:be(r)})]},r.id))]}):e.jsx("div",{className:"dreamArchiveEmpty",children:$?"正在读取":"还没有梦境记录"})}),e.jsxs("main",{className:`dreamArchiveView dreamArchiveFragmentView ${h==="fragments"?"active":""}`,children:[e.jsxs("div",{className:"dreamArchiveOrbitField","aria-hidden":"true",children:[e.jsx("div",{className:"dreamArchiveOrbitRing"}),e.jsx("div",{className:"dreamArchiveOrbitRing"}),e.jsx("div",{className:"dreamArchiveOrbitRing"})]}),e.jsx("div",{style:{position:"relative",zIndex:1,display:"flex",justifyContent:"center",marginBottom:20},children:e.jsx("button",{className:"dreamArchiveGhost",type:"button",onClick:q,children:"随机打捞"})}),e.jsxs("div",{className:"dreamArchiveStarPool",children:[le.map((r,t)=>{const s=G[t%G.length],p=Math.floor(t/G.length);return e.jsx("button",{className:"dreamArchivePaperStar",type:"button",style:{gridColumn:`${s.col} / span 2`,gridRow:`${p*10+s.row} / span 1`,"--star-rot":`${s.rot+t*7}deg`,"--star-scale":`${s.scale}`,"--star-offset":`${s.offset}px`,"--star-drift":`${-5-t%3*2}px`,"--star-delay":`${-(t%7)*.38}s`},onClick:()=>x({type:"fragment",star:r}),"aria-label":r.label||"梦境碎片",children:e.jsx(j,{gold:r.color==="gold"})},`${r.id}-${t}`)}),L.length?null:e.jsx("div",{className:"dreamArchiveEmpty",children:ie?"没有读到春梦碎片库":"正在打捞碎片库"})]}),e.jsx("button",{className:"dreamArchiveFloat",type:"button",onClick:()=>x({type:"fold"}),"aria-label":"写一颗星",children:e.jsxs("svg",{width:"18",height:"18",viewBox:"0 0 24 24",fill:"none",stroke:"currentColor",strokeWidth:"2.2",children:[e.jsx("line",{x1:"12",y1:"5",x2:"12",y2:"19"}),e.jsx("line",{x1:"5",y1:"12",x2:"19",y2:"12"})]})})]}),e.jsxs("main",{className:`dreamArchiveView dreamArchiveInspirationView ${h==="inspiration"?"active":""}`,children:[e.jsxs("div",{className:"dreamArchiveBottle",children:[e.jsx("img",{className:"dreamArchiveBottleRibbon",src:ge,alt:"","aria-hidden":"true"}),e.jsx("div",{className:"dreamArchiveBottleNeck"}),e.jsx("div",{className:"dreamArchiveBottleDust","aria-hidden":"true"}),e.jsx("div",{className:"dreamArchiveBottleStars",children:b.length?b.map((r,t)=>e.jsx("button",{className:"dreamArchiveBottleStar",type:"button",style:{width:`${20+t%5*5}px`,height:`${20+t%5*5}px`,transform:`rotate(${t*31}deg)`,opacity:.68+t%3*.12,"--star-delay":`${-(t%6)*.35}s`},onClick:()=>x({type:"fragment",star:r}),"aria-label":r.label,children:e.jsx(j,{gold:r.color==="gold"||t%3===0})},`${r.id}-${t}`)):null})]}),e.jsxs("div",{className:"dreamArchiveInspirationActions",style:{display:"flex",justifyContent:"center",gap:12,marginTop:20},children:[e.jsx("button",{className:"dreamArchiveGhost",type:"button",onClick:()=>x({type:"write"}),children:"写一颗"}),e.jsx("button",{className:"dreamArchiveGhost",type:"button",onClick:()=>M([]),children:"清空瓶子"})]})]}),e.jsxs("nav",{className:"dreamArchiveNav",children:[e.jsx("button",{className:`dreamArchiveTab ${h==="dreams"?"active":""}`,type:"button",onClick:()=>v("dreams"),children:"梦境"}),e.jsx("button",{className:`dreamArchiveTab ${h==="fragments"?"active":""}`,type:"button",onClick:()=>v("fragments"),children:"碎片"}),e.jsx("button",{className:`dreamArchiveTab ${h==="inspiration"?"active":""}`,type:"button",onClick:()=>v("inspiration"),children:"灵感"})]}),e.jsx("button",{className:`dreamArchiveOverlay ${m?"active":""}`,type:"button",onClick:()=>x(null),"aria-label":"关闭"}),e.jsx("div",{className:`dreamArchivePanel ${m?"active":""}`,children:me()})]})}export{we as DreamArchiveTab};

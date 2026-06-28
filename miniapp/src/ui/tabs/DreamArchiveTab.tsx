@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dreamBottleRibbonUrl from "../../assets/dream-bottle-ribbon-trimmed.png";
 import { apiJson } from "../api";
 import { useToast } from "../toast";
 
@@ -40,6 +41,14 @@ type DreamInspirationResp = {
   updated_at?: string;
 };
 
+type DreamFragmentLibraryResp = {
+  ok?: boolean;
+  stars?: FragmentStar[];
+  fragments?: string[];
+  packs?: FragmentPack[];
+  count?: number;
+};
+
 type DreamView = "dreams" | "fragments" | "inspiration";
 
 type FragmentStar = {
@@ -47,6 +56,12 @@ type FragmentStar = {
   label: string;
   text: string;
   color: "default" | "gold";
+  theme_id?: string;
+};
+
+type FragmentPack = {
+  id: string;
+  stars: FragmentStar[];
 };
 
 type PanelState =
@@ -60,14 +75,18 @@ const DREAM_LOCAL_FRAGMENTS_KEY = "miniapp.springDream.localFragments";
 const DREAM_INSPIRATION_KEY = "miniapp.springDream.inspirationStars";
 
 const STAR_LAYOUT = [
-  { x: 13, y: 12, rot: -18, scale: 1.02 },
-  { x: 61, y: 15, rot: 24, scale: 0.82 },
-  { x: 35, y: 31, rot: 9, scale: 1.24 },
-  { x: 75, y: 39, rot: -31, scale: 0.92 },
-  { x: 17, y: 55, rot: 42, scale: 0.74 },
-  { x: 51, y: 63, rot: -8, scale: 1.1 },
-  { x: 72, y: 72, rot: 18, scale: 0.7 },
-  { x: 30, y: 76, rot: -44, scale: 0.88 },
+  { col: 2, row: 1, rot: -18, scale: 0.82, offset: 0 },
+  { col: 9, row: 1, rot: 24, scale: 0.72, offset: 10 },
+  { col: 5, row: 2, rot: 9, scale: 0.92, offset: -4 },
+  { col: 11, row: 3, rot: -31, scale: 0.78, offset: 7 },
+  { col: 1, row: 4, rot: 42, scale: 0.7, offset: -2 },
+  { col: 7, row: 4, rot: -8, scale: 0.86, offset: 8 },
+  { col: 4, row: 5, rot: 18, scale: 0.68, offset: -6 },
+  { col: 10, row: 6, rot: -44, scale: 0.8, offset: 2 },
+  { col: 6, row: 7, rot: 33, scale: 0.74, offset: 11 },
+  { col: 2, row: 8, rot: -27, scale: 0.88, offset: -5 },
+  { col: 8, row: 8, rot: 12, scale: 0.7, offset: 4 },
+  { col: 12, row: 9, rot: -12, scale: 0.76, offset: -3 },
 ];
 
 const dreamArchiveCss = `
@@ -79,6 +98,8 @@ const dreamArchiveCss = `
   --accent: #FDE68A;
   --border: rgba(255, 255, 255, 0.1);
   --ink: rgba(255, 255, 255, 0.05);
+  --dream-display: 'Cormorant Garamond', 'Playfair Display', 'Noto Serif SC', 'Songti SC', serif;
+  --dream-body: 'Lora', 'Noto Serif SC', 'Songti SC', serif;
   position: fixed;
   inset: 0;
   z-index: 40;
@@ -87,7 +108,7 @@ const dreamArchiveCss = `
   overflow: hidden;
   background-color: var(--bg);
   color: var(--text-main);
-  font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-family: var(--dream-body);
   user-select: none;
 }
 
@@ -131,7 +152,7 @@ const dreamArchiveCss = `
 }
 
 .dreamArchiveTitleEn {
-  font-family: 'Noto Serif SC', serif;
+  font-family: var(--dream-display);
   font-weight: 300;
   font-size: 10px;
   letter-spacing: 0.6em;
@@ -142,8 +163,8 @@ const dreamArchiveCss = `
 }
 
 .dreamArchiveTitle {
-  font-family: 'Noto Serif SC', serif;
-  font-weight: 600;
+  font-family: var(--dream-display);
+  font-weight: 500;
   font-size: 32px;
   letter-spacing: 0.25em;
   text-shadow: 0 0 20px rgba(255,255,255,0.2);
@@ -159,10 +180,10 @@ const dreamArchiveCss = `
   border-radius: 20px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  font-family: var(--dream-display);
 }
 
-.dreamArchiveGhost:active,
-.dreamArchiveFloat:active {
+.dreamArchiveGhost:active {
   transform: scale(0.97);
 }
 
@@ -190,7 +211,7 @@ const dreamArchiveCss = `
   color: var(--text-muted);
   cursor: pointer;
   transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
-  font-family: 'Noto Serif SC', serif;
+  font-family: var(--dream-display);
   letter-spacing: 0.15em;
   position: relative;
   background: none;
@@ -279,11 +300,14 @@ const dreamArchiveCss = `
 
 .dreamArchiveNode {
   position: absolute;
-  left: -46px;
-  top: -2px;
-  width: 32px;
-  height: 32px;
+  left: -42px;
+  top: 1px;
+  width: 26px;
+  height: 26px;
   filter: drop-shadow(0 0 5px rgba(255,255,255,0.1));
+  animation: dreamArchiveSoftFloat 6s ease-in-out infinite;
+  animation-delay: var(--star-delay, 0s);
+  will-change: transform;
 }
 
 .dreamArchiveTime {
@@ -294,7 +318,7 @@ const dreamArchiveCss = `
 }
 
 .dreamArchiveDreamTitle {
-  font-family: 'Noto Serif SC', serif;
+  font-family: var(--dream-display);
   font-size: 18px;
   color: var(--text-main);
   margin-bottom: 8px;
@@ -327,123 +351,268 @@ const dreamArchiveCss = `
 
 .dreamArchiveFragmentView {
   position: relative;
-  overflow: hidden;
+  overflow-y: auto;
+  animation: none;
+}
+
+.dreamArchiveInspirationView {
+  position: relative;
+  overflow: visible;
+}
+
+.dreamArchiveInspirationView.active {
+  z-index: 30;
+}
+
+.dreamArchiveBottleLabel,
+.dreamArchiveBottle,
+.dreamArchiveInspirationActions {
+  position: relative;
+  z-index: 1;
+}
+
+.dreamArchiveOrbitField {
+  position: absolute;
+  left: 50%;
+  top: 24px;
+  width: min(132vw, 620px);
+  height: min(86vw, 400px);
+  transform: translateX(-50%) rotate(-11deg);
+  pointer-events: none;
+  opacity: 0.68;
+  z-index: 0;
+  filter: blur(0.1px);
+  animation: dreamArchiveOrbitDrift 9s ease-in-out infinite alternate;
+}
+
+.dreamArchiveOrbitRing {
+  --ring-tilt: -18deg;
+  --ring-scale-y: 1;
+  position: absolute;
+  inset: 8% 13%;
+  border-radius: 50%;
+  background:
+    conic-gradient(
+      from 20deg,
+      transparent 0deg 18deg,
+      rgba(253, 230, 138, 0.55) 18deg 20deg,
+      transparent 20deg 66deg,
+      rgba(255,255,255,0.32) 66deg 68deg,
+      transparent 68deg 136deg,
+      rgba(253, 230, 138, 0.34) 136deg 138deg,
+      transparent 138deg 360deg
+    );
+  -webkit-mask: radial-gradient(ellipse at center, transparent 0 58%, #000 58.6% 59.8%, transparent 60.4%);
+  mask: radial-gradient(ellipse at center, transparent 0 58%, #000 58.6% 59.8%, transparent 60.4%);
+  animation: dreamArchiveOrbitSpin 32s linear infinite;
+}
+
+.dreamArchiveOrbitRing::before,
+.dreamArchiveOrbitRing::after {
+  content: '';
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(253, 230, 138, 0.88);
+  box-shadow:
+    0 0 10px rgba(253, 230, 138, 0.7),
+    34px 12px 0 -1px rgba(255,255,255,0.42),
+    74px 40px 0 -1px rgba(255,255,255,0.24),
+    -52px 34px 0 -1px rgba(255,255,255,0.32),
+    -112px 74px 0 -1px rgba(253,230,138,0.2);
+}
+
+.dreamArchiveOrbitRing::before {
+  top: 18%;
+  left: 76%;
+}
+
+.dreamArchiveOrbitRing::after {
+  right: 18%;
+  bottom: 16%;
+  opacity: 0.7;
+}
+
+.dreamArchiveOrbitRing:nth-child(2) {
+  --ring-tilt: 21deg;
+  --ring-scale-y: 0.84;
+  inset: 18% 4%;
+  animation-duration: 44s;
+  animation-direction: reverse;
+  opacity: 0.58;
+  background:
+    conic-gradient(
+      from 110deg,
+      transparent 0deg 44deg,
+      rgba(255,255,255,0.26) 44deg 46deg,
+      transparent 46deg 160deg,
+      rgba(253, 230, 138, 0.34) 160deg 162deg,
+      transparent 162deg 270deg,
+      rgba(255,255,255,0.2) 270deg 272deg,
+      transparent 272deg 360deg
+    );
+}
+
+.dreamArchiveOrbitRing:nth-child(3) {
+  --ring-tilt: 58deg;
+  --ring-scale-y: 0.72;
+  inset: 30% 24%;
+  animation-duration: 26s;
+  opacity: 0.42;
+}
+
+@keyframes dreamArchiveOrbitSpin {
+  from { transform: rotate(var(--ring-tilt)) scaleY(var(--ring-scale-y)); }
+  to { transform: rotate(calc(var(--ring-tilt) + 360deg)) scaleY(var(--ring-scale-y)); }
+}
+
+@keyframes dreamArchiveOrbitDrift {
+  from { transform: translateX(-50%) translateY(-2px) rotate(-11deg); }
+  to { transform: translateX(-50%) translateY(8px) rotate(-8deg); }
 }
 
 .dreamArchiveStarPool {
-  position: absolute;
-  inset: 56px 0 0;
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: 34px;
+  justify-items: center;
+  align-items: center;
+  gap: 4px 0;
+  min-height: 0;
+  margin-top: 18px;
+  padding: 22px 10px 86px;
 }
 
 .dreamArchivePaperStar {
-  position: absolute;
-  width: 50px;
-  height: 50px;
+  --star-rot: 0deg;
+  --star-scale: 0.82;
+  --star-offset: 0px;
+  --star-drift: -7px;
+  position: relative;
+  width: 24px;
+  height: 24px;
   cursor: pointer;
   filter: drop-shadow(0 0 5px rgba(255,255,255,0.1));
   transition: transform 0.2s;
   border: 0;
   background: transparent;
   padding: 0;
+  animation: dreamArchiveStarFloat 5.8s ease-in-out infinite;
+  animation-delay: var(--star-delay, 0s);
+  transform: translate3d(0, var(--star-offset), 0) rotate(var(--star-rot)) scale(var(--star-scale));
+  will-change: transform;
 }
 
-.dreamArchiveStarLabel {
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 10px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  margin-top: 4px;
-  opacity: 0.7;
+@keyframes dreamArchiveStarFloat {
+  0%, 100% {
+    transform: translate3d(0, var(--star-offset), 0) rotate(var(--star-rot)) scale(var(--star-scale));
+  }
+  50% {
+    transform: translate3d(0, calc(var(--star-offset) + var(--star-drift)), 0) rotate(calc(var(--star-rot) + 4deg)) scale(var(--star-scale));
+  }
 }
 
 .dreamArchiveBottleLabel {
   text-align: center;
-  font-family: 'Noto Serif SC', serif;
+  font-family: var(--dream-display);
   color: var(--text-muted);
   font-size: 13px;
-  margin-top: 10px;
+  margin-top: 2px;
 }
 
 .dreamArchiveBottle {
   position: relative;
-  width: 240px;
-  height: 360px;
-  margin: 70px auto 40px;
+  left: 14px;
+  width: 166px;
+  height: 264px;
+  margin: 96px auto 38px;
   background:
-    radial-gradient(ellipse at 35% 20%, rgba(255,255,255,0.12) 0%, transparent 50%),
-    radial-gradient(ellipse at 70% 80%, rgba(255,255,255,0.04) 0%, transparent 40%),
-    linear-gradient(170deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.01) 40%, rgba(255,255,255,0.03) 100%);
-  border-radius: 100px 100px 36px 36px;
-  border: 1.5px solid rgba(255,255,255,0.2);
-  border-top-color: rgba(255,255,255,0.3);
-  border-left-color: rgba(255,255,255,0.25);
-  border-right-color: rgba(255,255,255,0.1);
+    radial-gradient(ellipse at 30% 28%, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.05) 30%, transparent 62%),
+    radial-gradient(ellipse at 52% 86%, rgba(253,230,138,0.18) 0%, rgba(253,230,138,0.05) 36%, transparent 68%),
+    linear-gradient(155deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.025) 48%, rgba(255,255,255,0.07) 100%);
+  border-radius: 42px 42px 32px 32px / 54px 54px 30px 30px;
+  border: 2px solid rgba(237,246,255,0.34);
+  border-top-color: rgba(255,255,255,0.5);
+  border-left-color: rgba(255,255,255,0.42);
+  border-right-color: rgba(181,210,255,0.2);
   backdrop-filter: blur(12px) saturate(1.2);
   overflow: visible;
+  transform: rotate(14deg);
+  transform-origin: 50% 2%;
+  animation: dreamArchiveBottleFloat 5.8s ease-in-out infinite;
+  will-change: transform;
   box-shadow:
-    inset 0 30px 60px rgba(255,255,255,0.06),
-    inset -20px -20px 40px rgba(0,0,0,0.15),
-    inset 20px 0 40px rgba(255,255,255,0.04),
-    0 40px 80px rgba(0,0,0,0.5),
-    0 0 0 1px rgba(255,255,255,0.05);
+    inset 0 24px 46px rgba(255,255,255,0.09),
+    inset -18px -20px 38px rgba(20,47,88,0.16),
+    inset 18px 0 32px rgba(255,255,255,0.08),
+    0 0 30px rgba(122,176,255,0.18),
+    0 32px 72px rgba(0,0,0,0.5);
+}
+
+@keyframes dreamArchiveBottleFloat {
+  0%, 100% { transform: translateY(0) rotate(14deg); }
+  50% { transform: translateY(-4px) rotate(15deg); }
 }
 
 .dreamArchiveBottle::before {
   content: '';
   position: absolute;
-  inset: 8px;
-  border-radius: 92px 92px 30px 30px;
-  border: 1px solid rgba(255,255,255,0.08);
+  inset: 10px 11px 12px;
+  border-radius: 34px 34px 24px 24px / 44px 44px 24px 24px;
+  border: 1px solid rgba(255,255,255,0.13);
   pointer-events: none;
-  background: linear-gradient(160deg, rgba(255,255,255,0.05) 0%, transparent 30%, transparent 70%, rgba(255,255,255,0.02) 100%);
+  background:
+    linear-gradient(154deg, rgba(255,255,255,0.1) 0%, transparent 28%, transparent 70%, rgba(255,255,255,0.04) 100%);
 }
 
 .dreamArchiveBottle::after {
   content: '';
   position: absolute;
-  top: 15%;
-  left: 8%;
-  width: 25px;
-  height: 80px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.05) 100%);
-  border-radius: 12px;
-  filter: blur(4px);
-  transform: rotate(8deg);
+  right: 34px;
+  top: 26px;
+  width: 16px;
+  height: 78px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0.18) 38%, rgba(255,255,255,0.04) 100%);
+  border-radius: 999px;
+  filter: blur(2px);
+  transform: rotate(0deg);
   pointer-events: none;
 }
 
 .dreamArchiveBottleNeck {
   position: absolute;
-  top: -50px;
+  top: -42px;
   left: 50%;
   transform: translateX(-50%);
-  width: 64px;
-  height: 52px;
-  background: linear-gradient(90deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.12) 30%, rgba(255,255,255,0.04) 100%);
-  border: 1.5px solid rgba(255,255,255,0.2);
+  width: 92px;
+  height: 48px;
+  background:
+    repeating-linear-gradient(180deg, rgba(255,255,255,0.2) 0 3px, rgba(255,255,255,0.04) 3px 7px),
+    linear-gradient(90deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.19) 36%, rgba(255,255,255,0.04) 100%);
+  border: 1.5px solid rgba(237,246,255,0.32);
   border-bottom: none;
-  border-radius: 10px 10px 4px 4px;
+  border-radius: 20px 20px 8px 8px;
   box-shadow:
     inset 0 2px 8px rgba(255,255,255,0.1),
     0 4px 20px rgba(0,0,0,0.3);
-  z-index: 10;
+  z-index: 12;
   overflow: hidden;
 }
 
 .dreamArchiveBottleNeck::before {
   content: '';
   position: absolute;
-  top: -14px;
+  top: -16px;
   left: 50%;
   transform: translateX(-50%);
-  width: 80px;
+  width: 70px;
   height: 18px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.06) 100%);
-  border: 1.5px solid rgba(255,255,255,0.25);
-  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(224,192,143,0.76) 0%, rgba(176,138,92,0.42) 100%);
+  border: 1px solid rgba(253,230,180,0.24);
+  border-radius: 10px 10px 4px 4px;
   box-shadow:
     0 2px 12px rgba(0,0,0,0.25),
     inset 0 1px 2px rgba(255,255,255,0.3);
@@ -452,38 +621,81 @@ const dreamArchiveCss = `
 .dreamArchiveBottleNeck::after {
   content: '';
   position: absolute;
-  top: -4px;
+  left: -8px;
+  right: -8px;
+  top: 12px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.22);
+  box-shadow:
+    0 10px 0 rgba(255,255,255,0.12),
+    0 20px 0 rgba(255,255,255,0.08);
+}
+
+.dreamArchiveBottleRibbon {
+  position: absolute;
   left: 50%;
-  transform: translateX(-50%);
-  width: 72px;
-  height: 8px;
-  background: rgba(255,255,255,0.08);
-  border-radius: 6px;
-  border: 1px solid rgba(255,255,255,0.15);
-  box-shadow: inset 0 1px 2px rgba(255,255,255,0.1);
+  top: -142px;
+  width: 330px;
+  max-width: none;
+  height: auto;
+  display: block;
+  transform: translateX(-60%) rotate(-14deg);
+  pointer-events: none;
+  z-index: 18;
+  filter: drop-shadow(0 10px 16px rgba(6,18,42,0.28));
+  transform-origin: 50% 50%;
+}
+
+.dreamArchiveBottleDust {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 30px;
+  height: 132px;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.88;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(255,255,255,0.95) 0 2px, transparent 3px),
+    radial-gradient(circle at 22% 66%, rgba(253,230,138,0.95) 0 2px, transparent 3px),
+    radial-gradient(circle at 72% 72%, rgba(255,255,255,0.86) 0 1px, transparent 2px),
+    radial-gradient(circle at 62% 50%, rgba(253,230,138,0.8) 0 1px, transparent 2px),
+    radial-gradient(ellipse at 50% 100%, rgba(253,230,138,0.42) 0%, rgba(84,142,199,0.12) 42%, transparent 72%);
+  filter: drop-shadow(0 0 10px rgba(253,230,138,0.36));
+  animation: dreamArchiveBottleGlow 4.8s ease-in-out infinite alternate;
 }
 
 .dreamArchiveBottleStars {
   position: absolute;
-  bottom: 20px;
+  bottom: 24px;
   left: 0;
   right: 0;
-  height: 100%;
+  height: 64%;
   display: flex;
   flex-wrap: wrap-reverse;
   justify-content: center;
   align-content: flex-start;
-  padding: 20px 30px;
-  gap: 2px;
+  padding: 14px 22px 8px;
+  gap: 1px;
+  z-index: 2;
 }
 
 .dreamArchiveBottleStar {
-  width: 44px;
-  height: 44px;
+  width: 34px;
+  height: 34px;
   margin: -4px;
   border: 0;
   background: transparent;
   padding: 0;
+  animation: dreamArchiveSoftFloat 6.4s ease-in-out infinite;
+  animation-delay: var(--star-delay, 0s);
+  will-change: transform;
+}
+
+@keyframes dreamArchiveBottleGlow {
+  from { opacity: 0.68; transform: translateY(2px) scale(0.98); }
+  to { opacity: 0.96; transform: translateY(-4px) scale(1.03); }
 }
 
 .dreamArchiveFloat {
@@ -506,8 +718,8 @@ const dreamArchiveCss = `
 .dreamArchiveOverlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.8);
-  backdrop-filter: blur(4px);
+  background: rgba(0,0,0,0.46);
+  backdrop-filter: blur(3px);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.4s;
@@ -524,15 +736,17 @@ const dreamArchiveCss = `
   bottom: 0;
   left: 0;
   right: 0;
-  max-height: 74vh;
+  max-height: 68vh;
   overflow-y: auto;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-  padding: 30px 24px 40px;
+  background: rgba(20, 20, 24, 0.72);
+  border-top: 0.5px solid rgba(255,255,255,0.12);
+  padding: 22px 22px 34px;
   transform: translateY(100%);
   transition: transform 0.4s cubic-bezier(0.23, 1, 0.32, 1);
   z-index: 1000;
-  border-radius: 30px 30px 0 0;
+  border-radius: 24px 24px 0 0;
+  backdrop-filter: blur(18px) saturate(1.1);
+  box-shadow: 0 -20px 60px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,255,255,0.06);
 }
 
 .dreamArchivePanel.active {
@@ -540,23 +754,26 @@ const dreamArchiveCss = `
 }
 
 .dreamArchivePanelTitle {
-  font-family: 'Noto Serif SC', serif;
-  font-size: 20px;
-  margin-bottom: 20px;
+  font-family: var(--dream-display);
+  font-size: 16px;
+  margin-bottom: 14px;
+  letter-spacing: 0.06em;
 }
 
 .dreamArchivePanelText {
   color: var(--text-main);
-  line-height: 1.8;
-  margin-bottom: 30px;
+  font-size: 13px;
+  line-height: 1.72;
+  margin-bottom: 22px;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .dreamArchivePanelMuted {
   color: var(--text-muted);
-  line-height: 1.8;
-  margin-bottom: 30px;
+  font-size: 13px;
+  line-height: 1.72;
+  margin-bottom: 22px;
 }
 
 .dreamArchivePanelActions {
@@ -570,15 +787,17 @@ const dreamArchiveCss = `
 
 .dreamArchiveTextarea {
   width: 100%;
-  height: 120px;
-  background: rgba(255,255,255,0.03);
+  height: 104px;
+  background: rgba(255,255,255,0.045);
   border: 0.5px solid var(--border);
   color: white;
-  padding: 15px;
+  padding: 12px;
   border-radius: 10px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
   outline: none;
   resize: none;
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .dreamArchiveTagRow {
@@ -595,53 +814,99 @@ const dreamArchiveCss = `
 }
 
 .dreamArchiveFishGrid {
-  display: flex;
-  justify-content: space-around;
-  margin: 30px 0;
-  gap: 16px;
+  position: relative;
+  margin: 18px 0 22px;
+  padding-left: 50px;
+}
+
+.dreamArchiveFishSvg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 50px;
+  min-height: 340px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.dreamArchiveFishPath {
+  fill: none;
+  stroke: rgba(255,255,255,0.15);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .dreamArchiveFishCard {
-  width: 100px;
-  text-align: center;
-  background: rgba(255,255,255,0.04);
-  border: 0.5px solid rgba(255,255,255,0.1);
-  border-radius: 16px;
-  padding: 20px 12px;
-  backdrop-filter: blur(8px);
-  box-shadow: 0 4px 20px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.05);
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 42px;
+  margin: 0 0 18px;
+  padding: 0;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  z-index: 1;
+}
+
+.dreamArchiveFishCard:nth-of-type(odd) {
+  transform: translateX(-8px);
+}
+
+.dreamArchiveFishCard:nth-of-type(even) {
+  transform: translateX(8px);
 }
 
 .dreamArchiveFishStar {
-  width: 48px;
-  height: 48px;
-  margin: 0 auto 10px;
-}
-
-.dreamArchiveFishTitle {
-  font-size: 11px;
-  color: var(--text-main);
-  font-family: 'Noto Serif SC', serif;
-  margin-bottom: 4px;
+  position: absolute;
+  left: -42px;
+  top: 1px;
+  width: 26px;
+  height: 26px;
+  filter: drop-shadow(0 0 5px rgba(255,255,255,0.1));
+  animation: dreamArchiveSoftFloat 5.6s ease-in-out infinite;
+  animation-delay: var(--star-delay, 0s);
+  will-change: transform;
 }
 
 .dreamArchiveFishText {
-  font-size: 10px;
+  font-size: 13px;
   color: var(--text-muted);
-  line-height: 1.4;
+  line-height: 1.6;
+  padding-top: 2px;
 }
 
 .dreamArchiveFoldedStar {
-  fill: var(--text-muted);
-  opacity: 0.8;
+  fill: rgba(229, 229, 231, 0.72);
+  opacity: 0.9;
   stroke: var(--text-main);
-  stroke-width: 0.5;
+  stroke-width: 0.6;
 }
 
 .dreamArchiveFoldedStar.gold {
   fill: var(--accent);
   opacity: 1;
   filter: drop-shadow(0 0 8px var(--accent));
+}
+
+@keyframes dreamArchiveSoftFloat {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  50% { transform: translate3d(2px, -6px, 0) rotate(4deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dreamArchiveOrbitField,
+  .dreamArchiveOrbitRing,
+  .dreamArchivePaperStar,
+  .dreamArchiveFishStar,
+  .dreamArchiveNode,
+  .dreamArchiveBottle,
+  .dreamArchiveBottleRibbon,
+  .dreamArchiveBottleStar {
+    animation: none;
+  }
 }
 `;
 
@@ -660,7 +925,7 @@ function normalizeItems(input: unknown): DreamArchiveItem[] {
     .map((item) => ({ ...item, id: String(item.id || "").trim() }));
 }
 
-function normalizeStars(input: unknown, key: string): FragmentStar[] {
+function normalizeStars(input: unknown, key: string, limit = 80): FragmentStar[] {
   if (!Array.isArray(input)) return [];
   const seen = new Set<string>();
   const out: FragmentStar[] = [];
@@ -675,9 +940,37 @@ function normalizeStars(input: unknown, key: string): FragmentStar[] {
       label: (rawLabel.trim() || cleanLabel(cleanText, "梦境碎片")).slice(0, 16),
       text: cleanText,
       color: typeof item === "object" && item && (item as FragmentStar).color === "gold" ? "gold" : "default",
+      theme_id: typeof item === "object" && item ? String((item as FragmentStar).theme_id || "") : "",
     });
   });
-  return out.slice(0, 36);
+  return out.slice(0, limit);
+}
+
+function normalizePacks(input: unknown, key: string): FragmentPack[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((pack, index) => {
+      const rawPack = pack && typeof pack === "object" ? (pack as any) : {};
+      const id = String(rawPack.id || rawPack.theme_id || `${key}-${index}`).trim() || `${key}-${index}`;
+      const rawStars = Array.isArray(rawPack.stars) ? rawPack.stars : rawPack.fragments;
+      const stars = normalizeStars(rawStars || [], id, 12).map((star) => ({
+        ...star,
+        theme_id: star.theme_id || id,
+      }));
+      return { id, stars };
+    })
+    .filter((pack) => pack.stars.length);
+}
+
+function groupStarsIntoPacks(stars: FragmentStar[]): FragmentPack[] {
+  const grouped = new Map<string, FragmentStar[]>();
+  stars.forEach((star, index) => {
+    const id = String(star.theme_id || `pack-${Math.floor(index / 5)}`).trim();
+    const bucket = grouped.get(id) || [];
+    bucket.push({ ...star, theme_id: star.theme_id || id });
+    grouped.set(id, bucket);
+  });
+  return Array.from(grouped.entries()).map(([id, packStars]) => ({ id, stars: packStars }));
 }
 
 function readStoredStars(key: string): FragmentStar[] {
@@ -718,6 +1011,7 @@ function starFromText(text: string, index: number, prefix: string): FragmentStar
     label: cleanLabel(text, "梦境碎片"),
     text,
     color: index % 3 === 1 ? "gold" : "default",
+    theme_id: prefix,
   };
 }
 
@@ -725,9 +1019,20 @@ function StarSvg({ gold = false }: { gold?: boolean }) {
   return (
     <svg viewBox="0 0 100 100" className={`dreamArchiveFoldedStar ${gold ? "gold" : ""}`}>
       <path d="M50 5 L61 40 L95 40 L68 60 L78 95 L50 75 L22 95 L32 60 L5 40 L39 40 Z" />
-      <path d="M50 5 L50 75 M5 40 L68 60 M95 40 L32 60" strokeOpacity="0.3" fill="none" />
     </svg>
   );
+}
+
+function fishPathForCount(count: number): string {
+  if (count <= 0) return "";
+  const step = 60;
+  const points: Array<[number, number]> = [[20, 14]];
+  for (let index = 1; index < count; index += 1) {
+    const prev = 14 + (index - 1) * step;
+    const next = 14 + index * step;
+    points.push([20, prev + 26], [index % 2 === 1 ? 12 : 28, prev + 46], [20, next]);
+  }
+  return points.map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x},${y}`).join(" ");
 }
 
 export function DreamArchiveTab({
@@ -745,6 +1050,8 @@ export function DreamArchiveTab({
   const [detailLoading, setDetailLoading] = useState(false);
   const [draftText, setDraftText] = useState("");
   const [localFragments, setLocalFragments] = useState<FragmentStar[]>(() => readStoredStars(DREAM_LOCAL_FRAGMENTS_KEY));
+  const [libraryPacks, setLibraryPacks] = useState<FragmentPack[]>([]);
+  const [libraryLoaded, setLibraryLoaded] = useState(false);
   const [inspirationStars, setInspirationStars] = useState<FragmentStar[]>(() => readStoredStars(DREAM_INSPIRATION_KEY));
   const [inspirationReady, setInspirationReady] = useState(false);
   const inspirationEditVersionRef = useRef(0);
@@ -806,6 +1113,28 @@ export function DreamArchiveTab({
 
   useEffect(() => {
     let cancelled = false;
+    apiJson<DreamFragmentLibraryResp>("/miniapp-api/spring-dream-fragments?limit=120")
+      .then((res) => {
+        if (cancelled) return;
+        const remotePacks = normalizePacks(res.packs || [], "remote-library");
+        if (remotePacks.length) {
+          setLibraryPacks(remotePacks);
+          return;
+        }
+        const remote = normalizeStars(res.stars || res.fragments || [], "remote-library", 120);
+        if (remote.length) setLibraryPacks(groupStarsIntoPacks(remote));
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLibraryLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     const requestVersion = inspirationEditVersionRef.current;
     apiJson<DreamInspirationResp>("/miniapp-api/spring-dream-inspiration")
       .then((res) => {
@@ -847,6 +1176,8 @@ export function DreamArchiveTab({
       });
   }, [inspirationReady, inspirationStars, toast]);
 
+  const libraryFragments = useMemo(() => libraryPacks.flatMap((pack) => pack.stars), [libraryPacks]);
+
   const fragmentStars = useMemo(() => {
     const fromSelected = Array.isArray(detail?.fragments)
       ? detail.fragments.filter(Boolean).map((fragment, index) => starFromText(String(fragment), index, "selected"))
@@ -856,15 +1187,20 @@ export function DreamArchiveTab({
       .filter(Boolean)
       .slice(0, 12)
       .map((fragment, index) => starFromText(String(fragment), index, "archive"));
-    const merged = [...fromSelected, ...fromArchive, ...localFragments];
+    const merged = [...libraryFragments, ...localFragments, ...fromSelected, ...fromArchive];
     const seen = new Set<string>();
     return merged.filter((star) => {
-      const key = `${star.label}:${star.text}`;
+      const key = star.text;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
-  }, [detail?.fragments, items, localFragments]);
+  }, [detail?.fragments, items, libraryFragments, localFragments]);
+
+  const visibleFragmentStars = useMemo(() => fragmentStars.slice(0, 60), [fragmentStars]);
+  const fishPacks = useMemo(() => {
+    return libraryPacks.filter((pack) => pack.stars.length);
+  }, [libraryPacks]);
 
   const viewTitle = view === "dreams" ? "梦境" : view === "fragments" ? "碎片" : "灵感";
 
@@ -907,7 +1243,7 @@ export function DreamArchiveTab({
       const next = [...stars, ...prev];
       const seen = new Set<string>();
       return next.filter((star) => {
-        const key = `${star.label}:${star.text}`;
+        const key = star.text;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -938,11 +1274,13 @@ export function DreamArchiveTab({
   }
 
   function randomFish() {
-    const pool = fragmentStars.length ? fragmentStars : localFragments;
-    const picked = pool
-      .slice()
-      .sort(() => Math.random() - 0.5)
-      .slice(0, 2);
+    const packs = fishPacks;
+    if (!packs.length) {
+      setPanel({ type: "fish", stars: [] });
+      return;
+    }
+    const pack = packs[Math.floor(Math.random() * packs.length)];
+    const picked = (pack?.stars || []).slice(0, 8);
     setPanel({ type: "fish", stars: picked });
   }
 
@@ -982,7 +1320,6 @@ export function DreamArchiveTab({
     if (panel.type === "fragment") {
       return (
         <>
-          <div className="dreamArchivePanelTitle">{panel.star.label}</div>
           <p className="dreamArchivePanelMuted">{panel.star.text}</p>
           <div className="dreamArchivePanelActions">
             <button className="dreamArchiveGhost" type="button" onClick={() => addStarsToBottle([panel.star])}>放进瓶子</button>
@@ -1003,7 +1340,7 @@ export function DreamArchiveTab({
     if (panel.type === "fold") {
       return (
         <>
-          <div className="dreamArchivePanelTitle">折一颗星</div>
+          <div className="dreamArchivePanelTitle">写一颗星</div>
           <textarea
             className="dreamArchiveTextarea"
             placeholder="记录微小的碎片..."
@@ -1016,7 +1353,7 @@ export function DreamArchiveTab({
             <span className="dreamArchiveGhost">动作</span>
             <span className="dreamArchiveGhost">氛围</span>
           </div>
-          <button className="dreamArchiveGhost dreamArchivePrimary" type="button" onClick={() => saveDraftAsFragment("fragment")}>折好了</button>
+          <button className="dreamArchiveGhost dreamArchivePrimary" type="button" onClick={() => saveDraftAsFragment("fragment")}>放好了</button>
         </>
       );
     }
@@ -1040,12 +1377,25 @@ export function DreamArchiveTab({
         <div className="dreamArchivePanelTitle" style={{ textAlign: "center" }}>打捞结果</div>
         {panel.stars.length ? (
           <div className="dreamArchiveFishGrid">
-            {panel.stars.map((star) => (
-              <div className="dreamArchiveFishCard" key={star.id}>
-                <div className="dreamArchiveFishStar"><StarSvg gold={star.color === "gold"} /></div>
-                <div className="dreamArchiveFishTitle">{star.label}</div>
+            <svg
+              className="dreamArchiveFishSvg"
+              viewBox={`0 0 50 ${Math.max(220, panel.stars.length * 60)}`}
+              style={{ height: Math.max(220, panel.stars.length * 60) }}
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            >
+              <path className="dreamArchiveFishPath" d={fishPathForCount(panel.stars.length)} />
+            </svg>
+            {panel.stars.map((star, index) => (
+              <button className="dreamArchiveFishCard" key={star.id} type="button" onClick={() => setPanel({ type: "fragment", star })}>
+                <div
+                  className="dreamArchiveFishStar"
+                  style={{ "--star-delay": `${-(index % 5) * 0.42}s` } as React.CSSProperties}
+                >
+                  <StarSvg gold={star.color === "gold"} />
+                </div>
                 <div className="dreamArchiveFishText">{star.text}</div>
-              </div>
+              </button>
             ))}
           </div>
         ) : (
@@ -1103,32 +1453,46 @@ export function DreamArchiveTab({
       </main>
 
       <main className={`dreamArchiveView dreamArchiveFragmentView ${view === "fragments" ? "active" : ""}`}>
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 20 }}>
+        <div className="dreamArchiveOrbitField" aria-hidden="true">
+          <div className="dreamArchiveOrbitRing" />
+          <div className="dreamArchiveOrbitRing" />
+          <div className="dreamArchiveOrbitRing" />
+        </div>
+        <div style={{ position: "relative", zIndex: 1, display: "flex", justifyContent: "center", marginBottom: 20 }}>
           <button className="dreamArchiveGhost" type="button" onClick={randomFish}>随机打捞</button>
         </div>
         <div className="dreamArchiveStarPool">
-          {fragmentStars.map((star, index) => {
+          {visibleFragmentStars.map((star, index) => {
             const layout = STAR_LAYOUT[index % STAR_LAYOUT.length];
+            const cycle = Math.floor(index / STAR_LAYOUT.length);
             return (
               <button
                 key={`${star.id}-${index}`}
                 className="dreamArchivePaperStar"
                 type="button"
                 style={{
-                  left: `${layout.x}%`,
-                  top: `${layout.y}%`,
-                  transform: `rotate(${layout.rot + index * 7}deg) scale(${layout.scale})`,
-                }}
+                  gridColumn: `${layout.col} / span 2`,
+                  gridRow: `${cycle * 10 + layout.row} / span 1`,
+                  "--star-rot": `${layout.rot + index * 7}deg`,
+                  "--star-scale": `${layout.scale}`,
+                  "--star-offset": `${layout.offset}px`,
+                  "--star-drift": `${-5 - (index % 3) * 2}px`,
+                  "--star-delay": `${-(index % 7) * 0.38}s`,
+                } as React.CSSProperties}
                 onClick={() => setPanel({ type: "fragment", star })}
+                aria-label={star.label || "梦境碎片"}
               >
                 <StarSvg gold={star.color === "gold"} />
-                <div className="dreamArchiveStarLabel">{star.label}</div>
               </button>
             );
           })}
-          {!fragmentStars.length ? <div className="dreamArchiveEmpty">还没有折好的星</div> : null}
+          {!fragmentStars.length ? (
+            <div className="dreamArchiveEmpty">
+              {libraryLoaded ? "没有读到春梦碎片库" : "正在打捞碎片库"}
+            </div>
+          ) : null}
         </div>
-        <button className="dreamArchiveFloat" type="button" onClick={() => setPanel({ type: "fold" })} aria-label="折一颗星">
+        <button className="dreamArchiveFloat" type="button" onClick={() => setPanel({ type: "fold" })} aria-label="写一颗星">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
             <line x1="12" y1="5" x2="12" y2="19" />
             <line x1="5" y1="12" x2="19" y2="12" />
@@ -1136,10 +1500,11 @@ export function DreamArchiveTab({
         </button>
       </main>
 
-      <main className={`dreamArchiveView ${view === "inspiration" ? "active" : ""}`}>
-        <div className="dreamArchiveBottleLabel">今晚的许愿瓶</div>
+      <main className={`dreamArchiveView dreamArchiveInspirationView ${view === "inspiration" ? "active" : ""}`}>
         <div className="dreamArchiveBottle">
+          <img className="dreamArchiveBottleRibbon" src={dreamBottleRibbonUrl} alt="" aria-hidden="true" />
           <div className="dreamArchiveBottleNeck" />
+          <div className="dreamArchiveBottleDust" aria-hidden="true" />
           <div className="dreamArchiveBottleStars">
             {inspirationStars.length ? inspirationStars.map((star, index) => (
               <button
@@ -1147,22 +1512,21 @@ export function DreamArchiveTab({
                 type="button"
                 key={`${star.id}-${index}`}
                 style={{
-                  width: `${28 + (index % 5) * 7}px`,
-                  height: `${28 + (index % 5) * 7}px`,
+                  width: `${20 + (index % 5) * 5}px`,
+                  height: `${20 + (index % 5) * 5}px`,
                   transform: `rotate(${index * 31}deg)`,
                   opacity: 0.68 + (index % 3) * 0.12,
-                }}
+                  "--star-delay": `${-(index % 6) * 0.35}s`,
+                } as React.CSSProperties}
                 onClick={() => setPanel({ type: "fragment", star })}
                 aria-label={star.label}
               >
                 <StarSvg gold={star.color === "gold" || index % 3 === 0} />
               </button>
-            )) : (
-              <div style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 100 }}>今晚还没有星星</div>
-            )}
+            )) : null}
           </div>
         </div>
-        <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 20 }}>
+        <div className="dreamArchiveInspirationActions" style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 20 }}>
           <button className="dreamArchiveGhost" type="button" onClick={() => setPanel({ type: "write" })}>写一颗</button>
           <button className="dreamArchiveGhost" type="button" onClick={() => updateInspirationStars([])}>清空瓶子</button>
         </div>

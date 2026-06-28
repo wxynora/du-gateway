@@ -20,6 +20,7 @@ from services.pixel_home import (
 from services.spring_dream import (
     get_spring_dream_archive,
     get_spring_dream_inspiration,
+    list_spring_dream_fragment_library,
     list_spring_dream_archives,
     save_spring_dream_inspiration,
 )
@@ -456,6 +457,15 @@ def register_routes(bp) -> None:
     @bp.route("/spring-dream-inspiration", methods=["GET"])
     def miniapp_spring_dream_inspiration_get():
         data = get_spring_dream_inspiration()
+        return jsonify({"ok": True, **data})
+
+    @bp.route("/spring-dream-fragments", methods=["GET"])
+    def miniapp_spring_dream_fragments():
+        try:
+            limit = int(request.args.get("limit") or 120)
+        except Exception:
+            limit = 120
+        data = list_spring_dream_fragment_library(limit=limit)
         return jsonify({"ok": True, **data})
 
     @bp.route("/spring-dream-inspiration", methods=["PUT"])

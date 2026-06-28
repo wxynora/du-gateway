@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -419,7 +419,17 @@ function formatAttachmentSize(bytes?: number): string {
   return `${(value / 1024 / 1024).toFixed(1)}MB`;
 }
 
-function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string; align: "left" | "right" }) {
+function ChatVoiceBar({
+  item,
+  src,
+  align,
+  onDurationLoaded,
+}: {
+  item: ChatAttachment;
+  src: string;
+  align: "left" | "right";
+  onDurationLoaded?: (item: ChatAttachment, durationMs: number) => void;
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [durationMs, setDurationMs] = useState(item.durationMs || 0);
@@ -429,10 +439,21 @@ function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string;
   const isRight = align === "right";
   const bars = [2, 3, 4, 3, 5, 7, 8, 6, 5, 7, 4, 3, 2];
 
+  useEffect(() => {
+    const nextDurationMs = Number(item.durationMs || 0);
+    if (Number.isFinite(nextDurationMs) && nextDurationMs > 0) {
+      setDurationMs(nextDurationMs);
+    }
+  }, [item.durationMs]);
+
   function syncMetadata() {
     const durationSeconds = audioRef.current?.duration || 0;
     if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
-      setDurationMs(Math.round(durationSeconds * 1000));
+      const nextDurationMs = Math.round(durationSeconds * 1000);
+      setDurationMs(nextDurationMs);
+      if (!item.durationMs || Math.abs(Number(item.durationMs || 0) - nextDurationMs) >= 500) {
+        onDurationLoaded?.(item, nextDurationMs);
+      }
     }
   }
 
@@ -907,10 +928,12 @@ export function ChatAttachmentBlock({
   attachments,
   align = "left",
   kinds,
+  onAudioDurationLoaded,
 }: {
   attachments?: ChatAttachment[];
   align?: "left" | "right";
   kinds?: ChatAttachmentKind[];
+  onAudioDurationLoaded?: (item: ChatAttachment, durationMs: number) => void;
 }) {
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const allowed = kinds?.length ? new Set(kinds) : null;
@@ -970,7 +993,15 @@ export function ChatAttachmentBlock({
             </a>
           );
         }
-        return <ChatVoiceBar key={item.id} item={item} src={src} align={align} />;
+        return (
+          <ChatVoiceBar
+            key={item.id}
+            item={item}
+            src={src}
+            align={align}
+            onDurationLoaded={onAudioDurationLoaded}
+          />
+        );
       })}
       {previewImage ? (
         <ImagePreviewOverlay

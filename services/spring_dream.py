@@ -597,6 +597,57 @@ def save_spring_dream_inspiration(stars) -> dict:
     }
 
 
+def list_spring_dream_fragment_library(limit: int = 120) -> dict:
+    try:
+        clean_limit = max(1, min(240, int(limit or 120)))
+    except Exception:
+        clean_limit = 120
+    out: list[dict] = []
+    packs: list[dict] = []
+    seen: set[str] = set()
+    for theme in _SPRING_DREAM_THEME_PACKS:
+        theme_id = str((theme or {}).get("id") or "").strip()
+        fragments = (theme or {}).get("fragments") or []
+        if not isinstance(fragments, list):
+            continue
+        pack_stars: list[dict] = []
+        for idx, fragment in enumerate(fragments):
+            text = str(fragment or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            label = text.replace("\n", " ").strip()[:8] or "梦境碎片"
+            pack_stars.append(
+                {
+                    "id": f"{theme_id or 'theme'}-{idx}",
+                    "label": label,
+                    "text": text[:500],
+                    "color": "gold" if idx == 0 else "default",
+                    "theme_id": theme_id,
+                }
+            )
+        if not pack_stars:
+            continue
+        if out and len(out) + len(pack_stars) > clean_limit:
+            break
+        packs.append(
+            {
+                "id": theme_id or f"theme_{len(packs) + 1}",
+                "stars": pack_stars,
+                "fragments": [str(item.get("text") or "") for item in pack_stars],
+            }
+        )
+        out.extend(pack_stars)
+        if len(out) >= clean_limit:
+            break
+    return {
+        "stars": out,
+        "fragments": [str(item.get("text") or "") for item in out],
+        "packs": packs,
+        "count": len(out),
+    }
+
+
 def _session_row(session_key: str) -> dict:
     _ensure_schema()
     with runtime_sqlite.connect() as conn:

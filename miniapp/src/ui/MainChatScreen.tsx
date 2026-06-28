@@ -1909,6 +1909,30 @@ export function MainChatScreen({
     void saveDisplayHistory(nextMessages, { localDeviceId: options.localDeviceId }).catch(() => {});
   }
 
+  function persistAudioAttachmentDuration(messageId: string, item: ChatAttachment, durationMs: number) {
+    const targetMessageId = String(messageId || "").trim();
+    const targetAttachmentId = chatVoiceTranscriptId(item);
+    const safeDurationMs = Math.round(Number(durationMs || 0));
+    if (!targetMessageId || !targetAttachmentId || !Number.isFinite(safeDurationMs) || safeDurationMs <= 0) return;
+    let changed = false;
+    const nextMessages = messagesRef.current.map((message) => {
+      if (message.id !== targetMessageId) return message;
+      const attachments = normalizeChatAttachments(message.attachments).map((attachment) => {
+        if (chatVoiceTranscriptId(attachment) !== targetAttachmentId) return attachment;
+        const currentDurationMs = Number(attachment.durationMs || 0);
+        if (currentDurationMs > 0 && Math.abs(currentDurationMs - safeDurationMs) < 500) return attachment;
+        changed = true;
+        return { ...attachment, durationMs: safeDurationMs };
+      });
+      if (!changed) return message;
+      return { ...message, attachments };
+    });
+    if (!changed) return;
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    saveDisplayHistoryInBackground(nextMessages, { localDeviceId: deviceId });
+  }
+
   async function mergeRemoteDisplayHistory(localDeviceId: string, source: string) {
     const did = String(localDeviceId || deviceId || "").trim();
     if (!did || !remoteHistoryWindowId || remoteHistorySyncingRef.current) return;
@@ -4335,7 +4359,11 @@ export function MainChatScreen({
                               }`}
                               style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                             >
-                              <ChatAttachmentBlock attachments={[audioAttachment]} align="right" />
+                              <ChatAttachmentBlock
+                                attachments={[audioAttachment]}
+                                align="right"
+                                onAudioDurationLoaded={(item, durationMs) => persistAudioAttachmentDuration(part.messageId, item, durationMs)}
+                              />
                             </ChatBubbleFrame>
                           )) : null}
                             <ChatVoiceTranscriptBlock
@@ -4521,7 +4549,11 @@ export function MainChatScreen({
                                   }`}
                                   style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                                 >
-                                  <ChatAttachmentBlock attachments={[audioAttachment]} align="left" />
+                                  <ChatAttachmentBlock
+                                    attachments={[audioAttachment]}
+                                    align="left"
+                                    onAudioDurationLoaded={(item, durationMs) => persistAudioAttachmentDuration(part.messageId, item, durationMs)}
+                                  />
                                 </ChatBubbleFrame>
                               )) : null}
                                 <ChatVoiceTranscriptBlock
