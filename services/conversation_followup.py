@@ -9,6 +9,7 @@ import requests
 from config import (
     QQ_PROACTIVE_PUSH_TOKEN,
     QQ_PROACTIVE_PUSH_URL,
+    STREAM_TIMEOUT_SECONDS,
     TELEGRAM_CHAT_PATH,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_GATEWAY_URL,
@@ -417,7 +418,7 @@ def _call_gateway_followup(window_id: str, channel: str, reason: str, chain_id: 
     }
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     try:
-        r = requests.post(url, headers=headers, json=body, timeout=120)
+        r = requests.post(url, headers=headers, json=body, timeout=STREAM_TIMEOUT_SECONDS)
         if r.status_code != 200:
             logger.warning("延迟续话调用网关失败 status=%s body=%s", r.status_code, (r.text or "")[:300])
             return None
@@ -656,7 +657,7 @@ def _send_wakeup_event(
         headers["X-Skip-QQ-Group-Activity"] = "1"
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     try:
-        r = requests.post(url, headers=headers, json=body, timeout=120)
+        r = requests.post(url, headers=headers, json=body, timeout=STREAM_TIMEOUT_SECONDS)
         if r.status_code != 200:
             logger.warning("后端事件唤醒调用网关失败 status=%s body=%s", r.status_code, (r.text or "")[:300])
             return {"ok": False, "error": f"gateway_http_{r.status_code}"}
