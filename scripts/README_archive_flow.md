@@ -2,7 +2,7 @@
 
 ## 核心记忆层处理方案（实时 + 人工整理）
 
-实时对话里**不写记忆库 Notion**（只写卧室 Notion 房间、小本本工具）。流程如下：
+实时对话里**不写记忆库 Notion**（小本本仍可用工具写）。流程如下：
 
 ```
 动态层（R2 current.json）
@@ -14,7 +14,7 @@
 长期层 / 记忆库（Notion 记忆库 或 四房间）
 ```
 
-- **实时**：每轮 DS 决策后只更新动态层 R2 + promote 到核心记忆 R2；不写记忆库。卧室仍写 Notion 卧室页面，小本本仍可用工具写。
+- **实时**：每轮 DS 决策后只更新动态层 R2；非卧室 new/merge 会 promote 到核心记忆 R2；不写记忆库。小本本仍可用工具写。
 - **人工**：在 Notion「核心记忆」表里整理，需要时再手动或后续脚本进长期层/记忆库。
 - **批处理归档**：跑 `feed_conversation_for_memory.py` 时，动态层 + 核心记忆照常更新 R2，**同时**把卧室/new/merge 写入记忆库 Notion（由脚本在应用决策后调 `write_archive_entry`）。
 
@@ -34,14 +34,13 @@ feed_conversation_for_memory.py  逐轮跑
 DS 分类 + 决策（new/merge/skip，tag：书房/客厅/图书馆/卧室）
        ↓
 ┌──────────────────────────────────────────────────────────────┐
-│ 卧室：不写动态层，把本轮原文（非 DS 的 content）写入 Notion 卧室；DS 仍写 content 供别处用。 │
-│ 书房/客厅/图书馆：按 action 更新 R2 dynamic_memory/current.json │
+│ 所有 tag（含卧室）：按 action 更新 R2 dynamic_memory/current.json │
 │   - new：追加一条记忆（content/tag/importance/timestamp/mention_count/last_mentioned） │
 │   - merge：找到 fused_with_id 对应的旧记忆，用 DS 返回的 content 覆盖，更新 last_mentioned 和 mention_count（+1） │
 │   - skip：不写                                                 │
 └──────────────────────────────────────────────────────────────┘
        ↓
-核心缓存：new/merge 时会 promote_to_core_cache（与窗口原文关联，供后续长期层筛选）
+核心缓存：非卧室 new/merge 时会 promote_to_core_cache（与窗口原文关联，供后续长期层筛选）
 ```
 
 ---
@@ -74,11 +73,11 @@ DS 分类 + 决策（new/merge/skip，tag：书房/客厅/图书馆/卧室）
 - **步骤**：
   1. 从 R2 读 `dynamic_memory/current.json`，得到当前记忆列表，并补全每条 `id`。
   2. 调用 DS：把「当前记忆列表」+「本轮对话」发给 DS，拿到一条决策（tag、action、content、fused_with_id 等；归档模式下还有 timestamp、mention_count、last_mentioned）。
-  3. **卧室**：若 `tag === "卧室"`，不写动态层，把**本轮原文**（`_round_messages_to_raw_text`）通过 `append_bedroom_raw` 写入 Notion 卧室（不存 DS 的 content；DS 仍写 content 供别处用），然后 return。
-  4. **书房/客厅/图书馆**：
-     - **new**：生成新 id，追加一条记忆（content、importance、tag、mention_count、created_at、last_mentioned），写回 R2，并 `promote_to_core_cache`。
-     - **merge**：找到 `fused_with_id` 对应的旧记忆，用 DS 返回的 content 覆盖，更新 `last_mentioned` 和 `mention_count`（+1），写回 R2，并 `promote_to_core_cache`。
+  3. **所有 tag（含卧室）**：
+     - **new**：生成新 id，追加一条记忆（content、importance、tag、mention_count、created_at、last_mentioned），写回 R2；非卧室再 `promote_to_core_cache`。
+     - **merge**：找到 `fused_with_id` 对应的旧记忆，用 DS 返回的 content 覆盖，更新 `last_mentioned` 和 `mention_count`（+1），写回 R2；非卧室再 `promote_to_core_cache`。
      - **skip**：不写。
+     - `卧室` 正常写动态层，但不提进 core cache，也不再侧写 Notion 原文。
 
 当前实现会优先使用 DS 决策里的 `timestamp` / `last_mentioned`；没有这些字段时才回退到「当前时间」`now_beijing_iso()`。
 
@@ -87,7 +86,7 @@ DS 分类 + 决策（new/merge/skip，tag：书房/客厅/图书馆/卧室）
 ## 4. DS 与 prompt
 
 - **正常对话**：用 `services/dynamic_layer_ds.py` 里的 `_DYNAMIC_LAYER_PROMPT`，要求 DS 输出固定标签格式；`call_dynamic_layer_ds(round_messages, current_memories)` 解析出 tag、action、importance、content、fused_with_id。
-- **归档脚本**：用 `scripts/archive_ds_prompt.txt` 的 prompt（批处理多轮版）；DS 每轮输出固定标签块，包含 `timestamp`、`mention_count`、`last_mentioned` 等。脚本批处理时调用 `call_archive_batch_ds` 读该文件发请求；卧室存**本轮原文**到 Notion，不存 DS 的 content。
+- **归档脚本**：用 `scripts/archive_ds_prompt.txt` 的 prompt（批处理多轮版）；DS 每轮输出固定标签块，包含 `timestamp`、`mention_count`、`last_mentioned` 等。脚本批处理时调用 `call_archive_batch_ds` 读该文件发请求；卧室按正常动态层规则落库或跳过。
 
 ---
 
@@ -95,7 +94,7 @@ DS 分类 + 决策（new/merge/skip，tag：书房/客厅/图书馆/卧室）
 
 - **dynamic_memory/current.json**：动态层记忆列表，每条有 id、content、tag、importance、mention_count、created_at、last_mentioned 等；归档时这些字段应用「原始时间」和归档约定初始值。
 - **core_cache/pending.json**：核心缓存，new/merge 时会把本轮原文与 touched 记忆关联，供后续长期层筛选。
-- 卧室原文不写进动态层，只进 Notion（通过 `append_bedroom_raw`）。
+- 卧室内容写概括后的动态记忆，不再单独写 Notion 原文。
 
 ---
 

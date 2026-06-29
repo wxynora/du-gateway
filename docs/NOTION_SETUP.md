@@ -1,6 +1,6 @@
 # Notion 各房间设置傻瓜版教程（与网关输出完全匹配）
 
-网关会往 Notion 写三类东西：**小本本**、**卧室**、**核心缓存**。下面按「用表格还是页面」「字段怎么建」逐项说明，建好后把对应 ID 填到环境变量即可。
+网关会往 Notion 写两类东西：**小本本**、**核心缓存**。下面按「用表格还是页面」「字段怎么建」逐项说明，建好后把对应 ID 填到环境变量即可。
 
 ---
 
@@ -9,7 +9,6 @@
 | 房间/用途 | Notion 类型 | 网关写入方式 | 需要建的 |
 |-----------|-------------|--------------|----------|
 | 小本本 | **普通页面 (Page)** | 在页面下追加段落，每条 `[时间] 原文` | 1 个空页面 |
-| 卧室 | **普通页面 (Page)** | 在页面下追加段落，每条 `[event_id] [时间]\n原文` | 1 个空页面 |
 | 核心缓存 | **Database（表格）** | 创建/更新行，按列名匹配 | 1 个 Database，7 列（你已建可跳过） |
 
 ---
@@ -33,30 +32,6 @@
 
 ```
 [2026-03-15T14:30:00+08:00] 小本本更新 今天终于把 R2 调通了……
-```
-
-每条都是一段 **Paragraph**，无需任何属性/字段。
-
----
-
-## 三、卧室（Bedroom）
-
-- **类型**：普通页面，**不要**用 Database。
-- **作用**：当动态层 DS 返回 `tag === "卧室"` 时，网关会把当轮对话原文追加到这个页面（不写动态层/核心缓存）。
-
-**操作步骤：**
-
-1. 在 Notion 里再新建一页 **Full page**，标题例如「卧室」。
-2. 页面内容可留空，网关会往**页面底部**追加段落。
-3. 同样从浏览器 URL 里复制该页面的 **Page ID**（32 位，有 `-` 就去掉）。
-4. 环境变量里设置：`NOTION_BEDROOM_PAGE_ID=你复制的页面ID`
-
-**网关写入格式示例：**
-
-```
-[event_id:window-42] [2026-03-15T14:35:00+08:00]
-老婆：xxx
-assistant：xxx
 ```
 
 每条都是一段 **Paragraph**，无需任何属性/字段。
@@ -106,9 +81,8 @@ assistant：xxx
 NOTION_API_KEY=secret_xxxx
 NOTION_VERSION=2022-06-28
 
-# 三个 ID：小本本页面、卧室页面、核心缓存数据库
+# 两个 ID：小本本页面、核心缓存数据库
 NOTION_NOTEBOOK_PAGE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-NOTION_BEDROOM_PAGE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NOTION_CORE_CACHE_DATABASE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 

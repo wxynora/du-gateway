@@ -8,7 +8,7 @@
 2. App 负责展示、编辑、新建、删除和评论。
 3. 渡通过 `exchange_diary_*` 工具读写和评论交换日记。
 4. `NOTION_TOOLS_ENABLED` 只控制通用 Notion runtime 工具，不影响交换日记、记事本、Stay with Du、气泡等网关原生工具。
-5. 通用 Notion 检索、日程、小本本、卧室原文等链路仍按各自用途保留，后续是否删除单独处理。
+5. 通用 Notion 检索、日程、小本本等链路仍按各自用途保留，后续是否删除单独处理。
 
 ## 数据结构
 
@@ -146,7 +146,6 @@ sqlite3 /root/du-gateway/data/runtime_state.sqlite3 \
 1. 通用 Notion 检索。
 2. Notion 日程。
 3. Notion 小本本。
-4. 卧室原文写入。
-5. 归档与核心缓存同步里的 Notion 相关代码。
+4. 归档与核心缓存同步里的 Notion 相关代码。
 
 如果以后确定这些也不用，再单独做一轮删除，先全项目 `rg` 引用，再删定义端。

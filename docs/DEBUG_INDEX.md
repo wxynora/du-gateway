@@ -399,6 +399,11 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 已完成：`routes/miniapp/media.py` 新增 `/chat-media/upload`、`/chat-media/transcribe`、`/chat-media/tts`、`/chat-media/raw-public`；文件本体存 R2 `sumitalk/chat_media/`，聊天历史和 operation 只存轻量附件元数据，不存 base64/blob。STT/TTS 均打 `[SumiTalk] chat_media_*` 分段日志，只记录 mime、bytes、耗时、文本长度等元数据，不记录正文或音频。
 - 已完成：聊天页加号面板保留“图片”；语音入口挪到输入框内侧，只显示麦克风 SVG，按住录音、松开发送。图片作为独立图片消息直接贴出，不塞进文字气泡；语音显示为 QQ 风格短语音条，不再使用 Android WebView 原生 `<audio controls>` 大播放器；正文等于语音转写时默认只展示语音条，转写仍保留在消息数据里给模型/搜索用。
 
+当前状态（2026-06-30 SumiTalk 聊天气泡颜文字兼容）：
+- 已完成：`miniapp/src/ui/ChatPresentation.tsx` 在 `PlainTextBlock` 和 `RichTextBlock` 的普通文本节点里识别括号型颜文字，包成 `.chat-kaomoji`；`RichTextBlock` 会先转义颜文字内部的 Markdown 控制字符，避免 `*`、`_`、`>` 等把颜文字误渲染成格式块。只改展示，不改消息内容、发送、存档或搜索文本。
+- 已完成：`miniapp/src/styles.css` 新增 `.chat-kaomoji`，让颜文字作为整体换行并使用系统符号/日文假名字体 fallback，避免被气泡换行规则拆成散字。
+- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json --pretty false`、`npm -C miniapp run build`、`.venv/bin/python -m py_compile config.py utils/log.py pipeline/pipeline.py services/dynamic_layer_ds.py app.py` 通过；`miniapp_static` 已随本轮前端重建。
+
 当前状态（2026-06-24 SumiTalk 聚合/恢复补洞）：
 - 已完成：`MainChatScreen.tsx::mergeRemoteDisplayHistory()` 改为远端历史返回后再读取当前消息，避免它用旧快照覆盖刚恢复出来的后端回复；15 秒聚合 flush 如果图片准备/压缩失败，会把原队列放回并设为等待下一条输入重试，不再先清空后丢失。
 - 已完成：私聊图片不再使用只存在内存的 `File`/`blob:` instant 路径；发送给上游前统一走压缩后的 base64 data URL。聚合队列从本地草稿恢复时，如果 modelContent 里只有远端图片 URL，会先拉回并压缩成 base64 再发。
@@ -832,7 +837,7 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 - 内部维护请求和部分 followup 请求可能跳过归档。
 - `X-Force-Last4` 会强制带最近 4 轮。
 - 动态层 DS 现在优先要求固定标签格式（`ACTION:` / `CONTENT:` 等），旧 JSON 只作为兼容解析；`new/merge` 的 `content` 如果太短、像半句话、标题词、没闭合引号或停在“然后/但是/——”这类没说完的位置，会最多重写 5 次，最后仍只是明显尾巴残缺时会做保守尾巴修复，确保落库的是完整句子。
-- 亲密 / NSFW 内容不要为了保存混进 `客厅`；该记就标 `卧室` 并按动态层 `new/merge` 正常存。卧室原文仍额外侧写 Notion 卧室页，画像与核心缓存不吃卧室动态记忆。
+- 亲密 / NSFW 内容不要为了保存混进 `客厅`；该记就标 `卧室` 并按动态层 `new/merge` 正常存。卧室内容不再额外侧写 Notion，画像与核心缓存不吃卧室动态记忆。
 - 卧室 tag 不和普通动态记忆共用完整生命周期：普通 tag 仍按 `DYNAMIC_MEMORY_DAYS_VALID=10` 参与注入有效期；卧室 tag 用 `DYNAMIC_MEMORY_BEDROOM_DAYS_VALID=3`，超过后不再注入，并会在动态层清理时从 R2/向量索引/血缘表退场。卧室连续 play 或同类偏好/边界延续时，优先 `merge`，不要因为小纸条玩法不同反复 `new`。
 
 当前状态（2026-06-04 动态层残缺便签重写与审计）：
@@ -854,8 +859,13 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 
 当前状态（2026-06-11 卧室动态记忆正常落库）：
 - 已完成：`services/dynamic_layer_ds.py` 去掉“卧室必 skip”规则，要求亲密 / NSFW 内容值得记时标 `卧室` 并正常 `new/merge`，不要为了保存错标 `客厅`。
-- 已完成：`pipeline/pipeline.py::_apply_one_decision` 不再在卧室通道 early return；卧室原文仍写 Notion 备份，但动态层继续按 action 落库或融合。new/merge 的卧室动态记忆不提进 core cache，画像候选仍沿用 `services/portrait_memory.py` 的卧室排除。
+- 已完成：`pipeline/pipeline.py::_apply_one_decision` 不再在卧室通道 early return；卧室不再写 Notion 原文备份，动态层继续按 action 落库或融合。new/merge 的卧室动态记忆不提进 core cache，画像候选仍沿用 `services/portrait_memory.py` 的卧室排除。
 - 未完成 / 下次继续：历史已经混进 `客厅` 的 NSFW 动态记忆不会自动迁移；如要清旧数据，先从 MiniApp 记忆调试或 R2 当前动态记忆列表里定位，再做迁移/重标脚本。
+
+当前状态（2026-06-30 移除卧室 Notion 侧写）：
+- 已完成：删除 `services/bedroom_gateway.py`，移除 `NOTION_BEDROOM_PAGE_ID` 配置和 `pipeline/pipeline.py::_apply_one_decision` 里的 Notion 原文追加调用；卧室 tag 现在只负责动态记忆分类、短生命周期和 core cache 排除。
+- 已验证：`.venv/bin/python -m py_compile config.py utils/log.py pipeline/pipeline.py services/dynamic_layer_ds.py` 通过；运行代码里不再有 `NOTION_BEDROOM_PAGE_ID` / `append_bedroom_raw` / `bedroom_gateway` 引用。
+- 未完成 / 下次继续：VPS 环境里如果还留着旧 `NOTION_BEDROOM_PAGE_ID`，新代码也不会读取；部署后重启网关即可生效。
 
 当前状态（2026-06-12 卧室动态记忆短生命周期）：
 - 已完成：`config.py` 新增 `DYNAMIC_MEMORY_BEDROOM_DAYS_VALID=3`；`pipeline/pipeline.py` 的动态记忆注入有效期按 tag 判断，卧室 tag 超过 3 天未再提到就不再注入。

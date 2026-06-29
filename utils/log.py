@@ -19,7 +19,6 @@ LOG_NAMES = {
     "services.image_desc": "ImageDesc",
     "services.notion_client": "Notion",
     "services.dynamic_layer_ds": "DynDS",
-    "services.bedroom_gateway": "Bedroom",
     "routes.telegram_webhook": "TGHook",
     "services.telegram_bot": "TGBot",
     "services.telegram_webhook_worker": "TGWorker",

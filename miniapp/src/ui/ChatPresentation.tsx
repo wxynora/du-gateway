@@ -280,6 +280,71 @@ function BubbleSkinLayer({ skin }: { skin: BubbleSkinKey }) {
   return <HeartRabbitBubbleSkin />;
 }
 
+const KAOMOJI_CANDIDATE_RE = /[^\s\u3400-\u9fff]{0,4}[（(][^（）()\n]{1,32}[）)][^\s\u3400-\u9fff]{0,4}/gu;
+const KAOMOJI_MARK_RE = /[\u02b0-\u036f\u1100-\u11ff\u1400-\u167f\u1d00-\u1d7f\u2500-\u2bff\u3000-\u303f\u3040-\u30ff\u3100-\u31ff\uff00-\uffef•]/u;
+const CJK_RE = /[\u3400-\u9fff]/u;
+
+function isKaomojiCandidate(value: string): boolean {
+  const text = value.trim();
+  if (text.length < 3 || text.length > 44) return false;
+  if (CJK_RE.test(text)) return false;
+  return KAOMOJI_MARK_RE.test(text);
+}
+
+function renderKaomojiText(text: string, keyPrefix: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let index = 0;
+  KAOMOJI_CANDIDATE_RE.lastIndex = 0;
+  for (const match of text.matchAll(KAOMOJI_CANDIDATE_RE)) {
+    const raw = match[0];
+    const start = match.index ?? 0;
+    if (!isKaomojiCandidate(raw)) continue;
+    if (start > lastIndex) nodes.push(text.slice(lastIndex, start));
+    nodes.push(
+      <span className="chat-kaomoji" key={`${keyPrefix}-kaomoji-${index}`}>
+        {raw}
+      </span>,
+    );
+    lastIndex = start + raw.length;
+    index += 1;
+  }
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes.length ? nodes : [text];
+}
+
+function escapeMarkdownControlChars(text: string): string {
+  return text.replace(/([\\`*_{}\[\]()#+\-.!|>~])/g, "\\$1");
+}
+
+function escapeMarkdownInKaomoji(text: string): string {
+  let output = "";
+  let lastIndex = 0;
+  KAOMOJI_CANDIDATE_RE.lastIndex = 0;
+  for (const match of text.matchAll(KAOMOJI_CANDIDATE_RE)) {
+    const raw = match[0];
+    const start = match.index ?? 0;
+    if (!isKaomojiCandidate(raw)) continue;
+    output += text.slice(lastIndex, start);
+    output += escapeMarkdownControlChars(raw);
+    lastIndex = start + raw.length;
+  }
+  if (lastIndex < text.length) output += text.slice(lastIndex);
+  return output || text;
+}
+
+function renderTextWithKaomoji(value: React.ReactNode, keyPrefix = "text"): React.ReactNode {
+  if (typeof value === "string") return renderKaomojiText(value, keyPrefix);
+  if (Array.isArray(value)) {
+    return value.map((child, index) => (
+      <React.Fragment key={`${keyPrefix}-${index}`}>
+        {renderTextWithKaomoji(child, `${keyPrefix}-${index}`)}
+      </React.Fragment>
+    ));
+  }
+  return value;
+}
+
 export function ChatHeaderStatus({ sending }: { sending: boolean }) {
   if (!sending) {
     return <div className="max-w-full truncate text-[8px] font-medium leading-[1.05] text-gray-500">在线</div>;
@@ -308,13 +373,13 @@ export function RichTextBlock({ content }: { content: string }) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        p: ({ children }) => <p className="m-0 whitespace-pre-wrap">{children}</p>,
+        p: ({ children }) => <p className="m-0 whitespace-pre-wrap">{renderTextWithKaomoji(children, "p")}</p>,
         h1: ({ children }) => <h1 className="mb-2 text-[20px] font-semibold leading-tight text-gray-900">{children}</h1>,
         h2: ({ children }) => <h2 className="mb-2 text-[18px] font-semibold leading-tight text-gray-900">{children}</h2>,
         h3: ({ children }) => <h3 className="mb-1.5 text-[16px] font-semibold leading-tight text-gray-900">{children}</h3>,
         ul: ({ children }) => <ul className="my-2 list-disc pl-5">{children}</ul>,
         ol: ({ children }) => <ol className="my-2 list-decimal pl-5">{children}</ol>,
-        li: ({ children }) => <li className="my-0.5">{children}</li>,
+        li: ({ children }) => <li className="my-0.5">{renderTextWithKaomoji(children, "li")}</li>,
         table: ({ children }) => (
           <div className="my-2 overflow-x-auto">
             <table className="min-w-full border-collapse text-left text-[12px] leading-6 text-gray-800">{children}</table>
@@ -323,8 +388,8 @@ export function RichTextBlock({ content }: { content: string }) {
         thead: ({ children }) => <thead className="bg-black/5">{children}</thead>,
         tbody: ({ children }) => <tbody>{children}</tbody>,
         tr: ({ children }) => <tr className="border-b border-black/10 last:border-b-0">{children}</tr>,
-        th: ({ children }) => <th className="px-2.5 py-2 font-semibold text-gray-900">{children}</th>,
-        td: ({ children }) => <td className="px-2.5 py-2 align-top">{children}</td>,
+        th: ({ children }) => <th className="px-2.5 py-2 font-semibold text-gray-900">{renderTextWithKaomoji(children, "th")}</th>,
+        td: ({ children }) => <td className="px-2.5 py-2 align-top">{renderTextWithKaomoji(children, "td")}</td>,
         pre: ({ children }) => <pre className="my-2 overflow-x-auto rounded-[12px] bg-black/5 p-3 text-[13px]">{children}</pre>,
         code: ({ children, ...props }) => {
           const inline = !String(props.className || "").includes("language-");
@@ -334,7 +399,7 @@ export function RichTextBlock({ content }: { content: string }) {
         a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer" className="underline">{children}</a>,
       }}
     >
-      {content}
+      {escapeMarkdownInKaomoji(content)}
     </ReactMarkdown>
   );
 }
@@ -345,7 +410,7 @@ export function HtmlBlock({ content }: { content: string }) {
 }
 
 export function PlainTextBlock({ content }: { content: string }) {
-  return <span className="whitespace-pre-wrap">{content}</span>;
+  return <span className="whitespace-pre-wrap">{renderKaomojiText(content, "plain")}</span>;
 }
 
 function attachmentSrc(item: ChatAttachment): string {

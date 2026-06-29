@@ -3153,7 +3153,8 @@ def _apply_one_decision(
     current_memories: list,
 ) -> Optional[dict]:
     """
-    对单条 DS 决策做应用：卧室额外写 Notion 卧室房间；new/merge 更新 current_memories 并写 R2、promote。
+    对单条 DS 决策做应用：new/merge 更新 current_memories 并写 R2、promote。
+    卧室内容正常进入动态层，但不提进 core cache。
     不写记忆库 Notion；若调用方是批处理归档脚本，可根据返回值再写记忆库。
     返回：若本条应写入记忆库（new/merge），返回 {"tag", "entry_id", "content", "promoted_at"}，否则 None。
     """
@@ -3218,17 +3219,7 @@ def _apply_one_decision(
             tag = "卧室"
 
     if tag == "卧室" or "卧室" in tag:
-        from services.bedroom_gateway import append_bedroom_raw
-
         tag = "卧室"
-        raw_text = raw_check or _round_messages_to_raw_text(round_messages)
-        append_bedroom_raw(window_id, round_index, raw_text)
-        logger.info(
-            "卧室通道触发 window_id=%s round_index=%s（已写 Notion 卧室，继续按动态层 action=%s 应用）",
-            window_id,
-            round_index,
-            action,
-        )
 
     if action == "new" and content:
         if _looks_like_raw_copy(content, round_messages):
@@ -3635,5 +3626,5 @@ def step_run_post_archive_tasks(
     if skip_dynamic_layer:
         logger.info("动态层跳过：请求要求跳过归档后动态层 window_id=%s round_index=%s", window_id, round_index)
         return None
-    # 动态层演化：调用 DS 产出 tag/融合等结果；网关决定是否写入动态层；卧室通道额外写 Notion
+    # 动态层演化：调用 DS 产出 tag/融合等结果；网关决定是否写入动态层
     _step_dynamic_layer_evolve(window_id, round_index, round_messages)

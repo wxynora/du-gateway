@@ -257,8 +257,6 @@ NOTION_VERSION = os.environ.get("NOTION_VERSION", "2022-06-28")
 NOTION_NOTEBOOK_DATABASE_ID = os.environ.get("NOTION_NOTEBOOK_DATABASE_ID", "323043f2b83980e59dc7ff4fa0a0e2c8").strip()
 # 页面模式小本本已弃用，留空即可
 NOTION_NOTEBOOK_PAGE_ID = os.environ.get("NOTION_NOTEBOOK_PAGE_ID", "").strip()
-# 卧室通道：网关识别 bedroom tag 后，将原文追加到此页面（块子级）；留空则不写 Notion
-NOTION_BEDROOM_PAGE_ID = os.environ.get("NOTION_BEDROOM_PAGE_ID", "").strip()
 # 核心缓存待审：sync_to_notion / sync_from_notion 用的 database ID
 NOTION_CORE_CACHE_DATABASE_ID = os.environ.get("NOTION_CORE_CACHE_DATABASE_ID", "321043f2b83980d088a5c6e2f7bd77bf")
 # 日程本：渡可读正文与增改（NOTION_TOOLS_ENABLED=1 时）

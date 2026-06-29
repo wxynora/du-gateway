@@ -28,6 +28,26 @@
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+.chat-kaomoji {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+  font-family:
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Noto Color Emoji",
+    "Hiragino Sans",
+    "Hiragino Kaku Gothic ProN",
+    "Yu Gothic",
+    "Meiryo",
+    system-ui,
+    sans-serif;
+  line-height: 1;
+  vertical-align: -0.04em;
+}
+
 @keyframes voice-wave {
   0%,
   100% {
