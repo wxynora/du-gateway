@@ -2113,7 +2113,8 @@ def chat_completions():
             continue
         if isinstance(msg, dict):
             _accumulate_nonstream_reasoning(msg)
-            _emit_sumitalk_reasoning_event(msg, tool_rounds_used + 1)
+            if tool_rounds_used > 0:
+                _emit_sumitalk_reasoning_event(msg, tool_rounds_used + 1)
             break
     if allow_tool_only_reply and resp_json and tool_rounds_used > 0:
         tool_trace_for_tool_only = _collect_tool_trace_from_messages(body.get("messages") or [])
@@ -2155,14 +2156,32 @@ def chat_completions():
         resp_json = _merge_html_preview_into_nonstream_response(resp_json, body.get("messages") or [])
         if is_sumitalk_request:
             resp_json = _merge_sumitalk_card_into_nonstream_response(resp_json, body.get("messages") or [])
+        sumitalk_final_reasoning_text = ""
+        sumitalk_final_reasoning_omitted = False
         try:
             raw_msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
             archive_thinking_blocks_for_r2 = _extract_claude_thinking_blocks(raw_msg)
+            if is_sumitalk_request and tool_rounds_used == 0 and isinstance(raw_msg, dict):
+                existing_reasoning_text, _existing_reasoning_details, existing_reasoning_omitted = _extract_reasoning_text_and_details(raw_msg)
+                sumitalk_final_reasoning_text = _merged_nonstream_reasoning_text(existing_reasoning_text)
+                sumitalk_final_reasoning_omitted = bool(accumulated_reasoning_omitted or existing_reasoning_omitted)
         except Exception:
             archive_thinking_blocks_for_r2 = []
         # 剥离 content / 结构化 delta 里的 thinking 块，避免泄漏给客户端（RikkaHub / Telegram 等）；
         # R2 存档会从 archive_thinking_blocks_for_r2 回填原始 thinking_blocks。
         resp_json = _strip_thinking_from_response_json(resp_json)
+        if is_sumitalk_request and tool_rounds_used == 0:
+            try:
+                response_msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+                if isinstance(response_msg, dict):
+                    if sumitalk_final_reasoning_text:
+                        response_msg["reasoning"] = sumitalk_final_reasoning_text
+                        (resp_json.get("choices") or [{}])[0]["message"] = response_msg
+                    elif sumitalk_final_reasoning_omitted:
+                        response_msg["reasoning"] = "（本轮 adaptive thinking 未返回可展示正文）"
+                        (resp_json.get("choices") or [{}])[0]["message"] = response_msg
+            except Exception:
+                logger.warning("合并 SumiTalk 非工具轮 thinking 失败 window_id=%s", window_id, exc_info=True)
         if not _disable_followup_request():
             try:
                 msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
