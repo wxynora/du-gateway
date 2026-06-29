@@ -168,6 +168,7 @@ PORT=8082
 PROXY_KEY=填一个长随机字符串
 CLAUDE_OAUTH_SYNC_KEY=填另一个长随机字符串
 CLAUDE_OAUTH_FILE=/home/duproxy/.cli-proxy-api/claude-oauth.json
+CLAUDE_CODE_VERSION=2.1.195
 CLAUDE_MAX_TOKENS=33000
 CLAUDE_THINKING_BUDGET_TOKENS=32000
 CLAUDE_PROMPT_CACHE_TTL=1h
@@ -176,7 +177,7 @@ EOF
 chmod 600 ~/claude-proxy/.env'
 ```
 
-如果后续决定让 proxy 直接读新 VPS 本机 Claude Code Keychain/credential，需要先确认 Linux 版 Claude Code 的 OAuth 存储路径，再调整 `CLAUDE_OAUTH_FILE` 或同步脚本。第一版更稳的做法是：在新 VPS 上跑本地 token sync，把 Claude Code 写出的 OAuth JSON 同步到 `CLAUDE_OAUTH_FILE`。
+负责刷新的本地组件可以持有 refresh token；Claude OAuth proxy 只读取 access-only 文件。第一版更稳的做法是：在新 VPS 上跑本地 token sync，从 Claude Code credential 读取/刷新 token，再把过滤后的 `accessToken/expiresAt` 写到 `CLAUDE_OAUTH_FILE`。
 
 创建 user systemd 服务。先由 root/sudo 允许 `duproxy` 用户服务开机常驻：
 
@@ -229,7 +230,7 @@ curl -sS --max-time 5 "http://$NEW_VPS_IP:8082/v1/models" || echo "expected: pub
 
 适合最终方案：Claude Code 和 proxy 都在新 VPS，本机 Mac 不再参与 token sync。
 
-需要写一个新 VPS 本地同步脚本，从 Claude Code 本机 credential 中导出 OAuth JSON 到：
+需要写一个新 VPS 本地同步脚本，从 Claude Code 本机 credential 中读取 refresh token 并刷新，然后把 access-only JSON 写到：
 
 ```text
 /home/duproxy/.cli-proxy-api/claude-oauth.json

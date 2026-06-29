@@ -33,9 +33,16 @@ const REFRESH_SKEW_MS = Math.max(
 const CLAUDE_PROMPT_CACHE_TTL = String(process.env.CLAUDE_PROMPT_CACHE_TTL || "1h").trim();
 const TARGET_HOST = "api.anthropic.com";
 const ANTHROPIC_VERSION = "2023-06-01";
+const CLAUDE_CODE_VERSION = String(process.env.CLAUDE_CODE_VERSION || "2.1.195").trim();
+const CLAUDE_CODE_BILLING_SALT = String(
+  process.env.CLAUDE_CODE_BILLING_SALT || "59cf53e54c78"
+).trim();
+const CLAUDE_CODE_ENTRYPOINT = String(process.env.CLAUDE_CODE_ENTRYPOINT || "cli").trim();
+const CLAUDE_CODE_CCH = String(process.env.CLAUDE_CODE_CCH || "00000").trim();
+const BILLING_HEADER_PREFIX = "x-anthropic-billing-header:";
 const BETA_HEADER = [
-  "claude-code-20250219",
   "oauth-2025-04-20",
+  "claude-code-20250219",
   "interleaved-thinking-2025-05-14",
   "prompt-caching-scope-2026-01-05",
   "context-management-2025-06-27",
@@ -53,11 +60,6 @@ const GATEWAY_DYNAMIC_SYSTEM_HINTS = [
   "【当前是在 RikkaHub 和渡聊天】",
   "【Notion 相关】",
 ];
-
-const SYSTEM_PROMPT_PREFIX = {
-  type: "text",
-  text: "You are Claude Code, Anthropic's official CLI for Claude.",
-};
 
 const MODEL_MAP = {
   "gpt-4o": "claude-sonnet-4-6",
@@ -228,6 +230,43 @@ function stripTtlFromCacheControl(obj) {
       if (Array.isArray(msg.content)) process(msg.content);
     }
   }
+}
+
+function sampledJsUtf16(text, indices) {
+  const value = String(text || "");
+  return indices.map((idx) => (idx < value.length ? value.charAt(idx) : "0")).join("");
+}
+
+function billingHash(firstText) {
+  const sampled = sampledJsUtf16(String(firstText || "").slice(0, 50), [4, 7, 20]);
+  return crypto
+    .createHash("sha256")
+    .update(`${CLAUDE_CODE_BILLING_SALT}${sampled}${CLAUDE_CODE_VERSION}`)
+    .digest("hex")
+    .slice(0, 3);
+}
+
+function claudeBillingSystemBlock(firstText) {
+  const sampleText = firstText || "";
+  const h = billingHash(sampleText);
+  return {
+    type: "text",
+    text: `${BILLING_HEADER_PREFIX} cc_version=${CLAUDE_CODE_VERSION}.${h}; cc_entrypoint=${CLAUDE_CODE_ENTRYPOINT}; cch=${CLAUDE_CODE_CCH};`,
+  };
+}
+
+function isClaudeBillingSystemBlock(item) {
+  return String(item?.text || "").trimStart().startsWith(BILLING_HEADER_PREFIX);
+}
+
+function containsRefreshToken(value) {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(containsRefreshToken);
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "refreshToken" || key === "refresh_token") return true;
+    if (containsRefreshToken(child)) return true;
+  }
+  return false;
 }
 
 function safeJsonParse(value, fallback = {}) {
@@ -787,22 +826,20 @@ function createOpenaiStreamConverter(model) {
 // ──────────────────────────────────────
 
 function processAnthropicBody(body) {
-  if (body.system) {
-    if (Array.isArray(body.system)) {
-      body.system.unshift(staticSystemPromptBlock());
-    } else {
-      body.system = [staticSystemPromptBlock(), { type: "text", text: body.system }];
-    }
-  } else {
-    body.system = [staticSystemPromptBlock()];
-  }
+  const existingSystem = (() => {
+    if (!body.system) return [];
+    if (Array.isArray(body.system)) return body.system.filter((item) => !isClaudeBillingSystemBlock(item));
+    return [{ type: "text", text: body.system }];
+  })();
+
+  const billingSeed = existingSystem.find((item) => String(item?.text || "").trim())?.text || "";
+  body.system = [
+    claudeBillingSystemBlock(billingSeed),
+    ...existingSystem,
+  ];
   stripTtlFromCacheControl(body);
   applyPromptCache(body);
   return body;
-}
-
-function staticSystemPromptBlock() {
-  return { ...SYSTEM_PROMPT_PREFIX };
 }
 
 function applyPromptCache(body) {
@@ -1067,6 +1104,7 @@ function proxyToAnthropic(token, path, payload) {
           Authorization: `Bearer ${token}`,
           "anthropic-version": ANTHROPIC_VERSION,
           "anthropic-beta": BETA_HEADER,
+          "User-Agent": `claude-code/${CLAUDE_CODE_VERSION} (external, cli)`,
           "Content-Length": Buffer.byteLength(data),
         },
       },
@@ -1090,6 +1128,7 @@ function proxyGetAnthropic(token, path) {
           Authorization: `Bearer ${token}`,
           "anthropic-version": ANTHROPIC_VERSION,
           "anthropic-beta": BETA_HEADER,
+          "User-Agent": `claude-code/${CLAUDE_CODE_VERSION} (external, cli)`,
         },
       },
       (proxyRes) => resolve(proxyRes)
@@ -1233,6 +1272,9 @@ const server = http.createServer(async (req, res) => {
       payload = JSON.parse(rawBody.toString("utf8"));
     } catch {
       return sendError(res, 400, "Invalid JSON body");
+    }
+    if (containsRefreshToken(payload)) {
+      return sendError(res, 400, "refresh token must not be synced");
     }
     try {
       const synced = writeSyncedOAuthCredentials(payload);

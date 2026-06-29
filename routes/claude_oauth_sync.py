@@ -27,6 +27,18 @@ def _proxy_response(resp: requests.Response) -> Response:
     return Response(resp.content, status=resp.status_code, content_type=content_type)
 
 
+def _contains_refresh_token(value) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in {"refreshToken", "refresh_token"}:
+                return True
+            if _contains_refresh_token(child):
+                return True
+    if isinstance(value, list):
+        return any(_contains_refresh_token(item) for item in value)
+    return False
+
+
 @bp.route("/internal/claude-oauth-status", methods=["GET"])
 def claude_oauth_status():
     try:
@@ -43,12 +55,16 @@ def claude_oauth_status():
 @bp.route("/internal/claude-oauth-sync", methods=["POST"])
 def claude_oauth_sync():
     try:
+        raw_body = request.get_data()
+        payload = request.get_json(silent=True)
+        if _contains_refresh_token(payload):
+            return jsonify({"ok": False, "error": "refresh token must not be synced"}), 400
         headers = _forward_headers()
         headers["Content-Type"] = request.headers.get("Content-Type") or "application/json"
         resp = requests.post(
             f"{_target_base()}/internal/oauth-sync",
             headers=headers,
-            data=request.get_data(),
+            data=raw_body,
             timeout=20,
         )
         return _proxy_response(resp)

@@ -978,7 +978,7 @@ ssh -o ControlMaster=no ali-du 'systemctl --user list-units --type=service --all
 
 ### Claude token sync 快查
 
-这套脚本是为了修 Claude OAuth proxy 401：从 Mac 本机 Claude Code Keychain 取 OAuth JSON，必要时本地刷新，然后通过 HTTP POST 同步到 VPS 的 Claude OAuth proxy。HTTP POST 是主链路；只有 POST 最终失败时，才允许 SSH fallback 把 OAuth JSON 写到远端 auth 文件并重启 Claude OAuth proxy。不要再把“同步 token”做成 SSH 写文件 + 重启服务的主链路。
+这套脚本是为了修 Claude OAuth proxy 401：从 Mac 本机 Claude Code Keychain 取 OAuth JSON，必要时由本机脚本持有 refresh token 并直连 OAuth endpoint 刷新；同步给 VPS 的 Claude OAuth proxy 时只发送 access-only 包。HTTP POST 是主链路；只有 POST 最终失败时，才允许 SSH fallback 把过滤后的 access-only JSON 写到远端 auth 文件并重启 Claude OAuth proxy。不要再把“同步 token”做成 SSH 写文件 + 重启服务的主链路。
 
 关键路径：
 - 脚本：`/Users/doraemon/claude-token-sync.sh`
@@ -993,7 +993,7 @@ ssh -o ControlMaster=no ali-du 'systemctl --user list-units --type=service --all
 - 网关转发状态接口：`GET /internal/claude-oauth-status`
 - 本机私有配置：`/Users/doraemon/.claude-token-sync.env`
 
-LaunchAgent 默认 `StartInterval=300`，也就是约 5 分钟跑一次。脚本先查本机 Keychain token 是否接近过期，必要时本机刷新后 POST；远端状态接口若报告新 401 或远端 token 比本机旧，也会触发 POST。远端 401 只是补救信号，不再是主链路。脚本不再临时改写 Keychain 的过期时间；只以 Claude Code 真实写回的新 `expiresAt` 为准。
+LaunchAgent 默认 `StartInterval=300`，也就是约 5 分钟跑一次。脚本先查本机 Keychain token 是否进入刷新窗口，必要时用 Keychain 里的 refresh token 直连 `https://platform.claude.com/v1/oauth/token` 刷新本机 token，再 POST access-only 同步包；远端状态接口若报告新 401 或远端 token 比本机旧，也会触发 POST。远端 401 只是补救信号，不强制本机刷新；脚本只以本机 Keychain 当前 `expiresAt` 为准。
 
 本机配置示例（不要提交，不要贴密钥）：
 
@@ -1005,13 +1005,14 @@ CLAUDE_PROXY_SSH_FALLBACK=1
 CLAUDE_PROXY_SSH_HOST=ali-du
 CLAUDE_PROXY_SSH_AUTH_FILE=/home/nora/.cli-proxy-api/claude-sumikamiss@gmail.com.json
 CLAUDE_PROXY_SSH_SERVICE=claude-oauth-proxy.service
+CLAUDE_REFRESH_BUFFER_SECONDS=60
 ```
 
 服务端约束：
 - `scripts/claude_oauth_proxy.js` 的同步接口用 `CLAUDE_OAUTH_SYNC_KEY` 校验；未配置时默认复用 `PROXY_KEY`。
 - Claude OAuth proxy 应继续只监听服务器本机或内网；公网只暴露网关转发接口或受控内网入口。
-- 同步接口只接收完整 OAuth JSON，验证 `accessToken/refreshToken/expiresAt`，原子写入 `CLAUDE_OAUTH_FILE`，并热更新内存 token，不需要 `systemctl restart`。
-- SSH fallback 只在 HTTP POST 失败后触发；它会先本地校验 OAuth JSON，再通过 `ssh ali-du` 写远端 auth 文件，最后 `systemctl --user restart claude-oauth-proxy.service` 让进程重新加载文件。不要打印 token 或 sync key。
+- 同步接口只接收 access-only OAuth JSON，验证 `accessToken/expiresAt`，拒收任何 `refreshToken/refresh_token`，原子写入 `CLAUDE_OAUTH_FILE`，并热更新内存 token，不需要 `systemctl restart`。
+- SSH fallback 只在 HTTP POST 失败后触发；它会先在本地生成过滤后的 access-only 同步包，再通过 `ssh ali-du` 写远端 auth 文件，最后 `systemctl --user restart claude-oauth-proxy.service` 让进程重新加载文件。不要打印 token 或 sync key。
 
 先查本机脚本有没有跑：
 
@@ -1958,3 +1959,10 @@ npm -C miniapp run android
 - 已完成：`docs/DEBUG_INDEX.md` 的 Claude OAuth proxy 索引项补上迁移方案入口。
 - 已验证：`git diff --check -- docs/claude_proxy_new_vps_migration_plan.md docs/DEBUG_INDEX.md` 通过；本轮只写文档，不改服务、不改 env、不重启。
 - 未完成 / 下次继续：买好新 VPS 后，从方案的“新 VPS 初始化”开始执行；执行前先确认新 VPS IP、旧 VPS SSH alias、旧 VPS 实际运行用户和 proxy 文件路径。
+
+当前状态（2026-06-29 Claude OAuth gist 风格刷新与请求形状）：
+- 已完成：`/Users/doraemon/claude-token-sync.sh` 不再走 `claude -p` 触发刷新，改为本机 Keychain 读取 refresh token 后直连 `https://platform.claude.com/v1/oauth/token`，POST JSON `{grant_type, client_id, refresh_token}`，请求头只带 `Content-Type: application/json` 和 `Accept: application/json`；默认只在过期前 60 秒窗口内刷新。
+- 已完成：同步给 Claude OAuth proxy 的 payload 只包含 `accessToken` 和 `expiresAt`，不包含 refresh token；`/Users/doraemon/claude-token-sync.sh` 在 HTTP/SSH 同步前会统一生成 access-only 过滤包，`scripts/claude_oauth_proxy.js` 的 `/internal/oauth-sync` 和网关转发层 `routes/claude_oauth_sync.py` 也会拒收任何 `refreshToken/refresh_token` 字段，避免误落盘。
+- 已完成：Claude OAuth proxy 不再插入 `You are Claude Code...` 系统提示词，只在 `system[0]` 注入 `x-anthropic-billing-header` 计费块；模型请求头带 `Authorization`、`anthropic-version: 2023-06-01`、`anthropic-beta`、`User-Agent: claude-code/2.1.195 (external, cli)`、`Content-Type: application/json`。`anthropic-beta` 的前两项按 gist 顺序为 `oauth-2025-04-20,claude-code-20250219`，后面继续保留现有 interleaved thinking / prompt cache scope / context management beta，避免砍掉当前功能。
+- 已验证：`node --check scripts/claude_oauth_proxy.js`、`.venv/bin/python -m py_compile routes/claude_oauth_sync.py`、`bash -n /Users/doraemon/claude-token-sync.sh` 通过；残留搜索未找到 `You are Claude Code`、`SYSTEM_PROMPT_PREFIX`、`staticSystemPromptBlock`、`claude -p`、`CLAUDE_BIN`、旧 refresh helper；`routes.claude_oauth_sync._contains_refresh_token()` smoke 覆盖 access-only 不误伤、refresh token 会拦截。
+- 未完成 / 下次继续：本轮没有 push、没有部署、没有重启，也没有触发真实 OAuth 刷新；线上生效仍需按既有流程同步 `scripts/claude_oauth_proxy.js` 到实际运行的 proxy 文件并重启相关服务。
