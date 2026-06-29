@@ -2113,8 +2113,7 @@ def chat_completions():
             continue
         if isinstance(msg, dict):
             _accumulate_nonstream_reasoning(msg)
-            if tool_rounds_used > 0:
-                _emit_sumitalk_reasoning_event(msg, tool_rounds_used + 1)
+            _emit_sumitalk_reasoning_event(msg, tool_rounds_used + 1)
             break
     if allow_tool_only_reply and resp_json and tool_rounds_used > 0:
         tool_trace_for_tool_only = _collect_tool_trace_from_messages(body.get("messages") or [])

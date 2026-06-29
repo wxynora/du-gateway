@@ -14,6 +14,19 @@ from services.sumitalk_chat_queue import (
 _SUMITALK_CHAT_DIRECT_WAIT_MS = 2500
 
 
+def _response_with_events(job: dict) -> dict:
+    response = job.get("response") or {}
+    if not isinstance(response, dict):
+        return {}
+    events = job.get("events") if isinstance(job.get("events"), list) else []
+    if not events:
+        return response
+    return {
+        **response,
+        "sumitalk_chat_events": response.get("sumitalk_chat_events") or events,
+    }
+
+
 def _get_panel_device_id() -> str:
     payload = request.environ.get("miniapp_panel_payload") or {}
     return str(payload.get("device_id") or "").strip()
@@ -54,12 +67,12 @@ def _job_payload(job_id: str, *, mode: str = "job") -> tuple[dict, int]:
         payload["events"] = job.get("events") or []
         payload["event_seq"] = int(job.get("event_seq") or 0)
     if status == "done":
-        payload["response"] = job.get("response") or {}
+        payload["response"] = _response_with_events(job)
         payload["status_code"] = int(job.get("status_code") or 200)
     elif status == "error":
         payload["error"] = str(job.get("error") or "渡回复失败")
         payload["status_code"] = int(job.get("status_code") or 500)
-        payload["response"] = job.get("response") or {}
+        payload["response"] = _response_with_events(job)
     elif status == "cancelled":
         payload["ok"] = False
         payload["error"] = str(job.get("error") or "已取消发送")
