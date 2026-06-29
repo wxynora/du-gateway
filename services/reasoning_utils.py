@@ -103,8 +103,7 @@ def extract_reasoning_text_and_details(obj: dict) -> tuple[str, list, bool]:
 
 def strip_thinking_from_response_json(resp_json: dict) -> dict:
     """
-    从非流式上游响应中剥离 content 里的 <think> 块，
-    同时把提取到的 thinking 合并进 message.reasoning（已有则追加），
+    从非流式上游响应中剥离 content 里的 <think> 块和结构化 reasoning 字段，
     避免 thinking 泄漏给客户端（RikkaHub / Telegram 等）。
     就地修改 resp_json 并返回；若无 choices 则原样返回。
     """
@@ -116,15 +115,15 @@ def strip_thinking_from_response_json(resp_json: dict) -> dict:
     msg = choices[0].get("message") if isinstance(choices[0], dict) else None
     if not isinstance(msg, dict):
         return resp_json
-    msg.pop("thinking_blocks", None)
+    for key in ("reasoning", "reasoning_content", "thinking"):
+        msg.pop(key, None)
+    for key in ("reasoning_details", "thinking_blocks", "reasoning_omitted"):
+        msg.pop(key, None)
     content = msg.get("content")
     if not isinstance(content, str):
         return resp_json
-    stripped, thinking = extract_thinking_from_content(content)
+    stripped, _thinking = extract_thinking_from_content(content)
     msg["content"] = stripped
-    if thinking:
-        existing = str(msg.get("reasoning") or "").strip()
-        msg["reasoning"] = (existing + "\n\n" + thinking).strip() if existing else thinking
     return resp_json
 
 

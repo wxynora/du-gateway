@@ -383,7 +383,7 @@ def _call_gateway_followup(window_id: str, channel: str, reason: str, chain_id: 
     try:
         from storage.upstream_store import get_cached_active_model
 
-        model = str(get_cached_active_model(refresh_if_missing=True) or "").strip()
+        model = str(get_cached_active_model(refresh_if_missing=False) or "").strip()
     except Exception:
         model = ""
     if not model:
@@ -577,7 +577,7 @@ def _send_wakeup_event(
     try:
         from storage.upstream_store import get_cached_active_model
 
-        model = str(get_cached_active_model(refresh_if_missing=True) or "").strip()
+        model = str(get_cached_active_model(refresh_if_missing=False) or "").strip()
     except Exception:
         model = ""
     if not model:

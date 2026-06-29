@@ -385,7 +385,7 @@ def handle_co_read_session():
     snippet = str(body.get("snippet") or "").strip()
     user_note = str(body.get("user_note") or "").strip()
     reply_target = str(body.get("reply_target") or request.headers.get("X-Reply-Target") or "co_read").strip()
-    model = str(body.get("model") or "").strip() or upstream_store.get_cached_active_model(refresh_if_missing=False)
+    model = upstream_store.get_cached_active_model(refresh_if_missing=False)
 
     if not window_id:
         return jsonify({"ok": False, "error": "缺少 window_id"}), 400

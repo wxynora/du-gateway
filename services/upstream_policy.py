@@ -14,7 +14,9 @@ from config import (
     PIONEER_CLAUDE_CACHE_TTL,
     is_openrouter_url,
     is_pioneer_url,
+    is_cloudflare_anthropic_url,
 )
+from services.cloudflare_anthropic import normalize_model_for_cloudflare
 
 _CLAUDE_ADAPTIVE_THINKING_RE = re.compile(r"claude-opus-4-(?:6|7|8)(?:\b|-|$)", re.IGNORECASE)
 _CLAUDE_OPUS_46_RE = re.compile(r"claude-opus-4-6(?:\b|-|$)", re.IGNORECASE)
@@ -329,13 +331,22 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
                 output_config["effort"] = _normalize_claude_adaptive_effort(model, get_active_claude_thinking_effort())
                 body["output_config"] = output_config
             if is_pioneer_url(upstream_url):
-                request_model = str(body.get("model") or "").strip()
-                effective_model = model or request_model
+                effective_model = model
                 if _is_claude_proxy_model(effective_model):
                     body["model"] = effective_model
                     body = _apply_pioneer_claude_prompt_cache(body, PIONEER_CLAUDE_CACHE_TTL)
                 else:
                     _strip_gateway_cache_markers(body.get("messages") or [])
+                if _is_claude_adaptive_thinking_model(effective_model):
+                    body["thinking"] = {"type": "adaptive", "display": "summarized"}
+                    output_config = body.get("output_config") if isinstance(body.get("output_config"), dict) else {}
+                    output_config = dict(output_config)
+                    output_config["effort"] = _normalize_claude_adaptive_effort(effective_model, get_active_claude_thinking_effort())
+                    body["output_config"] = output_config
+            if is_cloudflare_anthropic_url(upstream_url):
+                effective_model = model
+                if effective_model:
+                    body["model"] = normalize_model_for_cloudflare(effective_model, upstream_url)
                 if _is_claude_adaptive_thinking_model(effective_model):
                     body["thinking"] = {"type": "adaptive", "display": "summarized"}
                     output_config = body.get("output_config") if isinstance(body.get("output_config"), dict) else {}

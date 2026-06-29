@@ -323,7 +323,7 @@ def register_routes(bp) -> None:
         data = request.get_json(silent=True) or {}
         active = int(data.get("active") or 0)
         ok = upstream_store.set_active(active)
-        model = upstream_store.refresh_active_model_cache() if ok else ""
+        model = upstream_store.get_cached_active_model(refresh_if_missing=False) if ok else ""
         saved = upstream_store.load_upstreams()
         return jsonify(
             {
@@ -339,7 +339,7 @@ def register_routes(bp) -> None:
         data = request.get_json(silent=True) or {}
         idx = int(data.get("active") or 0)
         ok = upstream_store.set_active(idx)
-        model = upstream_store.refresh_active_model_cache() if ok else ""
+        model = upstream_store.get_cached_active_model(refresh_if_missing=False) if ok else ""
         saved = upstream_store.load_upstreams()
         return jsonify(
             {

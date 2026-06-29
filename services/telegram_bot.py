@@ -178,13 +178,13 @@ def build_telegram_style_system(include_channel_hint: bool = True, *, use_prompt
 
 def _fetch_gateway_first_model() -> Optional[str]:
     """
-    读取当前 active upstream 的真实可用模型。
-    模型在切换上游时刷新到本地缓存；缓存为空时只补拉一次。
+    只读取当前 active upstream 的模型缓存。
+    后端不主动探测 /v1/models，也不在缓存为空时猜测默认模型。
     """
     try:
         from storage.upstream_store import get_cached_active_model
 
-        model = str(get_cached_active_model(refresh_if_missing=True) or "").strip()
+        model = str(get_cached_active_model(refresh_if_missing=False) or "").strip()
         return model or None
     except Exception as e:
         logger.warning("读取 active 模型缓存失败: %s", e)

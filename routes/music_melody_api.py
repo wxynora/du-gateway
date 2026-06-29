@@ -543,7 +543,7 @@ def music_listen_chat():
         if client_lyrics.get("lines") or client_lyrics.get("plain_lines"):
             entry = {**entry, "lyrics": client_lyrics}
 
-    model = str(body.get("model") or "").strip() or upstream_store.get_cached_active_model(refresh_if_missing=True)
+    model = upstream_store.get_cached_active_model(refresh_if_missing=False)
     if not model:
         return jsonify({"ok": False, "error": "当前未设置全局模型"}), 502
 

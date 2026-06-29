@@ -21,6 +21,7 @@ from config import (
     SUMITALK_CHAT_QUEUE_DB,
     SUMITALK_CHAT_QUEUE_STALE_SECONDS,
 )
+from storage import upstream_store
 from services.upstream_policy import extract_upstream_error_detail
 from utils.time_aware import now_beijing_iso
 
@@ -795,13 +796,13 @@ def build_sumitalk_chat_job_payload(
     force_last4: str,
     remote_addr: str,
 ) -> tuple[str, dict | None, EnqueueChatJobResult | None]:
-    model = str((body or {}).get("model") or "").strip()
+    model = str(upstream_store.get_cached_active_model(refresh_if_missing=False) or "").strip()
     messages = (body or {}).get("messages") or []
     window_id = str((body or {}).get("window_id") or "").strip()
     reply_target = str(reply_target or "").strip()
     client_request_id = safe_sumitalk_client_request_id((body or {}).get("client_request_id"))
     if not model:
-        return "", {"payload": {"ok": False, "error": "缺少 model"}, "status": 400}, None
+        return "", {"payload": {"ok": False, "error": "当前未设置全局模型"}, "status": 400}, None
     if not isinstance(messages, list) or not messages:
         return "", {"payload": {"ok": False, "error": "缺少 messages"}, "status": 400}, None
     if not window_id:

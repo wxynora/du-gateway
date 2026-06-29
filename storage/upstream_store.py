@@ -1,6 +1,7 @@
 import json
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -9,6 +10,8 @@ from config import (
     is_siliconflow_url,
     is_openrouter_url,
     is_pioneer_url,
+    is_cloudflare_anthropic_url,
+    cloudflare_claude_model_options,
     openrouter_model_options,
     siliconflow_model_options,
 )
@@ -155,44 +158,113 @@ def normalize_claude_thinking_effort(value: str) -> str:
     return effort if effort in CLAUDE_THINKING_EFFORTS else DEFAULT_CLAUDE_THINKING_EFFORT
 
 
-def _current_active_identity() -> tuple[int, str]:
+def _normalize_url_for_key(raw_url: str) -> str:
+    url = str(raw_url or "").strip().rstrip("/")
+    if not url:
+        return ""
+    return url.lower()
+
+
+def _parse_url(raw_url: str):
+    url = str(raw_url or "").strip()
+    if not url:
+        return None
+    if "://" not in url:
+        url = "http://" + url
+    try:
+        return urlparse(url)
+    except Exception:
+        return None
+
+
+def _upstream_stable_key(item: dict, index: int | None = None) -> str:
+    item = item or {}
+    explicit = str(item.get("id") or "").strip()
+    if explicit:
+        return f"id:{explicit}"
+    url = str(item.get("url") or "").strip()
+    parsed = _parse_url(url)
+    host = ((parsed.hostname if parsed else "") or "").lower()
+    port = parsed.port if parsed else None
+    if host in {"127.0.0.1", "localhost", "::1"}:
+        if port == 8317:
+            return "local-oauth:codex"
+        if port == 8082:
+            return "local-oauth:claude"
+    normalized_url = _normalize_url_for_key(url)
+    if normalized_url:
+        return f"url:{normalized_url}"
+    name = str(item.get("name") or "").strip().lower()
+    if name:
+        return f"name:{name}"
+    return f"index:{index}" if index is not None else ""
+
+
+def _current_active_context() -> tuple[int, dict, str, str]:
     data = load_upstreams()
     items = data.get("items") or []
     active = int(data.get("active") or 0)
     if active < 0 or active >= len(items):
-        return active, ""
-    return active, str((items[active] or {}).get("url") or "").strip()
+        return active, {}, "", ""
+    item = items[active] or {}
+    url = str(item.get("url") or "").strip()
+    return active, item, url, _upstream_stable_key(item, active)
+
+
+def _active_model_entry_from_payload(payload: dict, active: int, item: dict, url: str, key: str) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    models_by_upstream = payload.get("models_by_upstream")
+    if isinstance(models_by_upstream, dict) and key:
+        entry = models_by_upstream.get(key)
+        if isinstance(entry, dict):
+            return entry
+    if str(payload.get("upstream_key") or "").strip() == key and key:
+        return payload
+    if payload.get("active") == active and str(payload.get("url") or "").strip() == url:
+        return payload
+    return {}
 
 
 def get_active_claude_thinking_effort() -> str:
     payload = _load_active_model_payload()
-    active, url = _current_active_identity()
-    if payload.get("active") == active and str(payload.get("url") or "").strip() == url:
-        return normalize_claude_thinking_effort(payload.get("claude_thinking_effort"))
+    active, item, url, key = _current_active_context()
+    entry = _active_model_entry_from_payload(payload, active, item, url, key)
+    if entry:
+        return normalize_claude_thinking_effort(entry.get("claude_thinking_effort"))
     return DEFAULT_CLAUDE_THINKING_EFFORT
 
 
 def set_active_claude_thinking_effort(effort: str) -> bool:
-    active, url = _current_active_identity()
+    active, item, url, key = _current_active_context()
     if not url:
         return False
     payload = _load_active_model_payload()
-    model = ""
-    if payload.get("active") == active and str(payload.get("url") or "").strip() == url:
-        model = str(payload.get("model") or "").strip()
-    return _save_active_model_payload(
+    models_by_upstream = dict(payload.get("models_by_upstream") or {}) if isinstance(payload.get("models_by_upstream"), dict) else {}
+    entry = dict(_active_model_entry_from_payload(payload, active, item, url, key) or {})
+    entry.update(
         {
             "active": active,
             "url": url,
-            "model": model,
+            "upstream_key": key,
+            "model": str(entry.get("model") or "").strip(),
             "claude_thinking_effort": normalize_claude_thinking_effort(effort),
             "checked_at": time.time(),
         }
     )
-
-
-def clear_active_model_cache() -> bool:
-    return _save_active_model_payload({})
+    if key:
+        models_by_upstream[key] = entry
+    return _save_active_model_payload(
+        {
+            "active": active,
+            "url": url,
+            "upstream_key": key,
+            "model": str(entry.get("model") or "").strip(),
+            "claude_thinking_effort": entry["claude_thinking_effort"],
+            "checked_at": time.time(),
+            "models_by_upstream": models_by_upstream,
+        }
+    )
 
 
 def list_models_for_item_detail(it: dict) -> dict:
@@ -225,6 +297,15 @@ def list_models_for_item_detail(it: dict) -> dict:
             "status": 200,
             "source": "siliconflow_model_options",
             "error": "",
+        }
+    if is_cloudflare_anthropic_url(url):
+        models = cloudflare_claude_model_options(url)
+        return {
+            "ok": bool(models),
+            "models": models,
+            "status": 200 if models else 0,
+            "source": "cloudflare_claude_model_options",
+            "error": "" if models else "CLOUDFLARE_CLAUDE_MODELS 未配置",
         }
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -283,46 +364,17 @@ def list_models_for_item(it: dict) -> list[str]:
     return list(detail.get("models") or []) if isinstance(detail, dict) else []
 
 
-def _fetch_first_model_for_item(it: dict) -> str:
-    models = list_models_for_item(it)
-    return models[0] if models else ""
-
-
-def refresh_active_model_cache() -> str:
-    data = load_upstreams()
-    items = data.get("items") or []
-    active = int(data.get("active") or 0)
-    if active < 0 or active >= len(items):
-        _save_active_model_payload({})
-        return ""
-    item = items[active] or {}
-    effort = get_active_claude_thinking_effort()
-    model = _fetch_first_model_for_item(item)
-    _save_active_model_payload(
-        {
-            "active": active,
-            "url": str(item.get("url") or "").strip(),
-            "model": model,
-            "claude_thinking_effort": effort,
-            "checked_at": time.time(),
-        }
-    )
-    return model
-
-
-def get_cached_active_model(refresh_if_missing: bool = True) -> str:
+def get_cached_active_model(refresh_if_missing: bool = False) -> str:
     payload = _load_active_model_payload()
-    data = load_upstreams()
-    items = data.get("items") or []
-    active = int(data.get("active") or 0)
-    if 0 <= active < len(items):
-        url = str((items[active] or {}).get("url") or "").strip()
-        if payload.get("active") == active and str(payload.get("url") or "").strip() == url:
-            model = str(payload.get("model") or "").strip()
-            if model:
-                return model
-    if refresh_if_missing:
-        return refresh_active_model_cache()
+    active, item, url, key = _current_active_context()
+    if url:
+        entry = _active_model_entry_from_payload(payload, active, item, url, key)
+        model = str(entry.get("model") or "").strip() if isinstance(entry, dict) else ""
+        if model:
+            return model
+    # refresh_if_missing is kept for old call sites, but backend runtime must not
+    # guess or refresh the active model by itself. The model cache changes only
+    # through explicit model save.
     return ""
 
 
@@ -330,20 +382,31 @@ def set_active_model(model: str) -> bool:
     model = str(model or "").strip()
     if not model:
         return False
-    data = load_upstreams()
-    items = data.get("items") or []
-    active = int(data.get("active") or 0)
-    if active < 0 or active >= len(items):
+    active, item, url, key = _current_active_context()
+    if not url:
         return False
-    item = items[active] or {}
     effort = get_active_claude_thinking_effort()
+    payload = _load_active_model_payload()
+    models_by_upstream = dict(payload.get("models_by_upstream") or {}) if isinstance(payload.get("models_by_upstream"), dict) else {}
+    entry = {
+        "active": active,
+        "url": url,
+        "upstream_key": key,
+        "model": model,
+        "claude_thinking_effort": effort,
+        "checked_at": time.time(),
+    }
+    if key:
+        models_by_upstream[key] = entry
     return _save_active_model_payload(
         {
             "active": active,
-            "url": str(item.get("url") or "").strip(),
+            "url": url,
+            "upstream_key": key,
             "model": model,
             "claude_thinking_effort": effort,
             "checked_at": time.time(),
+            "models_by_upstream": models_by_upstream,
         }
     )
 
@@ -354,10 +417,7 @@ def set_active(index: int) -> bool:
     if index < 0 or index >= len(items):
         return False
     data["active"] = int(index)
-    ok = save_upstreams(data)
-    if ok:
-        clear_active_model_cache()
-    return ok
+    return save_upstreams(data)
 
 
 def get_active_item() -> dict | None:

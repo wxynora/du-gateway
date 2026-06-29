@@ -932,7 +932,6 @@ export function MainChatScreen({
   onOpenCall: () => void;
 }) {
   const toast = useToast();
-  const modelKey = `miniapp.chat.${windowId}.model.v1`;
   const displayHistoryWindowId = String(displayWindowId || (!groupChatMode ? MAIN_SUMITALK_DISPLAY_WINDOW_ID : "")).trim();
   const historyWindowId = String(displayHistoryWindowId || windowId || "").trim();
   const remoteHistoryWindowId = displayHistoryWindowId;
@@ -1200,13 +1199,7 @@ export function MainChatScreen({
     });
   }
 
-  const [activeModel, setActiveModel] = useState(() => {
-    try {
-      return (localStorage.getItem(modelKey) || "").trim();
-    } catch {
-      return "";
-    }
-  });
+  const [activeModel, setActiveModel] = useState("");
   const benbenTaskRecoveringRef = useRef<Set<string>>(new Set());
   const benbenTaskFinalizedRef = useRef<Set<string>>(new Set());
   const sumitalkOperationRecoveringRef = useRef<Set<string>>(new Set());
@@ -1694,26 +1687,17 @@ export function MainChatScreen({
     let cancelled = false;
     (async () => {
       try {
-        const j = await apiJson<{ data?: Array<{ id?: string }> }>("/v1/models");
-        const ids = Array.isArray(j?.data)
-          ? j.data.map((item) => String(item?.id || "").trim()).filter(Boolean)
-          : [];
-        if (cancelled || !ids.length) return;
-        setActiveModel((prev) => {
-          const next = prev && ids.includes(prev) ? prev : ids[0];
-          try {
-            if (next) localStorage.setItem(modelKey, next);
-          } catch {}
-          return next;
-        });
+        const j = await apiJson<{ model?: string }>("/miniapp-api/upstreams");
+        const nextModel = String(j?.model || "").trim();
+        if (!cancelled) setActiveModel(nextModel);
       } catch (e: any) {
-        if (!cancelled) toast(`模型列表加载失败：${e?.message || e}`);
+        if (!cancelled) toast(`上游配置加载失败：${e?.message || e}`);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [modelKey, toast]);
+  }, [toast]);
 
   useEffect(() => {
     let cancelled = false;

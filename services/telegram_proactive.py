@@ -148,7 +148,7 @@ def _get_chat_model() -> str:
     try:
         from storage.upstream_store import get_cached_active_model
 
-        return str(get_cached_active_model(refresh_if_missing=True) or "").strip()
+        return str(get_cached_active_model(refresh_if_missing=False) or "").strip()
     except Exception:
         return ""
 

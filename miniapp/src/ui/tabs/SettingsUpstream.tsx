@@ -281,7 +281,7 @@ export function SettingsUpstream() {
       const selected = String(j.model || "").trim();
       setModels(nextModels);
       setCurrentModel(selected);
-      setPendingModel(selected || nextModels[0] || "");
+      setPendingModel(selected);
     } catch (e: any) {
       setModels([]);
       const payload = e?.payload || {};

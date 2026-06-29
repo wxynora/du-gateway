@@ -24,6 +24,8 @@ from config import (
     QQ_PROACTIVE_PUSH_TOKEN,
     is_openrouter_url,
     is_pioneer_url,
+    is_cloudflare_anthropic_url,
+    cloudflare_claude_model_options,
     openrouter_models_response,
     is_siliconflow_url,
     siliconflow_models_response,
@@ -72,7 +74,7 @@ from pipeline.pipeline import (
 )
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
-from storage import million_plan_mode_store, r2_store, whitelist_store
+from storage import million_plan_mode_store, r2_store, upstream_store, whitelist_store
 from storage.music_bgm_state import get_active_music_bgm_context
 from storage.music_melody_store import get_music_melody_entry_by_id
 from services.music_lyrics import normalize_lyrics_payload
@@ -100,6 +102,12 @@ from services.chat_content import message_content_chars as _message_content_char
 from services.claude_thinking_carryover import (
     extract_claude_thinking_blocks as _extract_claude_thinking_blocks,
     inject_previous_claude_thinking_blocks as _inject_previous_claude_thinking_blocks,
+)
+from services.cloudflare_anthropic import (
+    anthropic_sse_to_openai_sse as _anthropic_sse_to_openai_sse,
+    anthropic_to_openai_response as _anthropic_to_openai_response,
+    cloudflare_anthropic_headers as _cloudflare_anthropic_headers,
+    openai_to_anthropic_request as _openai_to_anthropic_request,
 )
 from services.chat_prompt_injections import (
     inject_channel_nsfw_system as _inject_channel_nsfw_system,
@@ -963,9 +971,17 @@ def _stream_forward_to_ai(body: dict, headers: dict):
             body_send = _apply_active_model_request_policy(body_send, url)
             target_url = url
             body_send = _apply_openrouter_request_policy(body_send, url)
+            is_cf_anthropic = is_cloudflare_anthropic_url(target_url)
+            if is_cf_anthropic:
+                body_send = _openai_to_anthropic_request(body_send, target_url)
+                h = _cloudflare_anthropic_headers(h, target_url, api_key)
             # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(target_url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
+                if is_cf_anthropic:
+                    for chunk in _anthropic_sse_to_openai_sse(r.iter_lines(), str(body_send.get("model") or request_model)):
+                        yield chunk
+                    return
                 last_data_line = None
                 first_chunk_logged = False
                 for line in r.iter_lines():
@@ -1422,6 +1438,10 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
             body_send = _apply_active_model_request_policy(body_send, url)
             target_url = url
             body_send = _apply_openrouter_request_policy(body_send, url)
+            is_cf_anthropic = is_cloudflare_anthropic_url(target_url)
+            if is_cf_anthropic:
+                body_send = _openai_to_anthropic_request(body_send, target_url)
+                req_headers = _cloudflare_anthropic_headers(req_headers, target_url, api_key)
             is_sumitalk_forward = str(headers.get("X-Reply-Channel") or request.headers.get("X-Reply-Channel") or "").strip().lower() == "sumitalk"
             upstream_started = time.time()
             if is_sumitalk_forward:
@@ -1475,6 +1495,8 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                 continue
             # 只有 2xx 算成功，其余（4xx/5xx/429 等）直接失败（不再自动 fallback）
             if 200 <= r.status_code < 300:
+                if is_cf_anthropic:
+                    data = _anthropic_to_openai_response(data or {}, str(body_send.get("model") or request_model))
                 cache_debug = _build_cache_debug_entry(body_send, target_url, prompt_cache_profile, data or {})
                 usage_debug = cache_debug.get("usage") or {}
                 profile_debug = cache_debug.get("request") or {}
@@ -1562,6 +1584,14 @@ def list_models():
         data = siliconflow_models_response()
         if data:
             return jsonify(data), 200
+    if is_cloudflare_anthropic_url(url):
+        models = cloudflare_claude_model_options(url)
+        if not models:
+            return jsonify({"error": "CLOUDFLARE_CLAUDE_MODELS 未配置"}), 502
+        return jsonify({
+            "object": "list",
+            "data": [{"id": model, "object": "model", "created": 0} for model in models],
+        }), 200
     models_url = _chat_url_to_models_url(url)
     if not models_url:
         return jsonify({"error": "无法解析模型列表地址"}), 502
@@ -1599,11 +1629,11 @@ def chat_completions():
     """统一入口：所有请求走完整管道（清洗、注入、转发、存档），无开头过滤。支持 X-Window-Id / body.window_id（如 Telegram 用 tg_{user_id}）。"""
     body = request.get_json(silent=True) or {}
     body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None)
-    body = _apply_openrouter_request_policy(body, _get_active_upstream_url())
+    active_upstream_url = _get_active_upstream_url()
     reply_channel = _reply_channel()
     reply_target = _reply_target()
     is_sumitalk_request = reply_channel == "sumitalk"
-    req_model = (body.get("model") or "").strip() if isinstance(body.get("model"), str) else ""
+    req_model = str(upstream_store.get_cached_active_model(refresh_if_missing=False) or "").strip()
     if not req_model:
         if is_sumitalk_request:
             raw_messages = body.get("messages") if isinstance(body, dict) else []
@@ -1614,7 +1644,9 @@ def chat_completions():
                 request.remote_addr,
                 (request.headers.get("User-Agent") or "")[:120],
             )
-        return jsonify({"error": "缺少 model"}), 400
+        return jsonify({"error": "当前未设置全局模型"}), 400
+    body["model"] = req_model
+    body = _apply_openrouter_request_policy(body, active_upstream_url)
     headers = dict(request.headers) if request.headers else {}
     window_id = _get_window_id_from_request(body)
     # 未传 id 的客户端（如 RikkaHub）与 R2 主存 __default__ 对齐，否则轮次恒为 1、总结永不触发
@@ -1840,7 +1872,9 @@ def chat_completions():
     body = _inject_qq_group_activity_context(body)
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
-    if _is_local_claude_oauth_proxy_url(active_upstream_url) and not _skip_claude_thinking_carryover_request():
+    if (
+        _is_local_claude_oauth_proxy_url(active_upstream_url) or is_cloudflare_anthropic_url(active_upstream_url)
+    ) and not _skip_claude_thinking_carryover_request():
         body = _inject_previous_claude_thinking_blocks(body, window_id)
     body = step_trim_messages_if_over_limit(body)
     body = _move_dynamic_systems_after_static_prefix(body)
@@ -1855,8 +1889,12 @@ def chat_completions():
             window_id,
             body.get("model") or "",
         )
-    # Claude OAuth / Pioneer 透传上游会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
-    preserve_dynamic_marker = _is_local_claude_oauth_proxy_url(active_upstream_url) or is_pioneer_url(active_upstream_url)
+    # Claude OAuth / Pioneer / Cloudflare Anthropic 会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
+    preserve_dynamic_marker = (
+        _is_local_claude_oauth_proxy_url(active_upstream_url)
+        or is_pioneer_url(active_upstream_url)
+        or is_cloudflare_anthropic_url(active_upstream_url)
+    )
     for msg in body.get("messages") or []:
         if not preserve_dynamic_marker:
             msg.pop("__dynamic__", None)

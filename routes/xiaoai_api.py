@@ -108,7 +108,7 @@ def _fetch_gateway_first_model() -> str:
     try:
         from storage.upstream_store import get_cached_active_model
 
-        model = str(get_cached_active_model(refresh_if_missing=True) or "").strip()
+        model = str(get_cached_active_model(refresh_if_missing=False) or "").strip()
         if model:
             return model
     except Exception as e:

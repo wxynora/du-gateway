@@ -691,6 +691,63 @@ def is_pioneer_url(url: str) -> bool:
     return bool(host and PIONEER_BASE_HOST and (host == PIONEER_BASE_HOST or host.endswith("." + PIONEER_BASE_HOST)))
 
 
+# -------------------- Cloudflare AI Gateway（Anthropic Messages） --------------------
+# 支持两类 Anthropic 原生入口：
+# 1) Provider native: https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/anthropic/v1/messages
+# 2) REST Anthropic-compatible: https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1/messages
+CLOUDFLARE_GATEWAY_HOST = os.environ.get("CLOUDFLARE_GATEWAY_HOST", "gateway.ai.cloudflare.com").strip().lower()
+CLOUDFLARE_API_HOST = os.environ.get("CLOUDFLARE_API_HOST", "api.cloudflare.com").strip().lower()
+CLOUDFLARE_CLAUDE_CACHE_TTL = os.environ.get("CLOUDFLARE_CLAUDE_CACHE_TTL", "1h").strip() or "1h"
+CLOUDFLARE_ANTHROPIC_API_KEY = os.environ.get("CLOUDFLARE_ANTHROPIC_API_KEY", "").strip()
+CLOUDFLARE_AIG_GATEWAY_ID = os.environ.get("CLOUDFLARE_AIG_GATEWAY_ID", "").strip()
+CLOUDFLARE_ANTHROPIC_BETA = os.environ.get(
+    "CLOUDFLARE_ANTHROPIC_BETA",
+    "interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05,context-management-2025-06-27",
+).strip()
+_CLOUDFLARE_CLAUDE_MODELS_STR = os.environ.get(
+    "CLOUDFLARE_CLAUDE_MODELS",
+    "claude-opus-4-6,claude-opus-4-7,claude-opus-4-8,claude-sonnet-4-6,claude-haiku-4-5",
+).strip()
+CLOUDFLARE_CLAUDE_MODELS = [
+    m.strip() for m in _CLOUDFLARE_CLAUDE_MODELS_STR.split(",") if m.strip()
+] if _CLOUDFLARE_CLAUDE_MODELS_STR else []
+
+
+def is_cloudflare_provider_native_anthropic_url(url: str) -> bool:
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").strip().lower()
+        path = (parsed.path or "").strip().lower().rstrip("/")
+    except Exception:
+        return False
+    return bool(host == CLOUDFLARE_GATEWAY_HOST and path.endswith("/anthropic/v1/messages"))
+
+
+def is_cloudflare_rest_anthropic_url(url: str) -> bool:
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").strip().lower()
+        path = (parsed.path or "").strip().lower().rstrip("/")
+    except Exception:
+        return False
+    return bool(host == CLOUDFLARE_API_HOST and path.endswith("/ai/v1/messages"))
+
+
+def is_cloudflare_anthropic_url(url: str) -> bool:
+    return is_cloudflare_provider_native_anthropic_url(url) or is_cloudflare_rest_anthropic_url(url)
+
+
+def cloudflare_claude_model_options(url: str = "") -> list[str]:
+    models = [m for m in CLOUDFLARE_CLAUDE_MODELS if m]
+    if is_cloudflare_rest_anthropic_url(url):
+        return [m if m.startswith("anthropic/") else f"anthropic/{m}" for m in models]
+    return [m.replace("anthropic/", "", 1) if m.startswith("anthropic/") else m for m in models]
+
+
 # -------------------- 硅基流动（SiliconFlow）专用模型列表 --------------------
 # 仅用于硅基流动上游的本地模型列表展示/探活；聊天入口不做硅基专属 model 兜底或覆盖。
 SILICONFLOW_BASE_HOST = os.environ.get("SILICONFLOW_BASE_HOST", "api.siliconflow.cn").strip().lower()
