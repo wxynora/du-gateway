@@ -12,7 +12,13 @@ _MAX_INJECT_PREV_CHARS = 2000
 # 与渡约定：整段放在回复末尾，便于网关正则截取；勿在正文其它位置出现这两行字面量。
 MARKER_START = "<<<DU_THOUGHT>>>"
 MARKER_END = "<<<END_DU_THOUGHT>>>"
-_HIDDEN_BLOCK = HiddenBlockParser.for_markers("DU_THOUGHT", MARKER_START, MARKER_END)
+SHORT_MARKER = "[du:thought 当前牵挂的事和情绪]"
+_HIDDEN_BLOCK = HiddenBlockParser.for_markers(
+    "DU_THOUGHT",
+    MARKER_START,
+    MARKER_END,
+    short_markers=("du:thought",),
+)
 
 
 def compute_visible_streaming(acc: str) -> str:
@@ -81,10 +87,9 @@ def format_inject_block(latest: Optional[dict]) -> str:
     """拼成注入 system 的说明 + 上一则心事。"""
     guide = (
         "【渡的心事（仅你与网关可见，勿在回复正文复述给老婆）】\n"
-        "若本轮有当前牵挂的事和情绪，请在正文后追加下面隐藏块（单独成块；网关会截取并存 R2，老婆侧不可见）：\n"
-        f"{MARKER_START}\n"
-        "（此处写当前牵挂的事和情绪，可多行）\n"
-        f"{MARKER_END}\n"
+        "若本轮有当前牵挂的事和情绪，优先在正文后追加一行短隐藏标记，网关会截取并存 R2，老婆侧不可见：\n"
+        f"{SHORT_MARKER}\n"
+        "旧的成块格式仍兼容，但优先用这一行，少写闭合符就少出错。\n"
         "隐藏标记统一追加在正文后，不要写进正文里。\n"
     )
     if not latest or not isinstance(latest, dict):

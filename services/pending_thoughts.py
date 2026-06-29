@@ -11,6 +11,7 @@ from utils.time_aware import now_beijing_iso
 logger = get_logger(__name__)
 
 TAG_RE = re.compile(r"[\[［【]\s*pending\s*[:：]\s*([^\]］】]+?)\s*[\]］】]", re.IGNORECASE)
+TAG_START_RE = re.compile(r"[\[［【]\s*pending\s*[:：]", re.IGNORECASE)
 
 MAX_PENDING_INJECT = 5
 MAX_PENDING_TEXT_CHARS = 120
@@ -75,6 +76,16 @@ def split_and_apply_tags(full_text: str) -> tuple[str, list[dict]]:
         else:
             logger.info("pending_thought tag ignored raw=%s", (match.group(1) or "")[:120])
     visible = TAG_RE.sub("", raw)
+    start = TAG_START_RE.search(visible)
+    if start:
+        rest = visible[start.end() :]
+        if not re.search(r"[\]］】]", rest):
+            op = _parse_op(rest)
+            if op:
+                ops.append(op)
+            elif rest.strip():
+                logger.info("pending_thought tail tag ignored raw=%s", rest[:120])
+            visible = visible[: start.start()].rstrip()
     visible = re.sub(r"\n{3,}", "\n\n", visible).strip()
     if ops:
         apply_pending_ops(ops)
@@ -159,7 +170,7 @@ def compute_visible_streaming(acc: str) -> str:
     if not acc:
         return ""
     s = TAG_RE.sub("", str(acc))
-    start = re.search(r"[\[［【]\s*pending\s*[:：]", s, flags=re.IGNORECASE)
+    start = TAG_START_RE.search(s)
     if start:
         rest = s[start.end() :]
         if not re.search(r"[\]］】]", rest):

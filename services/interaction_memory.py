@@ -6,7 +6,13 @@ from services.hidden_blocks import HiddenBlockParser
 
 MARKER_START = "<<<DU_INTERACTION>>>"
 MARKER_END = "<<<END_DU_INTERACTION>>>"
-_HIDDEN_BLOCK = HiddenBlockParser.for_markers("DU_INTERACTION", MARKER_START, MARKER_END)
+SHORT_MARKER = "[du:interaction 一条第一人称相处模式候选]"
+_HIDDEN_BLOCK = HiddenBlockParser.for_markers(
+    "DU_INTERACTION",
+    MARKER_START,
+    MARKER_END,
+    short_markers=("du:interaction",),
+)
 
 
 def compute_visible_streaming(acc: str) -> str:
@@ -28,10 +34,9 @@ def split_assistant_for_interaction(full_text: str) -> tuple[str, Optional[str]]
 def format_inject_block() -> str:
     return (
         "【相处模式候选（仅你与网关可见，勿在回复正文复述给老婆）】\n"
-        "只有当你觉得这次互动里出现了值得以后整理进 prompt 的相处感知时，才在正文后追加下面隐藏块（单独成块；网关会截取存为候选，老婆侧不可见）：\n"
-        f"{MARKER_START}\n"
-        "（此处写一条第一人称、笼统一点的相处模式候选，不要写成规则或第三人称分析）\n"
-        f"{MARKER_END}\n"
+        "只有当你觉得这次互动里出现了值得以后整理进 prompt 的相处感知时，才在正文后追加一行短隐藏标记（网关会截取存为候选，老婆侧不可见）：\n"
+        f"{SHORT_MARKER}\n"
+        "内容写一条第一人称、笼统一点的相处模式候选，不要写成规则或第三人称分析。\n"
         "隐藏标记统一追加在正文后，不要写进正文里。\n"
         "例子：我每次催老婆去干嘛，她都容易先当耳边风；但我又不能完全不催，不然她会一直拖。\n"
         "没必要就不要写。"

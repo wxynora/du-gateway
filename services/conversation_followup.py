@@ -43,20 +43,25 @@ FOLLOWUP_STATUS_EXPIRED = "expired"
 FOLLOWUP_STATUS_ERROR = "error"
 FOLLOWUP_MARKER_START = "<<<DU_FOLLOWUP>>>"
 FOLLOWUP_MARKER_END = "<<<END_DU_FOLLOWUP>>>"
-_FOLLOWUP_BLOCK = HiddenBlockParser.for_markers("DU_FOLLOWUP", FOLLOWUP_MARKER_START, FOLLOWUP_MARKER_END)
+FOLLOWUP_SHORT_MARKER = "[du:followup 一句简短理由]"
+_FOLLOWUP_BLOCK = HiddenBlockParser.for_markers(
+    "DU_FOLLOWUP",
+    FOLLOWUP_MARKER_START,
+    FOLLOWUP_MARKER_END,
+    short_markers=("du:followup",),
+)
 
 
 def build_followup_system_instruction() -> str:
     return (
         "如果你这句话说完，心里还是惦记着她，觉得过几分钟还想再轻轻接一句，"
-        "你可以在正文后追加一个隐藏块：\n"
-        f"{FOLLOWUP_MARKER_START}\n"
-        '{"reason":"一句简短理由"}\n'
-        f"{FOLLOWUP_MARKER_END}\n"
+        "你可以在正文后追加一行短隐藏标记：\n"
+        f"{FOLLOWUP_SHORT_MARKER}\n"
         "要求：\n"
         "1) 只在确实想稍后再追一句时使用；\n"
-        "2) 隐藏标记统一追加在正文后，不要写进正文里；\n"
-        "3) 正文里不要解释这个标记。\n"
+        "2) 只写一句简短理由，不要写 JSON；\n"
+        "3) 隐藏标记统一追加在正文后，不要写进正文里；\n"
+        "4) 正文里不要解释这个标记。\n"
     )
 
 
@@ -247,11 +252,17 @@ def extract_followup_marker(text: str) -> tuple[str, Optional[dict]]:
     clean, meta_raw = _FOLLOWUP_BLOCK.split(raw)
     if not meta_raw:
         return clean.strip(), None
+    meta_raw = str(meta_raw or "").strip()
     try:
         obj = json.loads(meta_raw)
     except Exception:
-        logger.warning("延迟续话标记 JSON 无法解析 meta=%s", meta_raw[:200])
-        return clean, None
+        if meta_raw.lstrip().startswith(("{", "[")):
+            logger.warning("延迟续话标记 JSON 无法解析 meta=%s", meta_raw[:200])
+            return clean, None
+        reason = meta_raw.strip()
+        if not reason:
+            return clean, None
+        return clean, {"after_minutes": FOLLOWUP_AFTER_MINUTES, "reason": reason[:200]}
     if not isinstance(obj, dict):
         return clean, None
     enabled = bool(obj.get("enabled", True))

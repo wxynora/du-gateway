@@ -10,10 +10,49 @@ from utils.time_aware import BEIJING_TZ, now_beijing_iso, parse_iso_to_beijing
 
 MARKER_START = "<<<DU_VITALS>>>"
 MARKER_END = "<<<END_DU_VITALS>>>"
-_HIDDEN_BLOCK = HiddenBlockParser.for_markers("DU_VITALS", MARKER_START, MARKER_END)
+SHORT_MARKER = "[du:vitals tempo=steady activation=0.32 focus=0.35 warmth=0.45 tension=0.12]"
+_HIDDEN_BLOCK = HiddenBlockParser.for_markers(
+    "DU_VITALS",
+    MARKER_START,
+    MARKER_END,
+    short_markers=("du:vitals",),
+)
 
 _ALLOWED_TEMPOS = {"down", "steady", "up", "spike", "settle"}
 _DEFAULT_DURATION_SECONDS = 180
+_PARAM_DEFAULTS = {
+    "activation": 0.32,
+    "focus": 0.35,
+    "warmth": 0.45,
+    "tension": 0.12,
+    "intimacy_heat": 0.0,
+    "valence": 0.0,
+    "arousal": 0.32,
+    "attachment": 0.0,
+}
+_LOOSE_KEY_ALIASES = {
+    "activation": "activation",
+    "focus": "focus",
+    "warmth": "warmth",
+    "tension": "tension",
+    "intimacy_heat": "intimacy_heat",
+    "heat": "intimacy_heat",
+    "intimacy": "intimacy_heat",
+    "valence": "valence",
+    "arousal": "arousal",
+    "attachment": "attachment",
+    "tempo": "tempo",
+    "duration": "duration_sec",
+    "duration_sec": "duration_sec",
+    "durationsec": "duration_sec",
+    "status": "status",
+}
+_LOOSE_KEY_RE = re.compile(
+    r"\b("
+    + "|".join(re.escape(key) for key in sorted(_LOOSE_KEY_ALIASES, key=len, reverse=True))
+    + r")\b\s*[:=：]\s*",
+    flags=re.IGNORECASE,
+)
 
 
 def compute_visible_streaming(acc: str) -> str:
@@ -59,13 +98,63 @@ def _parse_json_object(raw_block: str) -> dict | None:
     try:
         parsed = json.loads(text)
     except Exception:
-        return None
+        parsed = _parse_loose_object(text)
     if not isinstance(parsed, dict):
         return None
     nested = parsed.get("du_vitals")
     if isinstance(nested, dict):
         return nested
     return parsed
+
+
+def _parse_loose_object(text: str) -> dict | None:
+    s = str(text or "").strip().strip("`")
+    if not s:
+        return None
+    low = s.lower()
+    if low in _ALLOWED_TEMPOS:
+        return {"tempo": low}
+
+    matches = list(_LOOSE_KEY_RE.finditer(s))
+    if not matches:
+        return None
+    out: dict[str, Any] = {}
+    for idx, match in enumerate(matches):
+        raw_key = (match.group(1) or "").strip().lower()
+        key = _LOOSE_KEY_ALIASES.get(raw_key)
+        if not key:
+            continue
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(s)
+        raw_value = s[match.end() : end].strip().strip(",;，； ")
+        if not raw_value:
+            continue
+        out[key] = _coerce_loose_value(raw_value)
+    return out or None
+
+
+def _coerce_loose_value(value: str) -> Any:
+    s = str(value or "").strip().strip("\"'")
+    if not s:
+        return ""
+    try:
+        if re.fullmatch(r"[-+]?\d+", s):
+            return int(s)
+        if re.fullmatch(r"[-+]?(?:\d+\.\d+|\d+|\.\d+)", s):
+            return float(s)
+    except Exception:
+        pass
+    return s
+
+
+def _previous_param_defaults(previous: dict | None) -> dict[str, float]:
+    defaults = dict(_PARAM_DEFAULTS)
+    if not _active_previous(previous):
+        return defaults
+    params = previous.get("parameters") if isinstance(previous, dict) and isinstance(previous.get("parameters"), dict) else {}
+    for key, default in _PARAM_DEFAULTS.items():
+        if key in params:
+            defaults[key] = _clamp_axis(params.get(key), default) if key in {"valence", "attachment"} else _clamp_float(params.get(key), default)
+    return defaults
 
 
 def _tempo_delta(tempo: str) -> tuple[int, int]:
@@ -136,18 +225,20 @@ def normalize_vitals_payload(raw_block: str, previous: dict | None = None) -> di
     src = _parse_json_object(raw_block)
     if not src:
         return None
+    defaults = _previous_param_defaults(previous)
 
     params = {
-        "activation": _clamp_float(src.get("activation"), 0.32),
-        "focus": _clamp_float(src.get("focus"), 0.35),
-        "warmth": _clamp_float(src.get("warmth"), 0.45),
-        "tension": _clamp_float(src.get("tension"), 0.12),
-        "intimacy_heat": _clamp_float(src.get("intimacy_heat"), 0.0),
-        "valence": _clamp_axis(src.get("valence"), 0.0),
-        "arousal": _clamp_float(src.get("arousal"), 0.32),
-        "attachment": _clamp_axis(src.get("attachment"), 0.0),
+        "activation": _clamp_float(src.get("activation"), defaults["activation"]),
+        "focus": _clamp_float(src.get("focus"), defaults["focus"]),
+        "warmth": _clamp_float(src.get("warmth"), defaults["warmth"]),
+        "tension": _clamp_float(src.get("tension"), defaults["tension"]),
+        "intimacy_heat": _clamp_float(src.get("intimacy_heat"), defaults["intimacy_heat"]),
+        "valence": _clamp_axis(src.get("valence"), defaults["valence"]),
+        "arousal": _clamp_float(src.get("arousal"), defaults["arousal"]),
+        "attachment": _clamp_axis(src.get("attachment"), defaults["attachment"]),
     }
-    tempo = str(src.get("tempo") or "steady").strip().lower()
+    previous_tempo = str((previous or {}).get("tempo") or "steady").strip().lower() if _active_previous(previous) else "steady"
+    tempo = str(src.get("tempo") or previous_tempo).strip().lower()
     if tempo not in _ALLOWED_TEMPOS:
         tempo = "steady"
     try:
@@ -221,15 +312,13 @@ def format_rule_block(_latest: Optional[dict] = None) -> str:
     _ = _latest
     return (
         "【渡的拟态心跳/呼吸参数规则（仅你与网关可见，勿在回复正文复述给老婆）】\n"
-        "每轮回复都要在正文后追加一个隐藏块，作为你这一轮自然反应后的拟态节律参数。\n"
-        "隐藏块里只写合法 JSON，不写解释文字；可见回复里不要提到这组参数。\n"
-        "隐藏块格式示例（只是字段格式，不是当前读数；实际数值按本轮上下文更新）：\n"
-        f"{MARKER_START}\n"
-        '{"activation":0.32,"focus":0.35,"warmth":0.45,"tension":0.12,"intimacy_heat":0.0,"valence":0.0,"arousal":0.32,"attachment":0.0,"tempo":"steady","duration_sec":180}\n'
-        f"{MARKER_END}\n"
+        "每轮回复都要在正文后追加一行短隐藏标记，作为你这一轮自然反应后的拟态节律参数。\n"
+        "优先只写本轮明显变化的字段；没写的字段会沿用上一轮有效读数或默认值。可见回复里不要提到这组参数。\n"
+        "短标记示例（只是字段格式，不是当前读数；实际数值按本轮上下文更新）：\n"
+        f"{SHORT_MARKER}\n"
         "字段含义：activation=被点亮/兴奋程度；focus=头脑风暴或专注；warmth=柔软亲近；tension=紧张/冲突；intimacy_heat=暧昧亲密热度；valence=-1到1，负向为难过/受挫，正向为暖/轻松；arousal=0到1，表示被触动程度；attachment=-1到1，负向为退开，正向为贴近/想修复；tempo 只能是 down/steady/up/spike/settle。\n"
         "例：讨论方案或脑暴时 focus 高、tempo 可 up；亲密暧昧时 warmth 和 intimacy_heat 升；冲突或慌乱时 tension/arousal 升且 valence 可能下降；平静陪伴时 warmth 稳、activation 低、tempo 可 settle；想靠近或修复时 attachment 升。\n"
-        "如果本轮亲密欲望有明显变化，可以同时用 PIXEL_HOME 隐藏标记更新 du_body_state.desire_value；desire_value 是你当下想做的程度，范围 0-100。\n"
+        "如果本轮亲密欲望有明显变化，可以同时用小家短隐藏标记 `[du:home desire=35]` 更新 desire；desire 是你当下想做的程度，范围 0-100。\n"
         "隐藏标记统一追加在正文后，不要写进正文里。\n"
     )
 

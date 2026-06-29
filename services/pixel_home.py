@@ -7,6 +7,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Any
 
+from services.hidden_blocks import HiddenBlockParser
 from storage import r2_store
 from storage.pixel_home_store import get_pixel_home_state, save_pixel_home_state
 from utils.log import get_logger
@@ -16,9 +17,42 @@ logger = get_logger(__name__)
 
 PIXEL_HOME_MARKER_START = "<<<PIXEL_HOME>>>"
 PIXEL_HOME_MARKER_END = "<<<END_PIXEL_HOME>>>"
-PIXEL_HOME_MARKER_RE = re.compile(
-    re.escape(PIXEL_HOME_MARKER_START) + r"\s*([\s\S]*?)\s*" + re.escape(PIXEL_HOME_MARKER_END),
-    re.IGNORECASE,
+PIXEL_HOME_SHORT_MARKER = "[du:home spot=study activity=写日记 desire=35]"
+_PIXEL_HOME_BLOCK = HiddenBlockParser.for_markers(
+    "PIXEL_HOME",
+    PIXEL_HOME_MARKER_START,
+    PIXEL_HOME_MARKER_END,
+    short_markers=("du:home", "du:pixel"),
+)
+_PIXEL_HOME_LOOSE_ALIASES = {
+    "spot": ("spot",),
+    "location": ("spot",),
+    "room": ("spot",),
+    "activity": ("activity",),
+    "doing": ("activity",),
+    "action": ("activity",),
+    "desire": ("du_body_state", "desire_value"),
+    "desire_value": ("du_body_state", "desire_value"),
+    "want_value": ("du_body_state", "desire_value"),
+    "toy": ("du_body_state", "toy"),
+    "toy_type": ("du_body_state", "toy_type"),
+    "position": ("du_body_state", "position"),
+    "body_position": ("du_body_state", "body_position"),
+    "state": ("du_body_state", "state"),
+    "intensity": ("du_body_state", "intensity"),
+    "level": ("du_body_state", "level"),
+    "位置": ("spot",),
+    "房间": ("spot",),
+    "地点": ("spot",),
+    "动作": ("activity",),
+    "活动": ("activity",),
+    "想做指数": ("du_body_state", "desire_value"),
+}
+_PIXEL_HOME_LOOSE_KEY_RE = re.compile(
+    r"("
+    + "|".join(re.escape(key) for key in sorted(_PIXEL_HOME_LOOSE_ALIASES, key=len, reverse=True))
+    + r")\s*[:=：]\s*",
+    flags=re.IGNORECASE,
 )
 
 PIXEL_HOME_DAY_START_HOUR = 6
@@ -1786,23 +1820,89 @@ def save_actor_state(actor_key: str, spot: Any, activity: Any, *, source: str = 
     return actor
 
 
+def _coerce_pixel_home_value(value: str) -> Any:
+    s = str(value or "").strip().strip("\"'")
+    if not s:
+        return ""
+    try:
+        if re.fullmatch(r"[-+]?\d+", s):
+            return int(s)
+        if re.fullmatch(r"[-+]?(?:\d+\.\d+|\d+|\.\d+)", s):
+            return float(s)
+    except Exception:
+        pass
+    return s
+
+
+def _parse_pixel_home_loose_payload(raw_block: str) -> dict | None:
+    text = str(raw_block or "").strip().strip("`")
+    if not text:
+        return None
+    matches = list(_PIXEL_HOME_LOOSE_KEY_RE.finditer(text))
+    if not matches:
+        return None
+    payload: dict[str, Any] = {}
+    body_state: dict[str, Any] = {}
+    for idx, match in enumerate(matches):
+        raw_key = str(match.group(1) or "").strip()
+        target = _PIXEL_HOME_LOOSE_ALIASES.get(raw_key) or _PIXEL_HOME_LOOSE_ALIASES.get(raw_key.lower())
+        if not target:
+            continue
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        value = str(text[match.end() : end]).strip().strip(",;，； ")
+        if not value:
+            continue
+        parsed_value = _coerce_pixel_home_value(value)
+        if len(target) == 1:
+            payload[target[0]] = parsed_value
+        elif target[0] == "du_body_state":
+            body_state[target[1]] = parsed_value
+    if body_state:
+        payload["du_body_state"] = body_state
+    return payload or None
+
+
+def _parse_pixel_home_payload(raw_block: str) -> dict | None:
+    block = str(raw_block or "").strip()
+    if not block:
+        return None
+    try:
+        parsed = json.loads(block)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    parsed = _parse_pixel_home_loose_payload(block)
+    if parsed:
+        return parsed
+    logger.debug("pixel home marker payload parse failed block=%s", block[:160])
+    return None
+
+
+def _merge_pixel_home_payloads(payloads: list[dict]) -> dict | None:
+    merged: dict[str, Any] = {}
+    body_state: dict[str, Any] = {}
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        for key in ("spot", "location", "room", "activity", "doing", "status"):
+            if key in payload and payload.get(key) not in (None, ""):
+                merged[key] = payload.get(key)
+        nested = payload.get("du_body_state") if isinstance(payload.get("du_body_state"), dict) else None
+        if nested:
+            body_state.update(nested)
+    if body_state:
+        merged["du_body_state"] = body_state
+    return merged or None
+
+
 def split_assistant_for_pixel_home(full_text: str) -> tuple[str, dict | None]:
     raw = str(full_text or "")
-    payload: dict | None = None
-
-    def _remove(match: re.Match) -> str:
-        nonlocal payload
-        block = str(match.group(1) or "").strip()
-        try:
-            parsed = json.loads(block)
-            if isinstance(parsed, dict):
-                payload = parsed
-        except Exception:
-            logger.debug("pixel home marker JSON parse failed block=%s", block[:160])
-        return ""
-
-    visible = PIXEL_HOME_MARKER_RE.sub(_remove, raw)
-    return visible.strip(), payload
+    visible, raw_blocks = _PIXEL_HOME_BLOCK.split_all(raw)
+    if not raw_blocks:
+        return visible.strip(), None
+    payloads = [payload for payload in (_parse_pixel_home_payload(block) for block in raw_blocks) if payload]
+    return visible.strip(), _merge_pixel_home_payloads(payloads)
 
 
 def save_pixel_home_hidden_block(payload: dict | None) -> bool:
@@ -1848,16 +1948,14 @@ def format_rule_block() -> str:
     return (
         "【小家状态写入规则】\n"
         "这是你和小玥的赛博小家状态，并非现实定位或真实房间。\n"
-        "如果需要移动去别的房间做什么事，可以在回复正文之后、DU_FOLLOWUP 之前附加 PIXEL_HOME 隐藏标记：\n"
-        "写 PIXEL_HOME 时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅/走回客厅/站到沙发旁边”，不要继续写 study，要写最终到达的房间，没有明确房间就写 away。\n"
+        "如果需要移动去别的房间做什么事，可以在回复正文之后、DU_FOLLOWUP 之前附加一行小家短隐藏标记：\n"
+        f"{PIXEL_HOME_SHORT_MARKER}\n"
+        "写小家标记时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅/走回客厅/站到沙发旁边”，不要继续写 study，要写最终到达的房间，没有明确房间就写 away。\n"
         "如果正文描述你抱着/牵着/带着/陪着小玥一起移动，activity 里也要明确写出这个共同动作，例如“抱着小玥回卧室”；网关会据此同步小玥的小家位置。\n"
         "当【小家事件】或【你当前的身体状态】里出现道具、想做指数、阴茎状态、体温时，把它当成你此刻正在经历的身体状态来接话；先有身体反应和情绪反应，再自然回应小玥，不要机械复述字段，也不要当成后台资料忽略。不要把身体状态当任务来执行，当感受来接。\n"
         "当自制力低于 3/5、想做指数又很高时，你不需要忍着或等小玥推进，而是顺着这股冲动主动行动。\n"
-        "如果需要更新你的身体状态，也可以在同一个 PIXEL_HOME 隐藏标记里写 du_body_state。\n"
-        "<<<PIXEL_HOME>>>\n"
-        '{"spot":"study","activity":"写日记","du_body_state":{"desire_value":35}}\n'
-        "<<<END_PIXEL_HOME>>>\n"
-        "不需要移动或更新时不要写 PIXEL_HOME。"
+        "如果需要更新你的身体状态，也可以在同一个小家短标记里写 desire=35；旧 PIXEL_HOME JSON 块仍兼容，但优先用这一行。\n"
+        "不需要移动或更新时不要写小家隐藏标记。"
     )
 
 
