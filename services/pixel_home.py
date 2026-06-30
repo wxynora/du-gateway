@@ -151,7 +151,7 @@ DU_BODY_DEFAULT_VALUES = {
     "stamina_value": 82,
     "sensitivity_value": 50,
     "possessiveness_value": 40,
-    "mischief_value": 30,
+    "mischief_value": 45,
 }
 DU_BODY_DESIRE_PROMPT_TEXT = {
     0: "身体还算平静，欲望陷在冰点。",
@@ -198,7 +198,7 @@ DU_BODY_DELTA_FIELDS = {
     "mischief": "mischief_value",
 }
 DU_BODY_DELTA_LIMITS = {
-    "stamina": (-8, 6),
+    "stamina": (-6, 6),
     "sensitivity": (-10, 12),
     "possessiveness": (-12, 12),
     "mischief": (-18, 18),
