@@ -6112,11 +6112,15 @@
 }
 
 .pixel-home-ref-body-inline b {
+  display: -webkit-box;
   min-width: 0;
   flex: 1;
   font-weight: 400;
   opacity: 0.92;
+  overflow: hidden;
   overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .pixel-home-ref-body-inline i {
