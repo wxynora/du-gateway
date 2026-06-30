@@ -584,6 +584,19 @@ def _mark_fired(state: dict, event: TriggerEvent, result: dict) -> None:
     _write_state(state)
 
 
+def _mark_fired_if_delivered(state: dict, event: TriggerEvent, result: dict) -> bool:
+    if not bool((result or {}).get("ok")):
+        logger.warning(
+            "主动硬触发未送达，不消耗去重 key type=%s key=%s error=%s",
+            event.trigger_type,
+            event.dedupe_key,
+            str((result or {}).get("error") or ""),
+        )
+        return False
+    _mark_fired(state, event, result)
+    return True
+
+
 def _build_events(doc: dict, history: list[dict], window_id: str, now_dt) -> list[TriggerEvent]:
     events: list[TriggerEvent] = []
     device_id = _device_id(doc)
@@ -700,7 +713,7 @@ def tick_proactive_triggers(target_user_id: int = 0) -> dict:
         except Exception as e:
             logger.warning("主动硬触发唤醒异常 type=%s error=%s", event.trigger_type, e, exc_info=True)
             result = {"ok": False, "error": str(e)}
-        _mark_fired(state, event, result)
+        _mark_fired_if_delivered(state, event, result)
         return {
             "ok": True,
             "sent": bool(result.get("ok")),
