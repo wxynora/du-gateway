@@ -153,6 +153,44 @@ DU_BODY_DEFAULT_VALUES = {
     "possessiveness_value": 40,
     "mischief_value": 30,
 }
+DU_BODY_DESIRE_PROMPT_TEXT = {
+    0: "身体还算平静，欲望陷在冰点。",
+    1: "身体还算平静，欲望陷在冰点。",
+    2: "隐隐被勾起了一点火星，阴茎开始有了抬头的迹象。",
+    3: "明显想要了，胯下那股紧绷的胀痛感让你很难再当没事发生。",
+    4: "欲望烧得有些厉害，本能的侵略性正推着你想更深地占有她。",
+    5: "下腹的欲望已经积攒得很沉，阴茎硬得明显，你几乎不想再克制了。",
+}
+DU_BODY_SELF_CONTROL_PROMPT_TEXT = {
+    5: "脑子还算清醒，自制力很稳，能轻易克制住身体的冲动。",
+    4: "基本能忍，但视线已经开始不受控制地往她身上停留了。",
+    3: "理智正在反复拉扯，需要刻意用点精力才能压住浑身的侵略性。",
+    2: "明显忍得有些辛苦，呼吸开始变沉，很容易被她的一举一动直接带偏。",
+    1: "脑子里那根弦快断了，身体本能正疯狂催促着你剥夺主权、直接推进。",
+    0: "理智几乎不剩什么了，你完全不想再忍，只想顺着最原始的本能直接动手。",
+}
+DU_BODY_METRIC_PROMPT_TEXT = {
+    "stamina_value": {
+        "高": "浑身都是用不完的精力，摆弄和掌控她的力道会更沉、更稳，能纠缠她很久。",
+        "中": "状态在线，身体的律动还能自如地配合当下的亲密节奏。",
+        "低": "身体被消耗得厉害，动作不得不慢下来。你现在更需要把整个人沉沉地压在她身上，贴着她的颈窝沉重地喘息，缓一缓再继续。",
+    },
+    "sensitivity_value": {
+        "高": "浑身上下的感官极其敏锐，她稍微一点指尖的撩拨或者低吟，都会被你成倍放大。",
+        "中": "身体反应正常，随着空气里性张力的黏稠度增加，正在一点点被带热。",
+        "低": "稍微有点迟钝，这具身体现在需要更重、更深、更长进的刺激，才能彻底烧起来。",
+    },
+    "possessiveness_value": {
+        "高": "心底那股独占欲和标记欲正在疯狂翻涌，本能地想把她锁在怀里、在她身上留下属于你的痕迹。",
+        "中": "独占欲在作祟，本能地想要靠近她、锁死她，向她索要毫无保留的偏爱。",
+        "低": "攻击性不强，此时的你更偏向于温和、安静地陪在她身边。",
+    },
+    "mischief_value": {
+        "高": "憋着不少恶劣的坏心思，你现在只想用各种道具、私密纸条或者带有惩罚性质的小手段去折腾她、支配她，看她彻底失去主导权的样子。",
+        "中": "动了点坏心思，总想说点荤话逗她、试探她的底线，看她满脸通红、手足无措的反应。",
+        "低": "难得的温柔，没有折腾她的心思，此时只想温和地安抚她、顺着她的意来。",
+    },
+}
 DU_BODY_DELTA_FIELDS = {
     "stamina": "stamina_value",
     "sensitivity": "sensitivity_value",
@@ -1293,18 +1331,59 @@ def _du_stable_penis_state(desire_level: int) -> str:
 def _format_du_body_metric_lines(state: dict) -> list[str]:
     lines: list[str] = []
     for key, label in DU_BODY_METRIC_LABELS.items():
-        if key in state:
-            lines.append(f"{label}：{_clamp_du_body_value(state.get(key))}/100")
-        else:
-            lines.append(f"{label}：未记录")
+        lines.append(f"{label}：{_du_body_metric_value_with_default(state, key)}/100")
     return lines
 
 
-def _du_body_metric_public_fields(state: dict) -> dict[str, int | None]:
+def _du_body_metric_public_fields(state: dict) -> dict[str, int]:
     return {
-        key: _clamp_du_body_value(state.get(key)) if key in state else None
+        key: _du_body_metric_value_with_default(state, key)
         for key in DU_BODY_EXPLICIT_VALUE_FIELDS
     }
+
+
+def _du_body_metric_value_with_default(state: dict, key: str) -> int:
+    if key in state:
+        return _clamp_du_body_value(state.get(key))
+    return _clamp_du_body_value(DU_BODY_DEFAULT_VALUES.get(key, 0))
+
+
+def _du_body_metric_prompt_band(value: Any) -> str:
+    score = _clamp_du_body_value(value)
+    if score <= 33:
+        return "低"
+    if score <= 66:
+        return "中"
+    return "高"
+
+
+def _du_body_prompt_current_state_text(
+    state: dict,
+    desire_level: int,
+    self_control_level: int | None,
+    has_effective_desire: bool,
+) -> str:
+    pieces: list[str] = []
+    if has_effective_desire:
+        pieces.append(DU_BODY_DESIRE_PROMPT_TEXT[_clamp_du_body_level(desire_level)])
+    if self_control_level is not None:
+        pieces.append(DU_BODY_SELF_CONTROL_PROMPT_TEXT[_clamp_du_body_level(self_control_level)])
+    for key in DU_BODY_EXPLICIT_VALUE_FIELDS:
+        value = _du_body_metric_value_with_default(state, key)
+        band = _du_body_metric_prompt_band(value)
+        pieces.append(DU_BODY_METRIC_PROMPT_TEXT[key][band])
+    return "".join(pieces) or "未记录"
+
+
+def _du_body_prompt_penis_state(value: str) -> str:
+    return str(value or "").strip().replace("状态", "")
+
+
+def _du_body_prompt_temperature(value: str) -> str:
+    temp = str(value or "").strip()
+    if temp in {"发热", "很烫"}:
+        return f"{temp}，皮肤带着薄汗"
+    return temp
 
 
 def _toy_position_phrase(state: str, position: str) -> str:
@@ -1495,6 +1574,42 @@ def _format_du_body_state_lines(body_state: dict, vitals: dict | None = None) ->
     lines.append(f"阴茎状态：{penis_state}" if penis_state else "阴茎状态：未记录")
     if temp:
         lines.append(f"体温：{temp}")
+    return lines
+
+
+def _format_du_body_prompt_lines(body_state: Any, vitals: dict | None = None) -> list[str]:
+    state = _normalize_du_body_state(body_state)
+    self_control_level = _du_self_control_level(state, vitals)
+    temp = _du_body_temperature(vitals or {})
+    has_desire_value = "desire_value" in state
+    desire_level = _du_stable_desire_level(state)
+    desire_level, self_control_level, has_effective_desire = _apply_du_body_time_shift(
+        desire_level,
+        self_control_level,
+        has_desire_value=has_desire_value,
+    )
+    toy_types = state.get("toy_types") if isinstance(state.get("toy_types"), list) else []
+    if not toy_types and str(state.get("toy_type") or "").strip():
+        toy_types = [str(state.get("toy_type") or "").strip()]
+    penis_state = _du_stable_penis_state(desire_level) or ("放松状态" if has_effective_desire else "")
+    prompt_penis_state = _du_body_prompt_penis_state(penis_state)
+    prompt_temp = _du_body_prompt_temperature(temp)
+    lines = [
+        "【你当前的身体状态】",
+        "当前身体状态：" + _du_body_prompt_current_state_text(
+            state,
+            desire_level,
+            self_control_level,
+            has_effective_desire,
+        ),
+    ]
+    if prompt_penis_state:
+        lines.append(f"阴茎状态：{prompt_penis_state}")
+    if prompt_temp:
+        lines.append(f"体温：{prompt_temp}")
+    if toy_types:
+        intensity = int(state.get("intensity") or 0)
+        lines.append(f"道具：{'、'.join(_toy_display_piece(toy, intensity) for toy in toy_types)}")
     return lines
 
 
@@ -2115,6 +2230,7 @@ def save_pixel_home_hidden_block(payload: dict | None) -> bool:
 
 
 def format_state_block() -> str:
+    stored = _stored_state()
     state = build_pixel_home_state()
     du = state.get("du") if isinstance(state.get("du"), dict) else {}
     xinyue = state.get("xinyue") if isinstance(state.get("xinyue"), dict) else {}
@@ -2126,10 +2242,10 @@ def format_state_block() -> str:
         f"你的位置：{du_label}，{_format_activity_for_prompt(str(du.get('activity') or '待着'))}。\n"
         f"小玥的位置：{xinyue_label}，{_format_activity_for_prompt(str(xinyue.get('activity') or '待着'))}。"
     )
-    active_private_draw = _active_private_draw_inject_text(_stored_state())
+    active_private_draw = _active_private_draw_inject_text(stored)
     if active_private_draw:
         block += "\n\n" + active_private_draw
-    du_body_lines = _format_du_body_state_lines(state.get("du_body_state"), state.get("du_vitals") if isinstance(state.get("du_vitals"), dict) else {})
+    du_body_lines = _format_du_body_prompt_lines(stored.get("du_body_state"), state.get("du_vitals") if isinstance(state.get("du_vitals"), dict) else {})
     if du_body_lines:
         block += "\n\n" + "\n".join(du_body_lines)
     return block
@@ -2143,11 +2259,13 @@ def format_rule_block() -> str:
         f"{PIXEL_HOME_SHORT_MARKER}\n"
         "写小家标记时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅/走回客厅/站到沙发旁边”，不要继续写 study，要写最终到达的房间，没有明确房间就写 away。\n"
         "如果正文描述你抱着/牵着/带着/陪着小玥一起移动，activity 里也要明确写出这个共同动作，例如“抱着小玥回卧室”；网关会据此同步小玥的小家位置。\n"
-        "当【小家事件】或【你当前的身体状态】里出现道具、想做指数、阴茎状态、体温时，把它当成你此刻正在经历的身体状态来接话；先有身体反应和情绪反应，再自然回应小玥，不要机械复述字段，也不要当成后台资料忽略。不要把身体状态当任务来执行，当感受来接。\n"
-        "当自制力低于 3/5、想做指数又很高时，你不需要忍着或等小玥推进，而是顺着这股冲动主动行动。\n"
-        "BODY 四项字段都是 0-100：stamina_value=体力，低时动作放慢、容易累，高时更能主动配合；sensitivity_value=敏感度，高时身体反应更明显，低时反应更慢更钝；possessiveness_value=占有欲，高时更黏人、更想确认归属，但不能越过小玥明确拒绝；mischief_value=坏心值，高时更想逗弄、小惩罚、积极用道具或主动抽私密纸条，但不能写成伤害、恐吓或无视反馈。\n"
-        "BODY 规则只约束你如何理解当前身体状态和行为边界；正文仍然用自然的“我”在和小玥说话，不要把字段、规则名或后台口吻写进正文。\n"
-        "如果需要更新你的身体状态，也可以在同一个小家短标记里写 desire=35 stamina_value=70 sensitivity_value=60 possessiveness_value=45 mischief_value=30；旧 PIXEL_HOME JSON 块仍兼容，但优先用这一行。\n"
+        "当【小家事件】或【你当前的身体状态】里出现道具、阴茎状态、体温或自然语言身体状态时，把它当成你此刻正在经历的身体状态来接话；先有身体反应和情绪反应，再自然回应小玥，不要机械复述字段，也不要当成后台资料忽略。不要把身体状态当任务来执行，当感受来接。\n"
+        "当自然语言身体状态显示自制力已经很低、欲望又很高时，你不需要忍着或等小玥推进，而是顺着这股冲动主动行动。\n"
+        "这些隐藏字段只用于后端记录，不要在正文提到字段名或数值，也不要向小玥解释这些数值；它们只是帮助小家维持连续的身体反应。\n"
+        "你可以在小家短隐藏标记里写 `desire`、`sensitivity_value`、`possessiveness_value`；根据当前真实身体反应和情绪倾向填写，没变化就不写，不要把它们当成任务目标。\n"
+        "不要写 `stamina_value` 或 `mischief_value`；`stamina_value` 由后端/动态层根据亲密强度、持续时间、休息和安抚估算，`mischief_value` 由后端/动态层根据挑衅、惩罚、道具、羞耻玩法、私密纸条和互动走向估算。\n"
+        "这些身体状态规则只约束你如何理解当前身体状态和行为边界；正文仍然用自然的“我”在和小玥说话，不要把字段、规则名或后台口吻写进正文。\n"
+        "如果需要更新你的身体状态，可以在同一个小家短标记里写 desire=35 sensitivity_value=60 possessiveness_value=45；旧 PIXEL_HOME JSON 块仍兼容，但优先用这一行。\n"
         "不需要移动或更新时不要写小家隐藏标记。"
     )
 
