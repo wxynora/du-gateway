@@ -4089,14 +4089,14 @@ export function MainChatScreen({
     ? `absolute top-0 z-20 w-full border-b px-3 ${realModeEnabled ? "pb-3" : "pb-2"} pt-[calc(env(safe-area-inset-top,0px)+10px)]`
     : `absolute top-0 z-20 w-full border-b px-3 ${realModeEnabled ? "pb-4" : "pb-3"} pt-[calc(env(safe-area-inset-top,0px)+20px)]`;
   const chatRealBodyCapsuleClass = hasCustomChatBackground
-    ? "max-w-[calc(100vw-9rem)] truncate rounded-full border border-white/30 bg-white/28 px-2.5 py-[2px] text-[9px] font-medium leading-[13px] text-gray-700/80 shadow-[0_5px_14px_rgba(15,23,42,0.08)] backdrop-blur-2xl"
-    : "max-w-[calc(100vw-9rem)] truncate rounded-full border border-gray-100/70 bg-white/58 px-2.5 py-[2px] text-[9px] font-medium leading-[13px] text-gray-500 shadow-[0_5px_14px_rgba(15,23,42,0.05)] backdrop-blur-xl";
+    ? "line-clamp-2 max-w-[calc(100vw-9rem)] break-words rounded-[12px] border border-white/30 bg-white/28 px-2.5 py-1 text-[9px] font-medium leading-[13px] text-gray-700/80 shadow-[0_5px_14px_rgba(15,23,42,0.08)] backdrop-blur-2xl"
+    : "line-clamp-2 max-w-[calc(100vw-9rem)] break-words rounded-[12px] border border-gray-100/70 bg-white/58 px-2.5 py-1 text-[9px] font-medium leading-[13px] text-gray-500 shadow-[0_5px_14px_rgba(15,23,42,0.05)] backdrop-blur-xl";
   const messagesTopPaddingClass = searchOpen
     ? realModeEnabled
-      ? hasCustomChatBackground ? "pt-[164px]" : "pt-[180px]"
+      ? hasCustomChatBackground ? "pt-[176px]" : "pt-[192px]"
       : hasCustomChatBackground ? "pt-[140px]" : "pt-[156px]"
     : realModeEnabled
-      ? hasCustomChatBackground ? "pt-[112px]" : "pt-[128px]"
+      ? hasCustomChatBackground ? "pt-[124px]" : "pt-[140px]"
       : hasCustomChatBackground ? "pt-[88px]" : "pt-[104px]";
   const chatBackgroundCanvasHeight = chatBackgroundHeightRef.current ? `${chatBackgroundHeightRef.current}px` : "100lvh";
 
