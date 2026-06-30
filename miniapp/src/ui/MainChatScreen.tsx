@@ -266,13 +266,33 @@ function realModePenisState(value: any): string {
   return text || "未记录";
 }
 
+function realModeBodyMetric(value: any): string {
+  if (value === null || typeof value === "undefined" || value === "") return "";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "";
+  return String(Math.max(0, Math.min(100, Math.round(numeric))));
+}
+
 function formatRealModeBodyStatus(state: any): string {
   const bodyState = state?.du_body_state && typeof state.du_body_state === "object" ? state.du_body_state : {};
   const desireLevel = realModeLevel(bodyState.desire_level);
   const selfControlLevel = realModeLevel(bodyState.self_control_level);
   const penisState = realModePenisState(bodyState.penis_state);
   const mood = realModeMoodEmoji(state?.du_vitals && typeof state.du_vitals === "object" ? state.du_vitals : undefined);
-  return `想做指数${desireLevel}/5·自制力${selfControlLevel}/5·${penisState}·${mood}`;
+  const bodyMetrics = [
+    ["体", bodyState.stamina_value],
+    ["敏", bodyState.sensitivity_value],
+    ["占", bodyState.possessiveness_value],
+    ["坏", bodyState.mischief_value],
+  ]
+    .map(([label, value]) => {
+      const metric = realModeBodyMetric(value);
+      return metric ? `${label}${metric}` : "";
+    })
+    .filter(Boolean)
+    .join("·");
+  const metricPart = bodyMetrics ? `·${bodyMetrics}` : "";
+  return `想做指数${desireLevel}/5·自制力${selfControlLevel}/5${metricPart}·${penisState}·${mood}`;
 }
 
 function privateInputAggregateDeadlineFromPayload(payload: any): number {

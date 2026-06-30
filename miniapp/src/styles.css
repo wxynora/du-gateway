@@ -6325,6 +6325,56 @@
   color: white;
 }
 
+.pixel-home-ref-calibration-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pixel-home-ref-input-group .pixel-home-ref-calibration-field {
+  display: flex;
+  min-width: 0;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--pixel-home-border);
+  border-radius: 16px;
+  background: rgba(255, 250, 243, 0.58);
+  color: var(--pixel-home-text-muted);
+  font-family: "Inter", "Noto Sans SC", sans-serif;
+  font-size: 12px;
+}
+
+.pixel-home-ref-calibration-field span {
+  flex: 0 0 auto;
+}
+
+.pixel-home-ref-calibration-field input {
+  width: 62px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--pixel-home-text-main);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  text-align: right;
+}
+
+.pixel-home-ref-calibration-field input::placeholder {
+  color: var(--pixel-home-text-muted);
+  opacity: 0.65;
+}
+
+.pixel-home-ref-calibration-field input::-webkit-outer-spin-button,
+.pixel-home-ref-calibration-field input::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
 .pixel-home-ref-custom-input {
   width: 100%;
   padding: 8px 0;

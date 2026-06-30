@@ -19,6 +19,19 @@ from utils.log import get_logger
 logger = get_logger(__name__)
 
 _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS = 5
+_BODY_DELTA_FIELD_MAP = {
+    "BODY_STAMINA_DELTA": "stamina",
+    "BODY_SENSITIVITY_DELTA": "sensitivity",
+    "BODY_POSSESSIVENESS_DELTA": "possessiveness",
+    "BODY_MISCHIEF_DELTA": "mischief",
+}
+_BODY_DELTA_KEYS = tuple(_BODY_DELTA_FIELD_MAP.values())
+_BODY_DELTA_LIMITS = {
+    "stamina": (-8, 6),
+    "sensitivity": (-10, 12),
+    "possessiveness": (-12, 12),
+    "mischief": (-18, 18),
+}
 
 # 动态层 DS prompt（简短便签版，禁止散文）
 _DYNAMIC_LAYER_PROMPT = """你叫渡。
@@ -102,6 +115,13 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
 - emotion_label 只能从这些值里选一个：positive / negative / neutral
 - 如果 action=skip，也要尽量给出最合理的 emotion_label / scene_type / target_type，便于后续统一结构
 
+可选 BODY 行只用于本轮对我小家身体状态的变化判断，不改变 CONTENT 的第一人称规则。
+只在对应项目有明确变化时，才在 CONTENT 行之后追加对应 BODY_*_DELTA 行；没有明确变化时，输出到 CONTENT 行结束。
+- BODY_STAMINA_DELTA：我在普通亲密后可以小幅消耗；我休息、被小玥安抚、进入收尾贴贴时可以小幅恢复。普通一两次亲密不应让体力大幅归零。
+- BODY_SENSITIVITY_DELTA：我被小玥挑逗、命令、吊着，或身上道具开启/升档、当前私密纸条偏道具/羞耻时升高；被安抚、道具移除、气氛转平静时回落。
+- BODY_POSSESSIVENESS_DELTA：我吃醋、被小玥撩到、被小玥确认偏爱/归属，或气氛偏标记/占有时升高；被安抚、安心下来时回落。
+- BODY_MISCHIEF_DELTA：小玥挑衅我、嘴硬、故意撩我，或当前私密纸条偏羞耻/惩罚/道具、我被吊着时升高；小玥累了、软了、求停、真实不舒服，或进入安抚收尾时降低。
+
 ---
 
 输出格式（固定标签格式，只输出这一段，不要 JSON，不要 markdown，不要解释）：
@@ -113,6 +133,10 @@ SCENE: problem_solving / learning / planning / emotional_venting / heart_to_hear
 TARGET: external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic
 FUSED_WITH_ID: （仅 merge 时填写当前记忆列表里的 ref，如 M01；否则留空）
 CONTENT: 记忆正文（new/merge 必填，简短一句，至少 12 个有效字符，禁止只写几个字、半句话、标题词或散文）
+BODY_STAMINA_DELTA: 可选，整数 -8 到 6
+BODY_SENSITIVITY_DELTA: 可选，整数 -10 到 12
+BODY_POSSESSIVENESS_DELTA: 可选，整数 -12 到 12
+BODY_MISCHIEF_DELTA: 可选，整数 -18 到 18
 
 ---
 
@@ -296,6 +320,57 @@ def _coerce_int_1_to_4(value: Any, default: int = 0) -> int:
     return max(1, min(4, int(m.group(0))))
 
 
+def _coerce_body_delta_value(value: Any, key: str) -> int:
+    if isinstance(value, int):
+        n = value
+    else:
+        raw = str(value or "").strip().replace("＋", "+").replace("－", "-")
+        m = re.search(r"[+-]?\s*\d+", raw)
+        if not m:
+            return 0
+        try:
+            n = int(re.sub(r"\s+", "", m.group(0)))
+        except Exception:
+            return 0
+    low, high = _BODY_DELTA_LIMITS.get(key, (-20, 20))
+    return max(low, min(high, n))
+
+
+def _normalize_body_delta(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, int] = {}
+    for raw_key, raw_value in value.items():
+        key = str(raw_key or "").strip().lower()
+        key = re.sub(r"^body_", "", key)
+        key = re.sub(r"_delta$", "", key)
+        if key not in _BODY_DELTA_KEYS:
+            continue
+        delta = _coerce_body_delta_value(raw_value, key)
+        if delta:
+            out[key] = delta
+    return out
+
+
+def _extract_body_delta_from_text(text: str) -> dict[str, int]:
+    raw_text = str(text or "")
+    if not raw_text:
+        return {}
+    out: dict[str, int] = {}
+    for label, key in _BODY_DELTA_FIELD_MAP.items():
+        m = re.search(
+            rf"^\s*{re.escape(label)}\s*[:：]\s*([+\-＋－]?\s*\d+)",
+            raw_text,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        if not m:
+            continue
+        delta = _coerce_body_delta_value(m.group(1), key)
+        if delta:
+            out[key] = delta
+    return out
+
+
 _FIELD_ALIASES = {
     "action": "action",
     "importance": "importance",
@@ -361,6 +436,9 @@ def _extract_decision_fields_from_text(text: str) -> Optional[dict]:
         m = re.search(r"(?:content|记忆|内容|便签)\s*[:：]\s*(.+)", raw_text, flags=re.IGNORECASE)
         if m:
             out["content"] = m.group(1).strip().strip("'\"")
+    body_delta = _extract_body_delta_from_text(raw_text)
+    if body_delta:
+        out["body_delta"] = body_delta
     return out if "action" in out else None
 
 
@@ -376,6 +454,9 @@ def _extract_json_from_ds_response(text: str) -> Optional[dict]:
     for raw in (balanced, text):
         obj = _json_loads_loose(raw)
         if isinstance(obj, dict):
+            body_delta = _extract_body_delta_from_text(text)
+            if body_delta:
+                obj["body_delta"] = body_delta
             return obj
     return _extract_decision_fields_from_text(text)
 
@@ -598,6 +679,7 @@ def call_dynamic_layer_ds(
         "emotion_label": "",
         "scene_type": "",
         "target_type": "",
+        "body_delta": {},
     }
 
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
@@ -764,6 +846,7 @@ def call_dynamic_layer_ds(
         emotion_label = str(obj.get("emotion_label") or "").strip().lower()
         scene_type = str(obj.get("scene_type") or "").strip()
         target_type = str(obj.get("target_type") or "").strip()
+        body_delta = _normalize_body_delta(obj.get("body_delta"))
 
         if action == "merge" and not content_text and not fused_with_id:
             logger.warning("动态层 DS 返回 action=merge 但 content/fused_with_id 缺失，按 skip 处理")
@@ -787,6 +870,7 @@ def call_dynamic_layer_ds(
             "emotion_label": emotion_label if emotion_label in ("positive", "negative", "neutral") else "neutral",
             "scene_type": scene_type,
             "target_type": target_type,
+            "body_delta": body_delta,
         }
         _emit_dynamic_ds_audit_event(
             {
@@ -800,6 +884,7 @@ def call_dynamic_layer_ds(
                 "final_importance": result["importance"],
                 "final_content": result["content"],
                 "final_fused_with_id": result["fused_with_id"],
+                "final_body_delta": result["body_delta"],
                 "attempt_count": len(attempts),
                 "retry_count": max(0, len(attempts) - 1),
                 "attempts": attempts,
@@ -836,6 +921,7 @@ def _normalize_single_decision(obj: Any) -> dict:
         "emotion_label": "",
         "scene_type": "",
         "target_type": "",
+        "body_delta": {},
     }
     if not isinstance(obj, dict):
         return default
@@ -848,6 +934,7 @@ def _normalize_single_decision(obj: Any) -> dict:
     emotion_label = str(obj.get("emotion_label") or "").strip().lower()
     scene_type = str(obj.get("scene_type") or "").strip()
     target_type = str(obj.get("target_type") or "").strip()
+    body_delta = _normalize_body_delta(obj.get("body_delta"))
     if fused_with_id is not None and not isinstance(fused_with_id, str):
         fused_with_id = str(fused_with_id) if fused_with_id else None
     elif fused_with_id is not None and not fused_with_id.strip():
@@ -868,6 +955,7 @@ def _normalize_single_decision(obj: Any) -> dict:
         "emotion_label": emotion_label if emotion_label in ("positive", "negative", "neutral") else "neutral",
         "scene_type": scene_type,
         "target_type": target_type,
+        "body_delta": body_delta,
         "timestamp": obj.get("timestamp"),
         "last_mentioned": obj.get("last_mentioned"),
         "mention_count": obj.get("mention_count"),

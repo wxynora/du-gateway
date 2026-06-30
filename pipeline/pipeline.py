@@ -3337,6 +3337,39 @@ def _wenyou_round_skip_dynamic(round_messages: list) -> bool:
     return False
 
 
+def _apply_dynamic_body_delta(decision: dict, *, window_id: str, round_index: int) -> None:
+    if not isinstance(decision, dict):
+        return
+    body_delta = decision.get("body_delta")
+    if not isinstance(body_delta, dict) or not body_delta:
+        return
+    try:
+        from services.pixel_home import apply_du_body_delta
+
+        result = apply_du_body_delta(body_delta)
+        if result.get("changed"):
+            logger.info(
+                "动态层 BODY delta 已写入 du_body_state window_id=%s round_index=%s body_delta=%s",
+                window_id,
+                round_index,
+                body_delta,
+            )
+        else:
+            logger.debug(
+                "动态层 BODY delta 无实际变化 window_id=%s round_index=%s body_delta=%s",
+                window_id,
+                round_index,
+                body_delta,
+            )
+    except Exception as e:
+        logger.warning(
+            "动态层 BODY delta 写入 du_body_state 失败 window_id=%s round_index=%s error=%s",
+            window_id,
+            round_index,
+            e,
+        )
+
+
 def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages: list) -> Optional[dict]:
     """
     动态层演化：调用 DS 得单条决策并应用。返回若应写记忆库则返回 archive 载荷，否则 None（实时对话忽略返回值）。
@@ -3368,7 +3401,9 @@ def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages:
         window_id=window_id,
         round_index=round_index,
     )
-    return _apply_one_decision(window_id, round_index, round_messages, decision, current_memories)
+    archive_payload = _apply_one_decision(window_id, round_index, round_messages, decision, current_memories)
+    _apply_dynamic_body_delta(decision, window_id=window_id, round_index=round_index)
+    return archive_payload
 
 
 def step_archive_and_maybe_summary(

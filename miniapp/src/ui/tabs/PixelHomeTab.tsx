@@ -43,10 +43,16 @@ type DuBodyState = {
   desire_value?: number;
   desire_level?: number;
   self_control_level?: number | null;
+  stamina_value?: number | string | null;
+  sensitivity_value?: number | string | null;
+  possessiveness_value?: number | string | null;
+  mischief_value?: number | string | null;
   penis_state?: string;
   temperature?: string;
   text?: string;
 };
+
+type BodyCalibrationKey = "stamina_value" | "sensitivity_value" | "possessiveness_value" | "mischief_value";
 
 type Hotspot = {
   key: HotspotKey;
@@ -117,6 +123,12 @@ const DEFAULT_SPOTS: Array<{ key: HomeSpotKey; label: string }> = [
 ];
 
 const BODY_TOY_OPTIONS = ["无", "跳蛋", "震动乳夹", "震动环", "乳夹", "锁精环", "飞机杯", "软绳", "手腕绑带", "眼罩", "口球", "春药"];
+const BODY_CALIBRATION_FIELDS: Array<{ key: BodyCalibrationKey; label: string }> = [
+  { key: "stamina_value", label: "体力" },
+  { key: "sensitivity_value", label: "敏感度" },
+  { key: "possessiveness_value", label: "占有欲" },
+  { key: "mischief_value", label: "坏心值" },
+];
 
 const HOTSPOTS: Hotspot[] = [
   {
@@ -536,9 +548,32 @@ function bodyToyTypes(state: DuBodyState | undefined) {
   return state?.toy_type ? [state.toy_type] : [];
 }
 
+function bodyCalibrationValue(value: unknown) {
+  if (typeof value === "undefined" || value === null || String(value).trim() === "") return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.max(0, Math.min(100, Math.round(num)));
+}
+
+function bodyCalibrationInputValue(state: DuBodyState, key: BodyCalibrationKey) {
+  const value = bodyCalibrationValue(state[key]);
+  return value === null ? "" : String(value);
+}
+
+function bodyCalibrationTextParts(state: DuBodyState | undefined) {
+  return BODY_CALIBRATION_FIELDS.flatMap((field) => {
+    const value = bodyCalibrationValue(state?.[field.key]);
+    return value === null ? [] : [{ label: field.label, text: `${field.label}：${value}/100` }];
+  });
+}
+
 function bodyStateText(state: DuBodyState | undefined) {
   const text = String(state?.text || "").trim();
-  if (text) return text;
+  const calibrationParts = bodyCalibrationTextParts(state);
+  if (text) {
+    const extraParts = calibrationParts.filter((part) => !text.includes(`${part.label}：`)).map((part) => part.text);
+    return [text, ...extraParts].join("；");
+  }
   const parts: string[] = [];
   const toyTypes = bodyToyTypes(state);
   if (toyTypes.length) {
@@ -546,6 +581,7 @@ function bodyStateText(state: DuBodyState | undefined) {
     if (Number(state?.intensity || 0) > 0) details.push(`档位${Number(state?.intensity || 0)}`);
     parts.push(`道具：${toyTypes.join("、")}${details.length ? `（${details.join("，")}）` : ""}`);
   }
+  parts.push(...calibrationParts.map((part) => part.text));
   if (typeof state?.desire_value !== "undefined" || typeof state?.desire_level !== "undefined") {
     const desireLevel = Number(state?.desire_level || 0);
     parts.push(`想做指数：${desireLevel}/5`);
@@ -570,6 +606,19 @@ function toggleToyType(prev: DuBodyState, item: string): DuBodyState {
   const current = bodyToyTypes(prev);
   const next = current.includes(item) ? current.filter((value) => value !== item) : [...current, item];
   return { ...prev, toy_types: next, toy_type: next[0] || "无" };
+}
+
+function updateBodyCalibration(prev: DuBodyState, key: BodyCalibrationKey, rawValue: string): DuBodyState {
+  const next = { ...prev };
+  const value = rawValue.trim();
+  if (!value) {
+    delete next[key];
+    return next;
+  }
+  const num = Number(value);
+  if (!Number.isFinite(num)) return prev;
+  next[key] = num;
+  return next;
 }
 
 function statusText(label: string, activity: string) {
@@ -992,10 +1041,14 @@ export function PixelHomeTab() {
     setToySaveError("");
     setSavingToyState(true);
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         toy_types: bodyToyTypes(toyDraft),
         intensity: Number(toyDraft.intensity || 0) || 0,
       };
+      BODY_CALIBRATION_FIELDS.forEach((field) => {
+        const value = bodyCalibrationValue(toyDraft[field.key]);
+        if (value !== null) payload[field.key] = value;
+      });
       const data = await apiJson<PixelHomeStateResp>("/miniapp-api/pixel-home-state/du-body", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -1230,6 +1283,27 @@ export function PixelHomeTab() {
                   >
                     {level}
                   </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="pixel-home-ref-input-group">
+              <label>校准值</label>
+              <div className="pixel-home-ref-calibration-grid">
+                {BODY_CALIBRATION_FIELDS.map((field) => (
+                  <label className="pixel-home-ref-calibration-field" key={field.key}>
+                    <span>{field.label}</span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      max="100"
+                      step="1"
+                      placeholder="未设"
+                      value={bodyCalibrationInputValue(toyDraft, field.key)}
+                      onChange={(event) => setToyDraft((prev) => updateBodyCalibration(prev, field.key, event.currentTarget.value))}
+                    />
+                  </label>
                 ))}
               </div>
             </div>

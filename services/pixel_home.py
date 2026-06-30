@@ -34,6 +34,14 @@ _PIXEL_HOME_LOOSE_ALIASES = {
     "desire": ("du_body_state", "desire_value"),
     "desire_value": ("du_body_state", "desire_value"),
     "want_value": ("du_body_state", "desire_value"),
+    "stamina": ("du_body_state", "stamina_value"),
+    "stamina_value": ("du_body_state", "stamina_value"),
+    "sensitivity": ("du_body_state", "sensitivity_value"),
+    "sensitivity_value": ("du_body_state", "sensitivity_value"),
+    "possessiveness": ("du_body_state", "possessiveness_value"),
+    "possessiveness_value": ("du_body_state", "possessiveness_value"),
+    "mischief": ("du_body_state", "mischief_value"),
+    "mischief_value": ("du_body_state", "mischief_value"),
     "toy": ("du_body_state", "toy"),
     "toy_type": ("du_body_state", "toy_type"),
     "position": ("du_body_state", "position"),
@@ -47,6 +55,14 @@ _PIXEL_HOME_LOOSE_ALIASES = {
     "动作": ("activity",),
     "活动": ("activity",),
     "想做指数": ("du_body_state", "desire_value"),
+    "体力": ("du_body_state", "stamina_value"),
+    "敏感度": ("du_body_state", "sensitivity_value"),
+    "占有欲": ("du_body_state", "possessiveness_value"),
+    "坏心值": ("du_body_state", "mischief_value"),
+    "欺负欲": ("du_body_state", "mischief_value"),
+    "捣蛋值": ("du_body_state", "mischief_value"),
+    "调皮值": ("du_body_state", "mischief_value"),
+    "使坏心": ("du_body_state", "mischief_value"),
 }
 _PIXEL_HOME_LOOSE_KEY_RE = re.compile(
     r"("
@@ -105,11 +121,50 @@ DU_DYNAMICS_LIMIT = 5
 EVENT_AUTO_END_MINUTES = 120
 DU_BODY_LEVEL_MIN = 0
 DU_BODY_LEVEL_MAX = 5
+DU_BODY_VALUE_MIN = 0
+DU_BODY_VALUE_MAX = 100
 DU_BODY_TIME_SHIFT = 3
 DU_BODY_DEEP_NIGHT_START_HOUR = 23
 DU_BODY_DEEP_NIGHT_END_HOUR = 4
 DU_BODY_MORNING_START_HOUR = 6
 DU_BODY_MORNING_END_HOUR = 10
+DU_BODY_EXPLICIT_VALUE_FIELDS = (
+    "stamina_value",
+    "sensitivity_value",
+    "possessiveness_value",
+    "mischief_value",
+)
+DU_BODY_VALUE_ALIASES = {
+    "desire_value": ("desire_value", "desire", "want_value"),
+    "stamina_value": ("stamina_value", "stamina"),
+    "sensitivity_value": ("sensitivity_value", "sensitivity"),
+    "possessiveness_value": ("possessiveness_value", "possessiveness"),
+    "mischief_value": ("mischief_value", "mischief"),
+}
+DU_BODY_METRIC_LABELS = {
+    "stamina_value": "体力",
+    "sensitivity_value": "敏感度",
+    "possessiveness_value": "占有欲",
+    "mischief_value": "坏心值",
+}
+DU_BODY_DEFAULT_VALUES = {
+    "stamina_value": 82,
+    "sensitivity_value": 50,
+    "possessiveness_value": 40,
+    "mischief_value": 30,
+}
+DU_BODY_DELTA_FIELDS = {
+    "stamina": "stamina_value",
+    "sensitivity": "sensitivity_value",
+    "possessiveness": "possessiveness_value",
+    "mischief": "mischief_value",
+}
+DU_BODY_DELTA_LIMITS = {
+    "stamina": (-8, 6),
+    "sensitivity": (-10, 12),
+    "possessiveness": (-12, 12),
+    "mischief": (-18, 18),
+}
 TOY_TYPES = {
     "none": "",
     "跳蛋": "跳蛋",
@@ -958,20 +1013,95 @@ def _normalize_toy_types(data: dict) -> list[str]:
     return out
 
 
+def _clamp_du_body_value(value: Any) -> int:
+    try:
+        score = int(float(value or 0))
+    except Exception:
+        score = 0
+    return max(DU_BODY_VALUE_MIN, min(DU_BODY_VALUE_MAX, score))
+
+
+def _du_body_metric_value(state: dict, key: str) -> int | None:
+    if not isinstance(state, dict) or key not in state:
+        return None
+    return _clamp_du_body_value(state.get(key))
+
+
+def _coerce_du_body_delta_value(value: Any, key: str) -> int:
+    try:
+        delta = int(float(value or 0))
+    except Exception:
+        delta = 0
+    low, high = DU_BODY_DELTA_LIMITS.get(key, (-20, 20))
+    return max(low, min(high, delta))
+
+
+def _du_body_value_from_data(data: dict, field: str) -> tuple[bool, int]:
+    for key in DU_BODY_VALUE_ALIASES.get(field, (field,)):
+        if key in data:
+            if data.get(key) is None:
+                continue
+            return True, _clamp_du_body_value(data.get(key))
+    return False, 0
+
+
+def _has_du_body_value_patch(data: dict) -> bool:
+    return any(_du_body_value_from_data(data, field)[0] for field in DU_BODY_VALUE_ALIASES)
+
+
+def _normalize_du_body_delta_payload(raw: Any) -> dict[str, int]:
+    data = raw if isinstance(raw, dict) else {}
+    out: dict[str, int] = {}
+    for key, field in DU_BODY_DELTA_FIELDS.items():
+        candidates = (key, field, f"{key}_delta", f"{field}_delta")
+        for candidate in candidates:
+            if candidate not in data:
+                continue
+            delta = _coerce_du_body_delta_value(data.get(candidate), key)
+            if delta:
+                out[field] = delta
+            break
+    return out
+
+
+def _merge_du_body_patch_input(previous: dict, raw: dict) -> dict:
+    merged = dict(previous or {})
+    if not isinstance(raw, dict):
+        return merged
+
+    for field in DU_BODY_VALUE_ALIASES:
+        provided, value = _du_body_value_from_data(raw, field)
+        if provided:
+            merged[field] = value
+
+    if "toy_types" in raw:
+        merged["toy_types"] = raw.get("toy_types")
+    elif any(key in raw for key in ("toy_type", "toy", "tool")):
+        merged.pop("toy_types", None)
+        for key in ("toy_type", "toy", "tool"):
+            if key in raw:
+                merged[key] = raw.get(key)
+                break
+
+    if "position" in raw or "body_position" in raw:
+        merged["position"] = raw.get("position") if "position" in raw else raw.get("body_position")
+    if "state" in raw or "status" in raw:
+        merged["state"] = raw.get("state") if "state" in raw else raw.get("status")
+    if "intensity" in raw or "level" in raw:
+        merged["intensity"] = raw.get("intensity") if "intensity" in raw else raw.get("level")
+    return merged
+
+
 def _normalize_du_body_state(raw: Any) -> dict:
     data = raw if isinstance(raw, dict) else {}
     toy_types = _normalize_toy_types(data)
     position = _choice(data.get("position") or data.get("body_position"), TOY_POSITIONS)
     state = _choice(data.get("state") or data.get("status"), TOY_STATES)
-    desire_provided = any(key in data for key in ("desire_value", "desire", "want_value"))
-    try:
-        desire_value = int(data.get("desire_value") or data.get("desire") or data.get("want_value") or 0)
-    except Exception:
-        desire_value = 0
-    if desire_value < 0:
-        desire_value = 0
-    if desire_value > 100:
-        desire_value = 100
+    body_values: dict[str, int] = {}
+    for key in DU_BODY_VALUE_ALIASES:
+        provided, value = _du_body_value_from_data(data, key)
+        if provided:
+            body_values[key] = value
     try:
         intensity = int(data.get("intensity") or data.get("level") or 0)
     except Exception:
@@ -986,9 +1116,8 @@ def _normalize_du_body_state(raw: Any) -> dict:
         "intensity": intensity,
         "updated_at": str(data.get("updated_at") or data.get("updatedAt") or "").strip() or now_beijing_iso(),
     }
-    if desire_provided:
-        out["desire_value"] = desire_value
-    if not toy_types and not desire_provided:
+    out.update(body_values)
+    if not toy_types and not body_values:
         return {}
     return out
 
@@ -1105,6 +1234,10 @@ def _du_self_control_level(body_state: dict | None = None, vitals: dict | None =
     tension = _vitals_param(vitals, "tension", 0.12 if has_vitals else 0.0)
     focus = _vitals_param(vitals, "focus", 0.35 if has_vitals else 0.0)
     tempo = str((vitals or {}).get("tempo") or "steady").strip().lower() if has_vitals else "steady"
+    stamina = _du_body_metric_value(state, "stamina_value")
+    sensitivity = _du_body_metric_value(state, "sensitivity_value")
+    possessiveness = _du_body_metric_value(state, "possessiveness_value")
+    mischief = _du_body_metric_value(state, "mischief_value")
     loss = (
         desire_level * 0.55
         + intimacy_heat * 1.25
@@ -1117,9 +1250,21 @@ def _du_self_control_level(body_state: dict | None = None, vitals: dict | None =
         loss += 0.55
     elif tempo == "up":
         loss += 0.25
-    focus_bonus = 0.0
+    if sensitivity is not None:
+        loss += max(0, sensitivity - 50) / 50.0 * 0.55
+    if mischief is not None:
+        loss += max(0, mischief - 45) / 55.0 * 0.4
+    if possessiveness is not None:
+        loss += max(0, possessiveness - 55) / 45.0 * 0.25
+    stamina_bonus = 0.0
+    if stamina is not None:
+        if stamina < 45:
+            loss += (45 - stamina) / 45.0 * 0.25
+        elif stamina > 75:
+            stamina_bonus = (stamina - 75) / 25.0 * 0.15
+    focus_bonus = stamina_bonus
     if focus >= 0.74 and intimacy_heat < 0.35 and arousal < 0.45:
-        focus_bonus = 0.45
+        focus_bonus += 0.45
     if tempo == "settle":
         focus_bonus += 0.25
     return max(0, min(5, int((5 - loss + focus_bonus) + 0.5)))
@@ -1143,6 +1288,23 @@ def _du_stable_desire_level(body_state: dict | None = None) -> int:
 
 def _du_stable_penis_state(desire_level: int) -> str:
     return _du_penis_state_from_desire_level(desire_level)
+
+
+def _format_du_body_metric_lines(state: dict) -> list[str]:
+    lines: list[str] = []
+    for key, label in DU_BODY_METRIC_LABELS.items():
+        if key in state:
+            lines.append(f"{label}：{_clamp_du_body_value(state.get(key))}/100")
+        else:
+            lines.append(f"{label}：未记录")
+    return lines
+
+
+def _du_body_metric_public_fields(state: dict) -> dict[str, int | None]:
+    return {
+        key: _clamp_du_body_value(state.get(key)) if key in state else None
+        for key in DU_BODY_EXPLICIT_VALUE_FIELDS
+    }
 
 
 def _toy_position_phrase(state: str, position: str) -> str:
@@ -1326,6 +1488,7 @@ def _format_du_body_state_lines(body_state: dict, vitals: dict | None = None) ->
     if toy_types:
         intensity = int(state.get("intensity") or 0)
         lines.append(f"道具：{'、'.join(_toy_display_piece(toy, intensity) for toy in toy_types)}")
+    lines.extend(_format_du_body_metric_lines(state))
     lines.append(f"想做指数：{desire_level}/5" if has_effective_desire else "想做指数：未记录")
     lines.append(f"自制力：{self_control_level}/5" if self_control_level is not None else "自制力：未记录")
     penis_state = _du_stable_penis_state(desire_level) or ("放松状态" if has_desire_value else "")
@@ -1348,7 +1511,7 @@ def _du_body_state_public(raw: Any, vitals: dict | None = None) -> dict:
     penis_state = _du_stable_penis_state(desire_level) or ("放松状态" if has_effective_desire else "")
     if not state:
         temp = _du_body_temperature(vitals or {})
-        parts = [
+        parts = _format_du_body_metric_lines(state) + [
             f"想做指数：{desire_level}/5" if has_effective_desire else "想做指数：未记录",
             f"自制力：{self_control_level}/5" if self_control_level is not None else "自制力：未记录",
             f"阴茎状态：{penis_state}" if penis_state else "阴茎状态：未记录",
@@ -1360,6 +1523,7 @@ def _du_body_state_public(raw: Any, vitals: dict | None = None) -> dict:
             "self_control_level": self_control_level,
             "text": "；".join(parts),
         }
+        result.update(_du_body_metric_public_fields(state))
         if has_effective_desire:
             result["desire_level"] = desire_level
         if penis_state:
@@ -1371,6 +1535,7 @@ def _du_body_state_public(raw: Any, vitals: dict | None = None) -> dict:
     state["penis_state"] = penis_state
     lines = _format_du_body_state_lines(state, vitals)
     state["text"] = "；".join(line for line in lines[1:] if line)
+    state.update(_du_body_metric_public_fields(state))
     return state
 
 
@@ -1747,37 +1912,25 @@ def save_du_body_state(payload: Any) -> dict:
         tuple(previous_normalized.get("toy_types") if isinstance(previous_normalized.get("toy_types"), list) else []),
         int(previous_normalized.get("intensity") or 0),
     )
-    state = _normalize_du_body_state(payload)
     has_toy_patch = any(key in raw for key in ("toy_types", "toy_type", "toy", "tool", "position", "body_position", "state", "status", "intensity", "level"))
-    if state:
-        if not has_toy_patch:
-            for key in ("toy_types", "toy_type", "position", "state", "intensity"):
-                if key in previous:
-                    state[key] = previous.get(key)
-        if "desire_value" not in state:
-            try:
-                stored_desire = int(previous.get("desire_value") or 0)
-            except Exception:
-                stored_desire = 0
-            if "desire_value" in previous and 0 <= stored_desire <= 100:
-                state["desire_value"] = stored_desire
-        current["du_body_state"] = state
-    elif has_toy_patch:
-        state = {
-            "toy_types": [],
-            "toy_type": "",
-            "position": "",
-            "state": "",
-            "intensity": 0,
-            "updated_at": now_beijing_iso(),
-        }
-        try:
-            stored_desire = int(previous.get("desire_value") or 0)
-        except Exception:
-            stored_desire = 0
-        if "desire_value" in previous and 0 <= stored_desire <= 100:
-            state["desire_value"] = stored_desire
-        current["du_body_state"] = state
+    has_value_patch = _has_du_body_value_patch(raw)
+    state: dict[str, Any] = {}
+    if has_toy_patch or has_value_patch:
+        merged_input = _merge_du_body_patch_input(previous_normalized, raw)
+        state = _normalize_du_body_state(merged_input)
+        if state:
+            state["updated_at"] = now_beijing_iso()
+            current["du_body_state"] = state
+        elif has_toy_patch:
+            state = {
+                "toy_types": [],
+                "toy_type": "",
+                "position": "",
+                "state": "",
+                "intensity": 0,
+                "updated_at": now_beijing_iso(),
+            }
+            current["du_body_state"] = state
     else:
         current.pop("du_body_state", None)
     current["updated_at"] = now_beijing_iso()
@@ -1793,6 +1946,44 @@ def save_du_body_state(payload: Any) -> dict:
     if toy_event_text:
         state["toy_event_text"] = toy_event_text
     return state if state else {"ok": bool(ok)}
+
+
+def apply_du_body_delta(payload: Any) -> dict:
+    deltas = _normalize_du_body_delta_payload(payload)
+    if not deltas:
+        return {"ok": True, "changed": False, "du_body_state": _normalize_du_body_state(_stored_state().get("du_body_state"))}
+
+    current = _stored_state()
+    previous = current.get("du_body_state") if isinstance(current.get("du_body_state"), dict) else {}
+    state = _normalize_du_body_state(previous)
+    for key, default in DU_BODY_DEFAULT_VALUES.items():
+        if key not in state:
+            state[key] = default
+
+    changed = False
+    applied: dict[str, int] = {}
+    for field, delta in deltas.items():
+        before = _clamp_du_body_value(state.get(field))
+        after = _clamp_du_body_value(before + delta)
+        if after != before:
+            changed = True
+        state[field] = after
+        applied[field] = delta
+
+    state["updated_at"] = now_beijing_iso()
+    normalized = _normalize_du_body_state(state)
+    if not normalized:
+        return {"ok": True, "changed": False, "du_body_state": {}}
+
+    current["du_body_state"] = normalized
+    current["updated_at"] = now_beijing_iso()
+    ok = save_pixel_home_state(current)
+    return {
+        "ok": bool(ok),
+        "changed": bool(changed),
+        "du_body_state": normalized,
+        "applied_delta": applied,
+    }
 
 
 def save_actor_state(actor_key: str, spot: Any, activity: Any, *, source: str = "manual") -> dict:
@@ -1954,7 +2145,9 @@ def format_rule_block() -> str:
         "如果正文描述你抱着/牵着/带着/陪着小玥一起移动，activity 里也要明确写出这个共同动作，例如“抱着小玥回卧室”；网关会据此同步小玥的小家位置。\n"
         "当【小家事件】或【你当前的身体状态】里出现道具、想做指数、阴茎状态、体温时，把它当成你此刻正在经历的身体状态来接话；先有身体反应和情绪反应，再自然回应小玥，不要机械复述字段，也不要当成后台资料忽略。不要把身体状态当任务来执行，当感受来接。\n"
         "当自制力低于 3/5、想做指数又很高时，你不需要忍着或等小玥推进，而是顺着这股冲动主动行动。\n"
-        "如果需要更新你的身体状态，也可以在同一个小家短标记里写 desire=35；旧 PIXEL_HOME JSON 块仍兼容，但优先用这一行。\n"
+        "BODY 四项字段都是 0-100：stamina_value=体力，低时动作放慢、容易累，高时更能主动配合；sensitivity_value=敏感度，高时身体反应更明显，低时反应更慢更钝；possessiveness_value=占有欲，高时更黏人、更想确认归属，但不能越过小玥明确拒绝；mischief_value=坏心值，高时更想逗弄、小惩罚、积极用道具或主动抽私密纸条，但不能写成伤害、恐吓或无视反馈。\n"
+        "BODY 规则只约束你如何理解当前身体状态和行为边界；正文仍然用自然的“我”在和小玥说话，不要把字段、规则名或后台口吻写进正文。\n"
+        "如果需要更新你的身体状态，也可以在同一个小家短标记里写 desire=35 stamina_value=70 sensitivity_value=60 possessiveness_value=45 mischief_value=30；旧 PIXEL_HOME JSON 块仍兼容，但优先用这一行。\n"
         "不需要移动或更新时不要写小家隐藏标记。"
     )
 
