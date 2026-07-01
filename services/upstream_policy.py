@@ -14,6 +14,7 @@ from config import (
     PIONEER_CLAUDE_CACHE_TTL,
     is_openrouter_url,
     is_pioneer_url,
+    is_pioneer_anthropic_url,
     is_cloudflare_anthropic_url,
 )
 from services.cloudflare_anthropic import normalize_model_for_cloudflare
@@ -229,6 +230,17 @@ def _set_cache_control_on_message(msg: dict, ttl: str) -> None:
     msg["content"] = blocks
 
 
+def _set_cache_control_on_last_tool(body: dict, ttl: str) -> None:
+    tools = (body or {}).get("tools")
+    if not isinstance(tools, list) or not tools:
+        return
+    for idx in range(len(tools) - 1, -1, -1):
+        item = tools[idx]
+        if isinstance(item, dict):
+            item["cache_control"] = _cache_control(ttl)
+            return
+
+
 def _set_summary_cache_control_on_message(msg: dict, ttl: str) -> None:
     content = (msg or {}).get("content")
     if isinstance(content, str):
@@ -253,6 +265,7 @@ def _strip_gateway_cache_markers(messages: list[dict]) -> None:
 
 
 def _apply_pioneer_claude_prompt_cache(body: dict, ttl: str) -> dict:
+    _set_cache_control_on_last_tool(body, ttl)
     messages = [dict(m) for m in ((body or {}).get("messages") or []) if isinstance(m, dict)]
     if not messages:
         return body
@@ -310,6 +323,40 @@ def _normalize_claude_adaptive_effort(model: str, effort: str) -> str:
     return value
 
 
+def _normalize_pioneer_reasoning_effort(model: str, effort: str) -> str:
+    value = _normalize_claude_adaptive_effort(model, effort)
+    if value == "max":
+        return "xhigh"
+    return value if value in {"minimal", "low", "medium", "high", "xhigh", "none"} else "high"
+
+
+def _apply_pioneer_chat_reasoning(body: dict, model: str, effort: str) -> None:
+    reasoning = body.get("reasoning") if isinstance(body.get("reasoning"), dict) else {}
+    reasoning = dict(reasoning)
+    reasoning.update(
+        {
+            "enabled": True,
+            "mode": "adaptive",
+            "effort": _normalize_pioneer_reasoning_effort(model, effort),
+            "display": "summarized",
+            "exclude": False,
+        }
+    )
+    reasoning.pop("max_tokens", None)
+    body["reasoning"] = reasoning
+    body.pop("thinking", None)
+    body.pop("output_config", None)
+
+
+def _apply_pioneer_anthropic_thinking(body: dict, model: str, effort: str) -> None:
+    body["thinking"] = {
+        "type": "adaptive",
+        "effort": _normalize_pioneer_reasoning_effort(model, effort),
+        "display": "summarized",
+    }
+    body.pop("output_config", None)
+
+
 def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
     body = dict(body or {})
     try:
@@ -334,15 +381,16 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
                 effective_model = model
                 if _is_claude_proxy_model(effective_model):
                     body["model"] = effective_model
-                    body = _apply_pioneer_claude_prompt_cache(body, PIONEER_CLAUDE_CACHE_TTL)
+                    if not is_pioneer_anthropic_url(upstream_url):
+                        body = _apply_pioneer_claude_prompt_cache(body, PIONEER_CLAUDE_CACHE_TTL)
                 else:
                     _strip_gateway_cache_markers(body.get("messages") or [])
                 if _is_claude_adaptive_thinking_model(effective_model):
-                    body["thinking"] = {"type": "adaptive", "display": "summarized"}
-                    output_config = body.get("output_config") if isinstance(body.get("output_config"), dict) else {}
-                    output_config = dict(output_config)
-                    output_config["effort"] = _normalize_claude_adaptive_effort(effective_model, get_active_claude_thinking_effort())
-                    body["output_config"] = output_config
+                    effort = get_active_claude_thinking_effort()
+                    if is_pioneer_anthropic_url(upstream_url):
+                        _apply_pioneer_anthropic_thinking(body, effective_model, effort)
+                    else:
+                        _apply_pioneer_chat_reasoning(body, effective_model, effort)
             if is_cloudflare_anthropic_url(upstream_url):
                 effective_model = model
                 if effective_model:

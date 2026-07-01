@@ -689,6 +689,16 @@ def is_pioneer_url(url: str) -> bool:
     return bool(host and PIONEER_BASE_HOST and (host == PIONEER_BASE_HOST or host.endswith("." + PIONEER_BASE_HOST)))
 
 
+def is_pioneer_anthropic_url(url: str) -> bool:
+    if not is_pioneer_url(url):
+        return False
+    try:
+        path = (urlparse(url).path or "").strip().lower().rstrip("/")
+    except Exception:
+        return False
+    return path.endswith("/v1/messages")
+
+
 # -------------------- Cloudflare AI Gateway（Anthropic Messages） --------------------
 # 支持两类 Anthropic 原生入口：
 # 1) Provider native: https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/anthropic/v1/messages
