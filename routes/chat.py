@@ -2231,7 +2231,7 @@ def chat_completions():
                         (resp_json.get("choices") or [{}])[0]["message"] = msg
             except Exception:
                 logger.warning("处理延迟续话标记失败 window_id=%s", window_id, exc_info=True)
-        if reply_channel == "tg" and tool_rounds_used > 0:
+        if reply_channel == "tg":
             try:
                 response_msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
                 if isinstance(response_msg, dict):
@@ -2246,7 +2246,7 @@ def chat_completions():
                         response_msg["reasoning"] = merged_response_reasoning
                         (resp_json.get("choices") or [{}])[0]["message"] = response_msg
             except Exception:
-                logger.warning("合并 TG 工具循环 thinking 失败 window_id=%s", window_id, exc_info=True)
+                logger.warning("合并 TG thinking 失败 window_id=%s", window_id, exc_info=True)
     if resp_json and (resp_json or {}).get("choices"):
         msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
         content_text = get_assistant_content_text(msg)
