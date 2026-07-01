@@ -221,13 +221,29 @@ def _text_blocks_from_content(content) -> list:
     return [{"type": "text", "text": str(content or "")}]
 
 
-def _set_cache_control_on_message(msg: dict, ttl: str) -> None:
-    blocks = _text_blocks_from_content((msg or {}).get("content"))
-    for block in reversed(blocks):
+def _append_text_blocks_without_cache(target: list, content) -> None:
+    for block in _text_blocks_from_content(content):
+        if not isinstance(block, dict):
+            continue
+        item = dict(block)
+        item.pop("cache_control", None)
+        item.pop(_DYNAMIC_SYSTEM_MARKER, None)
+        item.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
+        item.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
+        target.append(item)
+
+
+def _last_text_block_index(blocks: list) -> int:
+    for idx in range(len(blocks) - 1, -1, -1):
+        block = blocks[idx]
         if isinstance(block, dict) and str(block.get("type") or "").strip().lower() in {"text", "input_text"}:
-            block["cache_control"] = _cache_control(ttl)
-            break
-    msg["content"] = blocks
+            return idx
+    return -1
+
+
+def _set_cache_control_on_block_index(blocks: list, idx: int, ttl: str) -> None:
+    if 0 <= idx < len(blocks) and isinstance(blocks[idx], dict):
+        blocks[idx]["cache_control"] = _cache_control(ttl)
 
 
 def _set_cache_control_on_last_tool(body: dict, ttl: str) -> None:
@@ -241,20 +257,6 @@ def _set_cache_control_on_last_tool(body: dict, ttl: str) -> None:
             return
 
 
-def _set_summary_cache_control_on_message(msg: dict, ttl: str) -> None:
-    content = (msg or {}).get("content")
-    if isinstance(content, str):
-        stable_text, recent_text = _split_summary_text(content)
-        if recent_text:
-            blocks = []
-            if stable_text:
-                blocks.append({"type": "text", "text": stable_text, "cache_control": _cache_control(ttl)})
-            blocks.append({"type": "text", "text": recent_text, "cache_control": _cache_control(ttl)})
-            msg["content"] = blocks
-            return
-    _set_cache_control_on_message(msg, ttl)
-
-
 def _strip_gateway_cache_markers(messages: list[dict]) -> None:
     for msg in messages:
         if not isinstance(msg, dict):
@@ -264,55 +266,66 @@ def _strip_gateway_cache_markers(messages: list[dict]) -> None:
         msg.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
 
 
+def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str) -> list[dict]:
+    leading_systems: list[dict] = []
+    rest_start = 0
+    for idx, msg in enumerate(messages):
+        if str(msg.get("role") or "").strip().lower() != "system":
+            rest_start = idx
+            break
+        leading_systems.append(msg)
+    else:
+        rest_start = len(messages)
+    if not leading_systems:
+        return messages
+
+    stable_blocks: list[dict] = []
+    volatile_systems: list[dict] = []
+    pre_summary_mark_idx = -1
+    summary_mark_idx = -1
+
+    for msg in leading_systems:
+        if _looks_like_dynamic_message(msg) or _looks_like_recent_summary_message(msg):
+            volatile_systems.append(dict(msg))
+            continue
+        if _looks_like_summary_cache_message(msg):
+            before_summary_idx = _last_text_block_index(stable_blocks)
+            if before_summary_idx >= 0:
+                pre_summary_mark_idx = before_summary_idx
+            stable_text, recent_text = _split_summary_text(_message_content_text(msg))
+            if stable_text:
+                stable_blocks.append({"type": "text", "text": stable_text})
+                summary_mark_idx = len(stable_blocks) - 1
+            if recent_text:
+                volatile_systems.append({"role": "system", "content": [{"type": "text", "text": recent_text}]})
+            continue
+        _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
+
+    if stable_blocks:
+        if pre_summary_mark_idx >= 0:
+            _set_cache_control_on_block_index(stable_blocks, pre_summary_mark_idx, ttl)
+        if summary_mark_idx >= 0:
+            _set_cache_control_on_block_index(stable_blocks, summary_mark_idx, ttl)
+        elif pre_summary_mark_idx < 0:
+            last_idx = _last_text_block_index(stable_blocks)
+            if last_idx >= 0:
+                _set_cache_control_on_block_index(stable_blocks, last_idx, ttl)
+
+    normalized: list[dict] = []
+    if stable_blocks:
+        normalized.append({"role": "system", "content": stable_blocks})
+    normalized.extend(volatile_systems)
+    normalized.extend(messages[rest_start:])
+    _strip_gateway_cache_markers(normalized)
+    return normalized
+
+
 def _apply_pioneer_claude_prompt_cache(body: dict, ttl: str) -> dict:
     _set_cache_control_on_last_tool(body, ttl)
     messages = [dict(m) for m in ((body or {}).get("messages") or []) if isinstance(m, dict)]
     if not messages:
         return body
-    leading_system_indexes: list[int] = []
-    for idx, msg in enumerate(messages):
-        if str(msg.get("role") or "").strip().lower() != "system":
-            break
-        leading_system_indexes.append(idx)
-    if not leading_system_indexes:
-        body["messages"] = messages
-        return body
-
-    summary_idx = -1
-    for idx in leading_system_indexes[1:]:
-        if _looks_like_summary_cache_message(messages[idx]):
-            summary_idx = idx
-            break
-
-    if summary_idx > 0:
-        cacheable_idx = -1
-        for idx in reversed([x for x in leading_system_indexes if x < summary_idx]):
-            msg = messages[idx]
-            if not _looks_like_dynamic_message(msg):
-                cacheable_idx = idx
-                break
-        if cacheable_idx >= 0:
-            _set_cache_control_on_message(messages[cacheable_idx], ttl)
-        _set_summary_cache_control_on_message(messages[summary_idx], ttl)
-        recent_idx = -1
-        for idx in [x for x in leading_system_indexes if x > summary_idx]:
-            if _looks_like_recent_summary_message(messages[idx]):
-                recent_idx = idx
-                break
-        if recent_idx > summary_idx:
-            _set_cache_control_on_message(messages[recent_idx], ttl)
-    else:
-        cacheable_idx = -1
-        for idx in leading_system_indexes:
-            msg = messages[idx]
-            if _looks_like_dynamic_message(msg):
-                break
-            cacheable_idx = idx
-        if cacheable_idx >= 0:
-            _set_cache_control_on_message(messages[cacheable_idx], ttl)
-
-    _strip_gateway_cache_markers(messages)
-    body["messages"] = messages
+    body["messages"] = _normalize_pioneer_chat_system_cache_messages(messages, ttl)
     return body
 
 
