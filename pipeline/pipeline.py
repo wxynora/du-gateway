@@ -195,17 +195,8 @@ def step_inject_current_base_model(body: dict) -> dict:
 
 
 def step_inject_pseudo_cot_inner_os(body: dict, window_id: str) -> dict:
-    """官方 thinking summary 拒绝后，下一轮临时要求开头输出可剥离的脑内 OS。"""
-    try:
-        from services.pseudo_cot import PSEUDO_COT_DYNAMIC_SYSTEM
-
-        state = r2_store.get_pseudo_cot_state(window_id)
-    except Exception as e:
-        logger.debug("pseudo cot 注入跳过 error=%s", e)
-        return body
-    if not isinstance(state, dict) or not state.get("enabled"):
-        return body
-    return _append_to_dynamic_system(body, "\n\n" + PSEUDO_COT_DYNAMIC_SYSTEM)
+    """内心 OS 伪 COT 已固定关闭，避免无标记内心段污染可见正文。"""
+    return body
 
 
 def _last_user_text_for_humor_memes(body: dict) -> str:
