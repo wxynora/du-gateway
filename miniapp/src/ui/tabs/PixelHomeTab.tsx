@@ -560,45 +560,85 @@ function bodyCalibrationInputValue(state: DuBodyState, key: BodyCalibrationKey) 
   return value === null ? "" : String(value);
 }
 
-function bodyCalibrationTextParts(state: DuBodyState | undefined) {
-  return BODY_CALIBRATION_FIELDS.flatMap((field) => {
-    const value = bodyCalibrationValue(state?.[field.key]);
-    return value === null ? [] : [{ label: field.label, text: `${field.label}：${value}/100` }];
-  });
+function clampMeterValue(value: unknown, max: number) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.max(0, Math.min(max, num));
 }
 
-function bodyStateText(state: DuBodyState | undefined) {
-  const text = String(state?.text || "").trim();
-  const calibrationParts = bodyCalibrationTextParts(state);
-  if (text) {
-    const extraParts = calibrationParts.filter((part) => !text.includes(`${part.label}：`)).map((part) => part.text);
-    return [text, ...extraParts].join("；");
-  }
-  const parts: string[] = [];
+function desireMeterValue(state: DuBodyState | undefined) {
+  const level = clampMeterValue(state?.desire_level, 5);
+  if (level !== null) return level;
+  const raw = bodyCalibrationValue(state?.desire_value);
+  return raw === null ? null : Math.max(0, Math.min(5, Math.round(raw / 20)));
+}
+
+function bodyStateTags(state: DuBodyState | undefined) {
+  const tags: string[] = [];
   const toyTypes = bodyToyTypes(state);
   if (toyTypes.length) {
-    const details = [];
-    if (Number(state?.intensity || 0) > 0) details.push(`档位${Number(state?.intensity || 0)}`);
-    parts.push(`道具：${toyTypes.join("、")}${details.length ? `（${details.join("，")}）` : ""}`);
+    const intensity = Number(state?.intensity || 0);
+    tags.push(`道具 ${toyTypes.join("、")}${intensity > 0 ? ` · ${intensity}档` : ""}`);
   }
-  parts.push(...calibrationParts.map((part) => part.text));
-  if (typeof state?.desire_value !== "undefined" || typeof state?.desire_level !== "undefined") {
-    const desireLevel = Number(state?.desire_level || 0);
-    parts.push(`想做指数：${desireLevel}/5`);
-    if (typeof state?.self_control_level !== "undefined" && state?.self_control_level !== null) {
-      parts.push(`自制力：${Number(state.self_control_level || 0)}/5`);
-    }
-    parts.push(`阴茎状态：${state?.penis_state || "放松状态"}`);
-  } else if (state?.penis_state) {
-    if (typeof state?.self_control_level !== "undefined" && state?.self_control_level !== null) {
-      parts.push(`自制力：${Number(state.self_control_level || 0)}/5`);
-    }
-    parts.push(`阴茎状态：${state.penis_state}`);
-  } else if (typeof state?.self_control_level !== "undefined" && state?.self_control_level !== null) {
-    parts.push(`自制力：${Number(state.self_control_level || 0)}/5`);
-  }
-  if (state?.temperature) parts.push(`体温：${state.temperature}`);
-  return parts.join("；") || "未记录";
+  const text = String(state?.text || "").trim();
+  if (text) tags.push(text);
+  if (state?.penis_state) tags.push(String(state.penis_state));
+  if (state?.temperature) tags.push(`体温 ${state.temperature}`);
+  return tags;
+}
+
+function BodyMeter({ label, value, max }: { label: string; value: number; max: number }) {
+  const safeValue = Math.max(0, Math.min(max, value));
+  const percent = max > 0 ? Math.round((safeValue / max) * 100) : 0;
+  return (
+    <span className="pixel-home-ref-body-meter">
+      <span className="pixel-home-ref-body-meter-head">
+        <span>{label}</span>
+        <b>
+          {safeValue}/{max}
+        </b>
+      </span>
+      <span className="pixel-home-ref-body-rail" aria-hidden="true">
+        <span style={{ width: `${percent}%` }} />
+      </span>
+    </span>
+  );
+}
+
+function BodyStatusBars({ state }: { state: DuBodyState | undefined }) {
+  const desire = desireMeterValue(state);
+  const selfControl = clampMeterValue(state?.self_control_level, 5);
+  const calibrationMeters = BODY_CALIBRATION_FIELDS.flatMap((field) => {
+    const value = bodyCalibrationValue(state?.[field.key]);
+    return value === null ? [] : [{ key: field.key, label: field.label, value }];
+  });
+  const tags = bodyStateTags(state);
+  const hasMeters = desire !== null || selfControl !== null || calibrationMeters.length > 0;
+  if (!hasMeters && tags.length === 0) return <span className="pixel-home-ref-body-empty">未记录</span>;
+  return (
+    <span className="pixel-home-ref-body-content">
+      {desire !== null || selfControl !== null ? (
+        <span className="pixel-home-ref-body-primary-bars">
+          {desire !== null ? <BodyMeter label="想做指数" value={desire} max={5} /> : null}
+          {selfControl !== null ? <BodyMeter label="自制力" value={selfControl} max={5} /> : null}
+        </span>
+      ) : null}
+      {calibrationMeters.length ? (
+        <span className="pixel-home-ref-body-secondary-bars">
+          {calibrationMeters.map((item) => (
+            <BodyMeter key={item.key} label={item.label} value={item.value} max={100} />
+          ))}
+        </span>
+      ) : null}
+      {tags.length ? (
+        <span className="pixel-home-ref-body-tags">
+          {tags.slice(0, 3).map((tag, index) => (
+            <span key={`${tag}-${index}`}>{tag}</span>
+          ))}
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 function toggleToyType(prev: DuBodyState, item: string): DuBodyState {
@@ -948,7 +988,6 @@ export function PixelHomeTab() {
   const spots = homeState?.spots?.length ? homeState.spots : DEFAULT_SPOTS;
   const duStatus = actorText(homeState?.du, "在书房写日记");
   const duMood = duMoodLabel(homeState?.du_vitals);
-  const duBodyStatus = bodyStateText(homeState?.du_body_state);
   const mySpotLabel = spots.find((spot) => spot.key === mySpot)?.label || "离家出走";
   const myStatus = myDirty ? statusText(mySpotLabel, myActivity) : actorText(homeState?.xinyue, "在客厅沙发休息");
   const selectedSpot = useMemo(() => HOTSPOTS.find((spot) => spot.key === selectedSpotKey) || null, [selectedSpotKey]);
@@ -1179,7 +1218,7 @@ export function PixelHomeTab() {
               setToyEditorOpen(true);
             }}
           >
-            <b>{duBodyStatus}</b>
+            <BodyStatusBars state={homeState?.du_body_state} />
             <i aria-hidden="true">+</i>
           </button>
         </section>

@@ -6111,16 +6111,98 @@
   cursor: pointer;
 }
 
-.pixel-home-ref-body-inline b {
-  display: -webkit-box;
+.pixel-home-ref-body-content {
+  display: grid;
   min-width: 0;
   flex: 1;
-  font-weight: 400;
-  opacity: 0.92;
+  gap: 7px;
+}
+
+.pixel-home-ref-body-empty {
+  display: block;
+  min-width: 0;
+  flex: 1;
+  color: var(--pixel-home-text-muted);
+  font-size: 13px;
+  line-height: 24px;
+}
+
+.pixel-home-ref-body-primary-bars,
+.pixel-home-ref-body-secondary-bars {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.pixel-home-ref-body-secondary-bars {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+}
+
+.pixel-home-ref-body-meter {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.pixel-home-ref-body-meter-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: rgba(113, 95, 86, 0.86);
+  font-size: 12px;
+  line-height: 1.15;
+}
+
+.pixel-home-ref-body-meter-head b {
+  flex: 0 0 auto;
+  color: rgba(113, 95, 86, 0.68);
+  font-family: "Inter", sans-serif;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.pixel-home-ref-body-rail {
+  position: relative;
+  display: block;
+  height: 4px;
   overflow: hidden;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  border-radius: 999px;
+  background: rgba(113, 95, 86, 0.1);
+}
+
+.pixel-home-ref-body-rail span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  min-width: 4px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(232, 196, 184, 0.72), rgba(196, 151, 138, 0.92));
+  box-shadow: 0 0 10px rgba(232, 196, 184, 0.26);
+  transition: width 0.28s ease;
+}
+
+.pixel-home-ref-body-tags {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.pixel-home-ref-body-tags span {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 3px 7px;
+  border: 1px solid rgba(113, 95, 86, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.3);
+  color: var(--pixel-home-text-muted);
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pixel-home-ref-body-inline i {
