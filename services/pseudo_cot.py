@@ -62,15 +62,7 @@ _PSEUDO_COT_CONTEXT_WORDS = ("thinking", "content")
 
 
 def pseudo_cot_instruction_enabled(body: dict) -> bool:
-    if not isinstance(body, dict):
-        return False
-    for msg in body.get("messages") or []:
-        if not isinstance(msg, dict):
-            continue
-        if str(msg.get("role") or "").strip().lower() != "system":
-            continue
-        if MARKER_START in str(msg.get("content") or ""):
-            return True
+    """伪 COT / 内心 OS 固定关闭，避免无标记内心段污染可见正文。"""
     return False
 
 
@@ -253,34 +245,27 @@ def apply_pseudo_cot_state_and_fallback(
     official_text, details, omitted = extract_reasoning_text_and_details(msg)
     refused = is_reasoning_summary_refusal(official_text, details)
     now = now_beijing_iso()
-    inner = str(inner_os or "").strip()
     if refused:
         try:
             r2_store.save_pseudo_cot_state(
                 window_id,
                 {
-                    "enabled": True,
-                    "reason": "official_summary_refused",
+                    "enabled": False,
+                    "reason": "pseudo_cot_hard_disabled",
                     "last_refusal_at": now,
+                    "closed_at": now,
+                    "closed_reason": "official_summary_refused_but_pseudo_cot_disabled",
                     "updated_at": now,
                 },
             )
         except Exception as e:
-            logger.warning("pseudo_cot_state enable failed window_id=%s error=%s", window_id, e)
+            logger.warning("pseudo_cot_state disabled-write failed window_id=%s error=%s", window_id, e)
         msg["official_reasoning_refused"] = True
         msg["official_reasoning_refusal_text"] = official_text[:1000]
         if omitted:
             msg["reasoning_omitted"] = True
-        if inner:
-            msg["reasoning"] = inner
-            msg["reasoning_source"] = "du_inner_os_fallback"
-        else:
-            msg["reasoning_source"] = "official_reasoning_refused"
+        msg["reasoning_source"] = "official_reasoning_refused"
         return msg
-    if force_inner_os and inner:
-        msg["reasoning"] = inner
-        msg["reasoning_source"] = "du_inner_os"
-        logger.info("pseudo_cot_inner_os archived window_id=%s chars=%s", window_id, len(inner))
     try:
         state = r2_store.get_pseudo_cot_state(window_id)
         if isinstance(state, dict) and state.get("enabled"):
