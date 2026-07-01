@@ -6118,6 +6118,26 @@
   gap: 7px;
 }
 
+.pixel-home-ref-body-penis {
+  display: block;
+  min-width: 0;
+  color: rgba(71, 57, 51, 0.9);
+  font-family: "Lora", "Noto Serif SC", serif;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.pixel-home-ref-body-status {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  color: rgba(113, 95, 86, 0.72);
+  font-family: "Inter", "Noto Sans SC", sans-serif;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
 .pixel-home-ref-body-empty {
   display: block;
   min-width: 0;

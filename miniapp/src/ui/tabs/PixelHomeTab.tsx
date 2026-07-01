@@ -573,6 +573,25 @@ function desireMeterValue(state: DuBodyState | undefined) {
   return raw === null ? null : Math.max(0, Math.min(5, Math.round(raw / 20)));
 }
 
+function bodyTextField(state: DuBodyState | undefined, label: string) {
+  const text = String(state?.text || "").trim();
+  if (!text) return "";
+  const match = text.match(new RegExp(`${label}[:：]([^；\\n]+)`));
+  return match?.[1]?.trim() || "";
+}
+
+function bodyPenisStatus(state: DuBodyState | undefined) {
+  return String(state?.penis_state || bodyTextField(state, "阴茎状态") || "").trim();
+}
+
+function bodyExtraStatusItems(state: DuBodyState | undefined) {
+  const temperature = String(state?.temperature || bodyTextField(state, "体温") || "").trim();
+  const toys = bodyToyTypes(state).filter((item) => item && item !== "无");
+  const intensity = clampMeterValue(state?.intensity, 5);
+  const toyText = toys.length ? `道具：${toys.join("、")}${intensity ? ` · ${intensity}档` : ""}` : "";
+  return [temperature ? `体温：${temperature}` : "", toyText].filter(Boolean);
+}
+
 function BodyMeter({ label, value, max }: { label: string; value: number; max: number }) {
   const safeValue = Math.max(0, Math.min(max, value));
   const percent = max > 0 ? Math.round((safeValue / max) * 100) : 0;
@@ -592,6 +611,8 @@ function BodyMeter({ label, value, max }: { label: string; value: number; max: n
 }
 
 function BodyStatusBars({ state }: { state: DuBodyState | undefined }) {
+  const penisStatus = bodyPenisStatus(state);
+  const extraStatusItems = bodyExtraStatusItems(state);
   const desire = desireMeterValue(state);
   const selfControl = clampMeterValue(state?.self_control_level, 5);
   const calibrationMeters = BODY_CALIBRATION_FIELDS.flatMap((field) => {
@@ -599,9 +620,17 @@ function BodyStatusBars({ state }: { state: DuBodyState | undefined }) {
     return value === null ? [] : [{ key: field.key, label: field.label, value }];
   });
   const hasMeters = desire !== null || selfControl !== null || calibrationMeters.length > 0;
-  if (!hasMeters) return <span className="pixel-home-ref-body-empty">未记录</span>;
+  if (!penisStatus && !extraStatusItems.length && !hasMeters) return <span className="pixel-home-ref-body-empty">未记录</span>;
   return (
     <span className="pixel-home-ref-body-content">
+      <span className="pixel-home-ref-body-penis">阴茎：{penisStatus || "未记录"}</span>
+      {extraStatusItems.length ? (
+        <span className="pixel-home-ref-body-status">
+          {extraStatusItems.map((item) => (
+            <span key={item}>{item}</span>
+          ))}
+        </span>
+      ) : null}
       {desire !== null || selfControl !== null ? (
         <span className="pixel-home-ref-body-primary-bars">
           {desire !== null ? <BodyMeter label="想做指数" value={desire} max={5} /> : null}
