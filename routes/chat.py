@@ -22,8 +22,10 @@ from config import (
     MAIN_GATEWAY_BEARER_TOKEN,
     QQ_GROUP_ACTIVITY_REPORT_TOKEN,
     QQ_PROACTIVE_PUSH_TOKEN,
+    PIONEER_CLAUDE_CACHE_TTL,
     is_openrouter_url,
     is_pioneer_url,
+    is_pioneer_anthropic_url,
     is_cloudflare_anthropic_url,
     cloudflare_claude_model_options,
     openrouter_models_response,
@@ -967,18 +969,26 @@ def _stream_forward_to_ai(body: dict, headers: dict):
         h = dict(req_headers)
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
+            if is_pioneer_url(url):
+                h["X-API-Key"] = api_key
         try:
             body_send = _apply_active_model_request_policy(body_send, url)
             target_url = url
             body_send = _apply_openrouter_request_policy(body_send, url)
             is_cf_anthropic = is_cloudflare_anthropic_url(target_url)
+            is_pioneer_anthropic = is_pioneer_anthropic_url(target_url)
+            if is_cf_anthropic or is_pioneer_anthropic:
+                body_send = _openai_to_anthropic_request(
+                    body_send,
+                    target_url,
+                    PIONEER_CLAUDE_CACHE_TTL if is_pioneer_anthropic else None,
+                )
             if is_cf_anthropic:
-                body_send = _openai_to_anthropic_request(body_send, target_url)
                 h = _cloudflare_anthropic_headers(h, target_url, api_key)
             # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(target_url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
-                if is_cf_anthropic:
+                if is_cf_anthropic or is_pioneer_anthropic:
                     for chunk in _anthropic_sse_to_openai_sse(r.iter_lines(), str(body_send.get("model") or request_model)):
                         yield chunk
                     return
@@ -1423,6 +1433,8 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
         req_headers = {"Content-Type": "application/json"}
         if api_key:
             req_headers["Authorization"] = f"Bearer {api_key}"
+            if is_pioneer_url(url):
+                req_headers["X-API-Key"] = api_key
         for h in ("Accept", "Accept-Encoding"):
             if request.headers.get(h):
                 req_headers[h] = request.headers.get(h)
@@ -1439,8 +1451,14 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
             target_url = url
             body_send = _apply_openrouter_request_policy(body_send, url)
             is_cf_anthropic = is_cloudflare_anthropic_url(target_url)
+            is_pioneer_anthropic = is_pioneer_anthropic_url(target_url)
+            if is_cf_anthropic or is_pioneer_anthropic:
+                body_send = _openai_to_anthropic_request(
+                    body_send,
+                    target_url,
+                    PIONEER_CLAUDE_CACHE_TTL if is_pioneer_anthropic else None,
+                )
             if is_cf_anthropic:
-                body_send = _openai_to_anthropic_request(body_send, target_url)
                 req_headers = _cloudflare_anthropic_headers(req_headers, target_url, api_key)
             is_sumitalk_forward = str(headers.get("X-Reply-Channel") or request.headers.get("X-Reply-Channel") or "").strip().lower() == "sumitalk"
             upstream_started = time.time()
@@ -1495,7 +1513,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                 continue
             # 只有 2xx 算成功，其余（4xx/5xx/429 等）直接失败（不再自动 fallback）
             if 200 <= r.status_code < 300:
-                if is_cf_anthropic:
+                if is_cf_anthropic or is_pioneer_anthropic:
                     data = _anthropic_to_openai_response(data or {}, str(body_send.get("model") or request_model))
                 cache_debug = _build_cache_debug_entry(body_send, target_url, prompt_cache_profile, data or {})
                 usage_debug = cache_debug.get("usage") or {}

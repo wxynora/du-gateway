@@ -188,7 +188,7 @@ def _convert_tool_choice(choice):
     return {"type": "auto"}
 
 
-def openai_to_anthropic_request(body: dict, url: str) -> dict:
+def openai_to_anthropic_request(body: dict, url: str, cache_ttl: str | None = None) -> dict:
     src = dict(body or {})
     messages: list[dict] = []
     system_blocks: list[dict] = []
@@ -265,7 +265,7 @@ def openai_to_anthropic_request(body: dict, url: str) -> dict:
     if src.get("parallel_tool_calls") is False:
         out["disable_parallel_tool_use"] = True
 
-    apply_prompt_cache(out, CLOUDFLARE_CLAUDE_CACHE_TTL)
+    apply_prompt_cache(out, cache_ttl or CLOUDFLARE_CLAUDE_CACHE_TTL)
     return out
 
 
