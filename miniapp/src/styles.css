@@ -6184,27 +6184,6 @@
   transition: width 0.28s ease;
 }
 
-.pixel-home-ref-body-tags {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.pixel-home-ref-body-tags span {
-  max-width: 100%;
-  overflow: hidden;
-  padding: 3px 7px;
-  border: 1px solid rgba(113, 95, 86, 0.1);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.3);
-  color: var(--pixel-home-text-muted);
-  font-size: 11px;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .pixel-home-ref-body-inline i {
   display: inline-flex;
   width: 24px;

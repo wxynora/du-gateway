@@ -573,20 +573,6 @@ function desireMeterValue(state: DuBodyState | undefined) {
   return raw === null ? null : Math.max(0, Math.min(5, Math.round(raw / 20)));
 }
 
-function bodyStateTags(state: DuBodyState | undefined) {
-  const tags: string[] = [];
-  const toyTypes = bodyToyTypes(state);
-  if (toyTypes.length) {
-    const intensity = Number(state?.intensity || 0);
-    tags.push(`道具 ${toyTypes.join("、")}${intensity > 0 ? ` · ${intensity}档` : ""}`);
-  }
-  const text = String(state?.text || "").trim();
-  if (text) tags.push(text);
-  if (state?.penis_state) tags.push(String(state.penis_state));
-  if (state?.temperature) tags.push(`体温 ${state.temperature}`);
-  return tags;
-}
-
 function BodyMeter({ label, value, max }: { label: string; value: number; max: number }) {
   const safeValue = Math.max(0, Math.min(max, value));
   const percent = max > 0 ? Math.round((safeValue / max) * 100) : 0;
@@ -612,9 +598,8 @@ function BodyStatusBars({ state }: { state: DuBodyState | undefined }) {
     const value = bodyCalibrationValue(state?.[field.key]);
     return value === null ? [] : [{ key: field.key, label: field.label, value }];
   });
-  const tags = bodyStateTags(state);
   const hasMeters = desire !== null || selfControl !== null || calibrationMeters.length > 0;
-  if (!hasMeters && tags.length === 0) return <span className="pixel-home-ref-body-empty">未记录</span>;
+  if (!hasMeters) return <span className="pixel-home-ref-body-empty">未记录</span>;
   return (
     <span className="pixel-home-ref-body-content">
       {desire !== null || selfControl !== null ? (
@@ -627,13 +612,6 @@ function BodyStatusBars({ state }: { state: DuBodyState | undefined }) {
         <span className="pixel-home-ref-body-secondary-bars">
           {calibrationMeters.map((item) => (
             <BodyMeter key={item.key} label={item.label} value={item.value} max={100} />
-          ))}
-        </span>
-      ) : null}
-      {tags.length ? (
-        <span className="pixel-home-ref-body-tags">
-          {tags.slice(0, 3).map((tag, index) => (
-            <span key={`${tag}-${index}`}>{tag}</span>
           ))}
         </span>
       ) : null}
