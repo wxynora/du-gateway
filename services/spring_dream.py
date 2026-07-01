@@ -1185,7 +1185,12 @@ def _clear_post_spring_dream_wakeup_pending(session_key: str, *, updated_at: str
     return True
 
 
-def maybe_prepare_post_spring_dream_wakeup(*, now_dt: datetime) -> Optional[dict]:
+def maybe_prepare_post_spring_dream_wakeup(
+    *,
+    now_dt: datetime,
+    require_sleeping: bool = True,
+    clear_on_empty_prompt: bool = True,
+) -> Optional[dict]:
     try:
         from services.pixel_home import build_sleep_wakeup_state
 
@@ -1194,18 +1199,22 @@ def maybe_prepare_post_spring_dream_wakeup(*, now_dt: datetime) -> Optional[dict
         return None
     night_date = str((sleep_state or {}).get("night_date") or "").strip()
     if not bool((sleep_state or {}).get("is_sleeping")):
-        _reset_night_sessions(night_date)
-        return None
+        if require_sleeping:
+            _reset_night_sessions(night_date)
+            return None
     session_key = str((sleep_state or {}).get("sleep_session_key") or "").strip()
-    if not session_key:
+    if require_sleeping and not session_key:
         return None
     session_key = _recent_session_key_for_night(night_date) or session_key
+    if not session_key:
+        return None
     row = _session_row(session_key)
     if not row or int(row.get("post_wakeup_pending") or 0) <= 0:
         return None
     prompt = load_post_spring_dream_wakeup_prompt()
     if not prompt:
-        _clear_post_spring_dream_wakeup_pending(session_key)
+        if clear_on_empty_prompt:
+            _clear_post_spring_dream_wakeup_pending(session_key)
         return None
     return {
         "prompt": prompt,

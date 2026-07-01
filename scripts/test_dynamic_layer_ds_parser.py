@@ -64,12 +64,16 @@ TARGET: our_relationship
 FUSED_WITH_ID:
 CONTENT:
 BODY_SENSITIVITY_DELTA: +7
-BODY_MISCHIEF_DELTA: +9"""
+BODY_MISCHIEF_DELTA: +9
+BODY_RESTRAINT_PRESSURE_DELTA: +22"""
     obj = _extract_json_from_ds_response(raw)
     _assert(isinstance(obj, dict), "skip output with body delta should parse")
     _assert(obj.get("action") == "skip", "ACTION should remain skip")
     _assert(not _decision_structural_issue(obj), "skip should not require content")
-    _assert(obj.get("body_delta") == {"sensitivity": 7, "mischief": 9}, "BODY deltas should parse on skip")
+    _assert(
+        obj.get("body_delta") == {"sensitivity": 7, "mischief": 9, "restraint_pressure": 22},
+        "BODY deltas should parse on skip",
+    )
 
 
 def test_incomplete_tail_is_rejected() -> None:
