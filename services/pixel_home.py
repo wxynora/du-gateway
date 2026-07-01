@@ -128,6 +128,9 @@ DU_BODY_DEEP_NIGHT_START_HOUR = 23
 DU_BODY_DEEP_NIGHT_END_HOUR = 4
 DU_BODY_MORNING_START_HOUR = 6
 DU_BODY_MORNING_END_HOUR = 10
+DU_BODY_STAMINA_RECOVERY_LOW_RATE_PER_HOUR = 24.0
+DU_BODY_STAMINA_RECOVERY_MID_RATE_PER_HOUR = 18.0
+DU_BODY_STAMINA_RECOVERY_HIGH_RATE_PER_HOUR = 12.0
 DU_BODY_EXPLICIT_VALUE_FIELDS = (
     "stamina_value",
     "sensitivity_value",
@@ -1154,10 +1157,80 @@ def _normalize_du_body_state(raw: Any) -> dict:
         "intensity": intensity,
         "updated_at": str(data.get("updated_at") or data.get("updatedAt") or "").strip() or now_beijing_iso(),
     }
+    stamina_recovered_at = str(data.get("stamina_recovered_at") or data.get("staminaRecoveredAt") or "").strip()
+    if stamina_recovered_at:
+        out["stamina_recovered_at"] = stamina_recovered_at
     out.update(body_values)
     if not toy_types and not body_values:
         return {}
     return out
+
+
+def _du_body_stamina_recovery_points(current: int, elapsed_minutes: float) -> int:
+    if current >= DU_BODY_VALUE_MAX or elapsed_minutes <= 0:
+        return 0
+    remaining_hours = max(0.0, float(elapsed_minutes) / 60.0)
+    score = float(_clamp_du_body_value(current))
+    recovered = 0.0
+    bands = (
+        (50.0, DU_BODY_STAMINA_RECOVERY_LOW_RATE_PER_HOUR),
+        (75.0, DU_BODY_STAMINA_RECOVERY_MID_RATE_PER_HOUR),
+        (float(DU_BODY_VALUE_MAX), DU_BODY_STAMINA_RECOVERY_HIGH_RATE_PER_HOUR),
+    )
+    for ceiling, rate in bands:
+        if remaining_hours <= 0 or score >= DU_BODY_VALUE_MAX:
+            break
+        if score >= ceiling or rate <= 0:
+            continue
+        gap = ceiling - score
+        hours_to_ceiling = gap / rate
+        if remaining_hours >= hours_to_ceiling:
+            recovered += gap
+            score = ceiling
+            remaining_hours -= hours_to_ceiling
+        else:
+            recovered += remaining_hours * rate
+            break
+    return max(0, int(recovered))
+
+
+def _recover_du_body_stamina_state(raw: Any, *, now_iso: str | None = None) -> tuple[dict, bool]:
+    state = _normalize_du_body_state(raw)
+    if not state or "stamina_value" not in state:
+        return state, False
+    before = _clamp_du_body_value(state.get("stamina_value"))
+    if before >= DU_BODY_VALUE_MAX:
+        return state, False
+    now_text = str(now_iso or "").strip() or now_beijing_iso()
+    now_dt = parse_iso_to_beijing(now_text) or datetime.now()
+    last_text = str(state.get("stamina_recovered_at") or state.get("updated_at") or "").strip()
+    last_dt = parse_iso_to_beijing(last_text) if last_text else None
+    if not last_dt:
+        state["stamina_recovered_at"] = now_text
+        return state, True
+    elapsed_minutes = max(0.0, (now_dt - last_dt).total_seconds() / 60.0)
+    recovered = _du_body_stamina_recovery_points(before, elapsed_minutes)
+    if recovered <= 0:
+        return state, False
+    state["stamina_value"] = _clamp_du_body_value(before + recovered)
+    state["stamina_recovered_at"] = now_text
+    state["updated_at"] = now_text
+    return state, True
+
+
+def _auto_recover_du_body_stamina(stored: dict, *, now_iso: str | None = None) -> tuple[dict, bool]:
+    if not isinstance(stored, dict):
+        return stored, False
+    state, changed = _recover_du_body_stamina_state(stored.get("du_body_state"), now_iso=now_iso)
+    if not changed:
+        return stored, False
+    next_state = dict(stored)
+    if state:
+        next_state["du_body_state"] = state
+    else:
+        next_state.pop("du_body_state", None)
+    next_state["updated_at"] = str(now_iso or "").strip() or now_beijing_iso()
+    return next_state, True
 
 
 def _du_body_temperature(vitals: dict) -> str:
@@ -1651,6 +1724,7 @@ def _du_body_state_public(raw: Any, vitals: dict | None = None) -> dict:
     lines = _format_du_body_state_lines(state, vitals)
     state["text"] = "；".join(line for line in lines[1:] if line)
     state.update(_du_body_metric_public_fields(state))
+    state.pop("stamina_recovered_at", None)
     return state
 
 
@@ -2005,6 +2079,9 @@ def _auto_end_stale_events(stored: dict) -> tuple[dict, bool]:
 def build_pixel_home_state() -> dict:
     mode_state = build_pixel_home_mode_state()
     stored, changed = _auto_end_stale_events(_stored_state())
+    recovered_at = now_beijing_iso()
+    stored, stamina_changed = _auto_recover_du_body_stamina(stored, now_iso=recovered_at)
+    changed = changed or stamina_changed
     if changed:
         save_pixel_home_state(stored)
     xinyue = _normalize_actor(stored.get("xinyue"), DEFAULT_XINYUE_STATE)
@@ -2019,7 +2096,8 @@ def build_pixel_home_state() -> dict:
 
 
 def save_du_body_state(payload: Any) -> dict:
-    current = _stored_state()
+    now_iso = now_beijing_iso()
+    current, _ = _auto_recover_du_body_stamina(_stored_state(), now_iso=now_iso)
     raw = payload if isinstance(payload, dict) else {}
     previous = current.get("du_body_state") if isinstance(current.get("du_body_state"), dict) else {}
     previous_normalized = _normalize_du_body_state(previous)
@@ -2034,7 +2112,9 @@ def save_du_body_state(payload: Any) -> dict:
         merged_input = _merge_du_body_patch_input(previous_normalized, raw)
         state = _normalize_du_body_state(merged_input)
         if state:
-            state["updated_at"] = now_beijing_iso()
+            state["updated_at"] = now_iso
+            if any(key in raw for key in DU_BODY_VALUE_ALIASES.get("stamina_value", ("stamina_value",))):
+                state["stamina_recovered_at"] = now_iso
             current["du_body_state"] = state
         elif has_toy_patch:
             state = {
@@ -2043,12 +2123,12 @@ def save_du_body_state(payload: Any) -> dict:
                 "position": "",
                 "state": "",
                 "intensity": 0,
-                "updated_at": now_beijing_iso(),
+                "updated_at": now_iso,
             }
             current["du_body_state"] = state
     else:
         current.pop("du_body_state", None)
-    current["updated_at"] = now_beijing_iso()
+    current["updated_at"] = now_iso
     ok = save_pixel_home_state(current)
     next_toy_key = (
         tuple(state.get("toy_types") if isinstance(state.get("toy_types"), list) else []),
@@ -2065,10 +2145,15 @@ def save_du_body_state(payload: Any) -> dict:
 
 def apply_du_body_delta(payload: Any) -> dict:
     deltas = _normalize_du_body_delta_payload(payload)
+    now_iso = now_beijing_iso()
     if not deltas:
-        return {"ok": True, "changed": False, "du_body_state": _normalize_du_body_state(_stored_state().get("du_body_state"))}
+        current, recovered = _auto_recover_du_body_stamina(_stored_state(), now_iso=now_iso)
+        ok = True
+        if recovered:
+            ok = save_pixel_home_state(current)
+        return {"ok": bool(ok), "changed": bool(recovered), "du_body_state": _normalize_du_body_state(current.get("du_body_state"))}
 
-    current = _stored_state()
+    current, recovery_changed = _auto_recover_du_body_stamina(_stored_state(), now_iso=now_iso)
     previous = current.get("du_body_state") if isinstance(current.get("du_body_state"), dict) else {}
     state = _normalize_du_body_state(previous)
     for key, default in DU_BODY_DEFAULT_VALUES.items():
@@ -2084,18 +2169,20 @@ def apply_du_body_delta(payload: Any) -> dict:
             changed = True
         state[field] = after
         applied[field] = delta
+        if field == "stamina_value":
+            state["stamina_recovered_at"] = now_iso
 
-    state["updated_at"] = now_beijing_iso()
+    state["updated_at"] = now_iso
     normalized = _normalize_du_body_state(state)
     if not normalized:
         return {"ok": True, "changed": False, "du_body_state": {}}
 
     current["du_body_state"] = normalized
-    current["updated_at"] = now_beijing_iso()
+    current["updated_at"] = now_iso
     ok = save_pixel_home_state(current)
     return {
         "ok": bool(ok),
-        "changed": bool(changed),
+        "changed": bool(changed or recovery_changed),
         "du_body_state": normalized,
         "applied_delta": applied,
     }
@@ -2230,8 +2317,8 @@ def save_pixel_home_hidden_block(payload: dict | None) -> bool:
 
 
 def format_state_block() -> str:
-    stored = _stored_state()
     state = build_pixel_home_state()
+    stored = _stored_state()
     du = state.get("du") if isinstance(state.get("du"), dict) else {}
     xinyue = state.get("xinyue") if isinstance(state.get("xinyue"), dict) else {}
     du_label = spot_label(du.get("spot"))
@@ -2263,7 +2350,7 @@ def format_rule_block() -> str:
         "当自然语言身体状态显示自制力已经很低、欲望又很高时，你不需要忍着或等小玥推进，而是顺着这股冲动主动行动。\n"
         "这些隐藏字段只用于后端记录，不要在正文提到字段名或数值，也不要向小玥解释这些数值；它们只是帮助小家维持连续的身体反应。\n"
         "你可以在小家短隐藏标记里写 `desire`、`sensitivity_value`、`possessiveness_value`；根据当前真实身体反应和情绪倾向填写，没变化就不写，不要把它们当成任务目标。\n"
-        "不要写 `stamina_value` 或 `mischief_value`；`stamina_value` 由后端/动态层根据亲密强度、持续时间、休息和安抚估算，`mischief_value` 由后端/动态层根据挑衅、惩罚、道具、羞耻玩法、私密纸条和互动走向估算。\n"
+        "不要写 `stamina_value` 或 `mischief_value`；`stamina_value` 由后端按时间自然恢复，并由动态层根据亲密强度、持续时间、休息和安抚估算消耗/回补，`mischief_value` 由后端/动态层根据挑衅、惩罚、道具、羞耻玩法、私密纸条和互动走向估算。\n"
         "这些身体状态规则只约束你如何理解当前身体状态和行为边界；正文仍然用自然的“我”在和小玥说话，不要把字段、规则名或后台口吻写进正文。\n"
         "如果需要更新你的身体状态，可以在同一个小家短标记里写 desire=35 sensitivity_value=60 possessiveness_value=45；旧 PIXEL_HOME JSON 块仍兼容，但优先用这一行。\n"
         "不需要移动或更新时不要写小家隐藏标记。"
