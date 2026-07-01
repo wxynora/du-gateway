@@ -246,6 +246,16 @@ def _set_cache_control_on_block_index(blocks: list, idx: int, ttl: str) -> None:
         blocks[idx]["cache_control"] = _cache_control(ttl)
 
 
+def _copy_message_with_cache_control(msg: dict, ttl: str) -> dict:
+    out = dict(msg or {})
+    blocks = _text_blocks_from_content(out.get("content"))
+    idx = _last_text_block_index(blocks)
+    if idx >= 0:
+        _set_cache_control_on_block_index(blocks, idx, ttl)
+    out["content"] = blocks
+    return out
+
+
 def _set_cache_control_on_last_tool(body: dict, ttl: str) -> None:
     tools = (body or {}).get("tools")
     if not isinstance(tools, list) or not tools:
@@ -284,20 +294,32 @@ def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str
     pre_summary_mark_idx = -1
     summary_mark_idx = -1
 
-    for msg in leading_systems:
-        if _looks_like_dynamic_message(msg) or _looks_like_recent_summary_message(msg):
+    for msg_idx, msg in enumerate(leading_systems):
+        if _looks_like_recent_summary_message(msg):
+            volatile_systems.append(_copy_message_with_cache_control(msg, ttl))
+            continue
+        if _looks_like_dynamic_message(msg):
             volatile_systems.append(dict(msg))
             continue
         if _looks_like_summary_cache_message(msg):
             before_summary_idx = _last_text_block_index(stable_blocks)
             if before_summary_idx >= 0:
                 pre_summary_mark_idx = before_summary_idx
-            stable_text, recent_text = _split_summary_text(_message_content_text(msg))
+            next_msg = leading_systems[msg_idx + 1] if msg_idx + 1 < len(leading_systems) else {}
+            if _looks_like_recent_summary_message(next_msg):
+                stable_text, recent_text = _message_content_text(msg), ""
+            else:
+                stable_text, recent_text = _split_summary_text(_message_content_text(msg))
             if stable_text:
                 stable_blocks.append({"type": "text", "text": stable_text})
                 summary_mark_idx = len(stable_blocks) - 1
             if recent_text:
-                volatile_systems.append({"role": "system", "content": [{"type": "text", "text": recent_text}]})
+                volatile_systems.append(
+                    {
+                        "role": "system",
+                        "content": [{"type": "text", "text": recent_text, "cache_control": _cache_control(ttl)}],
+                    }
+                )
             continue
         _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
 
