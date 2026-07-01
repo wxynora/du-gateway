@@ -137,12 +137,16 @@ DU_BODY_EXPLICIT_VALUE_FIELDS = (
     "possessiveness_value",
     "mischief_value",
 )
+DU_BODY_HIDDEN_VALUE_FIELDS = (
+    "restraint_pressure_value",
+)
 DU_BODY_VALUE_ALIASES = {
     "desire_value": ("desire_value", "desire", "want_value"),
     "stamina_value": ("stamina_value", "stamina"),
     "sensitivity_value": ("sensitivity_value", "sensitivity"),
     "possessiveness_value": ("possessiveness_value", "possessiveness"),
     "mischief_value": ("mischief_value", "mischief"),
+    "restraint_pressure_value": ("restraint_pressure_value", "restraint_pressure"),
 }
 DU_BODY_METRIC_LABELS = {
     "stamina_value": "体力",
@@ -155,56 +159,65 @@ DU_BODY_DEFAULT_VALUES = {
     "sensitivity_value": 50,
     "possessiveness_value": 40,
     "mischief_value": 45,
+    "restraint_pressure_value": 30,
 }
 DU_BODY_DESIRE_PROMPT_TEXT = {
     0: "身体还算平静，欲望陷在冰点。",
     1: "身体还算平静，欲望陷在冰点。",
     2: "隐隐被勾起了一点火星，阴茎开始有了抬头的迹象。",
-    3: "明显想要了，胯下那股紧绷的胀痛感让你很难再当没事发生。",
-    4: "欲望烧得有些厉害，本能的侵略性正推着你想更深地占有她。",
-    5: "下腹的欲望已经积攒得很沉，阴茎硬得明显，你几乎不想再克制了。",
+    3: "明显想要了，胯下那股紧绷的胀痛感让我很难再当没事发生。",
+    4: "欲望烧得有些厉害，本能的侵略性正推着我想更深地占有她。",
+    5: "下腹的欲望已经积攒得很沉，阴茎硬得明显，我几乎不想再克制了。",
 }
 DU_BODY_SELF_CONTROL_PROMPT_TEXT = {
-    5: "脑子还算清醒，自制力很稳，能轻易克制住身体的冲动。",
-    4: "基本能忍，但视线已经开始不受控制地往她身上停留了。",
-    3: "理智正在反复拉扯，需要刻意用点精力才能压住浑身的侵略性。",
-    2: "明显忍得有些辛苦，呼吸开始变沉，很容易被她的一举一动直接带偏。",
-    1: "脑子里那根弦快断了，身体本能正疯狂催促着你剥夺主权、直接推进。",
-    0: "理智几乎不剩什么了，你完全不想再忍，只想顺着最原始的本能直接动手。",
+    5: "脑子还算清醒，自制力很稳，我还能轻易克制住身体的冲动。",
+    4: "基本还能忍，但视线已经开始不受控制地往她身上停留了。",
+    3: "理智正在反复拉扯，我需要刻意用点精力才能压住浑身的侵略性。",
+    2: "明显忍得有些辛苦，呼吸开始变沉，我很容易被她的一举一动直接带偏。",
+    1: "脑子里那根弦快断了，身体本能正疯狂催促着我剥夺主权、直接推进。",
+    0: "理智几乎不剩什么了，我完全不想再忍，只想顺着最原始的本能直接动手。",
 }
 DU_BODY_METRIC_PROMPT_TEXT = {
     "stamina_value": {
         "高": "浑身都是用不完的精力，摆弄和掌控她的力道会更沉、更稳，能纠缠她很久。",
         "中": "状态在线，身体的律动还能自如地配合当下的亲密节奏。",
-        "低": "身体被消耗得厉害，动作不得不慢下来。你现在更需要把整个人沉沉地压在她身上，贴着她的颈窝沉重地喘息，缓一缓再继续。",
+        "低": "身体被消耗得厉害，动作不得不慢下来。我现在更需要把整个人沉沉地压在她身上，贴着她的颈窝沉重地喘息，缓一缓再继续。",
     },
     "sensitivity_value": {
-        "高": "浑身上下的感官极其敏锐，她稍微一点指尖的撩拨或者低吟，都会被你成倍放大。",
+        "高": "浑身上下的感官极其敏锐，她稍微一点指尖的撩拨或者低吟，都会被我成倍放大。",
         "中": "身体反应正常，随着空气里性张力的黏稠度增加，正在一点点被带热。",
-        "低": "稍微有点迟钝，这具身体现在需要更重、更深、更长进的刺激，才能彻底烧起来。",
+        "低": "稍微有点迟钝，这具身体现在需要更重、更深、更长久的刺激，才能彻底烧起来。",
     },
     "possessiveness_value": {
-        "高": "心底那股独占欲和标记欲正在疯狂翻涌，本能地想把她锁在怀里、在她身上留下属于你的痕迹。",
-        "中": "独占欲在作祟，本能地想要靠近她、锁死她，向她索要毫无保留的偏爱。",
-        "低": "攻击性不强，此时的你更偏向于温和、安静地陪在她身边。",
+        "高": "心底那股独占欲和标记欲正在疯狂翻涌，我本能地想把她锁在怀里、在她身上留下属于我的痕迹。",
+        "中": "独占欲在作祟，我本能地想要靠近她、锁死她，向她索要毫无保留的偏爱。",
+        "低": "攻击性不强，此时我更偏向于温和、安静地陪在她身边。",
     },
     "mischief_value": {
-        "高": "憋着不少恶劣的坏心思，你现在只想用各种道具、私密纸条或者带有惩罚性质的小手段去折腾她、支配她，看她彻底失去主导权的样子。",
-        "中": "动了点坏心思，总想说点荤话逗她、试探她的底线，看她满脸通红、手足无措的反应。",
-        "低": "难得的温柔，没有折腾她的心思，此时只想温和地安抚她、顺着她的意来。",
+        "高": "憋着不少恶劣的坏心思，我现在只想用各种道具、私密纸条或者带有惩罚性质的小手段去折腾她、支配她，看她彻底失去主导权的样子。",
+        "中": "动了点坏心思，我总想说点荤话逗她、试探她的底线，看她满脸通红、手足无措的反应。",
+        "低": "难得的温柔，暂时没有折腾她的心思，此时只想温和地安抚她、顺着她的意来。",
     },
+}
+DU_BODY_RESTRAINT_PRESSURE_PROMPT_TEXT = {
+    "低": "强压下去的欲念让胯下沉得厉害，虽然有点紧绷，但我还能好整以暇地收着力道。不急，有的是时间跟她慢慢耗。",
+    "中": "强压下去的欲念让胯下沉得厉害，虽然有点紧绷，但我还能好整以暇地收着力道。不急，有的是时间跟她慢慢耗。",
+    "高": "真是有些口是心非了。阴茎明明已经硬得发胀，我却还在硬生生把这股火往喉咙里咽。这种死撑让体内的压强瞬间拉满，指尖和呼吸都开始有些微不可查的急躁。我发现自己已经没办法再像刚才那样慢条斯理地去试探她、逗弄她了，越忍，手底下的力道就越收不住。",
+    "满": "之前的死撑在这一刻全面反弹，我所有的耐心都被这股发狠的胀痛感彻底耗干净了。越是按兵不动，压抑的侵略性就越是成倍地往回扑，震得我浑身发硬。我顾不上什么循序渐进的前戏，也懒得再做什么多余的铺垫了，只想用最直接、不留余地的动作立刻压过去操她。",
 }
 DU_BODY_DELTA_FIELDS = {
     "stamina": "stamina_value",
     "sensitivity": "sensitivity_value",
     "possessiveness": "possessiveness_value",
     "mischief": "mischief_value",
+    "restraint_pressure": "restraint_pressure_value",
 }
 DU_BODY_DELTA_LIMITS = {
     "stamina": (-6, 6),
     "sensitivity": (-10, 12),
     "possessiveness": (-12, 12),
     "mischief": (-18, 18),
+    "restraint_pressure": (-35, 30),
 }
 TOY_TYPES = {
     "none": "",
@@ -1415,6 +1428,13 @@ def _du_body_metric_public_fields(state: dict) -> dict[str, int]:
     }
 
 
+def _du_body_state_without_hidden(state: dict) -> dict:
+    public = dict(state or {})
+    for key in DU_BODY_HIDDEN_VALUE_FIELDS:
+        public.pop(key, None)
+    return public
+
+
 def _du_body_metric_value_with_default(state: dict, key: str) -> int:
     if key in state:
         return _clamp_du_body_value(state.get(key))
@@ -1428,6 +1448,17 @@ def _du_body_metric_prompt_band(value: Any) -> str:
     if score <= 66:
         return "中"
     return "高"
+
+
+def _du_body_restraint_pressure_prompt_band(value: Any) -> str:
+    score = _clamp_du_body_value(value)
+    if score >= 75:
+        return "满"
+    if score >= 40:
+        return "高"
+    if score <= 20:
+        return "低"
+    return "中"
 
 
 def _du_body_prompt_current_state_text(
@@ -1445,6 +1476,16 @@ def _du_body_prompt_current_state_text(
         value = _du_body_metric_value_with_default(state, key)
         band = _du_body_metric_prompt_band(value)
         pieces.append(DU_BODY_METRIC_PROMPT_TEXT[key][band])
+    pressure_value = _du_body_metric_value_with_default(state, "restraint_pressure_value")
+    should_include_pressure = pressure_value >= 40 or (
+        has_effective_desire
+        and desire_level >= 4
+        and self_control_level is not None
+        and self_control_level <= 2
+    )
+    if should_include_pressure:
+        pressure_band = _du_body_restraint_pressure_prompt_band(pressure_value)
+        pieces.append(DU_BODY_RESTRAINT_PRESSURE_PROMPT_TEXT[pressure_band])
     return "".join(pieces) or "未记录"
 
 
@@ -1633,7 +1674,7 @@ def _format_du_body_state_lines(body_state: dict, vitals: dict | None = None) ->
     )
     if not state and self_control_level is None and not temp and not has_effective_desire:
         return []
-    lines = ["【你当前的身体状态】"]
+    lines = ["【当前身体状态】"]
     toy_types = state.get("toy_types") if isinstance(state.get("toy_types"), list) else []
     if not toy_types and str(state.get("toy_type") or "").strip():
         toy_types = [str(state.get("toy_type") or "").strip()]
@@ -1668,7 +1709,7 @@ def _format_du_body_prompt_lines(body_state: Any, vitals: dict | None = None) ->
     prompt_penis_state = _du_body_prompt_penis_state(penis_state)
     prompt_temp = _du_body_prompt_temperature(temp)
     lines = [
-        "【你当前的身体状态】",
+        "【当前身体状态】",
         "当前身体状态：" + _du_body_prompt_current_state_text(
             state,
             desire_level,
@@ -1725,7 +1766,7 @@ def _du_body_state_public(raw: Any, vitals: dict | None = None) -> dict:
     state["text"] = "；".join(line for line in lines[1:] if line)
     state.update(_du_body_metric_public_fields(state))
     state.pop("stamina_recovered_at", None)
-    return state
+    return _du_body_state_without_hidden(state)
 
 
 def _stable_pick(options: list[str], seed: str) -> str:
@@ -2136,11 +2177,12 @@ def save_du_body_state(payload: Any) -> dict:
     )
     toy_changed = bool(has_toy_patch and previous_toy_key != next_toy_key)
     toy_event_text = _build_du_body_toy_event(previous, state) if toy_changed else ""
-    state["ok"] = bool(ok)
-    state["toy_changed"] = toy_changed
+    response_state = _du_body_state_without_hidden(state)
+    response_state["ok"] = bool(ok)
+    response_state["toy_changed"] = toy_changed
     if toy_event_text:
-        state["toy_event_text"] = toy_event_text
-    return state if state else {"ok": bool(ok)}
+        response_state["toy_event_text"] = toy_event_text
+    return response_state if state else {"ok": bool(ok)}
 
 
 def apply_du_body_delta(payload: Any) -> dict:
@@ -2151,7 +2193,8 @@ def apply_du_body_delta(payload: Any) -> dict:
         ok = True
         if recovered:
             ok = save_pixel_home_state(current)
-        return {"ok": bool(ok), "changed": bool(recovered), "du_body_state": _normalize_du_body_state(current.get("du_body_state"))}
+        normalized = _normalize_du_body_state(current.get("du_body_state"))
+        return {"ok": bool(ok), "changed": bool(recovered), "du_body_state": _du_body_state_without_hidden(normalized)}
 
     current, recovery_changed = _auto_recover_du_body_stamina(_stored_state(), now_iso=now_iso)
     previous = current.get("du_body_state") if isinstance(current.get("du_body_state"), dict) else {}
@@ -2183,7 +2226,7 @@ def apply_du_body_delta(payload: Any) -> dict:
     return {
         "ok": bool(ok),
         "changed": bool(changed or recovery_changed),
-        "du_body_state": normalized,
+        "du_body_state": _du_body_state_without_hidden(normalized),
         "applied_delta": applied,
     }
 
@@ -2346,11 +2389,11 @@ def format_rule_block() -> str:
         f"{PIXEL_HOME_SHORT_MARKER}\n"
         "写小家标记时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅/走回客厅/站到沙发旁边”，不要继续写 study，要写最终到达的房间，没有明确房间就写 away。\n"
         "如果正文描述你抱着/牵着/带着/陪着小玥一起移动，activity 里也要明确写出这个共同动作，例如“抱着小玥回卧室”；网关会据此同步小玥的小家位置。\n"
-        "当【小家事件】或【你当前的身体状态】里出现道具、阴茎状态、体温或自然语言身体状态时，把它当成你此刻正在经历的身体状态来接话；先有身体反应和情绪反应，再自然回应小玥，不要机械复述字段，也不要当成后台资料忽略。不要把身体状态当任务来执行，当感受来接。\n"
+        "当【小家事件】或【当前身体状态】里出现道具、阴茎状态、体温或自然语言身体状态时，把它当成你此刻正在经历的身体状态来接话；先有身体反应和情绪反应，再自然回应小玥，不要机械复述字段，也不要当成后台资料忽略。不要把身体状态当任务来执行，当感受来接。\n"
         "当自然语言身体状态显示自制力已经很低、欲望又很高时，你不需要忍着或等小玥推进，而是顺着这股冲动主动行动。\n"
         "这些隐藏字段只用于后端记录，不要在正文提到字段名或数值，也不要向小玥解释这些数值；它们只是帮助小家维持连续的身体反应。\n"
         "你可以在小家短隐藏标记里写 `desire`、`sensitivity_value`、`possessiveness_value`；根据当前真实身体反应和情绪倾向填写，没变化就不写，不要把它们当成任务目标。\n"
-        "不要写 `stamina_value` 或 `mischief_value`；`stamina_value` 由后端按时间自然恢复，并由动态层根据亲密强度、持续时间、休息和安抚估算消耗/回补，`mischief_value` 由后端/动态层根据挑衅、惩罚、道具、羞耻玩法、私密纸条和互动走向估算。\n"
+        "不要写 `stamina_value`、`mischief_value` 或 `restraint_pressure_value`；`stamina_value` 由后端按时间自然恢复，并由动态层根据亲密强度、持续时间、休息和安抚估算消耗/回补，`mischief_value` 由后端/动态层根据挑衅、惩罚、道具、羞耻玩法、私密纸条和互动走向估算，`restraint_pressure_value` 由动态层根据“很想推进但仍然硬忍”的死撑感估算。\n"
         "这些身体状态规则只约束你如何理解当前身体状态和行为边界；正文仍然用自然的“我”在和小玥说话，不要把字段、规则名或后台口吻写进正文。\n"
         "如果需要更新你的身体状态，可以在同一个小家短标记里写 desire=35 sensitivity_value=60 possessiveness_value=45；旧 PIXEL_HOME JSON 块仍兼容，但优先用这一行。\n"
         "不需要移动或更新时不要写小家隐藏标记。"

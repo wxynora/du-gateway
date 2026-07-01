@@ -98,6 +98,28 @@ def _resolve_sumitalk_target_device_id(preferred: str = "") -> str:
     return pref
 
 
+def _post_spring_dream_prompt_override_for_trigger(wakeup_kind: str, created_at: str | None = None) -> dict:
+    if str(wakeup_kind or "").strip() != "proactive_trigger":
+        return {}
+    now_dt = parse_iso_to_beijing(str(created_at or "").strip()) or parse_iso_to_beijing(now_beijing_iso())
+    if not now_dt:
+        return {}
+    try:
+        from services.spring_dream import maybe_prepare_post_spring_dream_wakeup
+
+        prepared = maybe_prepare_post_spring_dream_wakeup(
+            now_dt=now_dt,
+            require_sleeping=False,
+            clear_on_empty_prompt=False,
+        )
+    except Exception:
+        logger.warning("post_spring_dream prompt override lookup failed", exc_info=True)
+        return {}
+    if not isinstance(prepared, dict) or not str(prepared.get("prompt") or "").strip():
+        return {}
+    return prepared
+
+
 def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, created_at: str | None = None) -> bool:
     from routes.miniapp.sumitalk_history import (
         _SUMITALK_HISTORY_LOCK,
@@ -596,9 +618,13 @@ def _send_wakeup_event(
     context_window_id = str(window_id or "").strip()
     if not context_window_id:
         return {"ok": False, "error": "missing_window_id"}
+    kind = str(wakeup_kind or "").strip()
     prompt = str(event_text or "").strip()
     if not prompt:
         return {"ok": False, "error": "empty_event"}
+    post_spring_prompt_override = _post_spring_dream_prompt_override_for_trigger(kind, created_at)
+    if post_spring_prompt_override:
+        prompt = str(post_spring_prompt_override.get("prompt") or "").strip() or prompt
     preferred_channel, preferred_target, preferred_meta = _choice_dialog_delivery_preference(target)
     override_channel = _normalize_reply_channel(preferred_channel_override, default="", allow_tg=True)
     if override_channel:
@@ -656,7 +682,6 @@ def _send_wakeup_event(
         "X-Skip-Post-Archive-Dynamic-Memory": "1",
         "X-Force-Last4": "1",
     }
-    kind = str(wakeup_kind or "").strip()
     if kind:
         headers["X-DU-WAKEUP-KIND"] = kind
     if archive and not archive_after_delivery:
@@ -759,6 +784,13 @@ def _send_wakeup_event(
                     except Exception:
                         spring_archive = {"ok": False, "error": "exception"}
                         logger.warning("春梦专用存档异常 window_id=%s channel=%s", context_window_id, channel, exc_info=True)
+                if post_spring_prompt_override:
+                    try:
+                        from services.spring_dream import record_post_spring_dream_wakeup_sent
+
+                        record_post_spring_dream_wakeup_sent(post_spring_prompt_override, sent_at=now_beijing_iso())
+                    except Exception:
+                        logger.warning("post_spring_dream prompt override clear failed window_id=%s", context_window_id, exc_info=True)
                 return {
                     "ok": True,
                     "channel": channel,
