@@ -161,6 +161,8 @@ DU_BODY_DEFAULT_VALUES = {
     "mischief_value": 45,
     "restraint_pressure_value": 30,
 }
+DU_BODY_MISCHIEF_BASELINE = DU_BODY_DEFAULT_VALUES["mischief_value"]
+DU_BODY_MISCHIEF_MILD_COOLDOWN_MIN_DELTA = -3
 DU_BODY_DESIRE_PROMPT_TEXT = {
     0: "身体还算平静，欲望陷在冰点。",
     1: "身体还算平静，欲望陷在冰点。",
@@ -1088,6 +1090,17 @@ def _coerce_du_body_delta_value(value: Any, key: str) -> int:
         delta = 0
     low, high = DU_BODY_DELTA_LIMITS.get(key, (-20, 20))
     return max(low, min(high, delta))
+
+
+def _apply_du_body_delta_value(field: str, before: int, delta: int) -> int:
+    if (
+        field == "mischief_value"
+        and DU_BODY_MISCHIEF_MILD_COOLDOWN_MIN_DELTA <= delta < 0
+    ):
+        if before <= DU_BODY_MISCHIEF_BASELINE:
+            return before
+        return max(DU_BODY_MISCHIEF_BASELINE, _clamp_du_body_value(before + delta))
+    return _clamp_du_body_value(before + delta)
 
 
 def _du_body_value_from_data(data: dict, field: str) -> tuple[bool, int]:
@@ -2207,7 +2220,7 @@ def apply_du_body_delta(payload: Any) -> dict:
     applied: dict[str, int] = {}
     for field, delta in deltas.items():
         before = _clamp_du_body_value(state.get(field))
-        after = _clamp_du_body_value(before + delta)
+        after = _apply_du_body_delta_value(field, before, delta)
         if after != before:
             changed = True
         state[field] = after
