@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import os
 import queue
 import re
 import threading
@@ -941,12 +942,14 @@ def _pioneer_session_component(value: object, limit: int) -> str:
 
 
 def _build_pioneer_session_id(body: dict, headers: dict) -> str:
+    salt = os.getenv("PIONEER_SESSION_ID_SALT", "v2").strip() or "v2"
     model = str((body or {}).get("model") or "").strip() or "model"
     window_id = str((headers or {}).get("X-Window-Id") or (body or {}).get("window_id") or "__default__").strip()
     channel = str((headers or {}).get("X-Reply-Channel") or "chat").strip().lower()
-    digest_src = f"{channel}\n{model}\n{window_id}"
+    digest_src = f"{salt}\n{channel}\n{model}\n{window_id}"
     digest = hashlib.sha256(digest_src.encode("utf-8")).hexdigest()[:16]
-    return "du-gateway:{channel}:{model}:{window}:{digest}".format(
+    return "du-gateway:{salt}:{channel}:{model}:{window}:{digest}".format(
+        salt=_pioneer_session_component(salt, 32),
         channel=_pioneer_session_component(channel, 32),
         model=_pioneer_session_component(model, 64),
         window=_pioneer_session_component(window_id, 96),
