@@ -1,6 +1,7 @@
 # 聊天代理：统一走完整管道（清洗、注入、转发、存档），无开头过滤
 # 项目约定：主聊天禁止默认兜底模型。没传 model 就直接报错，不要偷偷补 DEFAULT_CHAT_MODEL / GATEWAY_MODELS[0] / gpt-4。
 import base64
+import hashlib
 import json
 import queue
 import re
@@ -931,6 +932,34 @@ def _skip_claude_thinking_carryover_request() -> bool:
     return (request.headers.get("X-Skip-Claude-Thinking-Carryover") or "").strip().lower() in ("1", "true", "yes")
 
 
+def _pioneer_session_component(value: object, limit: int) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"[^A-Za-z0-9_.:-]+", "_", text).strip("._:-")
+    if not text:
+        text = "default"
+    return text[:limit]
+
+
+def _build_pioneer_session_id(body: dict, headers: dict) -> str:
+    model = str((body or {}).get("model") or "").strip() or "model"
+    window_id = str((headers or {}).get("X-Window-Id") or (body or {}).get("window_id") or "__default__").strip()
+    channel = str((headers or {}).get("X-Reply-Channel") or "chat").strip().lower()
+    digest_src = f"{channel}\n{model}\n{window_id}"
+    digest = hashlib.sha256(digest_src.encode("utf-8")).hexdigest()[:16]
+    return "du-gateway:{channel}:{model}:{window}:{digest}".format(
+        channel=_pioneer_session_component(channel, 32),
+        model=_pioneer_session_component(model, 64),
+        window=_pioneer_session_component(window_id, 96),
+        digest=digest,
+    )[:240]
+
+
+def _attach_pioneer_session_id_header(req_headers: dict, body: dict, headers: dict, target_url: str) -> None:
+    if not is_pioneer_url(target_url):
+        return
+    req_headers["X-Session-Id"] = _build_pioneer_session_id(body, headers)
+
+
 def _stream_forward_to_ai(body: dict, headers: dict):
     """流式转发：上游 SSE 原样逐行 yield；不再自动 fallback。"""
     request_model = (body or {}).get("model") or ""
@@ -985,6 +1014,7 @@ def _stream_forward_to_ai(body: dict, headers: dict):
                 )
             if is_cf_anthropic:
                 h = _cloudflare_anthropic_headers(h, target_url, api_key)
+            _attach_pioneer_session_id_header(h, body_send, headers, target_url)
             # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(target_url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
@@ -1460,6 +1490,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                 )
             if is_cf_anthropic:
                 req_headers = _cloudflare_anthropic_headers(req_headers, target_url, api_key)
+            _attach_pioneer_session_id_header(req_headers, body_send, headers, target_url)
             is_sumitalk_forward = str(headers.get("X-Reply-Channel") or request.headers.get("X-Reply-Channel") or "").strip().lower() == "sumitalk"
             upstream_started = time.time()
             if is_sumitalk_forward:
@@ -1669,6 +1700,7 @@ def chat_completions():
     window_id = _get_window_id_from_request(body)
     # 未传 id 的客户端（如 RikkaHub）与 R2 主存 __default__ 对齐，否则轮次恒为 1、总结永不触发
     window_id = r2_store.normalize_window_id(window_id)
+    headers["X-Window-Id"] = window_id
     sumitalk_job_id = (
         str(request.headers.get("X-SumiTalk-Job-Id") or "").strip()
         if is_sumitalk_request
