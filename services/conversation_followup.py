@@ -566,7 +566,8 @@ def _archive_wakeup_after_delivery(
                 round_index=int(archived.get("round_index") or 0),
                 round_messages=archived.get("round_messages") or [archive_user, archive_assistant],
                 reply_channel=str(reply_channel or "").strip(),
-                skip_dynamic_layer=True,
+                skip_dynamic_memory_write=True,
+                skip_body_delta=False,
             )
             if str(reply_channel or "").strip().lower() == "sumitalk":
                 try:

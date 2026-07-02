@@ -808,6 +808,13 @@ def _skip_post_archive_dynamic_memory_request() -> bool:
     return _truthy_header("X-Skip-Post-Archive-Dynamic-Memory") or _is_million_plan_request()
 
 
+def _skip_post_archive_body_delta_request() -> bool:
+    return (
+        _truthy_header("X-Skip-Post-Archive-Body-Delta")
+        or _is_million_plan_request()
+    )
+
+
 def _million_plan_turn_id_from_request() -> str:
     raw = str(request.headers.get("X-Million-Plan-Turn-Id") or "").strip()
     if not raw:
@@ -1062,7 +1069,8 @@ def _stream_with_r2_archive(
     window_id: str = "",
     du_daily_trigger: Optional[dict] = None,
     dynamic_memory_citation_map: Optional[dict] = None,
-    skip_post_archive_dynamic_memory: bool = False,
+    skip_post_archive_dynamic_memory_write: bool = False,
+    skip_post_archive_body_delta: bool = False,
 ):
     """
     包装流式响应：原样转发 SSE，同时在流结束后用收集到的 content 写 R2。
@@ -1227,7 +1235,8 @@ def _stream_with_r2_archive(
                     body.get("messages") or [],
                     msg,
                     round_cleaned_for_r2=round_cleaned,
-                    skip_dynamic_layer=skip_post_archive_dynamic_memory,
+                    skip_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
+                    skip_body_delta=skip_post_archive_body_delta,
                 )
                 try:
                     from services.notion_write_from_assistant import process_assistant_content_for_notion_write
@@ -1442,7 +1451,8 @@ def _stream_with_r2_archive(
                 current_body.get("messages") or [],
                 msg,
                 round_cleaned_for_r2=round_cleaned,
-                skip_dynamic_layer=skip_post_archive_dynamic_memory,
+                skip_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
+                skip_body_delta=skip_post_archive_body_delta,
             )
             try:
                 from services.notion_write_from_assistant import process_assistant_content_for_notion_write
@@ -1877,7 +1887,8 @@ def chat_completions():
     if slim_voice_call:
         body = _inject_voice_call_style_system(body)
     skip_dynamic_memory = _skip_dynamic_memory_request()
-    skip_post_archive_dynamic_memory = _skip_post_archive_dynamic_memory_request()
+    skip_post_archive_dynamic_memory_write = _skip_post_archive_dynamic_memory_request()
+    skip_post_archive_body_delta = _skip_post_archive_body_delta_request()
     du_daily_maintenance = _is_du_daily_maintenance_request()
     du_daily_trigger = build_du_daily_trigger(window_id, body, headers)
     if not du_daily_maintenance and not _is_gateway_wakeup_request():
@@ -1969,7 +1980,8 @@ def chat_completions():
                 window_id,
                 du_daily_trigger=du_daily_trigger,
                 dynamic_memory_citation_map=dynamic_memory_citation_map,
-                skip_post_archive_dynamic_memory=skip_post_archive_dynamic_memory,
+                skip_post_archive_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
+                skip_post_archive_body_delta=skip_post_archive_body_delta,
             )
         )
     resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
@@ -2352,7 +2364,8 @@ def chat_completions():
                             round_index=int(archived.get("round_index") or 0),
                             round_messages=archived.get("round_messages") or round_cleaned,
                             reply_channel=reply_channel,
-                            skip_dynamic_layer=skip_post_archive_dynamic_memory,
+                            skip_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
+                            skip_body_delta=skip_post_archive_body_delta,
                         )
                 else:
                     step_archive_and_maybe_summary(
@@ -2360,7 +2373,8 @@ def chat_completions():
                         archive_messages,
                         msg_for_r2,
                         round_cleaned_for_r2=round_cleaned,
-                        skip_dynamic_layer=skip_post_archive_dynamic_memory,
+                        skip_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
+                        skip_body_delta=skip_post_archive_body_delta,
                     )
             else:
                 if reply_channel in _NONSTREAM_FAST_RETURN_CHANNELS:
@@ -2371,14 +2385,16 @@ def chat_completions():
                             round_index=int(archived.get("round_index") or 0),
                             round_messages=archived.get("round_messages") or [],
                             reply_channel=reply_channel,
-                            skip_dynamic_layer=skip_post_archive_dynamic_memory,
+                            skip_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
+                            skip_body_delta=skip_post_archive_body_delta,
                         )
                 else:
                     step_archive_and_maybe_summary(
                         window_id,
                         archive_messages,
                         msg_for_r2,
-                        skip_dynamic_layer=skip_post_archive_dynamic_memory,
+                        skip_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
+                        skip_body_delta=skip_post_archive_body_delta,
                     )
     else:
         logger.info("R2 未存档：上游无 choices 或响应为空")

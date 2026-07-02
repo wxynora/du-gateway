@@ -14,7 +14,8 @@ def run_nonstream_post_archive_in_background(
     round_index: int,
     round_messages: list,
     reply_channel: str = "",
-    skip_dynamic_layer: bool = False,
+    skip_dynamic_memory_write: bool = False,
+    skip_body_delta: bool = False,
 ) -> None:
     """非流式入口已同步写入 R2 后，只把总结/动态层等慢任务放后台。"""
 
@@ -24,14 +25,16 @@ def run_nonstream_post_archive_in_background(
                 window_id,
                 round_index,
                 round_messages,
-                skip_dynamic_layer=skip_dynamic_layer,
+                skip_dynamic_memory_write=skip_dynamic_memory_write,
+                skip_body_delta=skip_body_delta,
             )
             logger.info(
-                "非流式后台慢任务完成 window_id=%s channel=%s round_index=%s skip_dynamic_layer=%s",
+                "非流式后台慢任务完成 window_id=%s channel=%s round_index=%s skip_dynamic_memory_write=%s skip_body_delta=%s",
                 window_id,
                 reply_channel,
                 round_index,
-                skip_dynamic_layer,
+                skip_dynamic_memory_write,
+                skip_body_delta,
             )
         except Exception:
             logger.warning(

@@ -3361,7 +3361,14 @@ def _apply_dynamic_body_delta(decision: dict, *, window_id: str, round_index: in
         )
 
 
-def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages: list) -> Optional[dict]:
+def _step_dynamic_layer_evolve(
+    window_id: str,
+    round_index: int,
+    round_messages: list,
+    *,
+    skip_dynamic_memory_write: bool = False,
+    skip_body_delta: bool = False,
+) -> Optional[dict]:
     """
     动态层演化：调用 DS 得单条决策并应用。返回若应写记忆库则返回 archive 载荷，否则 None（实时对话忽略返回值）。
     """
@@ -3382,9 +3389,10 @@ def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages:
     from services.dynamic_layer_ds import call_dynamic_layer_ds
 
     current_memories = r2_store.get_dynamic_memory_list()
-    current_memories, changed = r2_store.ensure_dynamic_memory_ids(current_memories)
-    if changed:
-        r2_store.save_dynamic_memory_list(current_memories)
+    if not skip_dynamic_memory_write:
+        current_memories, changed = r2_store.ensure_dynamic_memory_ids(current_memories)
+        if changed:
+            r2_store.save_dynamic_memory_list(current_memories)
 
     decision = call_dynamic_layer_ds(
         round_messages,
@@ -3392,8 +3400,25 @@ def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages:
         window_id=window_id,
         round_index=round_index,
     )
-    archive_payload = _apply_one_decision(window_id, round_index, round_messages, decision, current_memories)
-    _apply_dynamic_body_delta(decision, window_id=window_id, round_index=round_index)
+    archive_payload = None
+    if skip_dynamic_memory_write:
+        logger.info(
+            "动态层记忆写入跳过 window_id=%s round_index=%s action=%s",
+            window_id,
+            round_index,
+            decision.get("action") if isinstance(decision, dict) else "",
+        )
+    else:
+        archive_payload = _apply_one_decision(window_id, round_index, round_messages, decision, current_memories)
+    if skip_body_delta:
+        logger.info(
+            "动态层 BODY delta 跳过 window_id=%s round_index=%s body_delta=%s",
+            window_id,
+            round_index,
+            decision.get("body_delta") if isinstance(decision, dict) else {},
+        )
+    else:
+        _apply_dynamic_body_delta(decision, window_id=window_id, round_index=round_index)
     return archive_payload
 
 
@@ -3402,7 +3427,8 @@ def step_archive_and_maybe_summary(
     request_messages: list,
     assistant_message: dict,
     round_cleaned_for_r2: Optional[list] = None,
-    skip_dynamic_layer: bool = False,
+    skip_dynamic_memory_write: bool = False,
+    skip_body_delta: bool = False,
 ) -> None:
     """
     存档本轮对话到 R2（完整清洗版）；每 4 轮异步更新实时层「渡的回忆」；动态层演化占位。
@@ -3422,7 +3448,8 @@ def step_archive_and_maybe_summary(
         window_id,
         archived["round_index"],
         archived["round_messages"],
-        skip_dynamic_layer=skip_dynamic_layer,
+        skip_dynamic_memory_write=skip_dynamic_memory_write,
+        skip_body_delta=skip_body_delta,
     )
 
 
@@ -3591,7 +3618,8 @@ def step_run_post_archive_tasks(
     round_index: int,
     round_messages: list,
     *,
-    skip_dynamic_layer: bool = False,
+    skip_dynamic_memory_write: bool = False,
+    skip_body_delta: bool = False,
 ) -> None:
     """本轮已写入 R2 后执行实时层总结与动态层演化等慢任务。"""
     # 实时层：每 4 轮 → DS 总结成「渡的回忆」（第一人称、详细版）
@@ -3649,8 +3677,18 @@ def step_run_post_archive_tasks(
             daemon=False,
         )
         t.start()
-    if skip_dynamic_layer:
-        logger.info("动态层跳过：请求要求跳过归档后动态层 window_id=%s round_index=%s", window_id, round_index)
+    if skip_dynamic_memory_write and skip_body_delta:
+        logger.info(
+            "动态层跳过：请求要求跳过动态记忆与 BODY delta window_id=%s round_index=%s",
+            window_id,
+            round_index,
+        )
         return None
     # 动态层演化：调用 DS 产出 tag/融合等结果；网关决定是否写入动态层
-    _step_dynamic_layer_evolve(window_id, round_index, round_messages)
+    _step_dynamic_layer_evolve(
+        window_id,
+        round_index,
+        round_messages,
+        skip_dynamic_memory_write=skip_dynamic_memory_write,
+        skip_body_delta=skip_body_delta,
+    )
