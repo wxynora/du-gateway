@@ -276,7 +276,7 @@ def _append_pioneer_volatile_context_blocks(target: list[dict], content) -> None
         target.append({"type": "text", "text": text})
 
 
-def _pioneer_volatile_context_message(blocks: list[dict]) -> dict | None:
+def _pioneer_clean_volatile_context_blocks(blocks: list[dict]) -> list[dict]:
     clean_blocks: list[dict] = []
     for block in blocks:
         if not isinstance(block, dict):
@@ -291,9 +291,26 @@ def _pioneer_volatile_context_message(blocks: list[dict]) -> dict | None:
         if not str(item.get("text") or "").strip():
             continue
         clean_blocks.append(item)
+    return clean_blocks
+
+
+def _prepend_pioneer_volatile_context(messages: list[dict], blocks: list[dict]) -> list[dict]:
+    clean_blocks = _pioneer_clean_volatile_context_blocks(blocks)
     if not clean_blocks:
-        return None
-    return {"role": "user", "content": clean_blocks}
+        return messages
+    out = [dict(msg) if isinstance(msg, dict) else msg for msg in messages]
+    for idx, msg in enumerate(out):
+        if not isinstance(msg, dict) or str(msg.get("role") or "").strip().lower() != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            original_blocks = _text_blocks_from_content(content)
+        else:
+            original_text = str(content or "")
+            original_blocks = [{"type": "text", "text": original_text}] if original_text else []
+        msg["content"] = [*clean_blocks, *original_blocks]
+        return out
+    return [{"role": "user", "content": clean_blocks}, *out]
 
 
 def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str) -> list[dict]:
@@ -351,10 +368,7 @@ def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str
     normalized: list[dict] = []
     if stable_blocks:
         normalized.append({"role": "system", "content": stable_blocks})
-    volatile_context = _pioneer_volatile_context_message(volatile_context_blocks)
-    if volatile_context:
-        normalized.append(volatile_context)
-    normalized.extend(messages[rest_start:])
+    normalized.extend(_prepend_pioneer_volatile_context(messages[rest_start:], volatile_context_blocks))
     _strip_gateway_cache_markers(normalized)
     return normalized
 
