@@ -125,6 +125,11 @@ function commentPrefix(comment: DiaryComment, comments: DiaryComment[]): string 
   return parent ? `${from} 回复 ${authorLabel(parent.author)}` : `${from} 回复`;
 }
 
+function commentPreview(value: string, max = 32): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
 function emptyDraft(author: Author): EditorDraft {
   return { author, title: "", emoji: "✦", content: "" };
 }
@@ -142,6 +147,7 @@ export function ExchangeDiaryTab({
   const [draft, setDraft] = useState<EditorDraft | null>(null);
   const [commentDraft, setCommentDraft] = useState("");
   const [commentRequestId, setCommentRequestId] = useState("");
+  const [replyTargetId, setReplyTargetId] = useState("");
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
@@ -157,6 +163,10 @@ export function ExchangeDiaryTab({
   const selected = useMemo(
     () => entries.find((entry) => entry.id === selectedId) || null,
     [entries, selectedId],
+  );
+  const replyTarget = useMemo(
+    () => selected?.comments.find((comment) => comment.id === replyTargetId) || null,
+    [selected, replyTargetId],
   );
 
   async function loadEntries(author: Author = activeAuthor, cursor = "") {
@@ -210,6 +220,7 @@ export function ExchangeDiaryTab({
     setSelectedId(id);
     setCommentDraft("");
     setCommentRequestId("");
+    setReplyTargetId("");
     setDetailLoading(true);
     setDetailError("");
     try {
@@ -241,6 +252,7 @@ export function ExchangeDiaryTab({
       setSelectedId(null);
       setCommentDraft("");
       setCommentRequestId("");
+      setReplyTargetId("");
       setDetailLoading(false);
       setDetailError("");
       return true;
@@ -263,6 +275,11 @@ export function ExchangeDiaryTab({
     setError("");
     void loadEntries(activeAuthor);
   }, [activeAuthor]);
+
+  useEffect(() => {
+    if (!replyTargetId || !selected) return;
+    if (!selected.comments.some((comment) => comment.id === replyTargetId)) setReplyTargetId("");
+  }, [replyTargetId, selected]);
 
   function handleBack() {
     if (closeTopLayer()) return;
@@ -346,6 +363,9 @@ export function ExchangeDiaryTab({
       await apiJson<ItemResp>(`${EXCHANGE_DIARY_API}/${encodeURIComponent(id)}`, { method: "DELETE" });
       setEntries((prev) => prev.filter((entry) => entry.id !== id));
       setSelectedId(null);
+      setCommentDraft("");
+      setCommentRequestId("");
+      setReplyTargetId("");
       setDraft(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -360,13 +380,16 @@ export function ExchangeDiaryTab({
     if (!content) return;
     const requestId = commentRequestId || makeId("exchange_diary_comment");
     if (!commentRequestId) setCommentRequestId(requestId);
+    const replyToCommentId = entry.comments.some((comment) => comment.id === replyTargetId) ? replyTargetId : "";
+    const payload: Record<string, string> = { author: "xy", content, client_request_id: requestId };
+    if (replyToCommentId) payload.reply_to_comment_id = replyToCommentId;
     setSaving(true);
     setError("");
     try {
       const data = await apiJson<ItemResp>(`${EXCHANGE_DIARY_API}/${encodeURIComponent(entry.id)}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ author: "xy", content, client_request_id: requestId }),
+        body: JSON.stringify(payload),
       });
       const item = data.item ? fromApiEntry(data.item) : null;
       if (item) {
@@ -374,6 +397,7 @@ export function ExchangeDiaryTab({
       }
       setCommentDraft("");
       setCommentRequestId("");
+      setReplyTargetId("");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -474,6 +498,7 @@ export function ExchangeDiaryTab({
             setSelectedId(null);
             setCommentDraft("");
             setCommentRequestId("");
+            setReplyTargetId("");
           }}
         >
           <div className="exchange-diary-detail-card" onClick={(event) => event.stopPropagation()}>
@@ -498,30 +523,59 @@ export function ExchangeDiaryTab({
                 >
                   <div className="exchange-diary-comment-meta">
                     <strong>{commentPrefix(comment, selected.comments)}</strong>
-                    {comment.createdAt ? <span>{comment.createdAt}</span> : null}
+                    <div className="exchange-diary-comment-tools">
+                      {comment.createdAt ? <span>{comment.createdAt}</span> : null}
+                      <button
+                        className="exchange-diary-comment-reply-btn"
+                        type="button"
+                        onClick={() => setReplyTargetId(comment.id)}
+                        disabled={saving}
+                      >
+                        回复
+                      </button>
+                    </div>
                   </div>
                   <div className="exchange-diary-comment-content">{comment.content}</div>
                 </div>
               ))}
               <div className="exchange-diary-comment-box">
+                {replyTarget ? (
+                  <div className="exchange-diary-replying-to">
+                    <span>回复 {authorLabel(replyTarget.author)}：{commentPreview(replyTarget.content)}</span>
+                    <button type="button" onClick={() => setReplyTargetId("")} disabled={saving}>取消</button>
+                  </div>
+                ) : null}
                 <textarea
                   value={commentDraft}
                   onChange={(event) => {
                     setCommentDraft(event.target.value);
                     setCommentRequestId("");
                   }}
-                  placeholder="写一句评论..."
+                  placeholder={replyTarget ? "写一句回复..." : "写一句评论..."}
                   rows={2}
                   disabled={saving}
                 />
-                <button type="button" onClick={() => addComment(selected)} disabled={saving || !commentDraft.trim()}>保存评论</button>
+                <button type="button" onClick={() => addComment(selected)} disabled={saving || !commentDraft.trim()}>
+                  {replyTarget ? "保存回复" : "保存评论"}
+                </button>
               </div>
             </div>
 
             <div className="exchange-diary-actions">
               <button className="exchange-diary-action-link" type="button" onClick={() => openEdit(selected)}>Edit</button>
               <button className="exchange-diary-action-link" type="button" onClick={() => deleteEntry(selected.id)} disabled={saving}>Delete</button>
-              <button className="exchange-diary-action-link push-right" type="button" onClick={() => setSelectedId(null)}>Close</button>
+              <button
+                className="exchange-diary-action-link push-right"
+                type="button"
+                onClick={() => {
+                  setSelectedId(null);
+                  setCommentDraft("");
+                  setCommentRequestId("");
+                  setReplyTargetId("");
+                }}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
@@ -1037,6 +1091,22 @@ function ExchangeDiaryStyles() {
         font-size: 11px;
       }
 
+      .exchange-diary-comment-tools {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .exchange-diary-comment-reply-btn {
+        border: none;
+        background: transparent;
+        padding: 0;
+        color: var(--text-light);
+        font-size: 11px;
+        line-height: 1.2;
+      }
+
       .exchange-diary-comment-content {
         line-height: 1.7;
       }
@@ -1045,6 +1115,27 @@ function ExchangeDiaryStyles() {
         margin-top: 14px;
         display: grid;
         gap: 10px;
+      }
+
+      .exchange-diary-replying-to {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        border-left: 2px solid rgba(203, 161, 145, 0.42);
+        background: rgba(255,255,255,0.56);
+        color: var(--text-light);
+        padding: 7px 9px;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .exchange-diary-replying-to span {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .exchange-diary-comment-box textarea,
@@ -1067,6 +1158,16 @@ function ExchangeDiaryStyles() {
         color: var(--text-main);
         padding: 7px 14px;
         font-size: 12px;
+      }
+
+      .exchange-diary-comment-box .exchange-diary-replying-to button {
+        flex: 0 0 auto;
+        justify-self: auto;
+        border: none;
+        background: transparent;
+        color: var(--text-light);
+        padding: 0;
+        font-size: 11px;
       }
 
       .exchange-diary-actions {
