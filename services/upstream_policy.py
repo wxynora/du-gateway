@@ -246,16 +246,6 @@ def _set_cache_control_on_block_index(blocks: list, idx: int, ttl: str) -> None:
         blocks[idx]["cache_control"] = _cache_control(ttl)
 
 
-def _copy_message_with_cache_control(msg: dict, ttl: str) -> dict:
-    out = dict(msg or {})
-    blocks = _text_blocks_from_content(out.get("content"))
-    idx = _last_text_block_index(blocks)
-    if idx >= 0:
-        _set_cache_control_on_block_index(blocks, idx, ttl)
-    out["content"] = blocks
-    return out
-
-
 def _set_cache_control_on_last_tool(body: dict, ttl: str) -> None:
     tools = (body or {}).get("tools")
     if not isinstance(tools, list) or not tools:
@@ -276,6 +266,36 @@ def _strip_gateway_cache_markers(messages: list[dict]) -> None:
         msg.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
 
 
+def _append_pioneer_volatile_context_blocks(target: list[dict], content) -> None:
+    before = len(target)
+    _append_text_blocks_without_cache(target, content)
+    if len(target) > before:
+        return
+    text = _message_content_text({"content": content}).strip()
+    if text:
+        target.append({"type": "text", "text": text})
+
+
+def _pioneer_volatile_context_message(blocks: list[dict]) -> dict | None:
+    clean_blocks: list[dict] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        item = dict(block)
+        item.pop("cache_control", None)
+        item.pop(_DYNAMIC_SYSTEM_MARKER, None)
+        item.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
+        item.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
+        if str(item.get("type") or "").strip().lower() not in {"text", "input_text"}:
+            continue
+        if not str(item.get("text") or "").strip():
+            continue
+        clean_blocks.append(item)
+    if not clean_blocks:
+        return None
+    return {"role": "user", "content": clean_blocks}
+
+
 def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str) -> list[dict]:
     leading_systems: list[dict] = []
     rest_start = 0
@@ -290,16 +310,16 @@ def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str
         return messages
 
     stable_blocks: list[dict] = []
-    volatile_systems: list[dict] = []
+    volatile_context_blocks: list[dict] = []
     pre_summary_mark_idx = -1
     summary_mark_idx = -1
 
     for msg_idx, msg in enumerate(leading_systems):
         if _looks_like_recent_summary_message(msg):
-            volatile_systems.append(_copy_message_with_cache_control(msg, ttl))
+            _append_pioneer_volatile_context_blocks(volatile_context_blocks, msg.get("content"))
             continue
         if _looks_like_dynamic_message(msg):
-            volatile_systems.append(dict(msg))
+            _append_pioneer_volatile_context_blocks(volatile_context_blocks, msg.get("content"))
             continue
         if _looks_like_summary_cache_message(msg):
             before_summary_idx = _last_text_block_index(stable_blocks)
@@ -314,12 +334,7 @@ def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str
                 stable_blocks.append({"type": "text", "text": stable_text})
                 summary_mark_idx = len(stable_blocks) - 1
             if recent_text:
-                volatile_systems.append(
-                    {
-                        "role": "system",
-                        "content": [{"type": "text", "text": recent_text, "cache_control": _cache_control(ttl)}],
-                    }
-                )
+                _append_pioneer_volatile_context_blocks(volatile_context_blocks, recent_text)
             continue
         _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
 
@@ -336,7 +351,9 @@ def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str
     normalized: list[dict] = []
     if stable_blocks:
         normalized.append({"role": "system", "content": stable_blocks})
-    normalized.extend(volatile_systems)
+    volatile_context = _pioneer_volatile_context_message(volatile_context_blocks)
+    if volatile_context:
+        normalized.append(volatile_context)
     normalized.extend(messages[rest_start:])
     _strip_gateway_cache_markers(normalized)
     return normalized
