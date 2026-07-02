@@ -11,6 +11,8 @@ from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
 
 SPRING_DREAM_PROBABILITY = 0.35
+SPRING_DREAM_PROBABILITY_STEP = 0.25
+SPRING_DREAM_PROBABILITY_MAX = 0.90
 SPRING_DREAM_MAX_PER_SLEEP = 3
 POST_SPRING_DREAM_WAKEUP_SECTION_ID = "post_spring_dream_wakeup"
 SPRING_DREAM_ARCHIVE_R2_PREFIX = "spring_dream_archives"
@@ -456,6 +458,8 @@ def _ensure_schema() -> None:
                     sleep_source TEXT NOT NULL DEFAULT '',
                     reserved_at TEXT NOT NULL DEFAULT '',
                     last_sent_at TEXT NOT NULL DEFAULT '',
+                    miss_count INTEGER NOT NULL DEFAULT 0,
+                    last_miss_at TEXT NOT NULL DEFAULT '',
                     post_wakeup_pending INTEGER NOT NULL DEFAULT 0,
                     post_wakeup_sent_at TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL DEFAULT ''
@@ -505,6 +509,14 @@ def _ensure_schema() -> None:
             if "post_wakeup_sent_at" not in columns:
                 conn.execute(
                     "ALTER TABLE spring_dream_sessions ADD COLUMN post_wakeup_sent_at TEXT NOT NULL DEFAULT ''"
+                )
+            if "miss_count" not in columns:
+                conn.execute(
+                    "ALTER TABLE spring_dream_sessions ADD COLUMN miss_count INTEGER NOT NULL DEFAULT 0"
+                )
+            if "last_miss_at" not in columns:
+                conn.execute(
+                    "ALTER TABLE spring_dream_sessions ADD COLUMN last_miss_at TEXT NOT NULL DEFAULT ''"
                 )
         _SCHEMA_READY = True
 
@@ -665,6 +677,8 @@ def _session_row(session_key: str) -> dict:
         "sleep_source": str(row["sleep_source"] or ""),
         "reserved_at": str(row["reserved_at"] or ""),
         "last_sent_at": str(row["last_sent_at"] or ""),
+        "miss_count": int(row["miss_count"] or 0),
+        "last_miss_at": str(row["last_miss_at"] or ""),
         "post_wakeup_pending": int(row["post_wakeup_pending"] or 0),
         "post_wakeup_sent_at": str(row["post_wakeup_sent_at"] or ""),
         "updated_at": str(row["updated_at"] or ""),
@@ -688,6 +702,70 @@ def _recent_session_key_for_night(night_date: str) -> str:
             (f"{clean_night}|%",),
         ).fetchone()
     return str(row["sleep_session_key"] or "").strip() if row is not None else ""
+
+
+def _adaptive_spring_dream_probability(base_chance: float, miss_count: int) -> float:
+    try:
+        base = max(0.0, min(1.0, float(base_chance)))
+    except Exception:
+        base = SPRING_DREAM_PROBABILITY
+    try:
+        misses = max(0, int(miss_count or 0))
+    except Exception:
+        misses = 0
+    return max(0.0, min(SPRING_DREAM_PROBABILITY_MAX, base + misses * SPRING_DREAM_PROBABILITY_STEP))
+
+
+def _record_spring_dream_miss(
+    *,
+    session_key: str,
+    sleep_source: str,
+    max_per_sleep: int,
+) -> int:
+    clean_key = str(session_key or "").strip()
+    if not clean_key:
+        return 0
+    limit = max(1, int(max_per_sleep or SPRING_DREAM_MAX_PER_SLEEP))
+    now_iso = now_beijing_iso()
+    _ensure_schema()
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            _prune_old_sessions(conn, now_iso)
+            row = conn.execute(
+                "SELECT miss_count FROM spring_dream_sessions WHERE sleep_session_key=?",
+                (clean_key,),
+            ).fetchone()
+            miss_count = int(row["miss_count"] or 0) if row is not None else 0
+            next_count = miss_count + 1
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO spring_dream_sessions (
+                        sleep_session_key, count, max_per_sleep, last_theme_id,
+                        sleep_source, reserved_at, last_sent_at,
+                        miss_count, last_miss_at,
+                        post_wakeup_pending, post_wakeup_sent_at, updated_at
+                    )
+                    VALUES (?, 0, ?, '', ?, '', '', ?, ?, 0, '', ?)
+                    """,
+                    (clean_key, limit, str(sleep_source or "").strip(), next_count, now_iso, now_iso),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE spring_dream_sessions
+                    SET miss_count=?, max_per_sleep=?, sleep_source=?,
+                        last_miss_at=?, updated_at=?
+                    WHERE sleep_session_key=?
+                    """,
+                    (next_count, limit, str(sleep_source or "").strip(), now_iso, now_iso, clean_key),
+                )
+            conn.execute("COMMIT")
+            return next_count
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
 
 def _reset_night_sessions(night_date: str) -> None:
@@ -738,9 +816,10 @@ def _reserve_spring_dream_slot(
                     INSERT INTO spring_dream_sessions (
                         sleep_session_key, count, max_per_sleep, last_theme_id,
                         sleep_source, reserved_at, last_sent_at,
+                        miss_count, last_miss_at,
                         post_wakeup_pending, post_wakeup_sent_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, '', 0, '', ?)
+                    VALUES (?, ?, ?, ?, ?, ?, '', 0, '', 0, '', ?)
                     """,
                     (clean_key, count_after, limit, theme_id, str(sleep_source or "").strip(), now_iso, now_iso),
                 )
@@ -749,7 +828,7 @@ def _reserve_spring_dream_slot(
                     """
                     UPDATE spring_dream_sessions
                     SET count=?, max_per_sleep=?, last_theme_id=?, sleep_source=?,
-                        reserved_at=?, updated_at=?
+                        reserved_at=?, miss_count=0, updated_at=?
                     WHERE sleep_session_key=?
                     """,
                     (count_after, limit, theme_id, str(sleep_source or "").strip(), now_iso, now_iso, clean_key),
@@ -842,17 +921,31 @@ def maybe_prepare_spring_dream_wakeup(
         _reset_night_sessions(str((sleep_state or {}).get("night_date") or "").strip())
         return None
 
+    sleep_source = str((sleep_state or {}).get("source") or "").strip()
     session_key = str((sleep_state or {}).get("sleep_session_key") or "").strip()
     if not session_key:
         return None
     session_key = _recent_session_key_for_night(str((sleep_state or {}).get("night_date") or "").strip()) or session_key
 
     roller = roll or random.random
-    try:
-        threshold = max(0.0, min(1.0, float(chance)))
-    except Exception:
-        threshold = SPRING_DREAM_PROBABILITY
-    if float(roller()) >= threshold:
+    session = _session_row(session_key)
+    miss_count = int((session or {}).get("miss_count") or 0)
+    threshold = _adaptive_spring_dream_probability(chance, miss_count)
+    rolled = float(roller())
+    if rolled >= threshold:
+        next_miss_count = _record_spring_dream_miss(
+            session_key=session_key,
+            sleep_source=sleep_source,
+            max_per_sleep=int(max_per_sleep or SPRING_DREAM_MAX_PER_SLEEP),
+        )
+        logger.info(
+            "春梦唤醒未命中 session=%s roll=%.4f threshold=%.4f miss_count=%s next_threshold=%.4f",
+            session_key,
+            rolled,
+            threshold,
+            next_miss_count,
+            _adaptive_spring_dream_probability(chance, next_miss_count),
+        )
         return None
 
     inspiration = get_spring_dream_inspiration()
@@ -871,7 +964,7 @@ def maybe_prepare_spring_dream_wakeup(
 
     reserved = _reserve_spring_dream_slot(
         session_key=session_key,
-        sleep_source=str((sleep_state or {}).get("source") or "").strip(),
+        sleep_source=sleep_source,
         max_per_sleep=int(max_per_sleep or SPRING_DREAM_MAX_PER_SLEEP),
         rng=rng,
         theme_override=theme_override,
@@ -886,7 +979,10 @@ def maybe_prepare_spring_dream_wakeup(
         "fragments": fragments,
         "inspiration_source": "miniapp" if inspiration_fragments else "random",
         "sleep_session_key": session_key,
-        "sleep_source": str((sleep_state or {}).get("source") or "").strip(),
+        "sleep_source": sleep_source,
+        "roll": rolled,
+        "threshold": threshold,
+        "miss_count_before": miss_count,
         "count_before": int(reserved.get("count_before") or 0),
         "count_after": int(reserved.get("count_after") or 0),
         "max_per_sleep": int(max_per_sleep or SPRING_DREAM_MAX_PER_SLEEP),
