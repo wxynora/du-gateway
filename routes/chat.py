@@ -973,15 +973,6 @@ def _game_tool_checkpoint_from_messages(messages: list) -> bool:
         return False
 
 
-def _force_next_tool_loop_reply_without_tool_calls(body: dict) -> dict:
-    out = dict(body or {})
-    if isinstance(out.get("tools"), list) and out.get("tools"):
-        out["tool_choice"] = "none"
-    else:
-        out.pop("tool_choice", None)
-    return out
-
-
 def _maybe_clear_qq_group_activity_context_for_private_reply(
     body: dict,
     *,
@@ -1385,8 +1376,7 @@ def _stream_with_r2_archive(
                 current_body = _append_tool_results_and_continue(current_body, msg, tool_calls, execute_tool)
                 tool_rounds_used += 1
                 if _game_tool_checkpoint_from_messages(current_body.get("messages") or []):
-                    logger.info("game tool checkpoint 流式回合转普通无工具收口 window_id=%s round=%s", window_id, tool_rounds_used)
-                    current_body = _force_next_tool_loop_reply_without_tool_calls(current_body)
+                    logger.info("game tool checkpoint 流式回合转普通收口 window_id=%s round=%s", window_id, tool_rounds_used)
                     game_checkpoint_finalizing = True
                     continue
                 continue
@@ -2219,8 +2209,7 @@ def chat_completions():
             )
             tool_rounds_used += 1
             if _game_tool_checkpoint_from_messages(body.get("messages") or []):
-                logger.info("game tool checkpoint 非流式回合转普通无工具收口 window_id=%s round=%s", window_id, tool_rounds_used)
-                body = _force_next_tool_loop_reply_without_tool_calls(body)
+                logger.info("game tool checkpoint 非流式回合转普通收口 window_id=%s round=%s", window_id, tool_rounds_used)
                 game_checkpoint_finalizing = True
                 resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
                 if cache_debug:

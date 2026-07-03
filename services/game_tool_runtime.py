@@ -14,6 +14,7 @@ GAME_ID_RANDOM_IMITATOR_TD = "random_imitator_td"
 GAME_TOOL_LOOP_MARKER = "game_tool_loop"
 GAME_TOOL_SKIP_DYNAMIC_MEMORY_WRITE = "skip_dynamic_memory_write"
 GAME_TOOL_SKIP_BODY_DELTA = "skip_body_delta"
+GAME_TOOL_CHECKPOINT_INSTRUCTION = "由于防沉迷机制，暂时中止游戏回合。不要继续使用游戏工具，正常回复信息。"
 
 GameExecutor = Callable[..., dict[str, Any]]
 
@@ -147,7 +148,7 @@ def game_tool_success_payload(
     text: str,
     checkpoint: bool = False,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "ok": True,
         "tool": tool_name,
         "game_id": game_id,
@@ -158,6 +159,9 @@ def game_tool_success_payload(
         GAME_TOOL_SKIP_DYNAMIC_MEMORY_WRITE: True,
         GAME_TOOL_SKIP_BODY_DELTA: True,
     }
+    if checkpoint:
+        payload["checkpoint_instruction"] = GAME_TOOL_CHECKPOINT_INSTRUCTION
+    return payload
 
 
 def game_tool_error_payload(

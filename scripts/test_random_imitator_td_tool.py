@@ -65,6 +65,10 @@ def test_tool_marks_anti_addiction_checkpoint_every_five_turns() -> None:
 
         _assert(data.get("checkpoint") is True, "turn 5 should checkpoint")
         _assert("防沉迷暂停" in str(data.get("text") or ""), "checkpoint text should be returned")
+        _assert(
+            "不要继续使用游戏工具" in str(data.get("checkpoint_instruction") or ""),
+            "checkpoint should tell the model not to keep using the game tool",
+        )
 
 
 def test_game_request_marker_skips_chat_side_effects() -> None:
@@ -114,7 +118,7 @@ def test_unified_game_runtime_executes_registered_game() -> None:
         _assert((Path(tmpdir) / "player_a.json").exists(), "unified runtime should use save_id path")
 
 
-def test_game_checkpoint_forces_next_reply_without_tool_calls() -> None:
+def test_game_checkpoint_does_not_mutate_tool_choice() -> None:
     result = json.dumps(
         {
             "ok": True,
@@ -139,10 +143,9 @@ def test_game_checkpoint_forces_next_reply_without_tool_calls() -> None:
         "tools": [{"type": "function", "function": {"name": "future_game", "parameters": {"type": "object"}}}],
         "tool_choice": "auto",
     }
-    next_body = chat_route._force_next_tool_loop_reply_without_tool_calls(body)
-    _assert(next_body.get("tool_choice") == "none", "checkpoint final hop should forbid another tool call")
-    _assert(next_body.get("messages") == messages, "checkpoint final hop should keep normal tool-loop context")
-    _assert(len(next_body.get("messages") or []) == len(messages), "checkpoint final hop should not inject prompts")
+    _assert(body.get("tool_choice") == "auto", "checkpoint should not mutate tool_choice")
+    _assert(body.get("messages") == messages, "checkpoint should keep normal tool-loop context")
+    _assert(len(body.get("messages") or []) == len(messages), "checkpoint should not inject prompts")
 
 
 def test_normal_game_tool_result_does_not_checkpoint() -> None:
@@ -185,7 +188,7 @@ if __name__ == "__main__":
     test_game_tool_trace_skips_archive_side_effects()
     test_game_tool_trace_marker_skips_archive_side_effects()
     test_unified_game_runtime_executes_registered_game()
-    test_game_checkpoint_forces_next_reply_without_tool_calls()
+    test_game_checkpoint_does_not_mutate_tool_choice()
     test_normal_game_tool_result_does_not_checkpoint()
     test_tool_mode_injects_without_game_loop_skip()
     print("ok")
