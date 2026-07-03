@@ -56,6 +56,7 @@ class ImitatorPvzCmdTests(unittest.TestCase):
 
             self.assertIn(cmd_engine.ANTI_ADDICTION_PAUSE_PREFIX, output)
             self.assertIn("已完成第5回合", output)
+            self.assertIn("暂时中止游戏回合", output)
 
     def test_cmd_open_prefers_existing_save(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

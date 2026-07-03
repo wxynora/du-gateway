@@ -242,7 +242,7 @@ def _anti_addiction_pause_text(turn: int, engine: GameEngine) -> str:
         return ""
     if engine.state.game_over:
         return ""
-    return f"{ANTI_ADDICTION_PAUSE_PREFIX}: 已完成第{turn}回合，本次先停在这里；状态已保存，下次用同一存档继续。"
+    return f"{ANTI_ADDICTION_PAUSE_PREFIX}: 由于防沉迷机制，已完成第{turn}回合后暂时中止游戏回合；状态已保存，下次用同一存档继续。"
 
 
 def _load_or_create_session(save_path: Path) -> dict[str, Any]:
