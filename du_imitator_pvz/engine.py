@@ -25,6 +25,7 @@ from .game.randomizer import ReplayRng
 
 SAVE_VERSION = 1
 DEFAULT_SAVE_PATH = Path(os.environ.get("DU_IMITATOR_PVZ_SAVE", Path.cwd() / "du_imitator_pvz_save.json"))
+DEFAULT_SEED = "DU-P2-001"
 DEFAULT_CARD_LOADOUT: tuple[str, ...] = ()
 ANTI_ADDICTION_PAUSE_EVERY_TURNS = 5
 ANTI_ADDICTION_PAUSE_PREFIX = "防沉迷暂停"
@@ -88,12 +89,16 @@ def _route_command(session: dict[str, Any], part: str, *, save_path: Path) -> st
     if command in {"new_game", "newgame"}:
         return _new_game(session, args)
     if command in {"cards", "loadout"}:
+        if _session_game_over(session):
+            _reset_finished_session(session)
         return _set_cards(session, args)
     if command in {"note", "notes"}:
         return _set_note(session, args)
     if command in {"recap"}:
         return _recap(session)
 
+    if _session_game_over(session):
+        return _reset_finished_session(session)
     engine = _engine_from_session(session)
     if engine is None:
         return _setup_text(session)
@@ -147,13 +152,18 @@ def _looks_like_gameplay_command(text: str) -> bool:
 def _new_game(session: dict[str, Any], args: list[str]) -> str:
     options = _parse_options(args)
     level = _int_option(options, "level", default=int(session.get("level", 1)), minimum=1)
-    seed = str(options.get("seed") or session.get("seed") or "DU-P2-001")
+    seed = str(options.get("seed") or session.get("seed") or DEFAULT_SEED)
+    player_notes = _player_notes_from_session(session)
     session.clear()
     session.update({"version": SAVE_VERSION, "turn": 0, "level": level, "seed": seed, "card_loadout": []})
     loadout = _loadout_from_options(options)
     if loadout is None:
+        if player_notes:
+            session["player_notes"] = player_notes
         return _setup_text(session, prefix=f"新游戏: lv{level} seed={seed}\n请先编辑卡槽。")
     engine = _new_engine(level=level, seed=seed, card_loadout=loadout)
+    if player_notes:
+        engine.set_player_notes(player_notes)
     session["card_loadout"] = list(loadout)
     _store_engine(session, engine)
     observation = engine.run_until_decision()
@@ -169,8 +179,11 @@ def _set_cards(session: dict[str, Any], args: list[str]) -> str:
         return f"未知卡牌: {', '.join(invalid)}\n\n{build_card_selection_view(GameConfig(card_slot_count=6, max_card_slot_count=10))['text']}"
     clean_loadout = tuple(card_id for card_id in loadout if card_id is not None)
     level = int(session.get("level", 1))
-    seed = str(session.get("seed") or "DU-P2-001")
+    seed = str(session.get("seed") or DEFAULT_SEED)
+    player_notes = _player_notes_from_session(session)
     engine = _new_engine(level=level, seed=seed, card_loadout=clean_loadout)
+    if player_notes:
+        engine.set_player_notes(player_notes)
     session["turn"] = 0
     session.pop(ANTI_ADDICTION_PENDING_KEY, None)
     session["card_loadout"] = list(clean_loadout)
@@ -183,12 +196,18 @@ def _set_note(session: dict[str, Any], args: list[str]) -> str:
     note = " ".join(args).strip()
     engine = _engine_from_session(session)
     if note:
+        if engine is None:
+            notes = [{"memory_id": "player_note_1", "note": note, "source_round_id": "manual", "updated_tick": int(session.get("tick", 0) or 0)}]
+            session["player_notes"] = notes
+            return f"复盘已记录: {note}"
         notes = [{"memory_id": "player_note_1", "note": note, "source_round_id": "manual", "updated_tick": engine.state.tick}]
         engine.set_player_notes(notes)
         _store_engine(session, engine)
         return f"复盘已记录: {note}\n{_state_json(engine)}"
-    notes = engine.player_notes
+    notes = _player_notes_from_session(session)
     if not notes:
+        if engine is None:
+            return "暂无复盘记录。"
         return f"暂无复盘记录。\n{_state_json(engine)}"
     return "\n".join(f"- {item.get('note', '')}" for item in notes)
 
@@ -208,6 +227,10 @@ def _recap(session: dict[str, Any]) -> str:
 
 
 def _current_view(session: dict[str, Any], save_path: Path | None = None) -> str:
+    if _session_game_over(session):
+        text = _reset_finished_session(session)
+        _save_session(session, save_path or DEFAULT_SAVE_PATH)
+        return text
     engine = _engine_from_session(session)
     if engine is None:
         return _setup_text(session)
@@ -272,10 +295,36 @@ def _load_or_create_session(save_path: Path) -> dict[str, Any]:
     if save_path.exists():
         with save_path.open("r", encoding="utf-8") as handle:
             return json.load(handle)
-    session: dict[str, Any] = {"version": SAVE_VERSION, "turn": 0, "level": 1, "seed": "DU-P2-001"}
-    session["card_loadout"] = list(DEFAULT_CARD_LOADOUT)
+    session = _fresh_session()
     _save_session(session, save_path)
     return session
+
+
+def _fresh_session() -> dict[str, Any]:
+    return {"version": SAVE_VERSION, "turn": 0, "level": 1, "seed": DEFAULT_SEED, "card_loadout": list(DEFAULT_CARD_LOADOUT)}
+
+
+def _player_notes_from_session(session: dict[str, Any]) -> list[dict[str, Any]]:
+    notes = session.get("player_notes")
+    session_notes = list(notes) if isinstance(notes, list) else []
+    engine = _engine_from_session(session)
+    if engine is not None and engine.player_notes:
+        return list(engine.player_notes)
+    return session_notes
+
+
+def _session_game_over(session: dict[str, Any]) -> bool:
+    engine = _engine_from_session(session)
+    return bool(engine and engine.state.game_over)
+
+
+def _reset_finished_session(session: dict[str, Any]) -> str:
+    player_notes = _player_notes_from_session(session)
+    session.clear()
+    session.update(_fresh_session())
+    if player_notes:
+        session["player_notes"] = player_notes
+    return _setup_text(session, prefix="上一局已结束，已准备新局。\n请先编辑卡槽。")
 
 
 def _save_session(session: dict[str, Any], save_path: Path) -> None:

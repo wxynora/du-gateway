@@ -57,16 +57,17 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已验证：`.venv/bin/python -m py_compile config.py routes/chat.py routes/xiaoai_api.py routes/miniapp/game_tools.py routes/miniapp_api.py services/telegram_bot.py services/telegram_proactive.py services/conversation_followup.py services/du_daily.py services/voice_call_pipeline.py services/random_imitator_td_tool.py services/game_tool_runtime.py storage/random_imitator_td_mode_store.py scripts/test_random_imitator_td_tool.py scripts/test_imitator_pvz_cmd.py`、`.venv/bin/python scripts/test_random_imitator_td_tool.py && .venv/bin/python scripts/test_imitator_pvz_cmd.py`、`.venv/bin/python -c "import app; from config import CHAT_RESPONSE_TIMEOUT_SECONDS, STREAM_TIMEOUT_SECONDS, TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS; print(CHAT_RESPONSE_TIMEOUT_SECONDS, STREAM_TIMEOUT_SECONDS, TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS)"` 均通过，输出为 `900 900 900`。
 
 当前状态（2026-07-03 random_imitator_td 网关私有工具接入）：
-- 已完成：新增私有聊天工具 `random_imitator_td`，执行走 `services/random_imitator_td_tool.py`，底层调用 `du_imitator_pvz.engine.cmd(command, save_path=...)`；存档位于 `data/random_imitator_td/<save_id>.json`，`save_id` 会做安全文件名规整，不和开源仓库默认存档混用。
+- 已完成：新增私有聊天工具 `random_imitator_td`，执行走 `services/random_imitator_td_tool.py`，底层调用 `du_imitator_pvz.engine.cmd(command, save_path=...)`；私用版固定单存档 `data/random_imitator_td/default.json`，工具 schema 不暴露 `save_id`，即使旧参数传入也会忽略。
 - 已完成：新增防沉迷暂停机制。每个存档第 5/10/15… 次玩家决策会先正常执行、推进并保存；同一工具循环里下一次本该继续推进的游戏工具结果，会改为返回 `防沉迷暂停: 由于防沉迷机制，已完成第N回合后暂时中止游戏回合...`，不推进新动作、不结算输赢；暂停只消费一次，之后可继续玩。网关工具结果同步带 `checkpoint: true`，方便前缀或客户端停止继续游戏工具循环。
 - 已完成：打开/继续入口收束为读档优先。`打开`、`继续`、`open`、`resume`、`look` 和命令行无参数启动都会优先读取当前存档；只有显式 `new_game` 才重开。网关工具空 `command` 也按 `打开` 处理，避免客户端下一次进入时误开新局。
-- 已完成：工具说明已明确 `save_id` 是不同玩家或长期存档的隔离键，同一玩家同一局必须保持固定，不要每轮生成新 `save_id`，避免堆出一批零散存档。
+- 已完成：工具说明已明确本工具固定使用单存档，不要尝试切换存档，避免模型手滑堆出零散存档。
 - 已完成：新增统一游戏入口 `services/game_tool_runtime.py` 与 `/miniapp-api/game-tools/<game_id>`。`random_imitator_td` 现在是首个注册游戏，工具结果固定带 `game_tool_loop: true`、`skip_dynamic_memory_write: true`、`skip_body_delta: true`；后续新游戏接入时注册新的 `game_id`、执行器、命令清单和存档根目录即可复用同一套入口与副作用跳过标记。
 - 已完成：`routes/chat.py` 新增游戏工具循环标记：请求头 `X-DU-Game-Tool-Loop: 1` 或 `X-Random-Imitator-TD: 1`、`window_id/reply_target` 以 `random-imitator-td` 开头时，会跳过动态记忆召回、归档后动态记忆写入、BODY delta，并跳过小家/用户状态文本推断。
 - 已完成：Prompt 管理新增「植物大战丧尸模式」后端开关。该开关只固定注入 `random_imitator_td` 工具，不让 `_is_game_tool_loop_request()` 变真，也不提前跳过动态记忆召回；跳过只发生在专用游戏标记命中，或本轮实际调用了 `random_imitator_td` 工具之后。
 - 已完成：归档保险层已补齐。即使客户端忘带游戏请求标记，只要本轮工具结果带 `game_tool_loop`，流式和非流式归档后的动态记忆写入与 BODY delta 都会强制跳过；旧的 `random_imitator_td` 工具名仍保留兜底兼容。
 - 已修复：防沉迷 checkpoint 不直接吐工具文本，而是按普通工具循环结束方式再请求一次上游；这次请求保留工具结果上下文，不改 `tool_choice`、不注入额外系统提示，只在 checkpoint 工具结果里带 `checkpoint_instruction`：由于防沉迷机制，暂时中止游戏回合，不要继续使用游戏工具，正常回复信息。普通非 checkpoint 游戏回合不走这个分支。
-- 已修复：`random_imitator_td` 网关包装层新增活跃存档指针 `_active_save.json`。普通继续/等待/种植/选卡等命令优先走活跃存档；没有活跃指针但存在 `default.json` 时回到 `default`；只有显式 `new_game` / `重开` / `reset` 等才允许切到请求里的新 `save_id`，避免模型手滑生成新 `save_id` 后误开新局或抢走防沉迷续玩。
+- 已修复：`random_imitator_td` 网关包装层已收束为固定单存档 `default.json`。旧 `_active_save.json` 只作为一次性迁移来源：如果服务器上只有旧活跃存档，会先复制到 `default.json`；之后不再写活跃指针，也不允许按 `save_id` 切档。
+- 已修复：局面胜利、失败或玩家主动 `结束本局` 后，下一次 `打开` / `继续` 会覆盖为 lv1 新局准备；玩家用 `note ...` 写下的复盘会跨局保留，不跟着存档覆盖清空。
 - 已修复：本局到达结局或玩家主动 `结束本局` 后，工具结果同样标记 `checkpoint: true`、`checkpoint_reason: game_over`，并提示“不要继续使用游戏工具，也不要立刻 new_game 或重开”，让模型按普通工具循环收口回复本局结果，避免结局后自动连开新局。
 - 已调整：网关工具续轮默认上限 `TOOL_MAX_ROUNDS` 从 6 调到 10；游戏工具正常仍会在 1 轮收口，10 只是给其他复杂工具链留余量。
 - 已验证：`.venv/bin/python scripts/test_random_imitator_td_tool.py && .venv/bin/python scripts/test_imitator_pvz_cmd.py`、`.venv/bin/python -m py_compile du_imitator_pvz/engine.py du_imitator_pvz/__main__.py services/random_imitator_td_tool.py services/game_tool_runtime.py storage/random_imitator_td_mode_store.py routes/miniapp/settings.py routes/miniapp/game_tools.py routes/miniapp_api.py routes/chat.py scripts/test_imitator_pvz_cmd.py scripts/test_random_imitator_td_tool.py` 均通过；工具返回不会暴露本机 `save_path`；开源仓库同步补了同款防沉迷暂停、打开读档入口和测试，但不包含 du-gateway 私有工具。

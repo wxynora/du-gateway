@@ -22,12 +22,12 @@ def _assert(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def test_tool_executes_and_persists_by_save_id() -> None:
+def test_tool_executes_and_persists_single_save() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         random_imitator_td_tool.SAVE_ROOT = Path(tmpdir)
 
         raw = random_imitator_td_tool.execute_random_imitator_td_tool(
-            {"save_id": "player/a", "command": "new_game level=1 seed=private-tool-test"}
+            {"command": "new_game level=1 seed=private-tool-test"}
         )
         data = json.loads(raw)
 
@@ -36,30 +36,39 @@ def test_tool_executes_and_persists_by_save_id() -> None:
         _assert(data.get("game_tool_loop") is True, "tool should mark game loop")
         _assert(data.get("skip_dynamic_memory_write") is True, "tool should mark dynamic memory skip")
         _assert(data.get("skip_body_delta") is True, "tool should mark body delta skip")
+        _assert(data.get("save_id") == "default", "tool should always report the single save")
         _assert("请先编辑卡槽" in str(data.get("text") or ""), "new game should wait for card setup")
-        _assert((Path(tmpdir) / "player_a.json").exists(), "save file should be scoped by save_id")
+        _assert((Path(tmpdir) / "default.json").exists(), "tool should persist to the single save")
+
+
+def test_tool_schema_does_not_expose_save_id() -> None:
+    tools = random_imitator_td_tool.get_random_imitator_td_tools_for_inject()
+    properties = tools[0]["function"]["parameters"]["properties"]
+
+    _assert("command" in properties, "tool should expose command")
+    _assert("save_id" not in properties, "tool should not expose save_id")
 
 
 def test_tool_marks_anti_addiction_checkpoint_every_five_turns() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         random_imitator_td_tool.SAVE_ROOT = Path(tmpdir)
 
-        args = {"save_id": "checkpoint", "command": "new_game level=1 seed=checkpoint-test"}
+        args = {"command": "new_game level=1 seed=checkpoint-test"}
         random_imitator_td_tool.execute_random_imitator_td_tool(args)
         random_imitator_td_tool.execute_random_imitator_td_tool(
-            {"save_id": "checkpoint", "command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
+            {"command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
         )
         for _ in range(5):
             data = json.loads(
                 random_imitator_td_tool.execute_random_imitator_td_tool(
-                    {"save_id": "checkpoint", "command": "等待 1"}
+                    {"command": "等待 1"}
                 )
             )
             _assert(data.get("checkpoint") is False, "turns through 5 should not checkpoint")
 
         data = json.loads(
             random_imitator_td_tool.execute_random_imitator_td_tool(
-                {"save_id": "checkpoint", "command": "等待 1"}
+                {"command": "等待 1"}
             )
         )
 
@@ -72,64 +81,59 @@ def test_tool_marks_anti_addiction_checkpoint_every_five_turns() -> None:
 
         data = json.loads(
             random_imitator_td_tool.execute_random_imitator_td_tool(
-                {"save_id": "checkpoint", "command": "等待 1"}
+                {"command": "等待 1"}
             )
         )
         _assert(data.get("checkpoint") is False, "turn after checkpoint should continue normally")
         _assert("防沉迷暂停" not in str(data.get("text") or ""), "checkpoint should be consumed once")
 
 
-def test_tool_keeps_active_save_when_save_id_changes_by_mistake() -> None:
+def test_tool_ignores_legacy_save_id_argument() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         random_imitator_td_tool.SAVE_ROOT = Path(tmpdir)
 
         random_imitator_td_tool.execute_random_imitator_td_tool(
-            {"save_id": "default", "command": "new_game level=1 seed=active-save-test"}
+            {"save_id": "player/a", "command": "new_game level=1 seed=single-save-test"}
         )
         random_imitator_td_tool.execute_random_imitator_td_tool(
-            {"save_id": "default", "command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
+            {"save_id": "other-save", "command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
         )
         raw = random_imitator_td_tool.execute_random_imitator_td_tool(
             {"save_id": "oops-new-save", "command": "等待 1"}
         )
         data = json.loads(raw)
 
-        _assert(data.get("ok") is True, "mistyped save_id should still execute")
-        _assert(data.get("save_id") == "default", "mistyped save_id should resolve to active save")
-        _assert((Path(tmpdir) / "default.json").exists(), "active save should remain present")
-        _assert(not (Path(tmpdir) / "oops-new-save.json").exists(), "mistyped save should not be created")
-        _assert("请先编辑卡槽" not in str(data.get("text") or ""), "mistyped save should not start setup")
+        _assert(data.get("ok") is True, "legacy save_id argument should still execute")
+        _assert(data.get("save_id") == "default", "legacy save_id argument should be ignored")
+        _assert((Path(tmpdir) / "default.json").exists(), "single save should remain present")
+        _assert(not (Path(tmpdir) / "player_a.json").exists(), "legacy save_id should not create a save")
+        _assert(not (Path(tmpdir) / "other-save.json").exists(), "changed save_id should not create a save")
+        _assert(not (Path(tmpdir) / "oops-new-save.json").exists(), "mistyped save_id should not create a save")
+        _assert("请先编辑卡槽" not in str(data.get("text") or ""), "legacy save_id should not restart setup")
 
 
-def test_tool_prefers_default_when_bad_save_already_exists_without_active_pointer() -> None:
+def test_tool_migrates_legacy_active_save_to_single_save() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         random_imitator_td_tool.SAVE_ROOT = Path(tmpdir)
 
-        random_imitator_td_tool.execute_random_imitator_td_tool(
-            {"save_id": "default", "command": "new_game level=1 seed=default-resume-test"}
+        legacy_path = Path(tmpdir) / "player2.json"
+        from du_imitator_pvz.engine import cmd
+
+        cmd("new_game level=1 seed=legacy-active-test cards=模仿者 模仿者 向日葵 窝瓜", save_path=legacy_path)
+        (Path(tmpdir) / game_tool_runtime.GAME_ACTIVE_SAVE_FILE).write_text(
+            json.dumps({"save_id": "player2"}, ensure_ascii=False),
+            encoding="utf-8",
         )
-        random_imitator_td_tool.execute_random_imitator_td_tool(
-            {"save_id": "default", "command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
-        )
-        random_imitator_td_tool.execute_random_imitator_td_tool(
-            {"save_id": "bad-save", "command": "new_game level=1 seed=bad-save-test"}
-        )
-        random_imitator_td_tool.execute_random_imitator_td_tool(
-            {"save_id": "bad-save", "command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
-        )
-        for _ in range(5):
-            random_imitator_td_tool.execute_random_imitator_td_tool({"save_id": "bad-save", "command": "等待 1"})
-        active_meta = Path(tmpdir) / game_tool_runtime.GAME_ACTIVE_SAVE_FILE
-        active_meta.unlink()
 
         raw = random_imitator_td_tool.execute_random_imitator_td_tool(
-            {"save_id": "bad-save", "command": "等待 1"}
+            {"command": "打开"}
         )
         data = json.loads(raw)
 
-        _assert(data.get("ok") is True, "tool should recover with existing default save")
-        _assert(data.get("save_id") == "default", "missing active pointer should fall back to default save")
-        _assert("防沉迷暂停" not in str(data.get("text") or ""), "bad save checkpoint should not hijack default resume")
+        _assert(data.get("ok") is True, "tool should migrate legacy active save")
+        _assert(data.get("save_id") == "default", "migrated save should report the single save")
+        _assert((Path(tmpdir) / "default.json").exists(), "legacy active save should be copied to default")
+        _assert('"seed": "legacy-active-test"' in (Path(tmpdir) / "default.json").read_text(encoding="utf-8"), "default should contain migrated save")
 
 
 def test_tool_marks_game_over_checkpoint_without_auto_restart() -> None:
@@ -137,13 +141,13 @@ def test_tool_marks_game_over_checkpoint_without_auto_restart() -> None:
         random_imitator_td_tool.SAVE_ROOT = Path(tmpdir)
 
         random_imitator_td_tool.execute_random_imitator_td_tool(
-            {"save_id": "default", "command": "new_game level=1 seed=game-over-test"}
+            {"command": "new_game level=1 seed=game-over-test"}
         )
         random_imitator_td_tool.execute_random_imitator_td_tool(
-            {"save_id": "default", "command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
+            {"command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
         )
         raw = random_imitator_td_tool.execute_random_imitator_td_tool(
-            {"save_id": "default", "command": "结束本局"}
+            {"command": "结束本局"}
         )
         data = json.loads(raw)
 
@@ -199,7 +203,9 @@ def test_unified_game_runtime_executes_registered_game() -> None:
         _assert(payload.get("ok") is True, "unified game runtime should execute registered game")
         _assert(payload.get("game_id") == "random_imitator_td", "alias should normalize to registered game")
         _assert(payload.get("game_tool_loop") is True, "unified game runtime should mark game loop")
-        _assert((Path(tmpdir) / "player_a.json").exists(), "unified runtime should use save_id path")
+        _assert(payload.get("save_id") == "default", "unified runtime should ignore save_id for the single-save game")
+        _assert((Path(tmpdir) / "default.json").exists(), "unified runtime should use the single save")
+        _assert(not (Path(tmpdir) / "player_a.json").exists(), "unified runtime should not create save_id paths")
 
 
 def test_game_checkpoint_does_not_mutate_tool_choice() -> None:
@@ -266,10 +272,11 @@ def test_tool_mode_injects_without_game_loop_skip() -> None:
 
 
 if __name__ == "__main__":
-    test_tool_executes_and_persists_by_save_id()
+    test_tool_executes_and_persists_single_save()
+    test_tool_schema_does_not_expose_save_id()
     test_tool_marks_anti_addiction_checkpoint_every_five_turns()
-    test_tool_keeps_active_save_when_save_id_changes_by_mistake()
-    test_tool_prefers_default_when_bad_save_already_exists_without_active_pointer()
+    test_tool_ignores_legacy_save_id_argument()
+    test_tool_migrates_legacy_active_save_to_single_save()
     test_tool_marks_game_over_checkpoint_without_auto_restart()
     test_game_request_marker_skips_chat_side_effects()
     test_game_tool_trace_skips_archive_side_effects()
