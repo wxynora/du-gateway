@@ -49,13 +49,13 @@ def test_tool_marks_anti_addiction_checkpoint_every_five_turns() -> None:
         random_imitator_td_tool.execute_random_imitator_td_tool(
             {"save_id": "checkpoint", "command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
         )
-        for _ in range(4):
+        for _ in range(5):
             data = json.loads(
                 random_imitator_td_tool.execute_random_imitator_td_tool(
                     {"save_id": "checkpoint", "command": "等待 1"}
                 )
             )
-            _assert(data.get("checkpoint") is False, "turns before 5 should not checkpoint")
+            _assert(data.get("checkpoint") is False, "turns through 5 should not checkpoint")
 
         data = json.loads(
             random_imitator_td_tool.execute_random_imitator_td_tool(
@@ -63,12 +63,20 @@ def test_tool_marks_anti_addiction_checkpoint_every_five_turns() -> None:
             )
         )
 
-        _assert(data.get("checkpoint") is True, "turn 5 should checkpoint")
+        _assert(data.get("checkpoint") is True, "turn 6 should emit the pending checkpoint")
         _assert("防沉迷暂停" in str(data.get("text") or ""), "checkpoint text should be returned")
         _assert(
             "不要继续使用游戏工具" in str(data.get("checkpoint_instruction") or ""),
             "checkpoint should tell the model not to keep using the game tool",
         )
+
+        data = json.loads(
+            random_imitator_td_tool.execute_random_imitator_td_tool(
+                {"save_id": "checkpoint", "command": "等待 1"}
+            )
+        )
+        _assert(data.get("checkpoint") is False, "turn after checkpoint should continue normally")
+        _assert("防沉迷暂停" not in str(data.get("text") or ""), "checkpoint should be consumed once")
 
 
 def test_game_request_marker_skips_chat_side_effects() -> None:

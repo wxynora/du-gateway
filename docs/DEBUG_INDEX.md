@@ -58,7 +58,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 
 当前状态（2026-07-03 random_imitator_td 网关私有工具接入）：
 - 已完成：新增私有聊天工具 `random_imitator_td`，执行走 `services/random_imitator_td_tool.py`，底层调用 `du_imitator_pvz.engine.cmd(command, save_path=...)`；存档位于 `data/random_imitator_td/<save_id>.json`，`save_id` 会做安全文件名规整，不和开源仓库默认存档混用。
-- 已完成：新增防沉迷暂停机制。每个存档第 5/10/15… 次玩家决策后，返回 `防沉迷暂停: 由于防沉迷机制，已完成第N回合后暂时中止游戏回合...`，不判胜负、不结束本局，只提示本次先停并保留存档；网关工具结果同步带 `checkpoint: true`，方便前缀或客户端直接停止继续工具循环。
+- 已完成：新增防沉迷暂停机制。每个存档第 5/10/15… 次玩家决策会先正常执行、推进并保存；同一工具循环里下一次本该继续推进的游戏工具结果，会改为返回 `防沉迷暂停: 由于防沉迷机制，已完成第N回合后暂时中止游戏回合...`，不推进新动作、不结算输赢；暂停只消费一次，之后可继续玩。网关工具结果同步带 `checkpoint: true`，方便前缀或客户端停止继续游戏工具循环。
 - 已完成：打开/继续入口收束为读档优先。`打开`、`继续`、`open`、`resume`、`look` 和命令行无参数启动都会优先读取当前存档；只有显式 `new_game` 才重开。网关工具空 `command` 也按 `打开` 处理，避免客户端下一次进入时误开新局。
 - 已完成：工具说明已明确 `save_id` 是不同玩家或长期存档的隔离键，同一玩家同一局必须保持固定，不要每轮生成新 `save_id`，避免堆出一批零散存档。
 - 已完成：新增统一游戏入口 `services/game_tool_runtime.py` 与 `/miniapp-api/game-tools/<game_id>`。`random_imitator_td` 现在是首个注册游戏，工具结果固定带 `game_tool_loop: true`、`skip_dynamic_memory_write: true`、`skip_body_delta: true`；后续新游戏接入时注册新的 `game_id`、执行器、命令清单和存档根目录即可复用同一套入口与副作用跳过标记。
