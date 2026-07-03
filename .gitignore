@@ -15,7 +15,11 @@ env/
 
 # 本地/运行时数据
 data/
+!du_imitator_pvz/data/
+!du_imitator_pvz/data/**
+du_imitator_pvz/data/**/__pycache__/
 *.log
+du_imitator_pvz_save.json
 scripts/feed_archive_checkpoint.json
 scripts/feed_archive.lock
 scripts/feed_archive.stop

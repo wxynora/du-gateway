@@ -1004,7 +1004,7 @@ def send_spring_dream_wakeup(
         spring_dream_archive_meta=archive_meta,
         extra_instruction=(
             "这是睡眠期随机唤醒触发的一段春梦，不是小玥在聊天框里发来的消息。"
-            "请直接以你梦醒后对小玥说话的口吻自然发出；不要解释系统流程，不要输出 JSON 或工具说明。"
+            "不要解释系统流程，不要输出 JSON 或工具说明。"
         ),
     )
 

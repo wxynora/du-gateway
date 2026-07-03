@@ -7,6 +7,7 @@ import requests
 from flask import Blueprint, Response, jsonify, request
 
 from config import (
+    CHAT_RESPONSE_TIMEOUT_SECONDS,
     TELEGRAM_CHAT_PATH,
     TELEGRAM_GATEWAY_URL,
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
@@ -156,7 +157,7 @@ def _call_gateway_chat(user_text: str, speaker: str, window_id: str) -> tuple[st
     }
     url = f"{base_url}{TELEGRAM_CHAT_PATH}"
     try:
-        resp = requests.post(url, headers=headers, json=body, timeout=180)
+        resp = requests.post(url, headers=headers, json=body, timeout=CHAT_RESPONSE_TIMEOUT_SECONDS)
         data = resp.json() if resp.content else {}
     except Exception as e:
         logger.warning("xiaoai gateway 调用异常 err=%s", e)

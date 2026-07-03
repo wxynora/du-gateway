@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import requests
 
-from config import MAIN_GATEWAY_BEARER_TOKEN, TELEGRAM_CHAT_PATH, TELEGRAM_GATEWAY_URL
+from config import CHAT_RESPONSE_TIMEOUT_SECONDS, MAIN_GATEWAY_BEARER_TOKEN, TELEGRAM_CHAT_PATH, TELEGRAM_GATEWAY_URL
 from services.hidden_blocks import HiddenBlockParser
 from storage import r2_store
 from utils.log import get_logger
@@ -818,7 +818,7 @@ def request_gateway_maintenance(window_id: str, trigger: dict) -> bool:
         "messages": [{"role": "user", "content": build_background_prompt(trigger)}],
     }
     try:
-        resp = requests.post(url, headers=headers, json=body, timeout=180)
+        resp = requests.post(url, headers=headers, json=body, timeout=CHAT_RESPONSE_TIMEOUT_SECONDS)
         if resp.status_code != 200:
             logger.warning("du_daily maintenance 失败 status=%s body=%s", resp.status_code, (resp.text or "")[:300])
             return False

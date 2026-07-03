@@ -13,6 +13,7 @@ from typing import Optional
 import requests
 
 from config import (
+    CHAT_RESPONSE_TIMEOUT_SECONDS,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_GATEWAY_URL,
     TELEGRAM_CHAT_PATH,
@@ -670,7 +671,7 @@ def _generate_schedule_reply(
     }
     try:
         logger.info("闹钟提醒生成请求 window_id=%s channel=%s model=%s chars=%s", headers["X-Window-Id"], channel, model, len(prompt))
-        r = requests.post(url, headers=headers, json=body, timeout=120)
+        r = requests.post(url, headers=headers, json=body, timeout=CHAT_RESPONSE_TIMEOUT_SECONDS)
         if r.status_code != 200:
             logger.warning("闹钟提醒生成失败 status=%s body=%s", r.status_code, (r.text or "")[:300])
             return None
@@ -763,7 +764,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
             body.get("model") or "",
             len(user_prompt),
         )
-        r = requests.post(url, headers=headers, json=body, timeout=120)
+        r = requests.post(url, headers=headers, json=body, timeout=CHAT_RESPONSE_TIMEOUT_SECONDS)
         if r.status_code != 200:
             logger.warning(
                 "主动决策网关非200 window_id=%s status=%s model=%s body_preview=%s",
@@ -1209,7 +1210,7 @@ def _run_proactive_diary_action(
             body.get("model") or "",
             len(str(initial_reason or "")),
         )
-        r = requests.post(url, headers=headers, json=body, timeout=180)
+        r = requests.post(url, headers=headers, json=body, timeout=CHAT_RESPONSE_TIMEOUT_SECONDS)
         if r.status_code != 200:
             logger.warning(
                 "主动写日记执行轮失败 status=%s body_preview=%s",
@@ -1280,7 +1281,7 @@ def _run_proactive_forum_action(
             body.get("model") or "",
             len(str(initial_reason or "")),
         )
-        r = requests.post(url, headers=headers, json=body, timeout=180)
+        r = requests.post(url, headers=headers, json=body, timeout=CHAT_RESPONSE_TIMEOUT_SECONDS)
         if r.status_code != 200:
             logger.warning(
                 "主动逛论坛执行轮失败 status=%s body_preview=%s",
@@ -1352,7 +1353,7 @@ def _run_proactive_drawer_action(
             body.get("model") or "",
             len(str(initial_reason or "")),
         )
-        r = requests.post(url, headers=headers, json=body, timeout=180)
+        r = requests.post(url, headers=headers, json=body, timeout=CHAT_RESPONSE_TIMEOUT_SECONDS)
         if r.status_code != 200:
             logger.warning(
                 "主动秘密抽屉执行轮失败 status=%s body_preview=%s",
@@ -1441,7 +1442,7 @@ def _ask_du_after_surf_result(
             body.get("model") or "",
             len(surf_result.get("cards_for_du") or []) if isinstance(surf_result, dict) else 0,
         )
-        r = requests.post(url, headers=headers, json=body, timeout=120)
+        r = requests.post(url, headers=headers, json=body, timeout=CHAT_RESPONSE_TIMEOUT_SECONDS)
         if r.status_code != 200:
             logger.warning(
                 "主动随机冲浪结果回喂失败 status=%s body_preview=%s",

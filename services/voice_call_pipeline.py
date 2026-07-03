@@ -5,7 +5,13 @@ import re
 import requests
 
 # 项目约定：语音通话禁止默认兜底模型。拉不到当前可用模型就直接报错，不要补 DEFAULT_CHAT_MODEL / GATEWAY_MODELS[0] / gpt-4。
-from config import MAIN_GATEWAY_BASE_URL, MAIN_GATEWAY_BEARER_TOKEN, TELEGRAM_PROACTIVE_TARGET_USER_ID, VOICE_CALL_WINDOW_ID
+from config import (
+    CHAT_RESPONSE_TIMEOUT_SECONDS,
+    MAIN_GATEWAY_BASE_URL,
+    MAIN_GATEWAY_BEARER_TOKEN,
+    TELEGRAM_PROACTIVE_TARGET_USER_ID,
+    VOICE_CALL_WINDOW_ID,
+)
 from utils.time_aware import now_beijing_iso
 from utils.log import get_logger
 
@@ -91,7 +97,7 @@ def call_voice_chat_pipeline(user_text, window_id="", audio_observations=""):
     base_url = str(MAIN_GATEWAY_BASE_URL or "").strip().rstrip("/")
     url = "%s/v1/chat/completions" % base_url
     try:
-        resp = requests.post(url, headers=headers, json=body, timeout=180)
+        resp = requests.post(url, headers=headers, json=body, timeout=CHAT_RESPONSE_TIMEOUT_SECONDS)
         data = resp.json() if resp.content else {}
     except Exception as e:
         logger.warning("voice chat pipeline 异常 err=%s", e)
@@ -102,7 +108,7 @@ def call_voice_chat_pipeline(user_text, window_id="", audio_observations=""):
             logger.warning("voice chat %s: model=%s -> %s 重试一次", resp.status_code, body.get("model"), new_model)
             body["model"] = new_model
             try:
-                resp = requests.post(url, headers=headers, json=body, timeout=180)
+                resp = requests.post(url, headers=headers, json=body, timeout=CHAT_RESPONSE_TIMEOUT_SECONDS)
                 data = resp.json() if resp.content else {}
             except Exception as e:
                 logger.warning("voice chat retry 异常 err=%s", e)

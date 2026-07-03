@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from du_imitator_pvz import engine as cmd_engine
+
+
+class ImitatorPvzCmdTests(unittest.TestCase):
+    def test_cmd_starts_game_sets_cards_and_persists_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd_engine.DEFAULT_SAVE_PATH = Path(tmpdir) / "save.json"
+
+            start = cmd_engine.cmd("new_game level=1 seed=cmd-test cards=模仿者 模仿者 向日葵 窝瓜")
+            action = cmd_engine.cmd("种 模仿者 3-3; 种 向日葵 2-3")
+            status = cmd_engine.cmd("status")
+
+            self.assertIn("新游戏: lv1 seed=cmd-test", start)
+            self.assertIn("资源: 阳光", start)
+            self.assertIn("3路3列种下模仿者", action)
+            self.assertIn('"level": 1', status)
+            self.assertTrue(cmd_engine.DEFAULT_SAVE_PATH.exists())
+
+            payload = json.loads(cmd_engine.DEFAULT_SAVE_PATH.read_text(encoding="utf-8"))
+            restored = cmd_engine._engine_from_session(payload)
+            self.assertEqual(restored.rng.seed, "cmd-test")
+            self.assertGreater(restored.state.tick, 0)
+            self.assertIsNotNone(restored.state.grid[(3, 3)])
+
+    def test_cmd_reports_card_selection_help(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd_engine.DEFAULT_SAVE_PATH = Path(tmpdir) / "save.json"
+
+            output = cmd_engine.cmd("cards")
+
+            self.assertIn("槽位6/10", output)
+            self.assertIn("模仿者(0)", output)
+
+    def test_cmd_emits_anti_addiction_pause_every_five_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd_engine.DEFAULT_SAVE_PATH = Path(tmpdir) / "save.json"
+
+            cmd_engine.cmd("new_game level=1 seed=pause-test cards=模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜")
+            for _ in range(4):
+                output = cmd_engine.cmd("等待 1")
+                self.assertNotIn(cmd_engine.ANTI_ADDICTION_PAUSE_PREFIX, output)
+
+            output = cmd_engine.cmd("等待 1")
+
+            self.assertIn(cmd_engine.ANTI_ADDICTION_PAUSE_PREFIX, output)
+            self.assertIn("已完成第5回合", output)
+
+    def test_cmd_open_prefers_existing_save(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd_engine.DEFAULT_SAVE_PATH = Path(tmpdir) / "save.json"
+
+            cmd_engine.cmd("new_game level=1 seed=resume-test cards=模仿者 模仿者 向日葵 窝瓜")
+            cmd_engine.cmd("等待 1")
+
+            output = cmd_engine.cmd("打开")
+
+            self.assertIn("资源: 阳光", output)
+            self.assertIn('"seed"', cmd_engine.DEFAULT_SAVE_PATH.read_text(encoding="utf-8"))
+            self.assertNotIn("请先编辑卡槽", output)
+
+
+if __name__ == "__main__":
+    unittest.main()

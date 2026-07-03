@@ -799,6 +799,13 @@ def execute_tool(name: str, arguments: dict) -> str:
     if name == "read_url":
         from services.web_search_tools import execute_read_url
         return execute_read_url(arguments if isinstance(arguments, dict) else {})
+    try:
+        from services.random_imitator_td_tool import RANDOM_IMITATOR_TD_TOOL_NAMES, execute_random_imitator_td_tool
+    except Exception:
+        RANDOM_IMITATOR_TD_TOOL_NAMES = ()
+        execute_random_imitator_td_tool = None
+    if name in RANDOM_IMITATOR_TD_TOOL_NAMES and execute_random_imitator_td_tool:
+        return execute_random_imitator_td_tool(arguments if isinstance(arguments, dict) else {})
     if str(name or "").strip().startswith("maps_"):
         from services.amap_mcp_tools import execute_amap_mcp_tool
         return execute_amap_mcp_tool(name, arguments if isinstance(arguments, dict) else {})

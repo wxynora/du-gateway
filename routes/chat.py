@@ -66,6 +66,7 @@ from pipeline.pipeline import (
     step_inject_du_notebook,
     step_inject_wenyou_player_tools,
     step_inject_gateway_tools,
+    step_inject_random_imitator_td_tools,
     step_inject_notion_search,
     step_inject_chat_tools,
     step_inject_forum_tools,
@@ -78,7 +79,7 @@ from pipeline.pipeline import (
 )
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
-from storage import million_plan_mode_store, r2_store, upstream_store, whitelist_store
+from storage import million_plan_mode_store, random_imitator_td_mode_store, r2_store, upstream_store, whitelist_store
 from storage.music_bgm_state import get_active_music_bgm_context
 from storage.music_melody_store import get_music_melody_entry_by_id
 from services.music_lyrics import normalize_lyrics_payload
@@ -280,6 +281,26 @@ def _is_million_plan_request() -> bool:
     return "/million-plan" in referer
 
 
+def _is_game_tool_loop_request() -> bool:
+    """文字游戏工具循环：不参与动态记忆/身体状态等对话侧沉淀。"""
+    if _truthy_header("X-DU-Game-Tool-Loop") or _truthy_header("X-Random-Imitator-TD"):
+        return True
+    for value in (_reply_target(), str(request.headers.get("X-Window-Id") or "")):
+        normalized = str(value or "").strip().lower().replace("_", "-")
+        if normalized.startswith(("random-imitator-td", "imitator-pvz")):
+            return True
+    referer = str(request.headers.get("Referer") or request.headers.get("Referrer") or "").lower()
+    return "/random-imitator-td" in referer or "/imitator-pvz" in referer
+
+
+def _random_imitator_td_tool_mode_enabled() -> bool:
+    try:
+        return bool(random_imitator_td_mode_store.is_enabled())
+    except Exception as e:
+        logger.warning("random_imitator_td_mode_check_failed error=%s", e)
+        return False
+
+
 def _inject_million_plan_player_prompt_if_enabled(body: dict) -> dict:
     try:
         if not million_plan_mode_store.is_enabled():
@@ -292,7 +313,12 @@ def _inject_million_plan_player_prompt_if_enabled(body: dict) -> dict:
 
 
 def _skip_dynamic_memory_request() -> bool:
-    return _truthy_header("X-Skip-Dynamic-Memory") or _is_gateway_wakeup_request() or _is_million_plan_request()
+    return (
+        _truthy_header("X-Skip-Dynamic-Memory")
+        or _is_gateway_wakeup_request()
+        or _is_million_plan_request()
+        or _is_game_tool_loop_request()
+    )
 
 
 def _tool_name(tool: dict) -> str:
@@ -805,13 +831,18 @@ def _is_gateway_wakeup_request() -> bool:
 
 
 def _skip_post_archive_dynamic_memory_request() -> bool:
-    return _truthy_header("X-Skip-Post-Archive-Dynamic-Memory") or _is_million_plan_request()
+    return (
+        _truthy_header("X-Skip-Post-Archive-Dynamic-Memory")
+        or _is_million_plan_request()
+        or _is_game_tool_loop_request()
+    )
 
 
 def _skip_post_archive_body_delta_request() -> bool:
     return (
         _truthy_header("X-Skip-Post-Archive-Body-Delta")
         or _is_million_plan_request()
+        or _is_game_tool_loop_request()
     )
 
 
@@ -915,6 +946,21 @@ def _tool_trace_has_function(tool_trace: list, name: str) -> bool:
         if str(item.get("name") or "").strip() == expected:
             return True
     return False
+
+
+def _tool_trace_has_game_tool_loop(tool_trace: list) -> bool:
+    try:
+        from services.game_tool_runtime import tool_trace_has_game_marker
+
+        if tool_trace_has_game_marker(tool_trace):
+            return True
+    except Exception as e:
+        logger.debug("game tool trace marker check failed error=%s", e)
+    return _tool_trace_has_function(tool_trace, "random_imitator_td")
+
+
+def _tool_trace_has_random_imitator_td(tool_trace: list) -> bool:
+    return _tool_trace_has_game_tool_loop(tool_trace)
 
 
 def _maybe_clear_qq_group_activity_context_for_private_reply(
@@ -1440,6 +1486,11 @@ def _stream_with_r2_archive(
             tc_trace = _collect_tool_trace_from_messages(current_body.get("messages") or [])
             if tc_trace:
                 msg["tool_calls"] = tc_trace
+            game_tool_used = _tool_trace_has_game_tool_loop(tc_trace)
+            archive_skip_dynamic_memory_write = skip_post_archive_dynamic_memory_write or game_tool_used
+            archive_skip_body_delta = skip_post_archive_body_delta or game_tool_used
+            if game_tool_used:
+                logger.info("game tool 回合命中，归档后动态记忆与 BODY delta 跳过 window_id=%s", window_id)
             round_cleaned = (
                 _build_round_cleaned_for_archive(last_user, msg, reply_target=_reply_target(), window_id=window_id)
                 if last_user
@@ -1451,8 +1502,8 @@ def _stream_with_r2_archive(
                 current_body.get("messages") or [],
                 msg,
                 round_cleaned_for_r2=round_cleaned,
-                skip_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
-                skip_body_delta=skip_post_archive_body_delta,
+                skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
+                skip_body_delta=archive_skip_body_delta,
             )
             try:
                 from services.notion_write_from_assistant import process_assistant_content_for_notion_write
@@ -1889,9 +1940,11 @@ def chat_completions():
     skip_dynamic_memory = _skip_dynamic_memory_request()
     skip_post_archive_dynamic_memory_write = _skip_post_archive_dynamic_memory_request()
     skip_post_archive_body_delta = _skip_post_archive_body_delta_request()
+    game_tool_loop = _is_game_tool_loop_request()
+    random_imitator_td_tool_mode = _random_imitator_td_tool_mode_enabled()
     du_daily_maintenance = _is_du_daily_maintenance_request()
     du_daily_trigger = build_du_daily_trigger(window_id, body, headers)
-    if not du_daily_maintenance and not _is_gateway_wakeup_request():
+    if not du_daily_maintenance and not _is_gateway_wakeup_request() and not game_tool_loop:
         try:
             last_user_for_home = _last_user_message(body.get("messages") or [])
             maybe_update_xinyue_state_from_user_text(_plain_message_text(last_user_for_home))
@@ -1921,6 +1974,8 @@ def chat_completions():
         body = step_inject_du_notebook(body)
         body = step_inject_wenyou_player_tools(body)
         body = step_inject_gateway_tools(body)
+        if game_tool_loop or random_imitator_td_tool_mode:
+            body = step_inject_random_imitator_td_tools(body)
         if not du_daily_maintenance:
             body = step_inject_notion_search(body, window_id)
             body = step_inject_chat_tools(body)
@@ -2344,6 +2399,11 @@ def chat_completions():
             tc_trace = _collect_tool_trace_from_messages(body.get("messages") or [])
             if tc_trace and not msg_for_r2.get("tool_calls"):
                 msg_for_r2["tool_calls"] = tc_trace
+            game_tool_used = _tool_trace_has_game_tool_loop(tc_trace)
+            archive_skip_dynamic_memory_write = skip_post_archive_dynamic_memory_write or game_tool_used
+            archive_skip_body_delta = skip_post_archive_body_delta or game_tool_used
+            if game_tool_used:
+                logger.info("game tool 回合命中，归档后动态记忆与 BODY delta 跳过 window_id=%s", window_id)
             last_user = _last_user_message(body.get("messages"))
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             archive_messages = _copy.deepcopy(body.get("messages") or [])
@@ -2364,8 +2424,8 @@ def chat_completions():
                             round_index=int(archived.get("round_index") or 0),
                             round_messages=archived.get("round_messages") or round_cleaned,
                             reply_channel=reply_channel,
-                            skip_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
-                            skip_body_delta=skip_post_archive_body_delta,
+                            skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
+                            skip_body_delta=archive_skip_body_delta,
                         )
                 else:
                     step_archive_and_maybe_summary(
@@ -2373,8 +2433,8 @@ def chat_completions():
                         archive_messages,
                         msg_for_r2,
                         round_cleaned_for_r2=round_cleaned,
-                        skip_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
-                        skip_body_delta=skip_post_archive_body_delta,
+                        skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
+                        skip_body_delta=archive_skip_body_delta,
                     )
             else:
                 if reply_channel in _NONSTREAM_FAST_RETURN_CHANNELS:
@@ -2385,16 +2445,16 @@ def chat_completions():
                             round_index=int(archived.get("round_index") or 0),
                             round_messages=archived.get("round_messages") or [],
                             reply_channel=reply_channel,
-                            skip_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
-                            skip_body_delta=skip_post_archive_body_delta,
+                            skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
+                            skip_body_delta=archive_skip_body_delta,
                         )
                 else:
                     step_archive_and_maybe_summary(
                         window_id,
                         archive_messages,
                         msg_for_r2,
-                        skip_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
-                        skip_body_delta=skip_post_archive_body_delta,
+                        skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
+                        skip_body_delta=archive_skip_body_delta,
                     )
     else:
         logger.info("R2 未存档：上游无 choices 或响应为空")

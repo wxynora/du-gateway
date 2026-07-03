@@ -24,7 +24,7 @@ PORT="${GATEWAY_BIND_PORT:-5000}"
 # with NapCat/NTQQ, where extra workers/threads cost real memory headroom.
 WORKERS="${GATEWAY_WORKERS:-1}"
 THREADS="${GATEWAY_THREADS:-4}"
-TIMEOUT="${GATEWAY_TIMEOUT:-360}"
+TIMEOUT="${GATEWAY_TIMEOUT:-960}"
 # Let non-daemon post-archive threads finish during gunicorn worker recycle,
 # but keep restart/recycle delays bounded on the small VPS.
 GRACEFUL_TIMEOUT="${GATEWAY_GRACEFUL_TIMEOUT:-120}"

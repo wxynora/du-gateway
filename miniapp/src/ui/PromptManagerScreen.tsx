@@ -167,6 +167,8 @@ export function PromptManagerScreen({
   const [silenceSaving, setSilenceSaving] = useState(false);
   const [millionEnabled, setMillionEnabled] = useState(false);
   const [millionSaving, setMillionSaving] = useState(false);
+  const [randomImitatorEnabled, setRandomImitatorEnabled] = useState(false);
+  const [randomImitatorSaving, setRandomImitatorSaving] = useState(false);
 
   const isDirty = !!detail && draft !== detail.content;
   const selectedTitle = detail?.label || "Prompt 管理";
@@ -174,15 +176,17 @@ export function PromptManagerScreen({
   async function loadList() {
     setLoading(true);
     try {
-      const [list, silence, million] = await Promise.all([
+      const [list, silence, million, randomImitator] = await Promise.all([
         apiJson<{ ok?: boolean; sections?: PromptSection[]; error?: string }>("/miniapp-api/prompt-manager"),
         apiJson<ModeResponse>("/miniapp-api/silence-mode"),
         apiJson<ModeResponse>("/miniapp-api/million-plan-mode"),
+        apiJson<ModeResponse>("/miniapp-api/random-imitator-td-mode"),
       ]);
       if (!list?.ok) throw new Error(list?.error || "加载失败");
       setSections(mergePromptSections(list.sections || []));
       if (silence?.ok) setSilenceEnabled(!!silence.enabled);
       if (million?.ok) setMillionEnabled(!!million.enabled);
+      if (randomImitator?.ok) setRandomImitatorEnabled(!!randomImitator.enabled);
     } catch (e: any) {
       toast(`加载失败：${e?.message || e}`);
     } finally {
@@ -210,12 +214,17 @@ export function PromptManagerScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function saveMode(kind: "silence" | "million", next: boolean) {
+  async function saveMode(kind: "silence" | "million" | "random_imitator", next: boolean) {
     const isSilence = kind === "silence";
-    const prev = isSilence ? silenceEnabled : millionEnabled;
-    const setEnabled = isSilence ? setSilenceEnabled : setMillionEnabled;
-    const setBusy = isSilence ? setSilenceSaving : setMillionSaving;
-    const path = isSilence ? "/miniapp-api/silence-mode" : "/miniapp-api/million-plan-mode";
+    const isMillion = kind === "million";
+    const prev = isSilence ? silenceEnabled : isMillion ? millionEnabled : randomImitatorEnabled;
+    const setEnabled = isSilence ? setSilenceEnabled : isMillion ? setMillionEnabled : setRandomImitatorEnabled;
+    const setBusy = isSilence ? setSilenceSaving : isMillion ? setMillionSaving : setRandomImitatorSaving;
+    const path = isSilence
+      ? "/miniapp-api/silence-mode"
+      : isMillion
+        ? "/miniapp-api/million-plan-mode"
+        : "/miniapp-api/random-imitator-td-mode";
     setEnabled(next);
     setBusy(true);
     try {
@@ -229,7 +238,9 @@ export function PromptManagerScreen({
       toast(
         isSilence
           ? (j.enabled ? "禁言模式已开启" : "禁言模式已关闭")
-          : (j.enabled ? "百万计划游戏模式已开启" : "百万计划游戏模式已关闭")
+          : isMillion
+            ? (j.enabled ? "百万计划游戏模式已开启" : "百万计划游戏模式已关闭")
+            : (j.enabled ? "植物大战丧尸模式已开启" : "植物大战丧尸模式已关闭")
       );
     } catch (e: any) {
       setEnabled(prev);
@@ -336,6 +347,13 @@ export function PromptManagerScreen({
               enabled={millionEnabled}
               disabled={millionSaving}
               onToggle={(v) => void saveMode("million", v)}
+            />
+            <SwitchSettingRow
+              icon={<CodeIcon />}
+              label="植物大战丧尸模式"
+              enabled={randomImitatorEnabled}
+              disabled={randomImitatorSaving}
+              onToggle={(v) => void saveMode("random_imitator", v)}
               last
             />
           </div>

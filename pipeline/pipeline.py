@@ -2750,6 +2750,18 @@ def step_inject_gateway_tools(body: dict) -> dict:
     return _append_tool_schemas(body, tools)
 
 
+def step_inject_random_imitator_td_tools(body: dict) -> dict:
+    """注入随机塔防工具；是否调用本 step 由聊天入口的专用标记或后端模式开关决定。"""
+    try:
+        from services.random_imitator_td_tool import get_random_imitator_td_tools_for_inject
+
+        tools = get_random_imitator_td_tools_for_inject()
+    except Exception as e:
+        logger.debug("random_imitator_td tools 注入跳过 error=%s", e)
+        return body
+    return _append_tool_schemas(body, tools)
+
+
 def step_inject_chat_tools(body: dict) -> dict:
     """
     注入聊天工具集合。

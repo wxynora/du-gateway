@@ -349,8 +349,14 @@ MAX_REQUEST_CHARS = int(os.environ.get("MAX_REQUEST_CHARS", "0"))
 # 转发时若请求未带 max_tokens 或小于此值，则设为该值，避免中转站用默认小值导致回复被截断（0=不强制）
 MAX_COMPLETION_TOKENS = int(os.environ.get("MAX_COMPLETION_TOKENS", "8192"))
 
-# 流式转发读超时（秒）。思维链模型思考阶段可能长时间不推数据，过短会断流导致思维链刚开头就截断，默认 300
-STREAM_TIMEOUT_SECONDS = int(os.environ.get("STREAM_TIMEOUT_SECONDS", "300"))
+# 对话回复等待总口径（秒）。普通入口、工具循环、后端唤醒/主动任务等所有等模型回复的链路默认 15 分钟。
+CHAT_RESPONSE_TIMEOUT_SECONDS = int(os.environ.get("CHAT_RESPONSE_TIMEOUT_SECONDS", "900"))
+
+# 流式转发读超时（秒）。思维链模型思考阶段可能长时间不推数据，过短会断流导致思维链刚开头就截断。
+STREAM_TIMEOUT_SECONDS = int(os.environ.get("STREAM_TIMEOUT_SECONDS", str(CHAT_RESPONSE_TIMEOUT_SECONDS)))
+TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS = int(
+    os.environ.get("TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS", str(CHAT_RESPONSE_TIMEOUT_SECONDS))
+)
 
 # 流式下游稳态：SSE 心跳（秒）。>0 时若下游一段时间无数据，则发送 ": ping\n\n" 保活，减少代理/客户端空闲断连
 STREAM_SSE_HEARTBEAT_SECONDS = int(os.environ.get("STREAM_SSE_HEARTBEAT_SECONDS", "15"))

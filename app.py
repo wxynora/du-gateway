@@ -78,7 +78,7 @@ if os.environ.get("GATEWAY_EMBEDDED_SCHEDULE_RUNTIME_ENABLED", "0").strip().lowe
 CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "https://duxy-home.com").strip()
 CORS_ALLOW_HEADERS = os.environ.get(
     "CORS_ALLOW_HEADERS",
-    "Content-Type, Authorization, X-Telegram-Init-Data, X-Panel-Token, X-Force-Last4, X-Reply-Channel, X-Reply-Target, X-Window-Id",
+    "Content-Type, Authorization, X-Telegram-Init-Data, X-Panel-Token, X-Force-Last4, X-Reply-Channel, X-Reply-Target, X-Window-Id, X-DU-Game-Tool-Loop, X-Random-Imitator-TD",
 ).strip()
 CORS_ALLOW_METHODS = os.environ.get(
     "CORS_ALLOW_METHODS",
