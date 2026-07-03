@@ -342,18 +342,6 @@ def _strip_dynamic_memory_recall_tools(body: dict) -> dict:
     return body
 
 
-def _strip_tools_for_game_checkpoint_finalization(body: dict) -> dict:
-    """Finish a game checkpoint as plain assistant text without allowing more game moves."""
-    if not isinstance(body, dict):
-        return body
-    if "tools" not in body and "tool_choice" not in body:
-        return body
-    stripped = dict(body)
-    stripped.pop("tools", None)
-    stripped.pop("tool_choice", None)
-    return stripped
-
-
 def _force_game_checkpoint_final_response(resp_json: dict | None) -> dict:
     fallback = "由于防沉迷机制，暂时中止游戏回合。下次可以继续。"
     data = dict(resp_json or {})
@@ -1417,7 +1405,6 @@ def _stream_with_r2_archive(
                 if _game_tool_checkpoint_from_messages(current_body.get("messages") or []):
                     logger.info("game tool checkpoint 流式回合转普通收口 window_id=%s round=%s", window_id, tool_rounds_used)
                     game_checkpoint_finalizing = True
-                    current_body = _strip_tools_for_game_checkpoint_finalization(current_body)
                     continue
                 continue
             if (
@@ -2259,7 +2246,6 @@ def chat_completions():
             if _game_tool_checkpoint_from_messages(body.get("messages") or []):
                 logger.info("game tool checkpoint 非流式回合转普通收口 window_id=%s round=%s", window_id, tool_rounds_used)
                 game_checkpoint_finalizing = True
-                body = _strip_tools_for_game_checkpoint_finalization(body)
                 resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
                 if cache_debug:
                     cache_debug_entries.append(cache_debug)

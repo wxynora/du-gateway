@@ -66,7 +66,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已完成：Prompt 管理新增「植物大战丧尸模式」后端开关。该开关只固定注入 `random_imitator_td` 工具，不让 `_is_game_tool_loop_request()` 变真，也不提前跳过动态记忆召回；跳过只发生在专用游戏标记命中，或本轮实际调用了 `random_imitator_td` 工具之后。
 - 已完成：归档保险层已补齐。即使客户端忘带游戏请求标记，只要本轮工具结果带 `game_tool_loop`，流式和非流式归档后的动态记忆写入与 BODY delta 都会强制跳过；旧的 `random_imitator_td` 工具名仍保留兜底兼容。
 - 已修复：防沉迷 checkpoint 不直接吐工具文本，而是按普通工具循环结束方式再请求一次上游；这次请求保留工具结果上下文，不改 `tool_choice`、不注入额外系统提示，只在 checkpoint 工具结果里带 `checkpoint_instruction`：由于防沉迷机制，暂时中止游戏回合，不要继续使用游戏工具，正常回复信息。普通非 checkpoint 游戏回合不走这个分支。
-- 已修复：checkpoint 收口请求不再继续暴露工具列表，避免模型无视 `checkpoint_instruction` 后再次调用 `random_imitator_td` 自己续玩；如果上游在收口阶段仍返回工具调用，后端会阻止执行并强制转成暂停回复。
+- 已修复：checkpoint 收口请求继续保留工具列表和 `tool_choice`，避免破坏 prompt cache；如果上游无视 `checkpoint_instruction` 在收口阶段仍返回 `random_imitator_td` 工具调用，后端会阻止执行并强制转成暂停回复。
 - 已修复：`random_imitator_td` 网关包装层已收束为固定单存档 `default.json`。旧 `_active_save.json` 只作为一次性迁移来源：如果服务器上只有旧活跃存档，会先复制到 `default.json`；之后不再写活跃指针，也不允许按 `save_id` 切档。
 - 已修复：局面胜利、失败或玩家主动 `结束本局` 后，下一次 `打开` / `继续` 会覆盖为 lv1 新局准备；玩家用 `note ...` 写下的复盘会跨局保留，不跟着存档覆盖清空。
 - 已修复：本局到达结局或玩家主动 `结束本局` 后，工具结果同样标记 `checkpoint: true`、`checkpoint_reason: game_over`，并提示“不要继续使用游戏工具，也不要立刻 new_game 或重开”，让模型按普通工具循环收口回复本局结果，避免结局后自动连开新局。
