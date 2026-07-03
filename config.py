@@ -362,8 +362,8 @@ TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS = int(
 STREAM_SSE_HEARTBEAT_SECONDS = int(os.environ.get("STREAM_SSE_HEARTBEAT_SECONDS", "15"))
 # 流式下游稳态：合并 flush 窗口（毫秒）。把短时间内多个小 chunk 合并后再 yield，减少小包抖动
 STREAM_SSE_FLUSH_MAX_MS = int(os.environ.get("STREAM_SSE_FLUSH_MAX_MS", "60"))
-# 工具调用最多允许继续几轮（每继续一轮都要额外调用一次上游模型）。默认 6 以便复杂工具链收口。
-TOOL_MAX_ROUNDS = int(os.environ.get("TOOL_MAX_ROUNDS", "6"))
+# 工具调用最多允许继续几轮（每继续一轮都要额外调用一次上游模型）。默认 10 以便复杂工具链收口。
+TOOL_MAX_ROUNDS = int(os.environ.get("TOOL_MAX_ROUNDS", "10"))
 if TOOL_MAX_ROUNDS < 1:
     TOOL_MAX_ROUNDS = 1
 

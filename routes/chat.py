@@ -963,6 +963,58 @@ def _tool_trace_has_random_imitator_td(tool_trace: list) -> bool:
     return _tool_trace_has_game_tool_loop(tool_trace)
 
 
+def _game_tool_reply_from_messages(messages: list) -> str:
+    try:
+        from services.game_tool_runtime import game_tool_reply_text_from_messages
+
+        return game_tool_reply_text_from_messages(messages)
+    except Exception as e:
+        logger.debug("game tool reply extraction failed error=%s", e)
+        return ""
+
+
+def _game_tool_checkpoint_from_messages(messages: list) -> bool:
+    try:
+        from services.game_tool_runtime import game_tool_checkpoint_from_messages
+
+        return game_tool_checkpoint_from_messages(messages)
+    except Exception as e:
+        logger.debug("game tool checkpoint extraction failed error=%s", e)
+        return False
+
+
+def _force_next_tool_loop_reply_without_tool_calls(body: dict) -> dict:
+    out = dict(body or {})
+    if isinstance(out.get("tools"), list) and out.get("tools"):
+        out["tool_choice"] = "none"
+    else:
+        out.pop("tool_choice", None)
+    return out
+
+
+def _force_nonstream_assistant_content(resp_json: dict | None, content: str) -> dict:
+    text = str(content or "").strip()
+    now = int(time.time())
+    data = resp_json if isinstance(resp_json, dict) else {}
+    data.setdefault("id", f"chatcmpl-local-{now}")
+    data.setdefault("object", "chat.completion")
+    data.setdefault("created", now)
+    data.setdefault("model", data.get("model") or "local-tool-result")
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        choices = [{"index": 0}]
+    choice = choices[0] if isinstance(choices[0], dict) else {"index": 0}
+    msg = dict(choice.get("message") or {})
+    msg["role"] = "assistant"
+    msg["content"] = text
+    msg.pop("tool_calls", None)
+    choice["message"] = msg
+    choice["finish_reason"] = "stop"
+    choices[0] = choice
+    data["choices"] = choices
+    return data
+
+
 def _maybe_clear_qq_group_activity_context_for_private_reply(
     body: dict,
     *,
@@ -1303,6 +1355,7 @@ def _stream_with_r2_archive(
     tool_rounds_used = 0
     tool_empty_final_retry_used = False
     tool_midstream_retry_used = False
+    game_checkpoint_finalizing = False
     tool_visible_content_parts: list[str] = []
     final_thinking_blocks: list[dict] = []
     stream_inner_os_parts: list[str] = []
@@ -1364,10 +1417,23 @@ def _stream_with_r2_archive(
                     reasoning_omitted = True
                 current_body = _append_tool_results_and_continue(current_body, msg, tool_calls, execute_tool)
                 tool_rounds_used += 1
+                if _game_tool_checkpoint_from_messages(current_body.get("messages") or []):
+                    logger.info("game tool checkpoint 流式回合转普通无工具收口 window_id=%s round=%s", window_id, tool_rounds_used)
+                    current_body = _force_next_tool_loop_reply_without_tool_calls(current_body)
+                    game_checkpoint_finalizing = True
+                    continue
+                game_reply = _game_tool_reply_from_messages(current_body.get("messages") or [])
+                if game_reply:
+                    logger.info("game tool 流式回合直接返回工具结果 window_id=%s round=%s chars=%s", window_id, tool_rounds_used, len(game_reply))
+                    yield _sse_delta_chunk_bytes(game_reply)
+                    content_parts.append(game_reply)
+                    yield b"data: [DONE]\n\n"
+                    break
                 continue
             if (
                 tool_rounds_used > 0
                 and (not tool_empty_final_retry_used)
+                and (not game_checkpoint_finalizing)
                 and _should_retry_tool_empty_final(parsed.get("content") or "")
             ):
                 logger.warning("工具续轮最终正文为空，流式路径触发一次强制收口补问")
@@ -1377,6 +1443,7 @@ def _stream_with_r2_archive(
             if (
                 tool_rounds_used > 0
                 and (not tool_midstream_retry_used)
+                and (not game_checkpoint_finalizing)
                 and _should_retry_tool_followup(
                     parsed.get("content") or "",
                     parsed.get("reasoning") or "",
@@ -2153,6 +2220,7 @@ def chat_completions():
     tool_rounds_used = 0
     tool_empty_final_retry_used = False
     tool_midstream_retry_used = False
+    game_checkpoint_finalizing = False
     allow_tool_only_reply = _allow_tool_only_reply_request()
     tool_only_reply_done = False
     while True:
@@ -2190,6 +2258,23 @@ def chat_completions():
                 ),
             )
             tool_rounds_used += 1
+            if _game_tool_checkpoint_from_messages(body.get("messages") or []):
+                logger.info("game tool checkpoint 非流式回合转普通无工具收口 window_id=%s round=%s", window_id, tool_rounds_used)
+                body = _force_next_tool_loop_reply_without_tool_calls(body)
+                game_checkpoint_finalizing = True
+                resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
+                if cache_debug:
+                    cache_debug_entries.append(cache_debug)
+                if err or status >= 400:
+                    break
+                continue
+            game_reply = _game_tool_reply_from_messages(body.get("messages") or [])
+            if game_reply:
+                logger.info("game tool 非流式回合直接返回工具结果 window_id=%s round=%s chars=%s", window_id, tool_rounds_used, len(game_reply))
+                resp_json = _force_nonstream_assistant_content(resp_json, game_reply)
+                status = 200
+                err = None
+                break
             resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
             if cache_debug:
                 cache_debug_entries.append(cache_debug)
@@ -2202,6 +2287,7 @@ def chat_completions():
         if (
             tool_rounds_used > 0
             and (not tool_empty_final_retry_used)
+            and (not game_checkpoint_finalizing)
             and (not allow_tool_only_reply)
             and _should_retry_tool_empty_final(visible_content_text)
         ):
@@ -2217,6 +2303,7 @@ def chat_completions():
         if (
             tool_rounds_used > 0
             and (not tool_midstream_retry_used)
+            and (not game_checkpoint_finalizing)
             and _should_retry_tool_followup(
                 visible_content_text,
                 str((msg or {}).get("reasoning") or (msg or {}).get("reasoning_content") or (msg or {}).get("thinking") or ""),

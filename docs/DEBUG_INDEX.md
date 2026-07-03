@@ -65,6 +65,9 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已完成：`routes/chat.py` 新增游戏工具循环标记：请求头 `X-DU-Game-Tool-Loop: 1` 或 `X-Random-Imitator-TD: 1`、`window_id/reply_target` 以 `random-imitator-td` 开头时，会跳过动态记忆召回、归档后动态记忆写入、BODY delta，并跳过小家/用户状态文本推断。
 - 已完成：Prompt 管理新增「植物大战丧尸模式」后端开关。该开关只固定注入 `random_imitator_td` 工具，不让 `_is_game_tool_loop_request()` 变真，也不提前跳过动态记忆召回；跳过只发生在专用游戏标记命中，或本轮实际调用了 `random_imitator_td` 工具之后。
 - 已完成：归档保险层已补齐。即使客户端忘带游戏请求标记，只要本轮工具结果带 `game_tool_loop`，流式和非流式归档后的动态记忆写入与 BODY delta 都会强制跳过；旧的 `random_imitator_td` 工具名仍保留兜底兼容。
+- 已修复：游戏工具结果现在会在网关 tool loop 内收口。普通游戏推进只要工具消息带 `game_tool_loop`，流式/非流式路径都会把工具返回的 `text` 作为本轮回复发给玩家，并停止继续请求上游；避免模型在同一轮连续调用 `random_imitator_td` 直到撞上 `TOOL_MAX_ROUNDS=6` 后空回复。
+- 已修复：防沉迷 checkpoint 不直接吐工具文本，而是按普通工具循环结束方式再请求一次上游；这次请求保留工具结果上下文，但把 `tool_choice` 设为 `none`，不注入额外提示词，让机正常回应玩家原始消息。
+- 已调整：网关工具续轮默认上限 `TOOL_MAX_ROUNDS` 从 6 调到 10；游戏工具正常仍会在 1 轮收口，10 只是给其他复杂工具链留余量。
 - 已验证：`.venv/bin/python scripts/test_random_imitator_td_tool.py && .venv/bin/python scripts/test_imitator_pvz_cmd.py`、`.venv/bin/python -m py_compile du_imitator_pvz/engine.py du_imitator_pvz/__main__.py services/random_imitator_td_tool.py services/game_tool_runtime.py storage/random_imitator_td_mode_store.py routes/miniapp/settings.py routes/miniapp/game_tools.py routes/miniapp_api.py routes/chat.py scripts/test_imitator_pvz_cmd.py scripts/test_random_imitator_td_tool.py` 均通过；工具返回不会暴露本机 `save_path`；开源仓库同步补了同款防沉迷暂停、打开读档入口和测试，但不包含 du-gateway 私有工具。
 - 未完成 / 下次继续：未做前端游戏面板；当前 Prompt 管理开关只控制固定注入 `random_imitator_td` 工具。游戏专用入口走 `/miniapp-api/game-tools/<game_id>` 或工具结果自带 `game_tool_loop`，普通聊天不会因为开关开启而跳过动态记忆/身体状态。
 

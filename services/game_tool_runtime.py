@@ -182,12 +182,7 @@ def game_tool_error_payload(
 
 
 def tool_result_has_game_marker(result: Any) -> bool:
-    data = result
-    if isinstance(result, str):
-        try:
-            data = json.loads(result)
-        except Exception:
-            return False
+    data = _coerce_result_dict(result)
     if not isinstance(data, dict):
         return False
     if data.get(GAME_TOOL_LOOP_MARKER) is True:
@@ -195,11 +190,66 @@ def tool_result_has_game_marker(result: Any) -> bool:
     return bool(data.get("game_id") and data.get(GAME_TOOL_SKIP_DYNAMIC_MEMORY_WRITE) and data.get(GAME_TOOL_SKIP_BODY_DELTA))
 
 
+def game_tool_reply_text_from_result(result: Any) -> str:
+    data = _coerce_result_dict(result)
+    if not isinstance(data, dict) or not tool_result_has_game_marker(data):
+        return ""
+    if data.get("ok") is False:
+        message = str(data.get("message") or data.get("error") or "游戏工具执行失败").strip()
+        return f"游戏工具执行失败: {message}" if message else "游戏工具执行失败。"
+    return str(data.get("text") or data.get("message") or "").strip()
+
+
+def game_tool_reply_text_from_messages(messages: list) -> str:
+    for msg in reversed(messages or []):
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("role") or "").strip().lower() != "tool":
+            continue
+        text = game_tool_reply_text_from_result(msg.get("content"))
+        if text:
+            return text
+    return ""
+
+
+def game_tool_checkpoint_from_result(result: Any) -> bool:
+    data = _coerce_result_dict(result)
+    if not isinstance(data, dict) or not tool_result_has_game_marker(data):
+        return False
+    checkpoint = data.get("checkpoint")
+    if isinstance(checkpoint, str):
+        return checkpoint.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return checkpoint is True
+
+
+def game_tool_checkpoint_from_messages(messages: list) -> bool:
+    for msg in reversed(messages or []):
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("role") or "").strip().lower() != "tool":
+            continue
+        if tool_result_has_game_marker(msg.get("content")):
+            return game_tool_checkpoint_from_result(msg.get("content"))
+    return False
+
+
 def tool_trace_has_game_marker(tool_trace: list) -> bool:
     for item in tool_trace or []:
         if isinstance(item, dict) and tool_result_has_game_marker(item.get("result")):
             return True
     return False
+
+
+def _coerce_result_dict(result: Any) -> dict[str, Any] | None:
+    if isinstance(result, dict):
+        return result
+    if isinstance(result, str):
+        try:
+            data = json.loads(result)
+        except Exception:
+            return None
+        return data if isinstance(data, dict) else None
+    return None
 
 
 def _execute_random_imitator_td(
