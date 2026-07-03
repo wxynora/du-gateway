@@ -105,7 +105,7 @@ def _route_command(session: dict[str, Any], part: str, *, save_path: Path) -> st
     pause_text = _consume_anti_addiction_pause(session, engine)
     if pause_text:
         return pause_text
-    observation = engine.run_until_decision()
+    observation = _action_observation(engine)
     try:
         plan = parse_player_text_action_plan(
             part,
@@ -120,6 +120,19 @@ def _route_command(session: dict[str, Any], part: str, *, save_path: Path) -> st
     output = f"{result['observation']['player_view']['text']}\n{_state_json(engine)}"
     _mark_anti_addiction_pause_if_due(session, int(session.get("turn", 0)), engine)
     return output
+
+
+def _action_observation(engine: GameEngine) -> dict[str, Any]:
+    return engine.build_observation(
+        reason=["before_player_action"],
+        events=[],
+        advance_summary={
+            "from_tick": engine.state.tick,
+            "to_tick": engine.state.tick,
+            "advanced_ticks": 0,
+            "stop_reason": "before_player_action",
+        },
+    )
 
 
 def _looks_like_gameplay_command(text: str) -> bool:
@@ -319,12 +332,22 @@ def _session_game_over(session: dict[str, Any]) -> bool:
 
 
 def _reset_finished_session(session: dict[str, Any]) -> str:
+    engine = _engine_from_session(session)
     player_notes = _player_notes_from_session(session)
+    next_level = 1
+    seed = DEFAULT_SEED
+    prefix = "上一局已结束，已准备新局。\n请先编辑卡槽。"
+    if engine is not None and engine.state.result == "won":
+        next_level = engine.state.level + 1
+        seed = engine.rng.seed
+        prefix = f"上一关已通关，已准备 lv{next_level}。\n请先编辑卡槽。"
     session.clear()
     session.update(_fresh_session())
+    session["level"] = next_level
+    session["seed"] = seed
     if player_notes:
         session["player_notes"] = player_notes
-    return _setup_text(session, prefix="上一局已结束，已准备新局。\n请先编辑卡槽。")
+    return _setup_text(session, prefix=prefix)
 
 
 def _save_session(session: dict[str, Any], save_path: Path) -> None:

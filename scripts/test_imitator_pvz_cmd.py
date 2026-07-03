@@ -64,6 +64,19 @@ class ImitatorPvzCmdTests(unittest.TestCase):
             self.assertNotIn(cmd_engine.ANTI_ADDICTION_PAUSE_PREFIX, output)
             self.assertIn("资源: 阳光", output)
 
+    def test_cmd_does_not_fast_forward_before_player_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd_engine.DEFAULT_SAVE_PATH = Path(tmpdir) / "save.json"
+
+            cmd_engine.cmd("new_game level=1 seed=no-hidden-advance cards=模仿者 模仿者")
+            first = cmd_engine.cmd("种 模仿者 3-3")
+            second = cmd_engine.cmd("种 模仿者 3-4")
+
+            self.assertIn('"tick": 3', first)
+            self.assertIn('"tick": 6', second)
+            self.assertIn("3路4列种下模仿者", second)
+            self.assertNotIn("3路3列模仿者开奖", second)
+
     def test_cmd_open_prefers_existing_save(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cmd_engine.DEFAULT_SAVE_PATH = Path(tmpdir) / "save.json"
@@ -92,6 +105,29 @@ class ImitatorPvzCmdTests(unittest.TestCase):
             self.assertIn("上一局已结束，已准备新局。", open_output)
             self.assertIn("请先编辑卡槽", open_output)
             self.assertIn("多带模仿者", notes_output)
+
+    def test_won_game_advances_to_next_level_on_next_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd_engine.DEFAULT_SAVE_PATH = Path(tmpdir) / "save.json"
+
+            cmd_engine.cmd("new_game level=1 seed=won-next-level cards=模仿者 模仿者 向日葵 窝瓜")
+            payload = json.loads(cmd_engine.DEFAULT_SAVE_PATH.read_text(encoding="utf-8"))
+            engine = cmd_engine._engine_from_session(payload)
+            self.assertIsNotNone(engine)
+            engine.state.game_over = True
+            engine.state.result = "won"
+            cmd_engine._store_engine(payload, engine)
+            cmd_engine._save_session(payload, cmd_engine.DEFAULT_SAVE_PATH)
+
+            open_output = cmd_engine.cmd("打开")
+            cards_output = cmd_engine.cmd("cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜")
+
+            self.assertIn("上一关已通关，已准备 lv2。", open_output)
+            self.assertIn("请先编辑卡槽", open_output)
+            payload = json.loads(cmd_engine.DEFAULT_SAVE_PATH.read_text(encoding="utf-8"))
+            self.assertEqual(payload["level"], 2)
+            self.assertEqual(payload["seed"], "won-next-level")
+            self.assertIn("Lv2 场地:夜间", cards_output)
 
     def test_note_in_setup_does_not_start_engine(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
