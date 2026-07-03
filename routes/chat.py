@@ -963,16 +963,6 @@ def _tool_trace_has_random_imitator_td(tool_trace: list) -> bool:
     return _tool_trace_has_game_tool_loop(tool_trace)
 
 
-def _game_tool_reply_from_messages(messages: list) -> str:
-    try:
-        from services.game_tool_runtime import game_tool_reply_text_from_messages
-
-        return game_tool_reply_text_from_messages(messages)
-    except Exception as e:
-        logger.debug("game tool reply extraction failed error=%s", e)
-        return ""
-
-
 def _game_tool_checkpoint_from_messages(messages: list) -> bool:
     try:
         from services.game_tool_runtime import game_tool_checkpoint_from_messages
@@ -990,29 +980,6 @@ def _force_next_tool_loop_reply_without_tool_calls(body: dict) -> dict:
     else:
         out.pop("tool_choice", None)
     return out
-
-
-def _force_nonstream_assistant_content(resp_json: dict | None, content: str) -> dict:
-    text = str(content or "").strip()
-    now = int(time.time())
-    data = resp_json if isinstance(resp_json, dict) else {}
-    data.setdefault("id", f"chatcmpl-local-{now}")
-    data.setdefault("object", "chat.completion")
-    data.setdefault("created", now)
-    data.setdefault("model", data.get("model") or "local-tool-result")
-    choices = data.get("choices")
-    if not isinstance(choices, list) or not choices:
-        choices = [{"index": 0}]
-    choice = choices[0] if isinstance(choices[0], dict) else {"index": 0}
-    msg = dict(choice.get("message") or {})
-    msg["role"] = "assistant"
-    msg["content"] = text
-    msg.pop("tool_calls", None)
-    choice["message"] = msg
-    choice["finish_reason"] = "stop"
-    choices[0] = choice
-    data["choices"] = choices
-    return data
 
 
 def _maybe_clear_qq_group_activity_context_for_private_reply(
@@ -1422,13 +1389,6 @@ def _stream_with_r2_archive(
                     current_body = _force_next_tool_loop_reply_without_tool_calls(current_body)
                     game_checkpoint_finalizing = True
                     continue
-                game_reply = _game_tool_reply_from_messages(current_body.get("messages") or [])
-                if game_reply:
-                    logger.info("game tool 流式回合直接返回工具结果 window_id=%s round=%s chars=%s", window_id, tool_rounds_used, len(game_reply))
-                    yield _sse_delta_chunk_bytes(game_reply)
-                    content_parts.append(game_reply)
-                    yield b"data: [DONE]\n\n"
-                    break
                 continue
             if (
                 tool_rounds_used > 0
@@ -2268,13 +2228,6 @@ def chat_completions():
                 if err or status >= 400:
                     break
                 continue
-            game_reply = _game_tool_reply_from_messages(body.get("messages") or [])
-            if game_reply:
-                logger.info("game tool 非流式回合直接返回工具结果 window_id=%s round=%s chars=%s", window_id, tool_rounds_used, len(game_reply))
-                resp_json = _force_nonstream_assistant_content(resp_json, game_reply)
-                status = 200
-                err = None
-                break
             resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
             if cache_debug:
                 cache_debug_entries.append(cache_debug)

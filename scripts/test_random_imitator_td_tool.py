@@ -114,33 +114,6 @@ def test_unified_game_runtime_executes_registered_game() -> None:
         _assert((Path(tmpdir) / "player_a.json").exists(), "unified runtime should use save_id path")
 
 
-def test_game_tool_reply_text_extracted_from_tool_messages() -> None:
-    result = json.dumps(
-        {
-            "ok": True,
-            "game_id": "future_game",
-            "game_tool_loop": True,
-            "skip_dynamic_memory_write": True,
-            "skip_body_delta": True,
-            "text": "事件: 开局\n1: 空 空 模仿者",
-        },
-        ensure_ascii=False,
-    )
-    messages = [
-        {"role": "assistant", "tool_calls": [{"id": "call_1", "function": {"name": "future_game"}}]},
-        {"role": "tool", "tool_call_id": "call_1", "content": result},
-    ]
-
-    _assert(
-        game_tool_runtime.game_tool_reply_text_from_messages(messages) == "事件: 开局\n1: 空 空 模仿者",
-        "game tool result text should be returned directly",
-    )
-    resp = chat_route._force_nonstream_assistant_content({"choices": [{"message": {"tool_calls": []}}]}, "棋盘")
-    msg = (resp.get("choices") or [{}])[0].get("message") or {}
-    _assert(msg.get("content") == "棋盘", "forced nonstream reply should expose game text")
-    _assert("tool_calls" not in msg, "forced nonstream reply should clear tool calls")
-
-
 def test_game_checkpoint_forces_next_reply_without_tool_calls() -> None:
     result = json.dumps(
         {
@@ -172,6 +145,27 @@ def test_game_checkpoint_forces_next_reply_without_tool_calls() -> None:
     _assert(len(next_body.get("messages") or []) == len(messages), "checkpoint final hop should not inject prompts")
 
 
+def test_normal_game_tool_result_does_not_checkpoint() -> None:
+    result = json.dumps(
+        {
+            "ok": True,
+            "game_id": "future_game",
+            "game_tool_loop": True,
+            "skip_dynamic_memory_write": True,
+            "skip_body_delta": True,
+            "checkpoint": False,
+            "text": "事件: 普通回合",
+        },
+        ensure_ascii=False,
+    )
+    messages = [
+        {"role": "assistant", "tool_calls": [{"id": "call_1", "function": {"name": "future_game"}}]},
+        {"role": "tool", "tool_call_id": "call_1", "content": result},
+    ]
+
+    _assert(not game_tool_runtime.game_tool_checkpoint_from_messages(messages), "normal game result should not checkpoint")
+
+
 def test_tool_mode_injects_without_game_loop_skip() -> None:
     app = Flask(__name__)
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -191,7 +185,7 @@ if __name__ == "__main__":
     test_game_tool_trace_skips_archive_side_effects()
     test_game_tool_trace_marker_skips_archive_side_effects()
     test_unified_game_runtime_executes_registered_game()
-    test_game_tool_reply_text_extracted_from_tool_messages()
     test_game_checkpoint_forces_next_reply_without_tool_calls()
+    test_normal_game_tool_result_does_not_checkpoint()
     test_tool_mode_injects_without_game_loop_skip()
     print("ok")
