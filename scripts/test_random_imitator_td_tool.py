@@ -208,7 +208,7 @@ def test_unified_game_runtime_executes_registered_game() -> None:
         _assert(not (Path(tmpdir) / "player_a.json").exists(), "unified runtime should not create save_id paths")
 
 
-def test_game_checkpoint_does_not_mutate_tool_choice() -> None:
+def test_game_checkpoint_finalization_strips_tools_without_message_injection() -> None:
     result = json.dumps(
         {
             "ok": True,
@@ -233,9 +233,32 @@ def test_game_checkpoint_does_not_mutate_tool_choice() -> None:
         "tools": [{"type": "function", "function": {"name": "future_game", "parameters": {"type": "object"}}}],
         "tool_choice": "auto",
     }
-    _assert(body.get("tool_choice") == "auto", "checkpoint should not mutate tool_choice")
-    _assert(body.get("messages") == messages, "checkpoint should keep normal tool-loop context")
-    _assert(len(body.get("messages") or []) == len(messages), "checkpoint should not inject prompts")
+    stripped = chat_route._strip_tools_for_game_checkpoint_finalization(body)
+
+    _assert("tools" not in stripped, "checkpoint finalization should remove tools")
+    _assert("tool_choice" not in stripped, "checkpoint finalization should remove tool_choice")
+    _assert(stripped.get("messages") == messages, "checkpoint should keep normal tool-loop context")
+    _assert(len(stripped.get("messages") or []) == len(messages), "checkpoint should not inject prompts")
+
+
+def test_game_checkpoint_finalization_blocks_tool_call_response() -> None:
+    resp = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": "call_1", "function": {"name": "random_imitator_td"}}],
+                }
+            }
+        ]
+    }
+
+    final_resp = chat_route._force_game_checkpoint_final_response(resp)
+    msg = final_resp["choices"][0]["message"]
+
+    _assert("tool_calls" not in msg, "forced checkpoint response should remove tool calls")
+    _assert("防沉迷机制" in str(msg.get("content") or ""), "forced checkpoint response should explain pause")
 
 
 def test_normal_game_tool_result_does_not_checkpoint() -> None:
@@ -282,7 +305,8 @@ if __name__ == "__main__":
     test_game_tool_trace_skips_archive_side_effects()
     test_game_tool_trace_marker_skips_archive_side_effects()
     test_unified_game_runtime_executes_registered_game()
-    test_game_checkpoint_does_not_mutate_tool_choice()
+    test_game_checkpoint_finalization_strips_tools_without_message_injection()
+    test_game_checkpoint_finalization_blocks_tool_call_response()
     test_normal_game_tool_result_does_not_checkpoint()
     test_tool_mode_injects_without_game_loop_skip()
     print("ok")

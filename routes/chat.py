@@ -342,6 +342,34 @@ def _strip_dynamic_memory_recall_tools(body: dict) -> dict:
     return body
 
 
+def _strip_tools_for_game_checkpoint_finalization(body: dict) -> dict:
+    """Finish a game checkpoint as plain assistant text without allowing more game moves."""
+    if not isinstance(body, dict):
+        return body
+    if "tools" not in body and "tool_choice" not in body:
+        return body
+    stripped = dict(body)
+    stripped.pop("tools", None)
+    stripped.pop("tool_choice", None)
+    return stripped
+
+
+def _force_game_checkpoint_final_response(resp_json: dict | None) -> dict:
+    fallback = "由于防沉迷机制，暂时中止游戏回合。下次可以继续。"
+    data = dict(resp_json or {})
+    choices = list(data.get("choices") or [{}])
+    if not choices:
+        choices = [{}]
+    choice = dict(choices[0] or {})
+    msg = dict(choice.get("message") or {})
+    msg.pop("tool_calls", None)
+    msg["content"] = _normalize_visible_reply_text(get_assistant_content_text(msg)) or fallback
+    choice["message"] = msg
+    choices[0] = choice
+    data["choices"] = choices
+    return data
+
+
 def _bearer_token_from_request() -> str:
     auth = (request.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
@@ -1348,6 +1376,17 @@ def _stream_with_r2_archive(
             parsed = _parse_stream_to_message(chunks)
             tool_calls = parsed.get("tool_calls")
             if tool_calls and isinstance(tool_calls, list):
+                if game_checkpoint_finalizing:
+                    logger.warning(
+                        "game tool checkpoint 收口时上游仍请求工具，已阻止继续执行 window_id=%s tool_calls=%s",
+                        window_id,
+                        len(tool_calls),
+                    )
+                    fallback = "由于防沉迷机制，暂时中止游戏回合。下次可以继续。"
+                    fallback = _merge_visible_tool_round_content(tool_visible_content_parts, fallback)
+                    yield _sse_delta_chunk_bytes(fallback)
+                    content_parts.append(fallback)
+                    break
                 if tool_rounds_used >= max_processed_tool_rounds:
                     logger.warning(
                         "工具调用达到轮数上限(%s)，停止继续请求上游以控制费用；当前工具数=%s",
@@ -1378,6 +1417,7 @@ def _stream_with_r2_archive(
                 if _game_tool_checkpoint_from_messages(current_body.get("messages") or []):
                     logger.info("game tool checkpoint 流式回合转普通收口 window_id=%s round=%s", window_id, tool_rounds_used)
                     game_checkpoint_finalizing = True
+                    current_body = _strip_tools_for_game_checkpoint_finalization(current_body)
                     continue
                 continue
             if (
@@ -2177,6 +2217,14 @@ def chat_completions():
         msg = (resp_json or {}).get("choices") and (resp_json.get("choices") or [{}])[0].get("message")
         tool_calls = (msg or {}).get("tool_calls")
         if tool_calls and isinstance(tool_calls, list):
+            if game_checkpoint_finalizing:
+                logger.warning(
+                    "game tool checkpoint 收口时上游仍请求工具，已阻止继续执行 window_id=%s tool_calls=%s",
+                    window_id,
+                    len(tool_calls),
+                )
+                resp_json = _force_game_checkpoint_final_response(resp_json)
+                break
             if tool_rounds_used >= max_processed_tool_rounds:
                 break
             if isinstance(msg, dict):
@@ -2211,6 +2259,7 @@ def chat_completions():
             if _game_tool_checkpoint_from_messages(body.get("messages") or []):
                 logger.info("game tool checkpoint 非流式回合转普通收口 window_id=%s round=%s", window_id, tool_rounds_used)
                 game_checkpoint_finalizing = True
+                body = _strip_tools_for_game_checkpoint_finalization(body)
                 resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
                 if cache_debug:
                     cache_debug_entries.append(cache_debug)
