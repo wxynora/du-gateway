@@ -1,5 +1,6 @@
 import json
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -15,6 +16,8 @@ GAME_TOOL_LOOP_MARKER = "game_tool_loop"
 GAME_TOOL_SKIP_DYNAMIC_MEMORY_WRITE = "skip_dynamic_memory_write"
 GAME_TOOL_SKIP_BODY_DELTA = "skip_body_delta"
 GAME_TOOL_CHECKPOINT_INSTRUCTION = "由于防沉迷机制，暂时中止游戏回合。不要继续使用游戏工具，正常回复信息。"
+GAME_ACTIVE_SAVE_FILE = "_active_save.json"
+RANDOM_IMITATOR_PENDING_KEY = "anti_addiction_pause_pending_turn"
 
 GameExecutor = Callable[..., dict[str, Any]]
 
@@ -98,6 +101,105 @@ def safe_save_id(save_id: str) -> str:
     raw = str(save_id or "default").strip() or "default"
     clean = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw)[:80].strip("._-")
     return clean or "default"
+
+
+def _save_path(root: Path, save_id: str) -> Path:
+    return root / f"{safe_save_id(save_id)}.json"
+
+
+def _active_save_path(root: Path) -> Path:
+    return root / GAME_ACTIVE_SAVE_FILE
+
+
+def _read_active_save_id(root: Path) -> str:
+    path = _active_save_path(root)
+    if not path.exists():
+        default_path = _save_path(root, "default")
+        return "default" if default_path.exists() else ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return "default" if _save_path(root, "default").exists() else ""
+    active = safe_save_id(str(data.get("save_id") or ""))
+    if _save_path(root, active).exists():
+        return active
+    return "default" if _save_path(root, "default").exists() else ""
+
+
+def _write_active_save_id(root: Path, save_id: str) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    _active_save_path(root).write_text(json.dumps({"save_id": safe_save_id(save_id)}, ensure_ascii=False), encoding="utf-8")
+
+
+def _read_save_payload(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _random_imitator_has_pending_pause(path: Path) -> bool:
+    data = _read_save_payload(path)
+    return bool(data.get(RANDOM_IMITATOR_PENDING_KEY))
+
+
+def _first_command_word(command: str) -> str:
+    raw = str(command or "").strip()
+    if not raw:
+        return ""
+    try:
+        words = shlex.split(raw.replace("\n", " ", 1))
+    except ValueError:
+        return raw.split(maxsplit=1)[0].strip().lower()
+    return str(words[0] if words else "").strip().lower()
+
+
+def _is_new_game_command(command: str) -> bool:
+    return _first_command_word(command) in {"new", "new_game", "newgame", "restart", "reset", "重开", "新游戏"}
+
+
+def _find_pending_random_imitator_save_id(root: Path, preferred: list[str]) -> str:
+    seen: set[str] = set()
+    for save_id in preferred:
+        safe_id = safe_save_id(save_id)
+        if safe_id in seen:
+            continue
+        seen.add(safe_id)
+        path = _save_path(root, safe_id)
+        if path.exists() and _random_imitator_has_pending_pause(path):
+            return safe_id
+    if not root.exists():
+        return ""
+    candidates = []
+    for path in root.glob("*.json"):
+        if path.name == GAME_ACTIVE_SAVE_FILE:
+            continue
+        if _random_imitator_has_pending_pause(path):
+            candidates.append(path)
+    if not candidates:
+        return ""
+    newest = max(candidates, key=lambda item: item.stat().st_mtime)
+    return newest.stem
+
+
+def _resolve_random_imitator_save_id(root: Path, command: str, requested_save_id: str) -> str:
+    requested = safe_save_id(requested_save_id)
+    active = _read_active_save_id(root)
+    if _is_new_game_command(command):
+        return requested
+
+    if active and active != requested:
+        return active
+
+    pending = _find_pending_random_imitator_save_id(root, [active, requested])
+    if pending:
+        return pending
+
+    requested_path = _save_path(root, requested)
+    if active and active != requested and not requested_path.exists():
+        return active
+    return requested
 
 
 def list_game_tools() -> list[dict[str, Any]]:
@@ -242,24 +344,26 @@ def _execute_random_imitator_td(
     tool_name: str,
 ) -> dict[str, Any]:
     root = Path(save_root) if save_root is not None else GAME_SAVE_ROOTS[GAME_ID_RANDOM_IMITATOR_TD]
-    save_path = root / f"{safe_save_id(save_id)}.json"
+    resolved_save_id = _resolve_random_imitator_save_id(root, command, save_id)
+    save_path = _save_path(root, resolved_save_id)
     try:
         from du_imitator_pvz.engine import ANTI_ADDICTION_PAUSE_PREFIX, cmd
 
         text = cmd(command, save_path=save_path)
+        _write_active_save_id(root, resolved_save_id)
         return game_tool_success_payload(
             game_id=GAME_ID_RANDOM_IMITATOR_TD,
             tool_name=tool_name,
-            save_id=save_id,
+            save_id=resolved_save_id,
             text=text,
             checkpoint=ANTI_ADDICTION_PAUSE_PREFIX in text,
         )
     except Exception as exc:
-        logger.exception("game tool failed game_id=%s save_id=%s", GAME_ID_RANDOM_IMITATOR_TD, save_id)
+        logger.exception("game tool failed game_id=%s save_id=%s", GAME_ID_RANDOM_IMITATOR_TD, resolved_save_id)
         return game_tool_error_payload(
             game_id=GAME_ID_RANDOM_IMITATOR_TD,
             tool_name=tool_name,
-            save_id=save_id,
+            save_id=resolved_save_id,
             error="EXECUTION_FAILED",
             message=str(exc),
         )

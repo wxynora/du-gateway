@@ -79,6 +79,59 @@ def test_tool_marks_anti_addiction_checkpoint_every_five_turns() -> None:
         _assert("防沉迷暂停" not in str(data.get("text") or ""), "checkpoint should be consumed once")
 
 
+def test_tool_keeps_active_save_when_save_id_changes_by_mistake() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        random_imitator_td_tool.SAVE_ROOT = Path(tmpdir)
+
+        random_imitator_td_tool.execute_random_imitator_td_tool(
+            {"save_id": "default", "command": "new_game level=1 seed=active-save-test"}
+        )
+        random_imitator_td_tool.execute_random_imitator_td_tool(
+            {"save_id": "default", "command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
+        )
+        raw = random_imitator_td_tool.execute_random_imitator_td_tool(
+            {"save_id": "oops-new-save", "command": "等待 1"}
+        )
+        data = json.loads(raw)
+
+        _assert(data.get("ok") is True, "mistyped save_id should still execute")
+        _assert(data.get("save_id") == "default", "mistyped save_id should resolve to active save")
+        _assert((Path(tmpdir) / "default.json").exists(), "active save should remain present")
+        _assert(not (Path(tmpdir) / "oops-new-save.json").exists(), "mistyped save should not be created")
+        _assert("请先编辑卡槽" not in str(data.get("text") or ""), "mistyped save should not start setup")
+
+
+def test_tool_prefers_default_when_bad_save_already_exists_without_active_pointer() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        random_imitator_td_tool.SAVE_ROOT = Path(tmpdir)
+
+        random_imitator_td_tool.execute_random_imitator_td_tool(
+            {"save_id": "default", "command": "new_game level=1 seed=default-resume-test"}
+        )
+        random_imitator_td_tool.execute_random_imitator_td_tool(
+            {"save_id": "default", "command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
+        )
+        random_imitator_td_tool.execute_random_imitator_td_tool(
+            {"save_id": "bad-save", "command": "new_game level=1 seed=bad-save-test"}
+        )
+        random_imitator_td_tool.execute_random_imitator_td_tool(
+            {"save_id": "bad-save", "command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
+        )
+        for _ in range(5):
+            random_imitator_td_tool.execute_random_imitator_td_tool({"save_id": "bad-save", "command": "等待 1"})
+        active_meta = Path(tmpdir) / game_tool_runtime.GAME_ACTIVE_SAVE_FILE
+        active_meta.unlink()
+
+        raw = random_imitator_td_tool.execute_random_imitator_td_tool(
+            {"save_id": "bad-save", "command": "等待 1"}
+        )
+        data = json.loads(raw)
+
+        _assert(data.get("ok") is True, "tool should recover with existing default save")
+        _assert(data.get("save_id") == "default", "missing active pointer should fall back to default save")
+        _assert("防沉迷暂停" not in str(data.get("text") or ""), "bad save checkpoint should not hijack default resume")
+
+
 def test_game_request_marker_skips_chat_side_effects() -> None:
     app = Flask(__name__)
     with app.test_request_context("/", headers={"X-DU-Game-Tool-Loop": "1"}):
@@ -192,6 +245,8 @@ def test_tool_mode_injects_without_game_loop_skip() -> None:
 if __name__ == "__main__":
     test_tool_executes_and_persists_by_save_id()
     test_tool_marks_anti_addiction_checkpoint_every_five_turns()
+    test_tool_keeps_active_save_when_save_id_changes_by_mistake()
+    test_tool_prefers_default_when_bad_save_already_exists_without_active_pointer()
     test_game_request_marker_skips_chat_side_effects()
     test_game_tool_trace_skips_archive_side_effects()
     test_game_tool_trace_marker_skips_archive_side_effects()
