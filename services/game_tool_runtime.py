@@ -16,6 +16,7 @@ GAME_TOOL_LOOP_MARKER = "game_tool_loop"
 GAME_TOOL_SKIP_DYNAMIC_MEMORY_WRITE = "skip_dynamic_memory_write"
 GAME_TOOL_SKIP_BODY_DELTA = "skip_body_delta"
 GAME_TOOL_CHECKPOINT_INSTRUCTION = "由于防沉迷机制，暂时中止游戏回合。不要继续使用游戏工具，正常回复信息。"
+GAME_TOOL_GAME_OVER_INSTRUCTION = "本局游戏已经结束。不要继续使用游戏工具，也不要立刻 new_game 或重开；正常回复本局结果。"
 GAME_ACTIVE_SAVE_FILE = "_active_save.json"
 RANDOM_IMITATOR_PENDING_KEY = "anti_addiction_pause_pending_turn"
 
@@ -144,6 +145,15 @@ def _random_imitator_has_pending_pause(path: Path) -> bool:
     return bool(data.get(RANDOM_IMITATOR_PENDING_KEY))
 
 
+def _random_imitator_game_over(path: Path) -> tuple[bool, str]:
+    data = _read_save_payload(path)
+    engine = data.get("engine") if isinstance(data, dict) else None
+    state = engine.get("state") if isinstance(engine, dict) else None
+    if not isinstance(state, dict):
+        return False, ""
+    return bool(state.get("game_over")), str(state.get("result") or "").strip()
+
+
 def _first_command_word(command: str) -> str:
     raw = str(command or "").strip()
     if not raw:
@@ -249,6 +259,10 @@ def game_tool_success_payload(
     save_id: str,
     text: str,
     checkpoint: bool = False,
+    checkpoint_instruction: str = "",
+    checkpoint_reason: str = "",
+    game_over: bool = False,
+    result: str = "",
 ) -> dict[str, Any]:
     payload = {
         "ok": True,
@@ -257,12 +271,16 @@ def game_tool_success_payload(
         "save_id": safe_save_id(save_id),
         "text": text,
         "checkpoint": bool(checkpoint),
+        "game_over": bool(game_over),
+        "result": str(result or "").strip(),
         GAME_TOOL_LOOP_MARKER: True,
         GAME_TOOL_SKIP_DYNAMIC_MEMORY_WRITE: True,
         GAME_TOOL_SKIP_BODY_DELTA: True,
     }
     if checkpoint:
-        payload["checkpoint_instruction"] = GAME_TOOL_CHECKPOINT_INSTRUCTION
+        payload["checkpoint_instruction"] = checkpoint_instruction or GAME_TOOL_CHECKPOINT_INSTRUCTION
+    if checkpoint_reason:
+        payload["checkpoint_reason"] = checkpoint_reason
     return payload
 
 
@@ -351,12 +369,21 @@ def _execute_random_imitator_td(
 
         text = cmd(command, save_path=save_path)
         _write_active_save_id(root, resolved_save_id)
+        anti_addiction_checkpoint = ANTI_ADDICTION_PAUSE_PREFIX in text
+        game_over, result = _random_imitator_game_over(save_path)
+        checkpoint = anti_addiction_checkpoint or game_over
+        checkpoint_instruction = GAME_TOOL_CHECKPOINT_INSTRUCTION if anti_addiction_checkpoint else GAME_TOOL_GAME_OVER_INSTRUCTION
+        checkpoint_reason = "anti_addiction" if anti_addiction_checkpoint else "game_over" if game_over else ""
         return game_tool_success_payload(
             game_id=GAME_ID_RANDOM_IMITATOR_TD,
             tool_name=tool_name,
             save_id=resolved_save_id,
             text=text,
-            checkpoint=ANTI_ADDICTION_PAUSE_PREFIX in text,
+            checkpoint=checkpoint,
+            checkpoint_instruction=checkpoint_instruction,
+            checkpoint_reason=checkpoint_reason,
+            game_over=game_over,
+            result=result,
         )
     except Exception as exc:
         logger.exception("game tool failed game_id=%s save_id=%s", GAME_ID_RANDOM_IMITATOR_TD, resolved_save_id)

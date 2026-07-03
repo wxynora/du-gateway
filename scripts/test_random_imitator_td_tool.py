@@ -132,6 +132,29 @@ def test_tool_prefers_default_when_bad_save_already_exists_without_active_pointe
         _assert("防沉迷暂停" not in str(data.get("text") or ""), "bad save checkpoint should not hijack default resume")
 
 
+def test_tool_marks_game_over_checkpoint_without_auto_restart() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        random_imitator_td_tool.SAVE_ROOT = Path(tmpdir)
+
+        random_imitator_td_tool.execute_random_imitator_td_tool(
+            {"save_id": "default", "command": "new_game level=1 seed=game-over-test"}
+        )
+        random_imitator_td_tool.execute_random_imitator_td_tool(
+            {"save_id": "default", "command": "cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜"}
+        )
+        raw = random_imitator_td_tool.execute_random_imitator_td_tool(
+            {"save_id": "default", "command": "结束本局"}
+        )
+        data = json.loads(raw)
+
+        _assert(data.get("ok") is True, "end game command should succeed")
+        _assert(data.get("checkpoint") is True, "game over should checkpoint the tool loop")
+        _assert(data.get("checkpoint_reason") == "game_over", "game over checkpoint should be labeled")
+        _assert(data.get("game_over") is True, "payload should expose game_over")
+        _assert(data.get("result") == "ended_by_player", "payload should expose result")
+        _assert("不要立刻" in str(data.get("checkpoint_instruction") or ""), "instruction should prevent immediate restart")
+
+
 def test_game_request_marker_skips_chat_side_effects() -> None:
     app = Flask(__name__)
     with app.test_request_context("/", headers={"X-DU-Game-Tool-Loop": "1"}):
@@ -247,6 +270,7 @@ if __name__ == "__main__":
     test_tool_marks_anti_addiction_checkpoint_every_five_turns()
     test_tool_keeps_active_save_when_save_id_changes_by_mistake()
     test_tool_prefers_default_when_bad_save_already_exists_without_active_pointer()
+    test_tool_marks_game_over_checkpoint_without_auto_restart()
     test_game_request_marker_skips_chat_side_effects()
     test_game_tool_trace_skips_archive_side_effects()
     test_game_tool_trace_marker_skips_archive_side_effects()
