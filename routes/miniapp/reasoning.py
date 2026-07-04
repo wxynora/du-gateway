@@ -27,6 +27,9 @@ _CLAUDE_PRICE_INPUT_PER_M = 5.0
 _CLAUDE_PRICE_CACHE_CREATE_1H_PER_M = 10.0
 _CLAUDE_PRICE_CACHE_READ_PER_M = 0.5
 _CLAUDE_PRICE_OUTPUT_PER_M = 25.0
+_CLAUDE_CACHE_TTL = "1h"
+_CLAUDE_FABLE_PRICE_INPUT_PER_M = 10.0
+_CLAUDE_FABLE_PRICE_OUTPUT_PER_M = 50.0
 
 
 def _clip_text(value, max_chars: int) -> str:
@@ -148,6 +151,8 @@ def _usage_uncached_input_tokens(usage: dict) -> int:
     cache_create = _positive_int(usage.get("cache_creation_input_tokens"))
     cache_read = _usage_cache_read_tokens(usage)
     if cache_create or cache_read:
+        if prompt_tokens < cache_create + cache_read:
+            return prompt_tokens
         return max(0, prompt_tokens - cache_create - cache_read)
     return prompt_tokens
 
@@ -164,6 +169,82 @@ def _usage_cache_read_tokens(usage: dict) -> int:
     )
 
 
+def _claude_default_pricing_per_million() -> dict[str, float]:
+    return {
+        "input": _CLAUDE_PRICE_INPUT_PER_M,
+        "cache_creation": _CLAUDE_PRICE_CACHE_CREATE_1H_PER_M,
+        "cache_read": _CLAUDE_PRICE_CACHE_READ_PER_M,
+        "output": _CLAUDE_PRICE_OUTPUT_PER_M,
+    }
+
+
+def _claude_fable_pricing_per_million() -> dict[str, float]:
+    return {
+        "input": _CLAUDE_FABLE_PRICE_INPUT_PER_M,
+        # Anthropic 1h cache write is 2x input; read is 0.1x input.
+        "cache_creation": _CLAUDE_FABLE_PRICE_INPUT_PER_M * 2,
+        "cache_read": _CLAUDE_FABLE_PRICE_INPUT_PER_M * 0.1,
+        "output": _CLAUDE_FABLE_PRICE_OUTPUT_PER_M,
+    }
+
+
+def _claude_pricing_for_model(model: str) -> dict[str, float]:
+    normalized = str(model or "").strip().lower()
+    if "fable" in normalized:
+        return _claude_fable_pricing_per_million()
+    return _claude_default_pricing_per_million()
+
+
+def _is_claude_cost_model(model: str) -> bool:
+    normalized = str(model or "").strip().lower()
+    return bool(normalized and ("claude" in normalized or "fable" in normalized))
+
+
+def _cache_debug_entry_model(entry: dict, usage: dict) -> str:
+    response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+    request_info = entry.get("request") if isinstance(entry.get("request"), dict) else {}
+    fallback_model = str(usage.get("fallback_model") or "").strip() if isinstance(usage, dict) else ""
+    if fallback_model:
+        return fallback_model
+    candidates = [
+        response.get("actual_model"),
+        response.get("requested_model"),
+        request_info.get("model"),
+        entry.get("model"),
+    ]
+    for candidate in candidates:
+        model = str(candidate or "").strip()
+        if model:
+            return model
+    return ""
+
+
+def _build_cost_line(model: str, usage: dict) -> dict:
+    pricing = _claude_pricing_for_model(model)
+    input_tokens = _usage_uncached_input_tokens(usage)
+    cache_create_tokens = _positive_int(usage.get("cache_creation_input_tokens"))
+    cache_read_tokens = _usage_cache_read_tokens(usage)
+    output_tokens = _first_positive_usage_value(usage, ("output_tokens", "completion_tokens"))
+    input_usd = input_tokens * pricing["input"] / 1_000_000
+    cache_create_usd = cache_create_tokens * pricing["cache_creation"] / 1_000_000
+    cache_read_usd = cache_read_tokens * pricing["cache_read"] / 1_000_000
+    output_usd = output_tokens * pricing["output"] / 1_000_000
+    total_usd = input_usd + cache_create_usd + cache_read_usd + output_usd
+    return {
+        "model": model,
+        "pricing_per_million": pricing,
+        "input_tokens": input_tokens,
+        "cache_creation_input_tokens": cache_create_tokens,
+        "cache_read_input_tokens": cache_read_tokens,
+        "output_tokens": output_tokens,
+        "input_usd": input_usd,
+        "cache_creation_usd": cache_create_usd,
+        "cache_read_usd": cache_read_usd,
+        "output_usd": output_usd,
+        "total_usd": total_usd,
+    }
+
+
 def _build_claude_cost_stats(cache_debug_items: list[dict]) -> dict:
     input_tokens = 0
     cache_create_tokens = 0
@@ -171,41 +252,41 @@ def _build_claude_cost_stats(cache_debug_items: list[dict]) -> dict:
     output_tokens = 0
     usage_entries = 0
     models: list[str] = []
+    pricing_by_model: dict[str, dict[str, float]] = {}
+    cost_lines: list[dict] = []
     for entry in cache_debug_items or []:
         if not isinstance(entry, dict):
             continue
         usage = entry.get("usage") if isinstance(entry.get("usage"), dict) else {}
         if not usage or usage.get("usage_returned") is False:
             continue
-        usage_entries += 1
-        input_tokens += _usage_uncached_input_tokens(usage)
-        cache_create_tokens += _positive_int(usage.get("cache_creation_input_tokens"))
-        cache_read_tokens += _usage_cache_read_tokens(usage)
-        output_tokens += _first_positive_usage_value(usage, ("output_tokens", "completion_tokens"))
-        response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
-        request = entry.get("request") if isinstance(entry.get("request"), dict) else {}
-        model = str(response.get("actual_model") or request.get("model") or "").strip()
+        model = _cache_debug_entry_model(entry, usage)
         if model and model not in models:
             models.append(model)
+        if not _is_claude_cost_model(model):
+            continue
+        usage_entries += 1
+        line = _build_cost_line(model, usage)
+        cost_lines.append(line)
+        input_tokens += line["input_tokens"]
+        cache_create_tokens += line["cache_creation_input_tokens"]
+        cache_read_tokens += line["cache_read_input_tokens"]
+        output_tokens += line["output_tokens"]
+        pricing_by_model[model] = line["pricing_per_million"]
     if usage_entries <= 0:
         return {}
-    if not any("claude" in model.lower() for model in models):
-        return {}
-    input_usd = input_tokens * _CLAUDE_PRICE_INPUT_PER_M / 1_000_000
-    cache_create_usd = cache_create_tokens * _CLAUDE_PRICE_CACHE_CREATE_1H_PER_M / 1_000_000
-    cache_read_usd = cache_read_tokens * _CLAUDE_PRICE_CACHE_READ_PER_M / 1_000_000
-    output_usd = output_tokens * _CLAUDE_PRICE_OUTPUT_PER_M / 1_000_000
+    input_usd = sum(float(line["input_usd"]) for line in cost_lines)
+    cache_create_usd = sum(float(line["cache_creation_usd"]) for line in cost_lines)
+    cache_read_usd = sum(float(line["cache_read_usd"]) for line in cost_lines)
+    output_usd = sum(float(line["output_usd"]) for line in cost_lines)
     total_usd = input_usd + cache_create_usd + cache_read_usd + output_usd
+    primary_pricing = dict(cost_lines[-1]["pricing_per_million"]) if cost_lines else _claude_default_pricing_per_million()
     return {
         "provider": "claude",
         "currency": "USD",
-        "cache_ttl": "1h",
-        "pricing_per_million": {
-            "input": _CLAUDE_PRICE_INPUT_PER_M,
-            "cache_creation": _CLAUDE_PRICE_CACHE_CREATE_1H_PER_M,
-            "cache_read": _CLAUDE_PRICE_CACHE_READ_PER_M,
-            "output": _CLAUDE_PRICE_OUTPUT_PER_M,
-        },
+        "cache_ttl": _CLAUDE_CACHE_TTL,
+        "pricing_per_million": primary_pricing,
+        "pricing_per_model": pricing_by_model,
         "input_tokens": input_tokens,
         "cache_creation_input_tokens": cache_create_tokens,
         "cache_read_input_tokens": cache_read_tokens,
@@ -217,6 +298,17 @@ def _build_claude_cost_stats(cache_debug_items: list[dict]) -> dict:
         "total_usd": round(total_usd, 8),
         "usage_entries": usage_entries,
         "models": models,
+        "cost_lines": [
+            {
+                **line,
+                "input_usd": round(float(line["input_usd"]), 8),
+                "cache_creation_usd": round(float(line["cache_creation_usd"]), 8),
+                "cache_read_usd": round(float(line["cache_read_usd"]), 8),
+                "output_usd": round(float(line["output_usd"]), 8),
+                "total_usd": round(float(line["total_usd"]), 8),
+            }
+            for line in cost_lines
+        ],
     }
 
 

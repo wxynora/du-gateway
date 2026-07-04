@@ -24,7 +24,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 主聊天网关 | `routes/chat.py` | `/v1/chat/completions`，stream、tool loop、reasoning、归档 |
 | 对话回复统一超时 | `config.py`、`routes/chat.py`、`services/telegram_bot.py`、`services/telegram_proactive.py`、`services/conversation_followup.py`、`services/du_daily.py`、`services/voice_call_pipeline.py`、`routes/xiaoai_api.py`、`scripts/start_gateway_prod.sh` | 所有等模型/网关回复的对话入口默认 15 分钟；工具短请求、搜索、天气、STT 等仍保留各自短超时 |
 | 主聊天策略 | `services/entry_style_prompt.py`、`services/chat_prompt_injections.py`、`services/upstream_policy.py` | 入口风格 system、voice/followup/NSFW/禁言注入、active upstream 选择、OpenRouter/CPA/Claude OAuth 请求策略 |
-| 主聊天诊断/思维链 | `services/prompt_cache_debug.py`、`services/reasoning_utils.py`、`services/chat_content.py` | prompt/cache debug、reasoning/thinking 剥离、SSE message 解析、消息字符统计 |
+| 主聊天诊断/思维链 | `services/prompt_cache_debug.py`、`services/reasoning_utils.py`、`services/chat_content.py`、`routes/miniapp/reasoning.py` | prompt/cache debug、reasoning/thinking 剥离、SSE message 解析、消息字符统计；MiniApp 思维链页的 Prompt Cache 计费估算在 `routes/miniapp/reasoning.py` |
 | 主聊天响应辅助 | `services/chat_sidecars.py`、`services/chat_response_enrichers.py`、`services/chat_tool_helpers.py`、`services/chat_request_helpers.py`、`services/chat_archive_helpers.py` | 隐藏 sidecar 写入、HTML 预览/SumiTalk 卡片补全、tool 重试/SSE 小工具、入口状态/误触保护、归档后台辅助 |
 | 注入管道 | `pipeline/pipeline.py` | core prompt、summary、last4、sense、dynamic memory、tools 注入 |
 | MiniApp API | `routes/miniapp_api.py` | SumiTalk、设备、思维链、设置、贴纸、日历、上游切换等接口 |
@@ -49,6 +49,14 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | Claude OAuth proxy | `scripts/claude_oauth_proxy.js`、`docs/claude_proxy_new_vps_migration_plan.md` | 自用 Claude 反代、thinking/cache/tool 格式转换；旧 VPS 继续用 `127.0.0.1:8082`，新 VPS 单独承载 Claude Code + OAuth proxy 的迁移手册 |
 | 植物大战僵尸模仿者版原型 | `du_imitator_pvz/`、`scripts/test_imitator_pvz_*.py`、`scripts/sim_imitator_pvz_balance.py`、`docs/植物大战僵尸模仿者版.md` | 纯 Python headless 随机模仿者塔防模拟器：P0/P2 合同、随机池、植物/僵尸行为、玩家回合复盘、v2 小工测试、铲子动作、僵王事件、主动重开、玩家棋盘文本视图 |
 | 随机模仿者网关私有工具 | `services/game_tool_runtime.py`、`services/random_imitator_td_tool.py`、`routes/miniapp/game_tools.py`、`routes/chat.py`、`pipeline/pipeline.py`、`services/chat_tools.py`、`scripts/test_random_imitator_td_tool.py` | du-gateway 私有游戏工具接入：`random_imitator_td` 是首个注册游戏；Prompt 开关只固定注入工具，只有专用游戏标记或工具结果自带 `game_tool_loop` 才跳过动态记忆写入与 BODY delta |
+
+当前状态（2026-07-04 思维链 Prompt Cache 计费估算）：
+- 已完成：`routes/miniapp/reasoning.py` 的 Claude cost 估算改为按每条 `cache_debug` 的实际模型拆分计费，再汇总到思维链日志页；返回中保留 `pricing_per_million`、`total_usd` 等旧字段，同时新增 `pricing_per_model` 和 `cost_lines` 方便排查混合模型。
+- 已完成：`claude-fable-5` / 含 `fable` 的模型使用 Fable 价格：输入 `$10/M`、输出 `$50/M`；Prompt Cache TTL 仍标记为 `1h`，因此 cache write 按输入价 2x、cache read 按输入价 0.1x 估算。
+- 已修复：Claude OAuth proxy 的 OpenAI 兼容 `prompt_tokens` 是 Anthropic `input_tokens`，不包含 `cache_read_input_tokens` / `cache_creation_input_tokens`；当 `prompt_tokens < cache_read + cache_create` 时，不能再扣减缓存，否则未缓存输入会被算成 0。Cloudflare Anthropic 兼容层的 `prompt_tokens` 是 total prompt，仍按 `prompt_tokens - cache_read - cache_create` 算未缓存输入。
+- 已修复：MiniApp 思维链页 Prompt Cache 折叠摘要改读后端汇总的 `cost.input_tokens/cache_*_tokens/output_tokens`，避免多次请求时摘要只显示最后一次 usage，而 cost 显示总账。
+- 已验证：`.venv/bin/python -m py_compile routes/miniapp/reasoning.py` 通过；本地 smoke 覆盖普通 Claude 与 Fable 混合计费，1M Fable input/cache write/cache read/output 分别算 `$10/$20/$1/$50`；用线上最新 Fable usage 样本回归，`prompt_tokens=3955/cache_create=1022/cache_read=26990/output=317` 估算为 `$0.10283`；`npm run build` 通过。
+- 未完成 / 下次继续：本轮没有改前端样式、聊天请求、缓存断点或部署；线上需要随下一次 push/restart 生效。
 
 当前状态（2026-07-03 对话回复统一超时）：
 - 已完成：新增 `CHAT_RESPONSE_TIMEOUT_SECONDS=900`，并让 `STREAM_TIMEOUT_SECONDS`、Telegram bot 调网关等待、XiaoAI、语音通话、主动消息/主动决策、日维护等对话链路默认跟随 15 分钟。

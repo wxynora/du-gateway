@@ -135,12 +135,15 @@ function PromptCacheDebugCard({ entries, outputStats, cost }: { entries?: Prompt
   const outputLine = outputStatsLine(outputStats);
   const costTotal = Number(cost?.total_usd || 0);
   const latestUsage = items[items.length - 1]?.usage || {};
-  const totalInputTokens = tokenNumber(firstUsageValue(latestUsage, ["input_tokens", "prompt_tokens"]));
+  const totalInputTokens =
+    tokenNumber(cost?.input_tokens) || tokenNumber(firstUsageValue(latestUsage, ["input_tokens", "prompt_tokens"]));
   const cacheReadTokens =
+    tokenNumber(cost?.cache_read_input_tokens) ||
     tokenNumber(latestUsage.cache_read_input_tokens) ||
     tokenNumber(firstUsageValue(latestUsage, ["cached_tokens", "prompt_cached_tokens", "input_cached_tokens"]));
-  const cacheCreateTokens = tokenNumber(latestUsage.cache_creation_input_tokens);
+  const cacheCreateTokens = tokenNumber(cost?.cache_creation_input_tokens) || tokenNumber(latestUsage.cache_creation_input_tokens);
   const outputTokens =
+    tokenNumber(cost?.output_tokens) ||
     tokenNumber(outputStats?.output_tokens) ||
     tokenNumber(outputStats?.usage_output_tokens) ||
     tokenNumber(outputStats?.estimated_output_tokens) ||
