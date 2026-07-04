@@ -213,7 +213,7 @@ function probeStatusBadgeClass(p?: ProbeItem): string {
 }
 
 function isClaudeAdaptiveModel(model: string): boolean {
-  return /claude-opus-4-(6|7|8)(\b|-|$)/i.test(String(model || "").trim());
+  return /(?:claude-opus-4-(6|7|8)|claude-fable-5)(\b|-|$)/i.test(String(model || "").trim());
 }
 
 function isClaudeProxyModel(model: string): boolean {
@@ -652,7 +652,7 @@ export function SettingsUpstream() {
                       >
                         <span className="w-16 shrink-0 text-[12px] font-semibold text-gray-400">思考强度</span>
                         <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-gray-900">
-                          {adaptiveThinkingActive ? pendingThinkingEffortForModel : "仅 4.8 / 4.7 / 4.6 生效"}
+                          {adaptiveThinkingActive ? pendingThinkingEffortForModel : "仅 4.8 / 4.7 / 4.6 / Fable 5 生效"}
                         </span>
                         <svg
                           className={"h-4 w-4 shrink-0 text-gray-400 transition-transform " + (thinkingListOpen ? "rotate-180" : "")}

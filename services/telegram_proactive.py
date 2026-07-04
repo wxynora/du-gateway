@@ -416,6 +416,62 @@ def _load_proactive_control_object(text: str) -> Optional[dict]:
     return None
 
 
+def _decode_loose_control_string(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        decoded = json.loads(raw)
+        if isinstance(decoded, str):
+            return decoded.strip()
+    except Exception:
+        pass
+    if raw.endswith(","):
+        raw = raw[:-1].strip()
+    while len(raw) >= 2 and raw[0] in {"\"", "'"} and raw[-1] == raw[0]:
+        raw = raw[1:-1].strip()
+    return (
+        raw.replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace('\\"', '"')
+        .strip()
+    )
+
+
+def _load_loose_proactive_control_object(text: str) -> Optional[dict]:
+    """Best-effort parse for control JSON whose message contains unescaped quotes."""
+    raw = _extract_json_object_text(text) or _strip_json_fence(text)
+    raw = str(raw or "").strip()
+    if not (raw.startswith("{") and raw.endswith("}")):
+        return None
+    normalized = raw.replace('""', '"').replace('\\"', '"')
+    if '"action"' not in normalized or '"message"' not in normalized:
+        return None
+
+    pattern = re.compile(r'(?P<prefix>[,{]\s*)["\'](?P<key>action|reason|message|channel)["\']\s*:', re.IGNORECASE)
+    matches = list(pattern.finditer(raw))
+    if not matches:
+        return None
+    found: dict[str, str] = {}
+    for idx, match in enumerate(matches):
+        key = match.group("key").lower()
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else raw.rfind("}")
+        if end <= start:
+            continue
+        chunk = raw[start:end].strip()
+        if chunk.endswith(","):
+            chunk = chunk[:-1].strip()
+        found[key] = _decode_loose_control_string(chunk)
+
+    action = str(found.get("action") or "").strip().lower()
+    message = str(found.get("message") or "").strip()
+    if not action and not message:
+        return None
+    return found
+
+
 def _looks_like_control_json_reply(text: str) -> bool:
     t = str(text or "").strip()
     if not t:
@@ -437,7 +493,7 @@ def _sanitize_control_reply_for_delivery(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
         return ""
-    obj = _load_proactive_control_object(raw)
+    obj = _load_proactive_control_object(raw) or _load_loose_proactive_control_object(raw)
     if isinstance(obj, dict) and ("action" in obj or "message" in obj or "channel" in obj):
         action = str(obj.get("action") or "").strip().lower()
         alias = {"send": "send_message", "msg": "send_message", "text": "send_message", "chat": "send_message"}
@@ -484,7 +540,7 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
             False, "", "no_contact", action="no_contact", du_reason="（使用 NO_CONTACT 标记，未给理由）", channel=default_channel
         )
 
-    obj = _load_proactive_control_object(t)
+    obj = _load_proactive_control_object(t) or _load_loose_proactive_control_object(t)
 
     if not isinstance(obj, dict):
         if _looks_like_control_json_reply(t):

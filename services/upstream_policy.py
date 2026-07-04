@@ -19,7 +19,10 @@ from config import (
 )
 from services.cloudflare_anthropic import normalize_model_for_cloudflare
 
-_CLAUDE_ADAPTIVE_THINKING_RE = re.compile(r"claude-opus-4-(?:6|7|8)(?:\b|-|$)", re.IGNORECASE)
+_CLAUDE_ADAPTIVE_THINKING_RE = re.compile(
+    r"(?:claude-opus-4-(?:6|7|8)|claude-fable-5)(?:\b|-|$)",
+    re.IGNORECASE,
+)
 _CLAUDE_OPUS_46_RE = re.compile(r"claude-opus-4-6(?:\b|-|$)", re.IGNORECASE)
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
