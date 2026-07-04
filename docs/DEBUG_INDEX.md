@@ -49,6 +49,16 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | Claude OAuth proxy | `scripts/claude_oauth_proxy.js`、`docs/claude_proxy_new_vps_migration_plan.md` | 自用 Claude 反代、thinking/cache/tool 格式转换；旧 VPS 继续用 `127.0.0.1:8082`，新 VPS 单独承载 Claude Code + OAuth proxy 的迁移手册 |
 | 植物大战僵尸模仿者版原型 | `du_imitator_pvz/`、`scripts/test_imitator_pvz_*.py`、`scripts/sim_imitator_pvz_balance.py`、`docs/植物大战僵尸模仿者版.md` | 纯 Python headless 随机模仿者塔防模拟器：P0/P2 合同、随机池、植物/僵尸行为、玩家回合复盘、v2 小工测试、铲子动作、僵王事件、主动重开、玩家棋盘文本视图 |
 | 随机模仿者网关私有工具 | `services/game_tool_runtime.py`、`services/random_imitator_td_tool.py`、`routes/miniapp/game_tools.py`、`routes/chat.py`、`pipeline/pipeline.py`、`services/chat_tools.py`、`scripts/test_random_imitator_td_tool.py` | du-gateway 私有游戏工具接入：`random_imitator_td` 是首个注册游戏；Prompt 开关只固定注入工具，只有专用游戏标记或工具结果自带 `game_tool_loop` 才跳过动态记忆写入与 BODY delta |
+| MiniApp 游戏大厅 / 涩涩走格棋 | `miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/tabs/SeseBoardGameTab.tsx`、`routes/miniapp/game_tools.py`、`services/private_board_game.py`、`services/game_tool_runtime.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_private_board_game.py` | 「日常 > 游戏」入口，文游显示为「无限流」；`private_board` 走走格棋后端和前端棋盘。小玥掷骰后自动把本次结果/当前棋局同步给渡；右上角局内聊天只发本次消息，不自带局内历史；渡第一行精确 `【掷骰】` 才触发行动；局内回复不外发主聊天但压缩归档进同一个 `tg_*` window 的 last4 |
+
+当前状态（2026-07-05 MiniApp 游戏大厅与涩涩走格棋）：
+- 已完成：`GamesHubTab.tsx` 新增游戏大厅；文游入口改名「无限流」并移入「日常 > 游戏」；新增「涩涩走格棋」入口。
+- 已完成：`services/private_board_game.py` 注册 `private_board`，支持 36 格走格棋、主题/主导方、状态/道具持续回合或时间、暂停行动、前进/后退/交换/解除/延长等格子事件；前端 `SeseBoardGameTab.tsx` 展示完整棋盘、棋子、骰子、移动动画、状态卡和右上角局内交流气泡。
+- 已完成：小玥在前端掷骰后，页面会自动调用 `/miniapp-api/game-tools/private_board/sync-du`，把本次掷骰结果和当前棋局同步给渡；渡回复第一行只有精确 `【掷骰】` 才会触发他的行动，普通“掷骰子/我来投一下”只算聊天。
+- 已完成：右上角局内聊天只发送本次 `message`，不再上传 `chat_messages` 或自带局内上下文；前后文依赖同一个 `tg_*` 窗口的正常 last4。`return_only=True` 只是不外发到 Telegram/主聊天界面，但 `_send_wakeup_event()` 仍带 `X-DU-FOLLOWUP-ARCHIVE: 1` 归档到同一窗口。
+- 已完成：`routes/chat.py` 对 `X-DU-WAKEUP-KIND: private_board` 做专门压缩归档，last4 里写成 `[涩涩走格棋] 小玥在局内说...` 或 `小玥同步了掷骰结果...`，不会把整段系统 prompt 或棋局大 JSON 塞进近期上下文。
+- 边界：游戏内同步请求带 `X-Force-Last4: 1`、`X-Skip-Dynamic-Memory: 1`、`X-Skip-Post-Archive-Dynamic-Memory: 1`；不带 `X-Skip-Post-Archive-Body-Delta`。也就是读取正常注入和 last4，跳过动态记忆召回/写入，不跳过 BODY delta。
+- 已验证：`.venv/bin/python -m py_compile routes/chat.py routes/miniapp/game_tools.py services/conversation_followup.py services/private_board_game.py services/game_tool_runtime.py`、`.venv/bin/python scripts/test_private_board_game.py`、`npm --prefix miniapp run build`、`npm --prefix miniapp exec tsc -- --noEmit --pretty false`、归档/header smoke 均通过；小工只读审查未发现 P0/P1/P2 阻断问题。未真实点击掷骰端到端，因为会改当前局面并实际叫渡。
 
 当前状态（2026-07-04 思维链 Prompt Cache 计费估算）：
 - 已完成：`routes/miniapp/reasoning.py` 的 Claude cost 估算改为按每条 `cache_debug` 的实际模型拆分计费，再汇总到思维链日志页；返回中保留 `pricing_per_million`、`total_usd` 等旧字段，同时新增 `pricing_per_model` 和 `cost_lines` 方便排查混合模型。

@@ -606,6 +606,7 @@ def _send_wakeup_event(
     skip_qq_group_activity: bool = False,
     system_event_user_summary: str = "",
     spring_dream_archive_meta: dict | None = None,
+    return_only: bool = False,
 ) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。事件唤醒默认归档，避免后续对话断层。"""
     try:
@@ -729,14 +730,6 @@ def _send_wakeup_event(
         text, _followup = extract_followup_marker(text)
         if not text:
             return {"ok": False, "error": "empty_gateway_reply"}
-        available_channels: list[str] = []
-        if not lock_preferred_channel:
-            from services.telegram_proactive import _available_channels
-
-            available_channels = _available_channels()
-        channels = _choice_dialog_delivery_channels(preferred_channel, available_channels, preferred_target)
-        if not channels:
-            return {"ok": False, "error": "no_proactive_channel", "reply_preview": text[:120]}
         outbound = _sanitize_reply_for_telegram(text).strip()
         try:
             from services.telegram_proactive import _sanitize_control_reply_for_delivery
@@ -746,6 +739,28 @@ def _send_wakeup_event(
             outbound = str(outbound or "").strip()
         if not outbound:
             return {"ok": False, "error": "empty_after_sanitize"}
+        if return_only:
+            return {
+                "ok": True,
+                "channel": "game",
+                "attempted_channels": [],
+                "preferred_channel": preferred_channel,
+                "preferred_channel_at": str(preferred_meta.get("at") or ""),
+                "locked_channel": bool(lock_preferred_channel),
+                "archive_ok": True,
+                "dispatched": False,
+                "reply_text": outbound,
+                "reply_preview": outbound[:120],
+                "error": "",
+            }
+        available_channels: list[str] = []
+        if not lock_preferred_channel:
+            from services.telegram_proactive import _available_channels
+
+            available_channels = _available_channels()
+        channels = _choice_dialog_delivery_channels(preferred_channel, available_channels, preferred_target)
+        if not channels:
+            return {"ok": False, "error": "no_proactive_channel", "reply_preview": outbound[:120]}
         attempted_channels = []
         for channel in channels:
             attempted_channels.append(channel)
@@ -871,6 +886,40 @@ def send_private_draw_wakeup(
         preferred_target_override=target,
         preferred_meta_override=preferred_meta,
         lock_preferred_channel=bool(preferred_channel),
+    )
+
+
+def send_private_board_wakeup(
+    window_id: str,
+    target: str,
+    event_text: str,
+    created_at: str | None = None,
+    preferred_channel: str = "",
+    preferred_meta: dict | None = None,
+    return_only: bool = False,
+) -> dict:
+    """立即让渡看到小玥同步来的涩涩走格棋局面。"""
+    return _send_wakeup_event(
+        window_id=window_id,
+        target=target,
+        event_text=event_text,
+        created_at=created_at,
+        archive=True,
+        extra_instruction=(
+            "这是小玥在涩涩走格棋页面内发给你的游戏交流，不是她在主聊天框里说的话。"
+            "请以渡自己的口吻自然回应一两句；如果当前轮到你且你想行动，回复第一行必须单独写精确指令「【掷骰】」，"
+            "第二行开始再说想对小玥说的话。普通说「掷骰子」「我来投一下」，或者把「【掷骰】」写在句子中间，都只算聊天，不会触发行动。"
+            "不要调用工具，不要解释工具、接口、系统流程，不要替小玥说话。"
+        ),
+        wakeup_kind="private_board",
+        system_event=True,
+        system_event_user_summary="请根据上面的涩涩走格棋游戏内交流回应小玥。",
+        preferred_channel_override=preferred_channel,
+        preferred_target_override=target,
+        preferred_meta_override=preferred_meta,
+        lock_preferred_channel=bool(preferred_channel),
+        allow_followup=not return_only,
+        return_only=return_only,
     )
 
 

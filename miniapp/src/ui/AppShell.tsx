@@ -46,6 +46,7 @@ import {
   MoonIconMini,
   NotebookPenIconMini,
   PhoneIconMini,
+  RouteIconMini,
   SmartphoneIconMini,
   SpeakerIconMini,
   StarIconMini,
@@ -92,7 +93,9 @@ const DreamArchiveTab = lazy(() => import("./tabs/DreamArchiveTab").then((m) => 
 const DuNotebookTab = lazy(() => import("./tabs/DuNotebookTab").then((m) => ({ default: m.DuNotebookTab })));
 const ExchangeDiaryTab = lazy(() => import("./tabs/ExchangeDiaryTab").then((m) => ({ default: m.ExchangeDiaryTab })));
 const BudgetCheckInTab = lazy(() => import("./tabs/BudgetCheckInTab").then((m) => ({ default: m.BudgetCheckInTab })));
+const GamesHubTab = lazy(() => import("./tabs/GamesHubTab").then((m) => ({ default: m.GamesHubTab })));
 const WenyouTab = lazy(() => import("./tabs/WenyouTab").then((m) => ({ default: m.WenyouTab })));
+const SeseBoardGameTab = lazy(() => import("./tabs/SeseBoardGameTab").then((m) => ({ default: m.SeseBoardGameTab })));
 const StickersTab = lazy(() => import("./tabs/StickersTab").then((m) => ({ default: m.StickersTab })));
 const CallHubScreen = lazy(() => import("./tabs/CallHubScreen").then((m) => ({ default: m.CallHubScreen })));
 const PixelHomeTab = lazy(() => import("./tabs/PixelHomeTab").then((m) => ({ default: m.PixelHomeTab })));
@@ -108,7 +111,7 @@ const SecretDrawerTab = lazy(() => import("./tabs/SecretDrawerTab").then((m) => 
 
 type PanelId = "logs" | "reasoning" | "memory-debug" | "dream-archive" | "du-notebook" | "study-room" | "budget-checkin" | "secret-drawer" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
 type AvatarImageKind = "myAvatar" | "duAvatar" | "benbenAvatar";
-type ChatScreenId = "du" | "group" | "wenyou" | null;
+type ChatScreenId = "du" | "group" | "games" | "wenyou" | "sese-board" | null;
 type BackHandler = () => boolean;
 type AppBackgroundTone = "light" | "dark";
 type ModeResponse = {
@@ -255,7 +258,7 @@ export function AppShell({
   const groupChatDisplayTitle = getDisplayGroupChatTitle(groupChatTitle);
   const handleWenyouBack = useCallback(() => {
     if (wenyouBackHandlerRef.current?.()) return;
-    setActiveScreen(null);
+    setActiveScreen("games");
   }, []);
   const loadDailyWhisper = useCallback(
     async (forceRefresh = false) => {
@@ -609,6 +612,10 @@ export function AppShell({
       if (activeScreen === "wenyou" && wenyouBackHandlerRef.current?.()) {
         return;
       }
+      if (activeScreen === "wenyou" || activeScreen === "sese-board") {
+        setActiveScreen("games");
+        return;
+      }
       if (activeScreen) {
         setActiveScreen(null);
         return;
@@ -688,6 +695,11 @@ export function AppShell({
               icon={<HomeIconMini />}
               label="小家"
               onClick={() => setShowPixelHome(true)}
+            />
+            <ListRow
+              icon={<RouteIconMini className="h-5 w-5 stroke-[1.5]" />}
+              label="游戏"
+              onClick={() => setActiveScreen("games")}
             />
             <ListRow
               icon={<StarIconMini />}
@@ -793,7 +805,6 @@ export function AppShell({
         groupWindowId={buildGroupDisplayWindowId(sharedChatWindowId)}
         onOpenDu={() => setActiveScreen("du")}
         onOpenGroup={() => setActiveScreen("group")}
-        onOpenWenyou={() => setActiveScreen("wenyou")}
         onRefreshTodayNote={() => {
           if (!todayNoteRefreshing) void loadDailyWhisper(true);
         }}
@@ -897,9 +908,22 @@ export function AppShell({
         />
       ) : null}
       {activeScreen === "wenyou" ? (
-        <FullScreenPane title="文游" accent="wenyou" onBack={handleWenyouBack} edgeSwipeBack>
+        <FullScreenPane title="无限流" accent="wenyou" onBack={handleWenyouBack} edgeSwipeBack>
           <LazyPane><WenyouTab initialView="hub" backHandlerRef={wenyouBackHandlerRef} windowId={sharedChatWindowId} /></LazyPane>
         </FullScreenPane>
+      ) : null}
+      {activeScreen === "games" ? (
+        <FullScreenPane title="游戏" accent="neutral" headerMode="simple" onBack={() => setActiveScreen(null)} edgeSwipeBack>
+          <LazyPane>
+            <GamesHubTab
+              onOpenWenyou={() => setActiveScreen("wenyou")}
+              onOpenSeseBoard={() => setActiveScreen("sese-board")}
+            />
+          </LazyPane>
+        </FullScreenPane>
+      ) : null}
+      {activeScreen === "sese-board" ? (
+        <LazyPane><SeseBoardGameTab onBack={() => setActiveScreen("games")} /></LazyPane>
       ) : null}
       {!activeScreen ? (
         <>

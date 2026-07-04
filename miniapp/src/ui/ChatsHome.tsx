@@ -53,7 +53,6 @@ export function ChatsHome({
   groupWindowId,
   onOpenDu,
   onOpenGroup,
-  onOpenWenyou,
   onRefreshTodayNote,
   todayNoteRefreshing,
   hasAppBackground = false,
@@ -67,7 +66,6 @@ export function ChatsHome({
   groupWindowId: string;
   onOpenDu: () => void;
   onOpenGroup: () => void;
-  onOpenWenyou: () => void;
   onRefreshTodayNote: () => void;
   todayNoteRefreshing: boolean;
   hasAppBackground?: boolean;
@@ -78,8 +76,6 @@ export function ChatsHome({
   const [duTime, setDuTime] = useState("主会话");
   const [groupPreview, setGroupPreview] = useState(groupDisplayTitle);
   const [groupTime, setGroupTime] = useState("群聊");
-  const [wenyouPreview, setWenyouPreview] = useState("独立文游会话");
-  const [wenyouTime, setWenyouTime] = useState("独立会话");
   const anniversaryDayCount = getAnniversaryDayCount();
 
   useEffect(() => {
@@ -144,23 +140,6 @@ export function ChatsHome({
     };
   }, [groupWindowId, privateWindowId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const j = await apiJson<{ ok?: boolean; active?: boolean; session?: { instance_name?: string; startedAt?: string } | null }>("/miniapp-api/wenyou/status");
-        if (cancelled) return;
-        if (j?.ok && j?.active && j?.session) {
-          setWenyouPreview(`当前副本：${String(j.session.instance_name || "系统空间进行中")}`);
-          setWenyouTime(String(j.session.startedAt || "").trim() || "进行中");
-        }
-      } catch {}
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   return (
     <div
       className={`${hasAppBackground ? "bg-transparent" : "bg-white"} pb-8`}
@@ -205,13 +184,6 @@ export function ChatsHome({
           tone="group"
           avatarImage={benbenAvatarImage}
           onClick={onOpenGroup}
-        />
-        <ChatEntryRow
-          title="文游"
-          preview={wenyouPreview}
-          time={wenyouTime}
-          tone="wenyou"
-          onClick={onOpenWenyou}
         />
       </div>
     </div>
@@ -367,16 +339,14 @@ function ChatEntryRow({
   title: string;
   preview: string;
   time: string;
-  tone: "du" | "group" | "wenyou";
+  tone: "du" | "group";
   avatarImage?: string;
   pinned?: boolean;
   onClick: () => void;
 }) {
-  const palette = tone === "wenyou"
-    ? { shell: "bg-[#F8F0F4] text-[#704A5D]" }
-    : tone === "group"
-      ? { shell: "bg-[#FFF3D7] text-[#8A5A10]" }
-      : { shell: "bg-[#F0F4F8] text-[#4A5568]" };
+  const palette = tone === "group"
+    ? { shell: "bg-[#FFF3D7] text-[#8A5A10]" }
+    : { shell: "bg-[#F0F4F8] text-[#4A5568]" };
   return (
     <button className="flex w-full items-center px-4 py-3.5 text-left transition-colors active:bg-white/12" onClick={onClick}>
       <div className="relative shrink-0">

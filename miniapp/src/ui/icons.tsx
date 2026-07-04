@@ -105,6 +105,10 @@ export function SendIconMini() {
   return <svg className="h-[17px] w-[17px] stroke-[1.8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13" /><path d="m22 2-7 20-4-9-9-4 20-7Z" /></svg>;
 }
 
+export function MessageCircleIconMini({ className = "h-[19px] w-[19px] stroke-[2]" }: { className?: string } = {}) {
+  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" /></svg>;
+}
+
 export function ChevronUpMini() {
   return <svg className="h-[14px] w-[14px] stroke-[1.8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m18 15-6-6-6 6" /></svg>;
 }

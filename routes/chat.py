@@ -675,8 +675,40 @@ def _compact_exchange_diary_comment_event_text(text: str) -> str:
     return "小玥刚刚评论了你的交换日记。"
 
 
+def _compact_private_board_event_text(text: str) -> str:
+    if "刚掷完骰子后的自动同步" in text or "本次掷骰结果与当前棋局" in text:
+        roll = _regex_group(
+            r"本次掷骰[:：]\s*([\s\S]*?)(?:\n\s*\n当前棋局[:：]|\n当前棋局[:：]|\n\n这是小玥在涩涩走格棋页面内发给你的游戏交流|$)",
+            text,
+        )
+        if roll:
+            return f"小玥在涩涩走格棋中同步了掷骰结果：{_compact_archive_line(roll, 220)}。"
+        return "小玥在涩涩走格棋中同步了本次掷骰结果和当前棋局。"
+    message = _regex_group(
+        r"小玥刚刚在局内说[:：]([\s\S]*?)(?:\n\n这是小玥在涩涩走格棋页面内发给你的游戏交流|$)",
+        text,
+    )
+    if message:
+        return f"小玥在涩涩走格棋局内说：{_compact_archive_line(message, 220)}。"
+    return "小玥在涩涩走格棋局内发来一条消息。"
+
+
 def _wakeup_kind_for_archive() -> str:
     return str(request.headers.get("X-DU-WAKEUP-KIND") or "").strip().lower()
+
+
+def _gateway_event_source_for_archive(messages: list | None, *, wakeup_kind: str = "") -> Optional[dict]:
+    kind = str(wakeup_kind or "").strip().lower()
+    if kind != "private_board":
+        return None
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("role") or "").strip().lower() != "system":
+            continue
+        if "涩涩走格棋" in _plain_message_text(msg):
+            return msg
+    return None
 
 
 def _compact_gateway_event_for_archive(user_msg: dict, *, wakeup_kind: str = "") -> dict:
@@ -697,6 +729,9 @@ def _compact_gateway_event_for_archive(user_msg: dict, *, wakeup_kind: str = "")
     elif kind in {"private_draw", "private_slip"}:
         label = "私密抽签"
         content = "小玥发来一次 sex play 抽签结果。"
+    elif kind == "private_board":
+        label = "涩涩走格棋"
+        content = _compact_private_board_event_text(text)
     elif kind in {"exchange_diary_comment", "diary_comment"}:
         label = "交换日记评论"
         content = _compact_exchange_diary_comment_event_text(text)
@@ -788,7 +823,14 @@ def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:
     return compacted
 
 
-def _build_round_cleaned_for_archive(user_msg: dict, assistant_msg: dict, *, reply_target: str, window_id: str) -> list:
+def _build_round_cleaned_for_archive(
+    user_msg: dict,
+    assistant_msg: dict,
+    *,
+    reply_target: str,
+    window_id: str,
+    request_messages: list | None = None,
+) -> list:
     archive_user = _last_user_for_archive(user_msg, reply_target=reply_target, window_id=window_id)
     archive_assistant = assistant_msg
     if _is_million_plan_request():
@@ -803,7 +845,8 @@ def _build_round_cleaned_for_archive(user_msg: dict, assistant_msg: dict, *, rep
     elif _is_gateway_wakeup_request():
         wakeup_kind = _wakeup_kind_for_archive()
         if wakeup_kind:
-            archive_user = _compact_gateway_event_for_archive(archive_user or user_msg, wakeup_kind=wakeup_kind)
+            event_msg = _gateway_event_source_for_archive(request_messages, wakeup_kind=wakeup_kind)
+            archive_user = _compact_gateway_event_for_archive(event_msg or archive_user or user_msg, wakeup_kind=wakeup_kind)
     return build_round_cleaned_for_r2(archive_user, archive_assistant)
 
 
@@ -1276,7 +1319,13 @@ def _stream_with_r2_archive(
                     force_inner_os=pseudo_cot_stream_enabled,
                 )
                 round_cleaned = (
-                    _build_round_cleaned_for_archive(last_user, msg, reply_target=_reply_target(), window_id=window_id)
+                    _build_round_cleaned_for_archive(
+                        last_user,
+                        msg,
+                        reply_target=_reply_target(),
+                        window_id=window_id,
+                        request_messages=current_body.get("messages") or [],
+                    )
                     if last_user
                     else None
                 )
@@ -1515,7 +1564,13 @@ def _stream_with_r2_archive(
             if game_tool_used:
                 logger.info("game tool 回合命中，归档后动态记忆与 BODY delta 跳过 window_id=%s", window_id)
             round_cleaned = (
-                _build_round_cleaned_for_archive(last_user, msg, reply_target=_reply_target(), window_id=window_id)
+                _build_round_cleaned_for_archive(
+                    last_user,
+                    msg,
+                    reply_target=_reply_target(),
+                    window_id=window_id,
+                    request_messages=current_body.get("messages") or [],
+                )
                 if last_user
                 else None
             )
@@ -2453,6 +2508,7 @@ def chat_completions():
                     msg_for_r2,
                     reply_target=reply_target,
                     window_id=window_id,
+                    request_messages=body.get("messages") or [],
                 )
                 if reply_channel in _NONSTREAM_FAST_RETURN_CHANNELS:
                     archived = step_archive_round(
