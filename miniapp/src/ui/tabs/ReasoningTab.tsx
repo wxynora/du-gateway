@@ -339,16 +339,16 @@ export function ReasoningTab() {
         .timeline-container::before {
           content:"";
           position:absolute;
-          left:9px;
+          left:1px;
           top:20px;
           bottom:0;
           width:2px;
           background: linear-gradient(180deg,#e5e7eb 0%, transparent 100%);
         }
-        .timeline-item { position: relative; margin-left: 28px; margin-bottom: 20px; }
+        .timeline-item { position: relative; margin-left: 8px; margin-bottom: 20px; }
         .timeline-dot {
           position:absolute;
-          left:-28px;
+          left:-12px;
           top:7px;
           width:10px;
           height:10px;
@@ -366,15 +366,17 @@ export function ReasoningTab() {
       `}</style>
 
       <button
-        className="fixed right-4 z-[35] flex h-9 w-9 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100"
-        style={{ top: "calc(env(safe-area-inset-top, 0px) + 10px)" }}
+        className="fixed right-4 z-[35] flex h-8 w-8 items-center justify-center rounded-full border border-gray-100/70 bg-white/80 text-gray-500 shadow-[0_3px_10px_rgba(15,23,42,0.04)] transition-colors active:bg-gray-50 disabled:opacity-50"
+        style={{ top: "calc(env(safe-area-inset-top, 0px) + 12px)" }}
         onClick={loadLatest}
         disabled={loading}
         title="刷新"
+        aria-label="刷新思维链"
       >
-        <svg className={`h-5 w-5 ${loading ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M20 6v6h-6" />
-          <path d="M20 12a8 8 0 1 1-2.34-5.66L20 8" />
+        <svg className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <polyline points="23 4 23 10 17 10" />
+          <polyline points="1 20 1 14 7 14" />
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
         </svg>
       </button>
 
@@ -393,7 +395,7 @@ export function ReasoningTab() {
         </div>
       ) : null}
 
-      <main className="w-full max-w-full overflow-x-hidden px-6 pb-8">
+      <main className="w-full max-w-full overflow-x-hidden pl-2 pr-4 pb-8">
         <div className="mb-6 w-full max-w-full overflow-x-hidden">
           <div className="timeline-container">
         {items.map((r, i) => {
@@ -417,7 +419,7 @@ export function ReasoningTab() {
             </div>
             <div className="content-box shadow-sm">
               {hasReasoning ? (
-                <p className="mb-4 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-gray-700">
+                <p className="mb-4 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-gray-700">
                   {String(r.reasoning || "")}
                 </p>
               ) : (
@@ -433,24 +435,29 @@ export function ReasoningTab() {
                     const args = String(tc?.arguments || "").trim();
                     const result = String(tc?.result || "").trim();
                     return (
-                      <div key={`${tc?.id || ""}-${ti}`} className="space-y-3">
-                        <div>
-                          <div className="mb-1 flex items-center gap-2">
-                            <span className="text-[11px] font-bold uppercase text-amber-700">Call: {nm}</span>
-                          </div>
-                          <div className="rounded-lg border border-amber-100/50 bg-amber-50/50 p-3">
-                            <code className="font-mono text-[12px] text-amber-900 break-all">{args || "(空参数)"}</code>
-                          </div>
+                      <div key={`${tc?.id || ""}-${ti}`} className="space-y-1 border-t border-gray-100 pt-3 first:border-t-0 first:pt-0">
+                        <div className="flex items-center justify-between gap-2 px-1">
+                          <span className="truncate text-[11px] font-bold uppercase text-gray-500">Tool: {nm}</span>
+                          <span className="shrink-0 text-[10px] text-gray-300">{result ? "有返回" : "无返回"}</span>
                         </div>
-
-                        <div>
-                          <div className="mb-1 flex items-center gap-2">
-                            <span className="text-[11px] font-bold uppercase text-blue-700">Result</span>
+                        <details className="group">
+                          <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg bg-amber-50/70 px-3 py-2 text-[11px] font-bold uppercase text-amber-700">
+                            <span>调用参数</span>
+                            <span className="text-[10px] text-amber-400 group-open:rotate-180">v</span>
+                          </summary>
+                          <div className="px-3 py-2">
+                            <code className="font-mono text-[11px] text-amber-900 break-all">{args || "(空参数)"}</code>
                           </div>
-                          <div className="rounded-lg border border-blue-100/50 bg-blue-50/50 p-3">
-                            <code className="font-mono text-[12px] text-blue-900 break-all">{result || "（无返回内容）"}</code>
+                        </details>
+                        <details className="group">
+                          <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg bg-blue-50/70 px-3 py-2 text-[11px] font-bold uppercase text-blue-700">
+                            <span>工具结果</span>
+                            <span className="text-[10px] text-blue-400 group-open:rotate-180">v</span>
+                          </summary>
+                          <div className="px-3 py-2">
+                            <code className="font-mono text-[11px] text-blue-900 break-all">{result || "（无返回内容）"}</code>
                           </div>
-                        </div>
+                        </details>
                       </div>
                     );
                   })}
