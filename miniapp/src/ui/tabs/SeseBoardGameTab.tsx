@@ -202,6 +202,12 @@ function statusDuration(item: StatusItem): string {
   return "";
 }
 
+function statusLabel(item: StatusItem): string {
+  const label = displayText(item.label || item.slot || "状态");
+  if (item.slot === "prop" || label === "道具") return "道具惩罚";
+  return label;
+}
+
 function actorPaused(statuses: StatusItem[] | undefined): boolean {
   return (statuses || []).some((item) => item.blocks_action && Number(item.remaining_actions || 0) > 0);
 }
@@ -497,7 +503,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
       applyPayload(next);
       const nextPopup = parseEventPopup(next.player_text || "");
       if (nextPopup) setPopup(nextPopup);
-      if (options.notifyAfterUserRoll !== false && move?.actor === "xinyue" && !next.state?.game_over) {
+      if (options.notifyAfterUserRoll !== false && next.state?.turn_actor === "du" && !next.state?.game_over) {
         notifyPayload = next;
       }
     } catch (e: any) {
@@ -701,6 +707,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           --text-light: #ba68c8;
           --bg-page: #fce4ec;
           --card-white: rgba(255, 255, 255, 0.86);
+          --sese-safe-top: max(calc(env(safe-area-inset-top, 0px) + 12px), 44px);
           position: absolute;
           inset: 0;
           z-index: 34;
@@ -711,7 +718,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
             var(--bg-page);
           color: var(--text-main);
           font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-          padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px calc(env(safe-area-inset-bottom, 0px) + 22px);
+          padding: var(--sese-safe-top) 14px calc(env(safe-area-inset-bottom, 0px) + 22px);
         }
         .sese-header {
           display: flex;
@@ -1120,6 +1127,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           --radius-lg: 24px;
           --radius-md: 16px;
           --shadow-soft: 0 4px 12px rgba(233, 30, 99, 0.1);
+          --sese-safe-top: max(calc(env(safe-area-inset-top, 0px) + 12px), 44px);
           --wavy-border: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 120' preserveAspectRatio='none'%3E%3Cpath d='M0,0V46.29c47.79,22.2,103.59,32.17,158,28,70.36-5.37,136.33-33.31,206.8-37.5C438.64,32.43,512.34,53.67,583,72.05c69.27,18,138.3,24.88,209.4,13.08,36.15-6,69.85-17.84,104.45-29.34C989.49,25,1113-14.29,1200,52.47V0Z' fill='%23f8bbd0'/%3E%3C/svg%3E");
           display: flex;
           flex-direction: column;
@@ -1138,7 +1146,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           max-width: none;
           margin: 0;
           background-color: var(--primary-pink);
-          padding: 12px 16px 18px;
+          padding: var(--sese-safe-top) 16px 18px;
         }
         .sese-header::after {
           content: "";
@@ -1154,7 +1162,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         .sese-back {
           position: absolute;
           left: 10px;
-          top: 12px;
+          top: var(--sese-safe-top);
           z-index: 12;
           width: 34px;
           height: 34px;
@@ -1167,7 +1175,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         .sese-chat-entry {
           position: absolute;
           right: 10px;
-          top: 12px;
+          top: var(--sese-safe-top);
           z-index: 12;
           display: inline-flex;
           align-items: center;
@@ -1474,7 +1482,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           align-items: flex-start;
           justify-content: flex-end;
           background: rgba(136, 77, 138, 0.18);
-          padding: calc(env(safe-area-inset-top, 0px) + 54px) 14px 14px;
+          padding: calc(var(--sese-safe-top) + 42px) 14px 14px;
           backdrop-filter: blur(2px);
         }
         .sese-chat-panel {
@@ -1692,7 +1700,7 @@ function PlayerStateCard({ actor, statuses, active }: { actor: Actor; statuses: 
       <h2>{actor === "xinyue" ? "我的状态" : "渡的状态"}</h2>
       <div className="sese-status-list">
         {shown.length ? shown.map((item, index) => {
-          const label = displayText(item.label || item.slot || "状态");
+          const label = statusLabel(item);
           const value = displayText(item.value || "");
           const duration = statusDuration(item);
           return (

@@ -434,7 +434,15 @@ def _event_duration_text(event: dict[str, Any]) -> str:
 def _slot_label(key: str) -> str:
     if not key:
         return "状态"
-    return str(_slot_by_key(key).get("label") or key or "状态").strip()
+    return _slot_display_label(key, str(_slot_by_key(key).get("label") or key or "状态"))
+
+
+def _slot_display_label(key: str, label: str = "") -> str:
+    slot_key = str(key or "").strip()
+    raw_label = str(label or "").strip()
+    if slot_key == "prop" or raw_label == "道具":
+        return "道具惩罚"
+    return raw_label or slot_key or "状态"
 
 
 def cmd(command: str = "", save_path: str | Path | None = None) -> str:
@@ -634,9 +642,13 @@ def _roll(state: dict[str, Any], dice: int | None = None) -> list[str]:
         actor = "xinyue"
     if _actor_blocked(state, actor):
         consumed = _consume_block_action(state, actor)
-        other = _other_actor(actor)
-        state["turn_actor"] = other if not _actor_blocked(state, actor) else other
-        return [f"{_name(actor, DU_VIEW_NAMES)}当前没有行动权，消耗 1 次限制。{consumed}".strip()]
+        state["turn_index"] = int(state.get("turn_index") or 0) + 1
+        lines = [f"{_name(actor, DU_VIEW_NAMES)}当前没有行动权，消耗 1 次限制。{consumed}".strip()]
+        pass_line = _advance_after_blocked_action(state, actor)
+        if pass_line:
+            lines.append(pass_line)
+        _append_log(state, " / ".join(lines))
+        return lines
 
     rolled = dice if dice in {1, 2, 3, 4, 5, 6} else random.Random(_rng_seed(state, actor, "dice")).randint(1, 6)
     old_pos = int(state["positions"].get(actor) or 0)
@@ -720,7 +732,7 @@ def _add_status_from_event(
 ) -> dict[str, Any]:
     slot_key = str(event.get("slot") or "").strip()
     slot = _slot_by_key(slot_key)
-    label = str(slot.get("label") or slot_key or "状态").strip()
+    label = _slot_display_label(slot_key, str(slot.get("label") or slot_key or "状态"))
     value = _pick_slot_value(state, actor, int(state["positions"].get(actor) or 0), slot_key)
     status = {
         "id": secrets.token_hex(4),
@@ -925,6 +937,20 @@ def _consume_block_action(state: dict[str, Any], actor: str) -> str:
     return ""
 
 
+def _advance_after_blocked_action(state: dict[str, Any], actor: str) -> str:
+    next_actor = _other_actor(actor)
+    if _actor_blocked(state, next_actor):
+        consumed = _consume_block_action(state, next_actor)
+        state["turn_index"] = int(state.get("turn_index") or 0) + 1
+        state["turn_actor"] = actor
+        return (
+            f"{_name(next_actor, DU_VIEW_NAMES)}也没有行动权，自动消耗 1 次限制。"
+            f"{_name(actor, DU_VIEW_NAMES)}继续处理停步回合。{consumed}"
+        ).strip()
+    state["turn_actor"] = next_actor
+    return f"下一次行动：{_name(next_actor, DU_VIEW_NAMES)}。"
+
+
 def _advance_turn(state: dict[str, Any], actor: str) -> str:
     next_actor = _other_actor(actor)
     if _actor_blocked(state, next_actor):
@@ -1045,7 +1071,7 @@ def _translate_line(line: str, names: dict[str, str]) -> str:
         return line
     text = line.replace("小玥", "\u0000")
     text = re.sub(
-        r"(^|[：，。；、\s-])我(?=(掷出|当前没有行动权|没有行动权|继续行动|的行动权恢复|到达终点|：))",
+        r"(^|[：，。；、\s-])我(?=(掷出|当前没有行动权|也没有行动权|没有行动权|继续行动|继续处理|的行动权恢复|到达终点|：))",
         r"\1渡",
         text,
     )
@@ -1092,7 +1118,7 @@ def _render_statuses(state: dict[str, Any], actor: str, names: dict[str, str]) -
 
 
 def _status_brief(status: dict[str, Any]) -> str:
-    label = str(status.get("label") or status.get("slot") or "状态").strip()
+    label = _slot_display_label(str(status.get("slot") or ""), str(status.get("label") or status.get("slot") or "状态"))
     value = str(status.get("value") or "").strip()
     return f"{label}：{value}（{_duration_text(status)}）"
 

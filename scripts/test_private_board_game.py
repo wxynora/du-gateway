@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 import tempfile
 from pathlib import Path
 import sys
@@ -59,6 +60,42 @@ def test_private_board_action_lock() -> None:
         state = after_xinyue["state"]
         _assert(state["turn_actor"] == "du", "du should recover after one locked action")
         _assert(not any(s.get("blocks_action") for s in state["statuses"]["du"]), "blocking status should be consumed")
+
+
+def test_private_board_double_blocked_turn_stays_drivable() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_path = Path(tmpdir) / "default.json"
+        run_command("new_game seed=double-block-test", save_path=save_path)
+        state = json.loads(save_path.read_text(encoding="utf-8"))
+        state["turn_actor"] = "xinyue"
+        state["statuses"]["xinyue"].append({
+            "id": "x-lock",
+            "slot": "prop",
+            "label": "道具",
+            "value": "测试停步",
+            "duration_type": "actions",
+            "remaining_actions": 1,
+            "blocks_action": True,
+        })
+        state["statuses"]["du"].append({
+            "id": "du-lock",
+            "slot": "prop",
+            "label": "道具",
+            "value": "测试停步",
+            "duration_type": "actions",
+            "remaining_actions": 1,
+            "blocks_action": True,
+        })
+        save_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+        skipped = run_command("roll", save_path=save_path)
+        state = skipped["state"]
+        player_text = str(skipped.get("player_text") or "")
+        _assert(state["turn_actor"] == "xinyue", "double blocked no-action turn should return control to xinyue")
+        _assert(not any(s.get("blocks_action") for s in state["statuses"]["xinyue"]), "xinyue block should be consumed")
+        _assert(not any(s.get("blocks_action") for s in state["statuses"]["du"]), "du block should be consumed")
+        _assert("渡也没有行动权" in player_text, "player text should explain du's skipped no-action turn")
+        _assert("道具惩罚：测试停步" in player_text, "prop status should read as punishment, not usable item")
 
 
 def test_private_board_registered_game_tool() -> None:
@@ -160,6 +197,7 @@ def test_private_board_theme_cell_events() -> None:
 if __name__ == "__main__":
     test_private_board_views()
     test_private_board_action_lock()
+    test_private_board_double_blocked_turn_stays_drivable()
     test_private_board_registered_game_tool()
     test_private_board_concurrent_rolls_do_not_drop_steps()
     test_private_board_theme_direction_filters()
