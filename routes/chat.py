@@ -321,27 +321,6 @@ def _skip_dynamic_memory_request() -> bool:
     )
 
 
-def _tool_name(tool: dict) -> str:
-    if not isinstance(tool, dict):
-        return ""
-    fn = tool.get("function") or {}
-    return str(fn.get("name") or tool.get("name") or "").strip()
-
-
-def _strip_dynamic_memory_recall_tools(body: dict) -> dict:
-    tools = body.get("tools")
-    if not isinstance(tools, list):
-        return body
-    filtered = [tool for tool in tools if _tool_name(tool) != "search_memory"]
-    if len(filtered) == len(tools):
-        return body
-    body = dict(body)
-    body["tools"] = filtered
-    if not filtered and body.get("tool_choice") == "auto":
-        body.pop("tool_choice", None)
-    return body
-
-
 def _force_game_checkpoint_final_response(resp_json: dict | None) -> dict:
     fallback = "由于防沉迷机制，暂时中止游戏回合。下次可以继续。"
     data = dict(resp_json or {})
@@ -1981,7 +1960,7 @@ def chat_completions():
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
     if slim_voice_call:
         body = _inject_voice_call_style_system(body)
-    skip_dynamic_memory = _skip_dynamic_memory_request()
+    skip_dynamic_memory = _skip_dynamic_memory_request() or slim_voice_call
     skip_post_archive_dynamic_memory_write = _skip_post_archive_dynamic_memory_request()
     skip_post_archive_body_delta = _skip_post_archive_body_delta_request()
     game_tool_loop = _is_game_tool_loop_request()
@@ -1994,43 +1973,40 @@ def chat_completions():
             maybe_update_xinyue_state_from_user_text(_plain_message_text(last_user_for_home))
         except Exception as e:
             logger.debug("pixel_home user state inference skipped error=%s", e)
-    if not slim_voice_call:
-        body = step_inject_current_base_model(body)
-        body = step_inject_system_alarm_action_result(body, window_id)
-        body = step_inject_pseudo_cot_inner_os(body, window_id)
-        body = step_inject_du_thought(body, window_id)
-        body = step_inject_pending_thoughts(body, window_id)
-        body = step_inject_secret_drawer(body, window_id)
-        body = step_inject_wakeup_frame(body, window_id)
-        body = step_inject_du_vitals(body, window_id)
-        body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
-        body = step_inject_pixel_home(body, window_id)
-        if not skip_dynamic_memory:
-            body = step_inject_dynamic_memory(body, window_id)
-        body = step_inject_humor_memes(body)
-        body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
-        body = step_inject_sense_snapshot(body, window_id)
-        body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
-        body = step_inject_interaction_candidate(body, window_id)
-        if not du_daily_maintenance:
-            body = step_inject_rikkahub_reminder(body, window_id)
-        body = step_inject_stay_with_du(body)
-        body = step_inject_du_notebook(body)
-        body = step_inject_wenyou_player_tools(body)
-        body = step_inject_gateway_tools(body)
-        if game_tool_loop or random_imitator_td_tool_mode:
-            body = step_inject_random_imitator_td_tools(body)
-        if not du_daily_maintenance:
-            body = step_inject_notion_search(body, window_id)
-            body = step_inject_chat_tools(body)
-            body = step_inject_forum_tools(body)
-            body = step_inject_amap_mcp_tools(body)
-            body = step_inject_websearch_tools(body)
-            body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
-        if skip_dynamic_memory:
-            body = _strip_dynamic_memory_recall_tools(body)
-        body = step_inject_reference_note(body)
-        body = step_inject_du_midterm_memory(body, window_id)
+    body = step_inject_current_base_model(body)
+    body = step_inject_system_alarm_action_result(body, window_id)
+    body = step_inject_pseudo_cot_inner_os(body, window_id)
+    body = step_inject_du_thought(body, window_id)
+    body = step_inject_pending_thoughts(body, window_id)
+    body = step_inject_secret_drawer(body, window_id)
+    body = step_inject_wakeup_frame(body, window_id)
+    body = step_inject_du_vitals(body, window_id)
+    body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
+    body = step_inject_pixel_home(body, window_id)
+    if not skip_dynamic_memory:
+        body = step_inject_dynamic_memory(body, window_id)
+    body = step_inject_humor_memes(body)
+    body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
+    body = step_inject_sense_snapshot(body, window_id)
+    body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
+    body = step_inject_interaction_candidate(body, window_id)
+    if not du_daily_maintenance:
+        body = step_inject_rikkahub_reminder(body, window_id)
+    body = step_inject_stay_with_du(body)
+    body = step_inject_du_notebook(body)
+    body = step_inject_wenyou_player_tools(body)
+    body = step_inject_gateway_tools(body)
+    if game_tool_loop or random_imitator_td_tool_mode:
+        body = step_inject_random_imitator_td_tools(body)
+    if not du_daily_maintenance:
+        body = step_inject_notion_search(body, window_id)
+    body = step_inject_chat_tools(body)
+    body = step_inject_forum_tools(body)
+    body = step_inject_amap_mcp_tools(body)
+    body = step_inject_websearch_tools(body)
+    body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
+    body = step_inject_reference_note(body)
+    body = step_inject_du_midterm_memory(body, window_id)
     body = _inject_music_bgm_context(body, reply_channel=reply_channel)
     body = _inject_qq_group_activity_context(body)
     active_upstream_url = _get_active_upstream_url()
