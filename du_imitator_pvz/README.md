@@ -11,6 +11,15 @@ print(cmd("种 模仿者 3-4; 种 向日葵 2-3"))
 print(cmd("等待"))
 ```
 
+特殊无尽模式固定六个模仿者，开局时同时选择是否开启混沌：
+
+```text
+new_game mode=特殊 chaos=off
+new_game mode=特殊 chaos=airdrop
+```
+
+`chaos=airdrop` 会新增空投箱；空投占格但不拦僵尸，可主动打开，僵尸经过也会打开，里面是强力植物或僵尸。
+
 也可以直接命令行运行：
 
 ```bash
@@ -37,8 +46,11 @@ help
 status
 look
 new_game level=1 seed=demo
+new_game mode=特殊 chaos=off
+new_game mode=特殊 chaos=airdrop
 cards 模仿者 模仿者 模仿者 模仿者 向日葵 窝瓜
 种 模仿者 3-4; 种 向日葵 2-3
+开空投 3-5
 铲 3-4
 等待
 结束本局
