@@ -25,6 +25,32 @@ def _strip_inline_env_comment(value: str) -> str:
     return raw
 
 
+def _env_int(name: str, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
+    try:
+        raw = _strip_inline_env_comment(os.environ.get(name, ""))
+        value = int(raw) if raw else int(default)
+    except Exception:
+        value = int(default)
+    if min_value is not None:
+        value = max(int(min_value), value)
+    if max_value is not None:
+        value = min(int(max_value), value)
+    return value
+
+
+def _env_float(name: str, default: float, min_value: float | None = None, max_value: float | None = None) -> float:
+    try:
+        raw = _strip_inline_env_comment(os.environ.get(name, ""))
+        value = float(raw) if raw else float(default)
+    except Exception:
+        value = float(default)
+    if min_value is not None:
+        value = max(float(min_value), value)
+    if max_value is not None:
+        value = min(float(max_value), value)
+    return value
+
+
 # 数据目录：白名单、最近窗口等
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -325,6 +351,23 @@ DYNAMIC_MEMORY_MIRROR_SHADOW_ENABLED = _dyn_mem_mirror_shadow_en not in ("0", "f
 _dyn_mem_keyword_dry_run = os.environ.get("DYNAMIC_MEMORY_KEYWORD_BACKFILL_DRY_RUN", "1").strip().lower()
 DYNAMIC_MEMORY_KEYWORD_BACKFILL_DRY_RUN = _dyn_mem_keyword_dry_run not in ("0", "false", "no", "off")
 DYNAMIC_MEMORY_KEYWORD_MAX_TERMS = int(os.environ.get("DYNAMIC_MEMORY_KEYWORD_MAX_TERMS", "32"))
+_dyn_mem_rerank_en = _strip_inline_env_comment(os.environ.get("DYNAMIC_MEMORY_RERANK_ENABLED", "1")).lower()
+DYNAMIC_MEMORY_RERANK_ENABLED = _dyn_mem_rerank_en in ("1", "true", "yes", "on")
+DYNAMIC_MEMORY_RERANK_PROVIDER = os.environ.get("DYNAMIC_MEMORY_RERANK_PROVIDER", "siliconflow").strip().lower()
+DYNAMIC_MEMORY_RERANK_MODEL = os.environ.get("DYNAMIC_MEMORY_RERANK_MODEL", "Qwen/Qwen3-Reranker-8B").strip()
+DYNAMIC_MEMORY_RERANK_API_URL = os.environ.get(
+    "DYNAMIC_MEMORY_RERANK_API_URL",
+    "https://api.siliconflow.cn/v1/rerank",
+).strip()
+DYNAMIC_MEMORY_RERANK_API_KEY = os.environ.get("DYNAMIC_MEMORY_RERANK_API_KEY", "").strip()
+DYNAMIC_MEMORY_RERANK_TIMEOUT_SECONDS = _env_float("DYNAMIC_MEMORY_RERANK_TIMEOUT_SECONDS", 2.5, 0.3, 30.0)
+DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES = _env_int("DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES", 30, 1, 80)
+DYNAMIC_MEMORY_RERANK_TOP_N = _env_int("DYNAMIC_MEMORY_RERANK_TOP_N", DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES, 1, 80)
+DYNAMIC_MEMORY_RERANK_DOCUMENT_MAX_CHARS = _env_int("DYNAMIC_MEMORY_RERANK_DOCUMENT_MAX_CHARS", 900, 80, 4000)
+DYNAMIC_MEMORY_RERANK_QUERY_MAX_CHARS = _env_int("DYNAMIC_MEMORY_RERANK_QUERY_MAX_CHARS", 1200, 80, 4000)
+DYNAMIC_MEMORY_RERANK_BLEND = _env_float("DYNAMIC_MEMORY_RERANK_BLEND", 0.78, 0.0, 1.0)
+_dyn_mem_rerank_custom_url = _strip_inline_env_comment(os.environ.get("DYNAMIC_MEMORY_RERANK_ALLOW_CUSTOM_URL", "0")).lower()
+DYNAMIC_MEMORY_RERANK_ALLOW_CUSTOM_URL = _dyn_mem_rerank_custom_url in ("1", "true", "yes", "on")
 
 # 记忆注入上限（总结+动态层合计）。
 # 默认按“字符数”控制：窗口记忆总结注入量与 R2 中 summary 上限是一套（约 8000 字符）。
@@ -765,6 +808,7 @@ def cloudflare_claude_model_options(url: str = "") -> list[str]:
 # -------------------- 硅基流动（SiliconFlow）专用模型列表 --------------------
 # 仅用于硅基流动上游的本地模型列表展示/探活；聊天入口不做硅基专属 model 兜底或覆盖。
 SILICONFLOW_BASE_HOST = os.environ.get("SILICONFLOW_BASE_HOST", "api.siliconflow.cn").strip().lower()
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "").strip()
 _SILICONFLOW_MODELS_STR = os.environ.get("SILICONFLOW_MODELS", "Pro/zai-org/GLM-5.1,zai-org/GLM-5.2").strip()
 SILICONFLOW_MODELS = [
     m.strip() for m in _SILICONFLOW_MODELS_STR.split(",") if m.strip()
@@ -778,7 +822,7 @@ def is_siliconflow_url(url: str) -> bool:
         host = (urlparse(url).hostname or "").strip().lower()
     except Exception:
         return False
-    return bool(host and SILICONFLOW_BASE_HOST and host.endswith(SILICONFLOW_BASE_HOST))
+    return bool(host and SILICONFLOW_BASE_HOST and (host == SILICONFLOW_BASE_HOST or host.endswith("." + SILICONFLOW_BASE_HOST)))
 
 
 def siliconflow_model_options() -> list[str]:
@@ -788,6 +832,14 @@ def siliconflow_model_options() -> list[str]:
         if model and model not in out:
             out.append(model)
     return out
+
+
+def resolve_siliconflow_api_key() -> str:
+    if DYNAMIC_MEMORY_RERANK_API_KEY:
+        return DYNAMIC_MEMORY_RERANK_API_KEY
+    if SILICONFLOW_API_KEY:
+        return SILICONFLOW_API_KEY
+    return ""
 
 
 def siliconflow_models_response() -> dict | None:

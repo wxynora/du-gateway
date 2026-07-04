@@ -19,97 +19,6 @@ _MEMORY_MAINTENANCE_LAST_FINISHED = ""
 _MEMORY_MAINTENANCE_LAST_ERROR = ""
 
 
-def _message_text(content) -> str:
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                parts.append(str(item.get("text") or "").strip())
-        return " ".join(x for x in parts if x).strip()
-    return ""
-
-
-def _latest_user_text_from_rounds(rounds: list[dict]) -> str:
-    for r in reversed(rounds or []):
-        for msg in reversed(r.get("messages") or []):
-            if not isinstance(msg, dict):
-                continue
-            if str(msg.get("role") or "").strip().lower() != "user":
-                continue
-            text = _message_text(msg.get("content"))
-            if text:
-                return text
-    return ""
-
-
-def _extract_dynamic_memory_lines(system_text: str) -> list[str]:
-    raw = str(system_text or "")
-    start = raw.find("【动态记忆】")
-    end = raw.find("【以上为动态记忆】")
-    if start < 0 or end <= start:
-        return []
-    chunk = raw[start + len("【动态记忆】") : end].strip()
-    return [line.strip() for line in chunk.splitlines() if line.strip()]
-
-
-def _build_live_dynamic_recall_preview(window_id: str) -> dict | None:
-    wid = str(window_id or "").strip()
-    if not wid:
-        return None
-    rounds = r2_store.get_conversation_rounds(wid, last_n=6) or []
-    query = _latest_user_text_from_rounds(rounds)
-    if not query:
-        return None
-    try:
-        from pipeline.pipeline import step_inject_dynamic_memory
-
-        body = {
-            "messages": [
-                {"role": "system", "content": "debug"},
-                {"role": "user", "content": query},
-            ]
-        }
-        out = step_inject_dynamic_memory(body, wid)
-        messages = out.get("messages") or []
-        system_text = ""
-        for msg in messages:
-            if str(msg.get("role") or "").strip().lower() == "system":
-                system_text = str(msg.get("content") or "")
-                break
-        lines = _extract_dynamic_memory_lines(system_text)
-        refreshed = r2_store.get_dynamic_recall_debug_events(limit=1) or []
-        if refreshed:
-            return refreshed[0]
-        return {
-            "timestamp": now_beijing_iso(),
-            "window_id": wid,
-            "query": query,
-            "keywords": [],
-            "keyword_debug": [],
-            "retrieval_query": "",
-            "source": "live_preview",
-            "recalled_lines": lines,
-            "recalled_count": len(lines),
-            "reason": "live_preview_fallback",
-        }
-    except Exception as e:
-        return {
-            "timestamp": now_beijing_iso(),
-            "window_id": wid,
-            "query": query,
-            "keywords": [],
-            "keyword_debug": [],
-            "retrieval_query": "",
-            "source": "live_preview",
-            "recalled_lines": [],
-            "recalled_count": 0,
-            "reason": "live_preview_error",
-            "vector_error": str(e),
-        }
-
-
 def _failed_rebuild_ids_path() -> Path:
     return Path(__file__).resolve().parents[2] / "data" / "rebuild_index_failed_ids.json"
 
@@ -178,6 +87,14 @@ def _dynamic_memory_mirror_status(limit: int = 20) -> dict:
 
 def _event_window_id(event: dict) -> str:
     return str((event or {}).get("window_id") or "").strip() or "__default__"
+
+
+def _is_live_preview_recall_event(event: dict) -> bool:
+    if not isinstance(event, dict):
+        return False
+    source = str(event.get("source") or "").strip()
+    reason = str(event.get("reason") or "").strip()
+    return source == "live_preview" or reason.startswith("live_preview_") or str(event.get("debug_origin") or "").strip() == "live_preview"
 
 
 def _merge_citation_events_into_recalls(recall_events: list[dict], citation_events: list[dict]) -> list[dict]:
@@ -431,10 +348,6 @@ def register_routes(bp) -> None:
                 target = (recent[0].get("id") or "").strip()
             summary = (r2_store.get_summary(target) or "").strip()
             all_events = r2_store.get_dynamic_recall_debug_events(limit=limit * 5) or []
-            if not all_events:
-                live_preview = _build_live_dynamic_recall_preview(target)
-                if live_preview:
-                    all_events = [live_preview]
             scope = str(request.args.get("scope") or "all").strip().lower()
             if scope not in ("all", "target"):
                 scope = "all"
@@ -451,6 +364,7 @@ def register_routes(bp) -> None:
                 e
                 for e in events
                 if str((e or {}).get("source") or "").strip() not in ("search_memory", "memory_citation")
+                and not _is_live_preview_recall_event(e)
             ]
             recall_events = _merge_citation_events_into_recalls(recall_events, citation_events)
             search_events = [e for e in events if str((e or {}).get("source") or "").strip() == "search_memory"]

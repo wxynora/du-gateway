@@ -2062,6 +2062,151 @@ def _merge_vector_and_bm25_recall(
     return [mem for _, _, mem in scored]
 
 
+def _dynamic_memory_rerank_query(
+    last_user_text: str,
+    retrieval_query: str,
+    messages: list[dict],
+    expanded_queries: list[str],
+) -> str:
+    parts = [f"当前消息：{(last_user_text or '').strip()}"]
+    rq = (retrieval_query or "").strip()
+    if rq and rq != (last_user_text or "").strip():
+        parts.append(f"检索短语：{rq}")
+    eq = [q.strip() for q in (expanded_queries or []) if q and q.strip()]
+    if eq:
+        parts.append("扩展检索：" + "；".join(eq[:3]))
+    turns_text = _last_4_turns_text_for_rewrite(messages)
+    if turns_text:
+        parts.append("近几轮上下文：" + turns_text[-800:])
+    return "\n".join(parts)
+
+
+def _dynamic_memory_rerank_document(mem: dict) -> str:
+    content = str((mem or {}).get("content") or "").strip()
+    retrieval_text = _memory_retrieval_text(mem)
+    parts: list[str] = []
+    if retrieval_text:
+        parts.append(f"检索文本：{retrieval_text}")
+    if content and content not in retrieval_text:
+        parts.append(f"记忆正文：{content}")
+    labels = []
+    for key, label in (
+        ("tag", "标签"),
+        ("scene_type", "场景"),
+        ("target_type", "对象"),
+        ("emotion_label", "情绪"),
+    ):
+        value = str((mem or {}).get(key) or "").strip()
+        if value:
+            labels.append(f"{label}={value}")
+    if labels:
+        parts.append("元信息：" + " ".join(labels))
+    return "\n".join(parts).strip()
+
+
+def _apply_external_dynamic_memory_rerank(
+    recalled: list[dict],
+    last_user_text: str,
+    retrieval_query: str,
+    messages: list[dict],
+    expanded_queries: list[str],
+    recall_source: str,
+) -> tuple[list[dict], str, dict]:
+    if not recalled:
+        return recalled, recall_source, {"enabled": False, "reason": "empty_recalled"}
+    try:
+        from config import DYNAMIC_MEMORY_RERANK_BLEND, DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES
+        from services.dynamic_memory_reranker import dynamic_memory_rerank_enabled, rerank_dynamic_memory_documents
+
+        if not dynamic_memory_rerank_enabled():
+            return recalled, recall_source, {"enabled": False, "reason": "disabled"}
+
+        max_candidates = max(1, int(DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES or 30))
+        candidate_mems = recalled[:max_candidates]
+        tail_mems = recalled[max_candidates:]
+        query = _dynamic_memory_rerank_query(last_user_text, retrieval_query, messages, expanded_queries)
+        docs = [
+            {
+                "memory_id": str((mem or {}).get("id") or ""),
+                "text": _dynamic_memory_rerank_document(mem),
+                "hybrid_score": float(((mem.get("_recall_score") or {}).get("total") or 0.0)),
+            }
+            for mem in candidate_mems
+        ]
+        result = rerank_dynamic_memory_documents(query, docs)
+        if not result.get("ok"):
+            return recalled, recall_source, result
+
+        blend = float(result.get("blend") or DYNAMIC_MEMORY_RERANK_BLEND or 0.78)
+        blend = min(1.0, max(0.0, blend))
+        returned_indexes: set[int] = set()
+        scored: list[tuple[float, float, dict]] = []
+        for item in result.get("ranked") or []:
+            try:
+                idx = int(item.get("index"))
+            except Exception:
+                continue
+            if idx < 0 or idx >= len(candidate_mems):
+                continue
+            mem = candidate_mems[idx]
+            returned_indexes.add(idx)
+            score = float(item.get("score") or 0.0)
+            old_score = mem.get("_recall_score") if isinstance(mem.get("_recall_score"), dict) else {}
+            hybrid_total = float(old_score.get("total") or 0.0)
+            final_score = score * blend + hybrid_total * (1.0 - blend)
+            merged_score = dict(old_score)
+            merged_score.update(
+                {
+                    "hybrid_total": round(hybrid_total, 4),
+                    "rerank": round(score, 4),
+                    "rerank_rank": int(item.get("rank") or 0),
+                    "rerank_model": str(result.get("model") or ""),
+                    "final_total": round(final_score, 4),
+                }
+            )
+            mem["_recall_score"] = merged_score
+            scored.append((final_score, _memory_weight(mem), mem))
+
+        for idx, mem in enumerate(candidate_mems):
+            if idx in returned_indexes:
+                continue
+            old_score = mem.get("_recall_score") if isinstance(mem.get("_recall_score"), dict) else {}
+            hybrid_total = float(old_score.get("total") or 0.0)
+            final_score = hybrid_total * (1.0 - blend)
+            merged_score = dict(old_score)
+            merged_score.update(
+                {
+                    "hybrid_total": round(hybrid_total, 4),
+                    "rerank": 0.0,
+                    "rerank_missing": True,
+                    "rerank_model": str(result.get("model") or ""),
+                    "final_total": round(final_score, 4),
+                }
+            )
+            mem["_recall_score"] = merged_score
+            scored.append((final_score, _memory_weight(mem), mem))
+
+        scored.sort(key=lambda x: (-x[0], -x[1]))
+        reranked = [mem for _, _, mem in scored] + tail_mems
+        debug = dict(result)
+        debug["ranked"] = (result.get("ranked") or [])[:10]
+        return reranked, f"{recall_source}+rerank", debug
+    except Exception as e:
+        logger.warning("动态记忆外部 rerank 失败，回退原排序 error=%s", e)
+        return recalled, recall_source, {"enabled": True, "ok": False, "reason": "exception", "error": str(e)[:160]}
+
+
+def _memory_recall_sort_score(mem: dict) -> float:
+    score = mem.get("_recall_score") if isinstance((mem or {}).get("_recall_score"), dict) else {}
+    value = score.get("final_total")
+    if value is None:
+        value = score.get("total") or 0.0
+    try:
+        return float(value)
+    except Exception:
+        return 0.0
+
+
 def _memory_dedupe_keys(mem: dict) -> list[str]:
     if not isinstance(mem, dict):
         return []
@@ -2357,7 +2502,7 @@ def _build_sqlite_shadow_compare(
         return {"enabled": True, "ok": False, "error": str(e)}
 
 
-def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
+def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: bool = True) -> dict:
     """
     每轮对话开始前：从 R2 读动态层，用向量召回 + BM25 关键词召回融合排序后注入 system 末尾。
     DYNAMIC_MEMORY_TOP_N<=0 时不注入、不调向量检索，便于测试延迟。
@@ -2444,12 +2589,14 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     valid_memory_ids = {str(mem.get("id") or "").strip() for mem in memories if str(mem.get("id") or "").strip()}
 
     # 缓存命中：连续聊同一话题时复用上次融合后的最终检索结果，跳过向量检索和 DS 改写
-    cached = _recall_cache_hit(window_id, keywords)
+    cached = _recall_cache_hit(window_id, keywords) if use_recall_cache else None
     if cached is not None:
         recalled = _dedupe_recalled_memories(cached.get("results") or [])
         recall_source = str(cached.get("source") or "hybrid")
         vector_error = ""
         expanded_queries = []
+        rerank_cache_hit = "+rerank" in recall_source
+        rerank_debug = {"enabled": rerank_cache_hit, "ok": rerank_cache_hit, "reason": "cache_hit"}
         logger.info("动态记忆检索缓存命中 window_id=%s keywords=%d results=%d", window_id, len(keywords), len(recalled))
     else:
         # 向量召回 + BM25 关键词召回同时进行，最后进入同一候选池融合排序。
@@ -2489,7 +2636,25 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         else:
             recall_source = "keyword" if vector_error else "hybrid"
 
-        _recall_cache_set(window_id, keywords, recalled, source=recall_source)
+        recalled, recall_source, rerank_debug = _apply_external_dynamic_memory_rerank(
+            recalled,
+            last_user_text,
+            retrieval_query,
+            messages,
+            expanded_queries,
+            recall_source,
+        )
+        rerank_reason = str((rerank_debug or {}).get("reason") or "")
+        rerank_attempted = bool((rerank_debug or {}).get("enabled"))
+        cacheable_recall = (not rerank_attempted) or rerank_reason in (
+            "disabled",
+            "missing_api_key",
+            "unsafe_api_url",
+            "empty_documents",
+            "empty_query",
+        )
+        if use_recall_cache and cacheable_recall:
+            _recall_cache_set(window_id, keywords, recalled, source=recall_source)
 
         if not recalled:
             _append_dynamic_recall_debug_event_safe(
@@ -2506,6 +2671,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                     "recalled_count": 0,
                     "reason": "no_hybrid_recall_hit",
                     "vector_error": vector_error,
+                    "rerank": rerank_debug,
                     "sqlite_shadow": _build_sqlite_shadow_compare(
                         query=last_user_text,
                         retrieval_query=retrieval_query,
@@ -2517,11 +2683,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             )
             return body
 
-    scored = [(
-        float(((mem.get("_recall_score") or {}).get("total") or 0.0)),
-        _memory_weight(mem),
-        mem,
-    ) for mem in recalled]
+    scored = [(_memory_recall_sort_score(mem), _memory_weight(mem), mem) for mem in recalled]
     scored.sort(key=lambda x: (-x[0], -x[1]))
 
     budget = memory_dynamic_budget()
@@ -2611,6 +2773,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                 "recalled_count": 0,
                 "reason": "empty_after_budget_or_filter",
                 "vector_error": vector_error,
+                "rerank": rerank_debug,
                 "sqlite_shadow": _build_sqlite_shadow_compare(
                     query=last_user_text,
                     retrieval_query=retrieval_query,
@@ -2649,6 +2812,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             "recalled_items": recalled_items,
             "recalled_count": len(lines),
             "scores": injected_scores,
+            "rerank": rerank_debug,
             "citation_map": citation_map,
             "sqlite_shadow": _build_sqlite_shadow_compare(
                 query=last_user_text,
