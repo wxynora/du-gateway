@@ -34,6 +34,7 @@ from utils.tokens import estimate_tokens, memory_summary_budget, memory_dynamic_
 logger = get_logger(__name__)
 from services import image_desc, deepseek_summary
 from services.dynamic_memory_citation import DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY
+from services.dynamic_memory_recall_debug import DU_REQUEST_ID_BODY_KEY, normalize_debug_request_id
 from services.memory_bm25 import BM25QueryTerm, bm25_score_documents
 
 # ---------------------------------------------------------------------------
@@ -2509,6 +2510,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
     """
     if DYNAMIC_MEMORY_TOP_N <= 0:
         return body
+    du_request_id = normalize_debug_request_id((body or {}).get(DU_REQUEST_ID_BODY_KEY))
     memories = r2_store.get_dynamic_memory_list()
     if not memories:
         return body
@@ -2657,30 +2659,31 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
             _recall_cache_set(window_id, keywords, recalled, source=recall_source)
 
         if not recalled:
-            _append_dynamic_recall_debug_event_safe(
-                {
-                    "timestamp": now_beijing_iso(),
-                    "window_id": (window_id or "").strip() or "__default__",
-                    "query": (last_user_text or "").strip(),
-                    "keywords": keywords,
-                    "keyword_debug": keyword_debug,
-                    "retrieval_query": retrieval_query,
-                    "source": recall_source,
-                    "expanded_queries": expanded_queries,
-                    "recalled_lines": [],
-                    "recalled_count": 0,
-                    "reason": "no_hybrid_recall_hit",
-                    "vector_error": vector_error,
-                    "rerank": rerank_debug,
-                    "sqlite_shadow": _build_sqlite_shadow_compare(
-                        query=last_user_text,
-                        retrieval_query=retrieval_query,
-                        keywords=keywords,
-                        actual_ids=[],
-                        valid_memory_ids=valid_memory_ids,
-                    ),
-                }
-            )
+            event = {
+                "timestamp": now_beijing_iso(),
+                "window_id": (window_id or "").strip() or "__default__",
+                "query": (last_user_text or "").strip(),
+                "keywords": keywords,
+                "keyword_debug": keyword_debug,
+                "retrieval_query": retrieval_query,
+                "source": recall_source,
+                "expanded_queries": expanded_queries,
+                "recalled_lines": [],
+                "recalled_count": 0,
+                "reason": "no_hybrid_recall_hit",
+                "vector_error": vector_error,
+                "rerank": rerank_debug,
+                "sqlite_shadow": _build_sqlite_shadow_compare(
+                    query=last_user_text,
+                    retrieval_query=retrieval_query,
+                    keywords=keywords,
+                    actual_ids=[],
+                    valid_memory_ids=valid_memory_ids,
+                ),
+            }
+            if du_request_id:
+                event["du_request_id"] = du_request_id
+            _append_dynamic_recall_debug_event_safe(event)
             return body
 
     scored = [(_memory_recall_sort_score(mem), _memory_weight(mem), mem) for mem in recalled]
@@ -2759,30 +2762,31 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
             citation_map[citation_label] = mid
     if not lines:
         # 召回有候选但受预算/过滤后未注入：记录原因
-        _append_dynamic_recall_debug_event_safe(
-                {
-                    "timestamp": now_beijing_iso(),
-                    "window_id": (window_id or "").strip() or "__default__",
-                    "query": (last_user_text or "").strip(),
-                    "keywords": keywords,
-                    "keyword_debug": keyword_debug,
-                    "retrieval_query": retrieval_query,
-                    "source": recall_source,
-                    "expanded_queries": expanded_queries,
-                    "recalled_lines": [],
-                "recalled_count": 0,
-                "reason": "empty_after_budget_or_filter",
-                "vector_error": vector_error,
-                "rerank": rerank_debug,
-                "sqlite_shadow": _build_sqlite_shadow_compare(
-                    query=last_user_text,
-                    retrieval_query=retrieval_query,
-                    keywords=keywords,
-                    actual_ids=[],
-                    valid_memory_ids=valid_memory_ids,
-                ),
-            }
-        )
+        event = {
+            "timestamp": now_beijing_iso(),
+            "window_id": (window_id or "").strip() or "__default__",
+            "query": (last_user_text or "").strip(),
+            "keywords": keywords,
+            "keyword_debug": keyword_debug,
+            "retrieval_query": retrieval_query,
+            "source": recall_source,
+            "expanded_queries": expanded_queries,
+            "recalled_lines": [],
+            "recalled_count": 0,
+            "reason": "empty_after_budget_or_filter",
+            "vector_error": vector_error,
+            "rerank": rerank_debug,
+            "sqlite_shadow": _build_sqlite_shadow_compare(
+                query=last_user_text,
+                retrieval_query=retrieval_query,
+                keywords=keywords,
+                actual_ids=[],
+                valid_memory_ids=valid_memory_ids,
+            ),
+        }
+        if du_request_id:
+            event["du_request_id"] = du_request_id
+        _append_dynamic_recall_debug_event_safe(event)
         return body
     # 收集注入记忆的 score 明细
     injected_scores = []
@@ -2798,31 +2802,32 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
                     **s,
                 }
             )
-    _append_dynamic_recall_debug_event_safe(
-        {
-            "timestamp": now_beijing_iso(),
-            "window_id": (window_id or "").strip() or "__default__",
-            "query": (last_user_text or "").strip(),
-            "keywords": keywords,
-            "keyword_debug": keyword_debug,
-            "retrieval_query": retrieval_query,
-            "source": recall_source,
-            "expanded_queries": expanded_queries,
-            "recalled_lines": lines,
-            "recalled_items": recalled_items,
-            "recalled_count": len(lines),
-            "scores": injected_scores,
-            "rerank": rerank_debug,
-            "citation_map": citation_map,
-            "sqlite_shadow": _build_sqlite_shadow_compare(
-                query=last_user_text,
-                retrieval_query=retrieval_query,
-                keywords=keywords,
-                actual_ids=[str((item or {}).get("memory_id") or "") for item in recalled_items],
-                valid_memory_ids=valid_memory_ids,
-            ),
-        }
-    )
+    event = {
+        "timestamp": now_beijing_iso(),
+        "window_id": (window_id or "").strip() or "__default__",
+        "query": (last_user_text or "").strip(),
+        "keywords": keywords,
+        "keyword_debug": keyword_debug,
+        "retrieval_query": retrieval_query,
+        "source": recall_source,
+        "expanded_queries": expanded_queries,
+        "recalled_lines": lines,
+        "recalled_items": recalled_items,
+        "recalled_count": len(lines),
+        "scores": injected_scores,
+        "rerank": rerank_debug,
+        "citation_map": citation_map,
+        "sqlite_shadow": _build_sqlite_shadow_compare(
+            query=last_user_text,
+            retrieval_query=retrieval_query,
+            keywords=keywords,
+            actual_ids=[str((item or {}).get("memory_id") or "") for item in recalled_items],
+            valid_memory_ids=valid_memory_ids,
+        ),
+    }
+    if du_request_id:
+        event["du_request_id"] = du_request_id
+    _append_dynamic_recall_debug_event_safe(event)
     citation_hint = ""
     if citation_map:
         citation_hint = (

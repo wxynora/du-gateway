@@ -3,6 +3,53 @@ import { apiJson } from "../api";
 import { useToast } from "../toast";
 
 type ToolCallItem = { id?: string; name?: string; arguments?: string; result?: string };
+type MemoryRecallScore = {
+  id?: string;
+  memory_id?: string;
+  total?: number;
+  final_total?: number;
+  hybrid_total?: number;
+  sem_user?: number;
+  sem_ctx?: number;
+  bm25?: number;
+  weight?: number;
+  rerank?: number;
+  rerank_rank?: number;
+  rerank_model?: string;
+};
+type MemoryRecallItem = {
+  id?: string;
+  memory_id?: string;
+  label?: string;
+  source?: string;
+  content?: string;
+  line?: string;
+  tag?: string;
+  importance?: number;
+  mention_count?: number;
+  referenced?: boolean;
+  score?: MemoryRecallScore;
+};
+type MemoryRecallEvent = {
+  du_request_id?: string;
+  timestamp?: string;
+  window_id?: string;
+  matched_by?: string;
+  query?: string;
+  retrieval_query?: string;
+  keywords?: string[];
+  source?: string;
+  reason?: string;
+  expanded_queries?: string[];
+  recalled_count?: number;
+  recalled_lines?: string[];
+  recalled_items?: MemoryRecallItem[];
+  referenced_memory_ids?: string[];
+  assistant_preview?: string;
+  citation_timestamp?: string;
+  rerank?: Record<string, unknown>;
+  vector_error?: string;
+};
 type PromptCacheDebugEntry = {
   request?: Record<string, unknown>;
   usage?: Record<string, unknown>;
@@ -50,6 +97,8 @@ type ReasoningItem = {
   output_stats?: OutputStats;
   cost?: CostStats;
   tool_calls?: ToolCallItem[];
+  memory_recall?: MemoryRecallEvent | null;
+  memory_recall_status?: string;
 };
 type ReasoningResp = { ok?: boolean; window_id?: string; window_ids?: string[]; items?: ReasoningItem[]; count?: number };
 type TranslateResp = { ok?: boolean; translated?: string; error?: string };
@@ -252,6 +301,115 @@ function PromptCacheDebugCard({ entries, outputStats, cost }: { entries?: Prompt
   );
 }
 
+function recallSourceLabel(source?: string) {
+  const raw = String(source || "").trim();
+  if (!raw) return "未标记";
+  if (raw === "hybrid") return "hybrid";
+  if (raw === "vector") return "vector";
+  if (raw === "keyword") return "keyword";
+  return raw;
+}
+
+function recallScoreLine(score?: MemoryRecallScore) {
+  if (!score) return "";
+  const parts: string[] = [];
+  const addScore = (label: string, value: unknown) => {
+    if (value === null || value === undefined || value === "") return;
+    const n = Number(value);
+    if (Number.isFinite(n)) parts.push(`${label}=${n.toFixed(3)}`);
+  };
+  const finalScore = score.final_total ?? score.total ?? score.hybrid_total;
+  addScore("score", finalScore);
+  addScore("sem", score.sem_user);
+  addScore("bm25", score.bm25);
+  addScore("rerank", score.rerank);
+  return parts.join(" · ");
+}
+
+function MemoryRecallBlock({ recall }: { recall?: MemoryRecallEvent | null }) {
+  if (!recall) return null;
+  const items = Array.isArray(recall.recalled_items) ? recall.recalled_items.filter(Boolean) : [];
+  const fallbackLines = Array.isArray(recall.recalled_lines) ? recall.recalled_lines.filter(Boolean) : [];
+  const referencedCount = Array.isArray(recall.referenced_memory_ids) ? recall.referenced_memory_ids.length : 0;
+  const count = Number(recall.recalled_count || items.length || fallbackLines.length || 0);
+  const keywords = Array.isArray(recall.keywords) ? recall.keywords.filter(Boolean).slice(0, 8) : [];
+  const title = count > 0 ? `本轮召回记忆 · ${count} 条` : "本轮召回记忆 · 未命中";
+  return (
+    <details className="group mt-3 border-t border-gray-100 pt-3 text-[11px] text-gray-500">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0 truncate font-semibold text-gray-600">
+          {title}
+          <span className="font-normal text-gray-400"> · {recallSourceLabel(recall.source)}</span>
+          {referencedCount ? <span className="font-normal text-rose-400"> · 引用 {referencedCount}</span> : null}
+        </span>
+        <span className="shrink-0 text-[10px] text-gray-300">
+          <span className="group-open:hidden">展开</span>
+          <span className="hidden group-open:inline">收起</span>
+        </span>
+      </summary>
+      <div className="mt-2 space-y-2 leading-4">
+        {recall.retrieval_query ? (
+          <div className="break-words text-gray-400">query: {recall.retrieval_query}</div>
+        ) : null}
+        {keywords.length ? (
+          <div className="flex flex-wrap gap-1.5">
+            {keywords.map((kw, idx) => (
+              <span key={`${kw}-${idx}`} className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-500">
+                {kw}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {items.length ? (
+          <div className="space-y-2">
+            {items.map((item, idx) => {
+              const mid = String(item.memory_id || item.id || "").trim();
+              const content = String(item.content || item.line || "").trim();
+              const score = recallScoreLine(item.score);
+              return (
+                <div
+                  key={`${mid || "memory"}-${idx}`}
+                  className={`border-l-2 pl-2 ${item.referenced ? "border-rose-300 text-gray-700" : "border-gray-100 text-gray-500"}`}
+                >
+                  <div className="mb-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
+                    {item.label ? <span className="font-semibold text-gray-600">memory {item.label}</span> : null}
+                    <span>{item.source || "memory"}</span>
+                    {item.tag ? <span>{item.tag}</span> : null}
+                    {item.referenced ? <span className="font-semibold text-rose-400">已引用</span> : null}
+                  </div>
+                  <div className="whitespace-pre-wrap break-words">{content || mid || "（空内容）"}</div>
+                  {score ? <div className="mt-0.5 text-[10px] text-gray-400">{score}</div> : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : fallbackLines.length ? (
+          <div className="space-y-1.5">
+            {fallbackLines.map((line, idx) => (
+              <div key={`${line}-${idx}`} className="border-l-2 border-gray-100 pl-2 whitespace-pre-wrap break-words">
+                {line}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-gray-400">{recall.reason || "这一轮没有动态记忆注入。"}</div>
+        )}
+        {recall.assistant_preview ? (
+          <div className="border-t border-gray-50 pt-2 text-[10px] text-rose-400">
+            引用片段: {recall.assistant_preview}
+          </div>
+        ) : null}
+        {recall.vector_error ? (
+          <div className="text-[10px] text-amber-500">vector_error: {recall.vector_error}</div>
+        ) : null}
+        {recall.matched_by ? (
+          <div className="text-[10px] text-gray-300">matched_by={recall.matched_by}</div>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 export function ReasoningTab() {
   const toast = useToast();
   const [items, setItems] = useState<ReasoningItem[]>([]);
@@ -425,6 +583,8 @@ export function ReasoningTab() {
               ) : (
                 <div className="mb-3 text-[12px] text-gray-400">本轮未返回思维链文本</div>
               )}
+
+              <MemoryRecallBlock recall={r.memory_recall} />
 
               {hasCacheDebug ? <PromptCacheDebugCard entries={r.cache_debug} outputStats={r.output_stats} cost={r.cost} /> : null}
 

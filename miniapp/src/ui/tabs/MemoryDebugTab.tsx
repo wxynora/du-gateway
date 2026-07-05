@@ -3,99 +3,6 @@ import { apiJson } from "../api";
 import { HeaderPortal } from "../components";
 import { useToast } from "../toast";
 
-type RecallScore = {
-  id?: string;
-  memory_id?: string;
-  content?: string;
-  retrieval_text?: string;
-  total?: number;
-  sem_user?: number;
-  sem_ctx?: number;
-};
-
-type SQLiteShadowCandidate = {
-  memory_id?: string;
-  content?: string;
-  tag?: string;
-  score?: number;
-  high_signal_count?: number;
-  reasons?: string[];
-  matched_terms?: string[];
-  in_actual?: boolean;
-  in_r2_valid?: boolean;
-};
-
-type SQLiteShadowCompare = {
-  enabled?: boolean;
-  ok?: boolean;
-  error?: string;
-  query_terms?: string[];
-  candidate_count?: number;
-  candidate_ids?: string[];
-  actual_ids?: string[];
-  overlap_ids?: string[];
-  missed_actual_ids?: string[];
-  stale_candidate_ids?: string[];
-  overlap_count?: number;
-  missed_actual_count?: number;
-  stale_candidate_count?: number;
-  candidates?: SQLiteShadowCandidate[];
-};
-
-type ReferencedMemory = {
-  id?: string;
-  entry_id?: string;
-  source?: string;
-  content?: string;
-  tag?: string;
-  promoted_by?: string;
-  promoted_at?: string;
-  importance?: number;
-  mention_count?: number;
-  last_mentioned?: string;
-};
-
-type RecalledMemoryItem = ReferencedMemory & {
-  label?: string;
-  memory_id?: string;
-  line?: string;
-};
-
-type RecallEvent = {
-  timestamp?: string;
-  window_id?: string;
-  query?: string;
-  scene_type?: string;
-  target_type?: string;
-  time_range?: string;
-  reason?: string;
-  suspicion_level?: string;
-  keywords?: string[];
-  keyword_debug?: Array<{ text?: string; is_phrase?: boolean }>;
-  retrieval_query?: string;
-  source?: string;
-  recalled_lines?: Array<
-    | string
-    | {
-        id?: string;
-        content?: string;
-        emotion_label?: string;
-        scene_type?: string;
-        target_type?: string;
-        semantic_score?: number;
-        final_score?: number;
-      }
-  >;
-  recalled_count?: number;
-  recalled_items?: RecalledMemoryItem[];
-  scores?: RecallScore[];
-  referenced_memory_ids?: string[];
-  referenced_memories?: ReferencedMemory[];
-  assistant_preview?: string;
-  citation_timestamp?: string;
-  sqlite_shadow?: SQLiteShadowCompare;
-};
-
 type DsAuditAttempt = {
   attempt?: number;
   parsed?: boolean;
@@ -216,15 +123,8 @@ type MemoryDebugResp = {
   scope?: "all" | "target" | string;
   summary?: string;
   summary_exists?: boolean;
-  recalls?: RecallEvent[];
-  search_memory_events?: RecallEvent[];
-  citation_events?: RecallEvent[];
   count?: number;
   total_count?: number;
-  search_count?: number;
-  search_total_count?: number;
-  citation_count?: number;
-  citation_total_count?: number;
   ds_audit?: {
     events?: DsAuditEvent[];
     total_count?: number;
@@ -281,10 +181,6 @@ function firstLinePreview(text: string, maxChars = 96) {
   return `${first.slice(0, maxChars)}...`;
 }
 
-function memoryItemId(item: RecalledMemoryItem | RecallScore) {
-  return String((item as RecalledMemoryItem).memory_id || item.id || "").trim();
-}
-
 export function MemoryDebugTab() {
   const toast = useToast();
   const [loading, setLoading] = useState(false);
@@ -336,8 +232,6 @@ export function MemoryDebugTab() {
     };
   }, [reload]);
 
-  const recalls = Array.isArray(data?.recalls) ? data!.recalls! : [];
-  const searchEvents = Array.isArray(data?.search_memory_events) ? data!.search_memory_events! : [];
   const dsAuditEvents = Array.isArray(data?.ds_audit?.events) ? data!.ds_audit!.events! : [];
   const dsActionCounts = data?.ds_audit?.action_counts || {};
   const coreItems = Array.isArray(data?.core_cache?.items) ? data!.core_cache!.items! : [];
@@ -693,191 +587,6 @@ export function MemoryDebugTab() {
               </div>
             </details>
 
-            <div className="space-y-4">
-              <div className="flex items-center justify-between px-1">
-                <div className="flex items-baseline space-x-2">
-                  <h2 className="text-[11px] font-bold uppercase tracking-widest text-gray-400">自动召回</h2>
-                  <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-bold text-blue-500">
-                    {String(data?.count ?? recalls.length)} / {String(data?.total_count ?? recalls.length)}
-                  </span>
-                </div>
-              </div>
-              {recalls.map((it, idx) => {
-                const referencedIds = new Set(
-                  (it.referenced_memory_ids || []).map((id) => String(id || "").trim()).filter(Boolean)
-                );
-                const recalledItems = Array.isArray(it.recalled_items) ? it.recalled_items : [];
-                const scoreItems = Array.isArray(it.scores) ? it.scores : [];
-                return (
-                  <details key={`${String(it.timestamp || "")}-${idx}`} className="reminder-card rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft">
-                    <summary className="cursor-pointer list-none">
-                      <div className="mb-2 flex items-start justify-between">
-                        <div className="flex flex-wrap gap-1.5">
-                          <span className="status-badge bg-gray-50 text-gray-400">source: {String(it.source || "recall")}</span>
-                          {referencedIds.size ? <span className="status-badge bg-emerald-50 text-emerald-500">引用 {referencedIds.size}</span> : null}
-                        </div>
-                        <span className="text-[11px] text-gray-300">{String(it.timestamp || "")}</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <h3 className="truncate pr-4 text-[15px] font-bold text-gray-800">{String(it.query || "") || "（空）"}</h3>
-                        <svg className="h-4 w-4 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <polyline points="6 9 12 15 18 9" />
-                        </svg>
-                      </div>
-                    </summary>
-                    <div className="mt-4 space-y-3 border-t border-gray-50 pt-4">
-                      <div className="text-[12px] text-gray-500 break-words">retrieval_query: {String(it.retrieval_query || "(空)")}</div>
-                      <div className="text-[12px] text-gray-500 break-words">
-                        keywords: {Array.isArray(it.keywords) && it.keywords.length ? it.keywords.join(" / ") : "(空)"}
-                      </div>
-                      {it.sqlite_shadow?.enabled ? (
-                        <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3">
-                          <div className="mb-2 flex flex-wrap items-center gap-1.5">
-                            <span className={`status-badge ${it.sqlite_shadow.ok ? "bg-emerald-50 text-emerald-500" : "bg-amber-50 text-amber-500"}`}>
-                              sqlite shadow
-                            </span>
-                            <span className="status-badge bg-white text-gray-400">
-                              hit {String(it.sqlite_shadow.overlap_count ?? 0)} / {String(it.sqlite_shadow.candidate_count ?? 0)}
-                            </span>
-                            {Number(it.sqlite_shadow.missed_actual_count || 0) > 0 ? (
-                              <span className="status-badge bg-amber-50 text-amber-500">miss {String(it.sqlite_shadow.missed_actual_count)}</span>
-                            ) : null}
-                            {Number(it.sqlite_shadow.stale_candidate_count || 0) > 0 ? (
-                              <span className="status-badge bg-red-50 text-red-500">stale {String(it.sqlite_shadow.stale_candidate_count)}</span>
-                            ) : null}
-                          </div>
-                          {it.sqlite_shadow.error ? (
-                            <div className="mb-2 break-words text-[11px] text-amber-500">{it.sqlite_shadow.error}</div>
-                          ) : null}
-                          <div className="mb-2 break-words text-[11px] text-gray-400">
-                            terms: {Array.isArray(it.sqlite_shadow.query_terms) && it.sqlite_shadow.query_terms.length ? it.sqlite_shadow.query_terms.slice(0, 10).join(" / ") : "(空)"}
-                          </div>
-                          {Array.isArray(it.sqlite_shadow.candidates) && it.sqlite_shadow.candidates.length ? (
-                            <div className="space-y-1.5">
-                              {it.sqlite_shadow.candidates.slice(0, 5).map((c, ci) => (
-                                <div key={`${String(c.memory_id || "")}-${ci}`} className={`rounded-xl p-2 ${c.in_actual ? "bg-emerald-50 text-emerald-700" : "bg-white text-gray-500"}`}>
-                                  <div className="mb-1 flex items-center justify-between gap-2">
-                                    <span className="truncate text-[11px] font-bold">{firstLinePreview(String(c.content || c.memory_id || ""), 48)}</span>
-                                    <span className="shrink-0 text-[10px] font-bold">{String(c.score ?? "-")}</span>
-                                  </div>
-                                  <div className="flex flex-wrap gap-1 text-[10px] text-gray-400">
-                                    {c.tag ? <span className="rounded bg-white px-1.5 py-0.5">{c.tag}</span> : null}
-                                    {Number(c.high_signal_count || 0) > 0 ? <span className="rounded bg-white px-1.5 py-0.5">signal {String(c.high_signal_count)}</span> : null}
-                                    {(c.matched_terms || []).slice(0, 4).map((term, ti) => (
-                                      <span key={`${term}-${ti}`} className="rounded bg-white px-1.5 py-0.5">{term}</span>
-                                    ))}
-                                    {c.in_actual ? <span className="rounded bg-emerald-500 px-1.5 py-0.5 text-white">actual</span> : null}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {it.assistant_preview ? (
-                        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-3 text-[12px] leading-relaxed text-emerald-700">
-                          渡回复：{firstLinePreview(String(it.assistant_preview || ""), 88)}
-                        </div>
-                      ) : null}
-                      {recalledItems.length > 0 ? (
-                        <div className="space-y-2">
-                          {recalledItems.map((m, mi) => {
-                            const mid = memoryItemId(m);
-                            const isReferenced = !!mid && referencedIds.has(mid);
-                            return (
-                              <div
-                                key={`${mid || String(m.label || "")}-${mi}`}
-                                className={`rounded-2xl p-4 transition ${
-                                  isReferenced
-                                    ? "border border-emerald-300 bg-emerald-50/80 shadow-[0_0_0_3px_rgba(16,185,129,.08)]"
-                                    : "border border-transparent bg-gray-50"
-                                }`}
-                              >
-                                <div className="mb-2 flex items-center justify-between gap-2">
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {m.label ? <span className="status-badge bg-white text-gray-400">memory {m.label}</span> : null}
-                                    <span className={`status-badge ${m.source === "core_cache" ? "bg-purple-50 text-purple-500" : "bg-blue-50 text-blue-500"}`}>
-                                      {m.source === "core_cache" ? "core" : "dynamic"}
-                                    </span>
-                                    {isReferenced ? <span className="status-badge bg-emerald-500 text-white">已引用</span> : null}
-                                  </div>
-                                  <span className="truncate text-[10px] text-gray-300">{mid}</span>
-                                </div>
-                                <p className="text-[12px] leading-relaxed text-gray-600 break-words">{String(m.content || m.line || "(空)")}</p>
-                                <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] text-gray-400">
-                                  {m.tag ? <span className="rounded bg-white px-2 py-1">{m.tag}</span> : null}
-                                  <span className="rounded bg-white px-2 py-1">imp {String(m.importance ?? 0)}</span>
-                                  <span className="rounded bg-white px-2 py-1">mention {String(m.mention_count ?? 0)}</span>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : scoreItems.length > 0 ? (
-                        <div className="space-y-2">
-                          {scoreItems.map((s, si) => {
-                            const mid = memoryItemId(s);
-                            const isReferenced = !!mid && referencedIds.has(mid);
-                            return (
-                              <div
-                                key={`${mid || String(si)}-${si}`}
-                                className={`rounded-2xl p-4 transition ${
-                                  isReferenced
-                                    ? "border border-emerald-300 bg-emerald-50/80 shadow-[0_0_0_3px_rgba(16,185,129,.08)]"
-                                    : "border border-transparent bg-gray-50"
-                                }`}
-                              >
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="text-[12px] font-bold text-gray-700">Result #{si + 1}</span>
-                                    {isReferenced ? <span className="status-badge bg-emerald-500 text-white">已引用</span> : null}
-                                  </div>
-                                  <span className="text-[12px] font-bold text-blue-500">Score: {String(s.total ?? "-")}</span>
-                                </div>
-                                <p className="mt-2 text-[12px] leading-relaxed text-gray-500 break-words">{String(s.content || s.id || "(空)")}</p>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <p className="py-2 text-center text-[12px] italic text-gray-400">暂无详细召回参数</p>
-                      )}
-                    </div>
-                  </details>
-                );
-              })}
-              {!recalls.length ? <div className="px-1 py-4 text-[12px] text-gray-300">（暂无召回记录）</div> : null}
-            </div>
-
-            <div className="space-y-4">
-              <div className="flex items-center justify-between px-1">
-                <div className="flex items-baseline space-x-2">
-                  <h2 className="text-[11px] font-bold uppercase tracking-widest text-gray-400">Search Memory</h2>
-                  <span className="rounded bg-orange-50 px-1.5 py-0.5 text-[10px] font-bold text-orange-500">
-                    {String(data?.search_count ?? searchEvents.length)} / {String(data?.search_total_count ?? searchEvents.length)}
-                  </span>
-                </div>
-              </div>
-              {searchEvents.map((it, idx) => (
-                <details key={`${String(it.timestamp || "")}-search-${idx}`} className="reminder-card rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft" open={idx === 0}>
-                  <summary className="cursor-pointer list-none">
-                    <div className="mb-3 flex items-start justify-between">
-                      <div>
-                        <span className="status-badge bg-orange-50 text-orange-500">{String(it.suspicion_level || "Info")}</span>
-                        <h3 className="mt-2 text-[15px] font-bold text-gray-800">{String(it.query || "（空）")}</h3>
-                      </div>
-                      <span className="text-[11px] text-gray-300">{String(it.timestamp || "")}</span>
-                    </div>
-                  </summary>
-                  <div className="rounded-2xl bg-gray-50 p-3">
-                    <p className="text-[12px] leading-relaxed text-gray-500 break-words">
-                      <strong className="text-gray-700">Reason:</strong> {String(it.reason || "(空)")}
-                    </p>
-                  </div>
-                </details>
-              ))}
-              {!searchEvents.length ? <div className="px-1 py-4 text-[12px] text-gray-300">（暂无 search_memory 记录）</div> : null}
-            </div>
           </div>
         ) : (
           <div className="space-y-5">

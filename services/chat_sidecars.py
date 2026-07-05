@@ -9,6 +9,7 @@ from services.du_daily import (
 from services.du_thought import split_assistant_for_thought
 from services.du_vitals import normalize_vitals_payload, split_assistant_for_vitals
 from services.dynamic_memory_citation import strip_assistant_memory_citations
+from services.dynamic_memory_recall_debug import normalize_debug_request_id
 from services.interaction_memory import split_assistant_for_interaction
 from services.pending_thoughts import split_and_apply_tags as split_pending_thought_tags
 from services.pc_command_handler import process_pcmd_in_assistant_text
@@ -109,13 +110,18 @@ def lookup_referenced_memory_details(memory_ids: list[str]) -> list[dict]:
     return out
 
 
-def append_memory_citation_debug_event(window_id: str, memory_ids: list[str], full_text: str) -> None:
+def append_memory_citation_debug_event(
+    window_id: str,
+    memory_ids: list[str],
+    full_text: str,
+    *,
+    du_request_id: str = "",
+) -> None:
     if not memory_ids:
         return
     try:
         details = lookup_referenced_memory_details(memory_ids)
-        r2_store.append_dynamic_recall_debug_event(
-            {
+        event = {
                 "timestamp": now_beijing_iso(),
                 "window_id": (window_id or "").strip() or "__default__",
                 "source": "memory_citation",
@@ -125,7 +131,10 @@ def append_memory_citation_debug_event(window_id: str, memory_ids: list[str], fu
                 "referenced_memories": details,
                 "assistant_preview": str(full_text or "").strip()[:240],
             }
-        )
+        rid = normalize_debug_request_id(du_request_id)
+        if rid:
+            event["du_request_id"] = rid
+        r2_store.append_dynamic_recall_debug_event(event)
     except Exception as e:
         logger.warning("记忆引用调试事件写入失败 ids=%s error=%s", memory_ids[:10], e)
 
@@ -137,6 +146,7 @@ def extract_and_store_hidden_sidecars(
     dynamic_memory_citation_map: Optional[dict] = None,
     source_messages: Optional[list[dict]] = None,
     reply_channel: str = "",
+    du_request_id: str = "",
 ) -> str:
     visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_text or "")
     visible, thought = split_assistant_for_thought(visible_after_pcmd)
@@ -193,7 +203,12 @@ def extract_and_store_hidden_sidecars(
         except Exception as e:
             logger.warning("save_secret_drawer_hidden_block 失败 error=%s", e)
     if referenced_memory_ids:
-        append_memory_citation_debug_event(window_id, referenced_memory_ids, visible)
+        append_memory_citation_debug_event(
+            window_id,
+            referenced_memory_ids,
+            visible,
+            du_request_id=du_request_id,
+        )
         try:
             touched = r2_store.touch_dynamic_memory_mentions(referenced_memory_ids)
             logger.info("动态记忆引用命中 ids=%s touched=%s", referenced_memory_ids[:10], touched)
@@ -209,6 +224,7 @@ def apply_hidden_sidecars_to_assistant_response(
     dynamic_memory_citation_map: Optional[dict] = None,
     source_messages: Optional[list[dict]] = None,
     reply_channel: str = "",
+    du_request_id: str = "",
 ) -> dict:
     """
     剥离助手回复中的隐藏块（老婆侧不可见）；若存在闭合块则写入 R2。
@@ -232,6 +248,7 @@ def apply_hidden_sidecars_to_assistant_response(
         dynamic_memory_citation_map=dynamic_memory_citation_map,
         source_messages=source_messages or [],
         reply_channel=reply_channel,
+        du_request_id=du_request_id,
     )
     if visible != content_text:
         msg["content"] = visible

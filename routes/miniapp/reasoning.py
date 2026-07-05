@@ -9,6 +9,12 @@ from flask import jsonify, request
 
 from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL, TELEGRAM_PROACTIVE_TARGET_USER_ID
 from services.chat_tool_helpers import collect_tool_trace_from_messages
+from services.dynamic_memory_recall_debug import (
+    event_window_id,
+    is_live_preview_recall_event,
+    merge_citation_events_into_recalls,
+    normalize_debug_request_id,
+)
 from services.reasoning_utils import dedupe_reasoning_text_parts
 from storage import r2_store, whitelist_store
 from utils.tokens import estimate_tokens
@@ -21,6 +27,9 @@ _REASONING_TARGETS_DEFAULT = 6
 _REASONING_TEXT_MAX_CHARS = 60000
 _TOOL_ARGUMENTS_MAX_CHARS = 8000
 _TOOL_RESULT_MAX_CHARS = 12000
+_MEMORY_RECALL_QUERY_MAX_CHARS = 1200
+_MEMORY_RECALL_CONTENT_MAX_CHARS = 1200
+_MEMORY_RECALL_FALLBACK_MAX_SECONDS = 30 * 60
 _SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
 _CLAUDE_PRICE_INPUT_PER_M = 5.0
 _CLAUDE_PRICE_CACHE_CREATE_1H_PER_M = 10.0
@@ -424,6 +433,220 @@ def _format_reasoning_tool_calls(messages: list) -> list[dict]:
     return out
 
 
+def _memory_recall_item_id(item: dict) -> str:
+    return str(
+        (item or {}).get("memory_id")
+        or (item or {}).get("id")
+        or (item or {}).get("entry_id")
+        or ""
+    ).strip()
+
+
+def _memory_recall_score_id(score: dict) -> str:
+    return str((score or {}).get("id") or (score or {}).get("memory_id") or "").strip()
+
+
+def _slim_memory_recall_score(score: dict) -> dict:
+    if not isinstance(score, dict):
+        return {}
+    out: dict = {}
+    for key in (
+        "id",
+        "memory_id",
+        "total",
+        "final_total",
+        "hybrid_total",
+        "sem_user",
+        "sem_ctx",
+        "bm25",
+        "bm25_raw",
+        "weight",
+        "vector_total",
+        "rerank",
+        "rerank_rank",
+        "rerank_model",
+        "rerank_missing",
+    ):
+        if key in score:
+            out[key] = score.get(key)
+    if score.get("content"):
+        out["content"] = _clip_text(str(score.get("content") or ""), 180)
+    if score.get("retrieval_text"):
+        out["retrieval_text"] = _clip_text(str(score.get("retrieval_text") or ""), 180)
+    return out
+
+
+def _safe_positive_int(value, fallback: int = 0) -> int:
+    try:
+        n = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    return n if n > 0 else fallback
+
+
+def _slim_memory_recall_item(item: dict, referenced_ids: set[str], score_by_id: dict[str, dict]) -> dict:
+    if not isinstance(item, dict):
+        return {}
+    mid = _memory_recall_item_id(item)
+    out = {
+        "id": mid,
+        "memory_id": mid,
+        "label": str(item.get("label") or "").strip(),
+        "source": str(item.get("source") or "").strip(),
+        "content": _clip_text(str(item.get("content") or ""), _MEMORY_RECALL_CONTENT_MAX_CHARS),
+        "line": _clip_text(str(item.get("line") or ""), _MEMORY_RECALL_CONTENT_MAX_CHARS),
+        "tag": str(item.get("tag") or "").strip(),
+        "emotion_label": str(item.get("emotion_label") or "").strip(),
+        "scene_type": str(item.get("scene_type") or "").strip(),
+        "target_type": str(item.get("target_type") or "").strip(),
+        "importance": item.get("importance"),
+        "mention_count": item.get("mention_count"),
+        "created_at": str(item.get("created_at") or "").strip(),
+        "updated_at": str(item.get("updated_at") or "").strip(),
+        "last_mentioned": str(item.get("last_mentioned") or "").strip(),
+        "referenced": bool(mid and mid in referenced_ids),
+    }
+    if mid and score_by_id.get(mid):
+        out["score"] = score_by_id[mid]
+    return out
+
+
+def _slim_memory_recall_event(event: dict, matched_by: str) -> dict:
+    if not isinstance(event, dict):
+        return {}
+    referenced_ids = {
+        str(x or "").strip()
+        for x in (event.get("referenced_memory_ids") or [])
+        if str(x or "").strip()
+    }
+    score_by_id = {
+        sid: _slim_memory_recall_score(score)
+        for score in (event.get("scores") or [])
+        if isinstance(score, dict) and (sid := _memory_recall_score_id(score))
+    }
+    recalled_items = [
+        _slim_memory_recall_item(item, referenced_ids, score_by_id)
+        for item in (event.get("recalled_items") or [])
+        if isinstance(item, dict)
+    ]
+    recalled_lines = []
+    for raw in event.get("recalled_lines") or []:
+        if isinstance(raw, str):
+            recalled_lines.append(_clip_text(raw, _MEMORY_RECALL_CONTENT_MAX_CHARS))
+        elif isinstance(raw, dict):
+            recalled_lines.append(_clip_text(str(raw.get("content") or raw.get("line") or raw), _MEMORY_RECALL_CONTENT_MAX_CHARS))
+    if not recalled_items and event.get("scores"):
+        for score in event.get("scores") or []:
+            if not isinstance(score, dict):
+                continue
+            mid = _memory_recall_score_id(score)
+            recalled_items.append(
+                {
+                    "id": mid,
+                    "memory_id": mid,
+                    "content": _clip_text(str(score.get("content") or score.get("retrieval_text") or ""), _MEMORY_RECALL_CONTENT_MAX_CHARS),
+                    "source": "",
+                    "referenced": bool(mid and mid in referenced_ids),
+                    "score": _slim_memory_recall_score(score),
+                }
+            )
+    return {
+        "du_request_id": normalize_debug_request_id(event.get("du_request_id")),
+        "timestamp": str(event.get("timestamp") or "").strip(),
+        "window_id": event_window_id(event),
+        "matched_by": matched_by,
+        "query": _clip_text(str(event.get("query") or ""), _MEMORY_RECALL_QUERY_MAX_CHARS),
+        "retrieval_query": _clip_text(str(event.get("retrieval_query") or ""), _MEMORY_RECALL_QUERY_MAX_CHARS),
+        "keywords": [str(x or "").strip() for x in (event.get("keywords") or []) if str(x or "").strip()][:20],
+        "source": str(event.get("source") or "").strip(),
+        "reason": str(event.get("reason") or "").strip(),
+        "expanded_queries": [
+            _clip_text(str(x or ""), _MEMORY_RECALL_QUERY_MAX_CHARS)
+            for x in (event.get("expanded_queries") or [])
+            if str(x or "").strip()
+        ][:6],
+        "recalled_count": _safe_positive_int(
+            event.get("recalled_count"),
+            len(recalled_items) or len(recalled_lines) or 0,
+        ),
+        "recalled_lines": recalled_lines[:12],
+        "recalled_items": recalled_items[:12],
+        "referenced_memory_ids": sorted(referenced_ids),
+        "referenced_memories": [
+            x for x in (event.get("referenced_memories") or []) if isinstance(x, dict)
+        ][:12],
+        "assistant_preview": _clip_text(str(event.get("assistant_preview") or ""), 240),
+        "citation_timestamp": str(event.get("citation_timestamp") or "").strip(),
+        "rerank": event.get("rerank") if isinstance(event.get("rerank"), dict) else {},
+        "vector_error": str(event.get("vector_error") or "").strip(),
+    }
+
+
+def _load_memory_recall_debug_index(targets: list[str]) -> dict:
+    target_set = {str(x or "").strip() for x in targets if str(x or "").strip()}
+    if not target_set:
+        return {"by_request_id": {}, "by_window": {}}
+    try:
+        all_events = r2_store.get_dynamic_recall_debug_events(limit=200) or []
+    except Exception as e:
+        logger.warning("reasoning memory recall debug read failed error=%s", e)
+        return {"by_request_id": {}, "by_window": {}}
+    events = [e for e in all_events if isinstance(e, dict) and event_window_id(e) in target_set]
+    recall_events = [
+        e for e in events
+        if str((e or {}).get("source") or "").strip() not in ("search_memory", "memory_citation")
+        and not is_live_preview_recall_event(e)
+    ]
+    citation_events = [
+        e for e in events
+        if str((e or {}).get("source") or "").strip() == "memory_citation"
+    ]
+    merged = merge_citation_events_into_recalls(recall_events, citation_events)
+    by_request_id: dict[str, dict] = {}
+    by_window: dict[str, list[dict]] = {}
+    for event in merged:
+        rid = normalize_debug_request_id(event.get("du_request_id"))
+        if rid and rid not in by_request_id:
+            by_request_id[rid] = event
+        by_window.setdefault(event_window_id(event), []).append(event)
+    for values in by_window.values():
+        values.sort(key=lambda e: str((e or {}).get("timestamp") or ""), reverse=True)
+    return {"by_request_id": by_request_id, "by_window": by_window}
+
+
+def _find_memory_recall_for_round(
+    msg: dict | None,
+    window_id: str,
+    round_timestamp: str,
+    recall_index: dict,
+) -> tuple[dict | None, str]:
+    if not isinstance(msg, dict):
+        return None, ""
+    by_request_id = recall_index.get("by_request_id") if isinstance(recall_index, dict) else {}
+    by_window = recall_index.get("by_window") if isinstance(recall_index, dict) else {}
+    rid = normalize_debug_request_id(msg.get("du_request_id"))
+    if rid and isinstance(by_request_id, dict):
+        event = by_request_id.get(rid)
+        if isinstance(event, dict):
+            return event, "du_request_id"
+
+    round_dt = _parse_beijing_dt(round_timestamp)
+    if round_dt is None or not isinstance(by_window, dict):
+        return None, ""
+    candidates = by_window.get(window_id) or []
+    for event in candidates:
+        event_dt = _parse_beijing_dt(str((event or {}).get("timestamp") or ""))
+        if event_dt is None or event_dt > round_dt:
+            continue
+        try:
+            delta = (round_dt - event_dt).total_seconds()
+        except Exception:
+            continue
+        if 0 <= delta <= _MEMORY_RECALL_FALLBACK_MAX_SECONDS:
+            return event, "window_time"
+    return None, ""
+
+
 def _split_reasoning_translate_chunks(src: str, max_chars: int = _REASONING_TRANSLATE_CHUNK_CHARS) -> list[str]:
     text = str(src or "").strip()
     if not text:
@@ -583,6 +806,7 @@ def register_routes(bp) -> None:
         if not targets:
             return jsonify({"ok": True, "window_id": "", "items": [], "count": 0})
 
+        memory_recall_index = _load_memory_recall_debug_index(targets)
         out = []
         for target in targets:
             rounds = r2_store.get_conversation_rounds(target, last_n=scan_rounds) or []
@@ -623,6 +847,17 @@ def register_routes(bp) -> None:
                         else {}
                     )
                     cost_stats = _build_claude_cost_stats(cache_debug_items)
+                    recall_event, recall_matched_by = _find_memory_recall_for_round(
+                        selected_assistant_msg,
+                        target,
+                        ts,
+                        memory_recall_index,
+                    )
+                    memory_recall = (
+                        _slim_memory_recall_event(recall_event, recall_matched_by)
+                        if recall_event and recall_matched_by
+                        else None
+                    )
                     out.append(
                         {
                             "window_id": target,
@@ -633,6 +868,8 @@ def register_routes(bp) -> None:
                             "output_stats": output_stats,
                             "cost": cost_stats,
                             "tool_calls": tool_calls_out,
+                            "memory_recall": memory_recall,
+                            "memory_recall_status": "attached" if memory_recall else "none",
                         }
                     )
 

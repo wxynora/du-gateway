@@ -8,6 +8,7 @@ import queue
 import re
 import threading
 import time
+import uuid
 from typing import Optional
 import requests
 
@@ -96,6 +97,7 @@ from services.dynamic_memory_citation import (
     DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY,
     normalize_citation_map,
 )
+from services.dynamic_memory_recall_debug import DU_REQUEST_ID_BODY_KEY, normalize_debug_request_id
 from services.conversation_followup import (
     queue_followup,
 )
@@ -1084,6 +1086,7 @@ def _stream_forward_to_ai(body: dict, headers: dict):
     last_err = None
     for url, api_key in targets:
         body_send = dict(body)
+        body_send.pop(DU_REQUEST_ID_BODY_KEY, None)
         body_send["stream"] = True
         # 若未带 max_tokens 或过小，则设下限，避免中转站默认截断
         if MAX_COMPLETION_TOKENS > 0:
@@ -1161,10 +1164,12 @@ def _stream_with_r2_archive(
     body: dict,
     headers: dict,
     window_id: str = "",
+    reply_channel: str = "",
     du_daily_trigger: Optional[dict] = None,
     dynamic_memory_citation_map: Optional[dict] = None,
     skip_post_archive_dynamic_memory_write: bool = False,
     skip_post_archive_body_delta: bool = False,
+    du_request_id: str = "",
 ):
     """
     包装流式响应：原样转发 SSE，同时在流结束后用收集到的 content 写 R2。
@@ -1177,6 +1182,8 @@ def _stream_with_r2_archive(
     reasoning_details_parts: list[dict] = []
     thinking_blocks_parts: list[dict] = []
     reasoning_omitted = False
+    reply_channel = str(reply_channel or _reply_channel() or "").strip().lower()
+    du_request_id = normalize_debug_request_id(du_request_id or (body or {}).get(DU_REQUEST_ID_BODY_KEY))
     last_user = _last_user_message(body.get("messages") or [])
     du_daily_maintenance = _is_du_daily_maintenance_request()
     pseudo_cot_stream_enabled = _pseudo_cot_instruction_enabled(body)
@@ -1295,6 +1302,7 @@ def _stream_with_r2_archive(
                 dynamic_memory_citation_map=dynamic_memory_citation_map,
                 source_messages=body.get("messages") or [],
                 reply_channel=reply_channel,
+                du_request_id=du_request_id,
             )
             full_reasoning = "".join(reasoning_parts).strip()
             stream_sec = time.time() - stream_start
@@ -1304,6 +1312,7 @@ def _stream_with_r2_archive(
                 logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
             elif not is_failed_response(visible) and visible.strip():
                 msg = {"role": "assistant", "content": visible}
+                msg["du_request_id"] = du_request_id
                 if full_reasoning:
                     msg["reasoning"] = full_reasoning
                 if reasoning_details_parts:
@@ -1324,7 +1333,7 @@ def _stream_with_r2_archive(
                         msg,
                         reply_target=_reply_target(),
                         window_id=window_id,
-                        request_messages=current_body.get("messages") or [],
+                        request_messages=body.get("messages") or [],
                     )
                     if last_user
                     else None
@@ -1521,6 +1530,7 @@ def _stream_with_r2_archive(
             dynamic_memory_citation_map=dynamic_memory_citation_map,
             source_messages=body.get("messages") or [],
             reply_channel=reply_channel,
+            du_request_id=du_request_id,
         )
         if not _disable_followup_request():
             try:
@@ -1541,6 +1551,7 @@ def _stream_with_r2_archive(
             logger.info("R2 未存档：流式回复为空，跳过")
         else:
             msg = {"role": "assistant", "content": visible}
+            msg["du_request_id"] = du_request_id
             if full_reasoning:
                 msg["reasoning"] = full_reasoning
             if reasoning_details_parts:
@@ -1613,6 +1624,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
         try:
             # 非流式：上游返回单 JSON，便于解析、存档、追加黑名单后缀等
             body_send = dict(body)
+            body_send.pop(DU_REQUEST_ID_BODY_KEY, None)
             body_send["stream"] = False
             if MAX_COMPLETION_TOKENS > 0:
                 cur = body_send.get("max_tokens")
@@ -1843,6 +1855,8 @@ def chat_completions():
     # 未传 id 的客户端（如 RikkaHub）与 R2 主存 __default__ 对齐，否则轮次恒为 1、总结永不触发
     window_id = r2_store.normalize_window_id(window_id)
     headers["X-Window-Id"] = window_id
+    du_request_id = normalize_debug_request_id(body.get(DU_REQUEST_ID_BODY_KEY)) or f"du-{uuid.uuid4().hex}"
+    body[DU_REQUEST_ID_BODY_KEY] = du_request_id
     sumitalk_job_id = (
         str(request.headers.get("X-SumiTalk-Job-Id") or "").strip()
         if is_sumitalk_request
@@ -1926,6 +1940,7 @@ def chat_completions():
                 dynamic_memory_citation_map=dynamic_memory_citation_map,
                 source_messages=body.get("messages") or [],
                 reply_channel=reply_channel,
+                du_request_id=du_request_id,
             )
             if visible_text:
                 yield _sse_delta_chunk_bytes(visible_text)
@@ -2108,10 +2123,12 @@ def chat_completions():
                 body,
                 headers,
                 window_id,
+                reply_channel=reply_channel,
                 du_daily_trigger=du_daily_trigger,
                 dynamic_memory_citation_map=dynamic_memory_citation_map,
                 skip_post_archive_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
                 skip_post_archive_body_delta=skip_post_archive_body_delta,
+                du_request_id=du_request_id,
             )
         )
     resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
@@ -2367,6 +2384,7 @@ def chat_completions():
             dynamic_memory_citation_map=dynamic_memory_citation_map,
             source_messages=body.get("messages") or [],
             reply_channel=reply_channel,
+            du_request_id=du_request_id,
         )
         resp_json = _merge_html_preview_into_nonstream_response(resp_json, body.get("messages") or [])
         if is_sumitalk_request:
@@ -2461,6 +2479,7 @@ def chat_completions():
             # 构造仅用于 R2 存档的 msg 副本，不修改 resp_json（避免 reasoning 回传给客户端）
             import copy as _copy
             msg_for_r2 = _copy.deepcopy(msg)
+            msg_for_r2["du_request_id"] = du_request_id
             if archive_thinking_blocks_for_r2 and not msg_for_r2.get("thinking_blocks"):
                 msg_for_r2["thinking_blocks"] = archive_thinking_blocks_for_r2
             # reasoning 兼容字段：优先取最终轮次自带的，再合并工具中间轮次累计的
