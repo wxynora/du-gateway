@@ -279,6 +279,10 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：无原始身体状态时，命中深夜/早晨也会生成基础身体状态（想做指数 3/5、自制力 2/5、阴茎状态随想做指数自然显示）；非命中时段仍维持未记录，不额外制造字段。
 - 已验证：`.venv/bin/python -m py_compile services/pixel_home.py services/spring_dream.py`、`git diff --check -- services/pixel_home.py services/spring_dream.py docs/DEBUG_INDEX.md` 通过；smoke 覆盖深夜、早晨、白天三种时间修正和无记录/有记录两种输入。
 
+当前状态（2026-07-05 春梦睡眠期清晨边界）：
+- 已完成：`services/pixel_home.py::PIXEL_HOME_DAY_START_HOUR` 从 `6` 延长到 `7`，让 `06:00-06:59` 仍按上一晚夜间/睡眠期处理，避免凌晨才睡或周末补觉时春梦链路被 6 点硬切白天提前挡掉。
+- 保留：不改春梦概率、不改随机唤醒调度、不改存档链路；只是延长睡眠状态判断的清晨截止边界。
+
 当前状态（2026-06-27 春梦触发提示词升级）：
 - 已完成：`services/spring_dream.py::build_spring_dream_prompt()` 按辛玥给定方向改为“潜意识的欲望解构”口径：强调当前正深陷梦境、碎片只是梦深处的边缘素材，要求完整细腻拓展、不要机械复述拼凑，并强化梦境里的失控欲望与感官特写。春梦仍只改随机唤醒命中的 prompt replacement，不新增通道、队列或归档路径。
 - 已验证：`.venv/bin/python -m py_compile services/spring_dream.py`、`git diff --check -- services/spring_dream.py docs/DEBUG_INDEX.md` 通过；smoke 确认生成 prompt 使用新标题和防复述/拓展要求。
@@ -1971,6 +1975,10 @@ npm -C miniapp run android
 - 已完成：`routes/miniapp/reasoning.py` 对历史脏数据做兜底：如果 reasoning 文本本身命中伪 COT 拒绝模式，就不再原样展示，改走“adaptive thinking 未返回可展示正文”的 omitted 提示；已有 `du_inner_os` 的轮次仍展示脑内 OS。
 - 已验证：`python3 -m py_compile services/pseudo_cot.py routes/chat.py routes/miniapp/reasoning.py` 和 `git diff --check -- services/pseudo_cot.py routes/chat.py routes/miniapp/reasoning.py docs/DEBUG_INDEX.md` 通过；本地 smoke 确认 `summary=I cannot... + <DU_INNER_OS>` 时返回体 `reasoning` 会被替换为脑内 OS，App 历史接口会隐藏旧拒绝 summary。
 - 未完成 / 下次继续：本轮未回写修复历史 R2 旧轮次本体；历史接口只是展示层兜底。如果要把旧 R2 对象里的拒绝文本批量替换/清理，需要单独做带备份的数据修正。
+
+当前状态（2026-07-05 思维链日志原文展示）：
+- 已完成：`routes/miniapp/reasoning.py` 不再用 `services.pseudo_cot.is_reasoning_summary_refusal()` 隐藏思维链日志文本；MiniApp 思维链页作为审计页，只要归档里有 `reasoning/reasoning_content/thinking/thinking_blocks` 就原样展示。真正的 `I cannot rewrite...` 拒绝文本也展示为原文，不再改成“未返回可展示正文”。
+- 保留：伪 COT / 内心 OS 的拒绝检测仍留在 `services/pseudo_cot.py` 自己的链路里；本轮不改 TG 折叠块、不改 R2 存档、不改上游返回体。
 
 当前状态（2026-06-23 渡秘密抽屉后端一期）：
 - 已完成：新增方案文档 `docs/渡秘密抽屉功能方案.md`，收束“渡自己的秘密抽屉”功能边界：保存想留下的对话、图片、梦境、冲浪内容、碎碎念和兜底杂项；它不是动态记忆、不是日记，也不会把具体条目自动注入常规上下文。
