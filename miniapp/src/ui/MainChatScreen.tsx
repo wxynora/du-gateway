@@ -245,6 +245,8 @@ const SUMITALK_REAL_BODY_STATE_POLL_MS = 5000;
 const LOCAL_RECALL_PREVIEW_DEVICE_ID = "local-recall-preview-device";
 const LOCAL_RECALL_PREVIEW_ACTION_PREFIX = "local-recall-preview-action-";
 const LOCAL_RECALL_PREVIEW_SOURCE = "local_recall_preview";
+const RECALL_MESSAGE_POST_POPUP_HIDE_DELAY_MS = 2000;
+const RECALL_MESSAGE_BUBBLE_STAGGER_MS = 650;
 
 function isLocalRecallPreviewEnabled(): boolean {
   if (typeof window === "undefined") return false;
@@ -2955,21 +2957,37 @@ export function MainChatScreen({
     return sanitizeHistoryMessages(replaced);
   }
 
+  function recalledMessageIdsBottomFirst(currentMessages: ChatDraftMessage[], ids: Set<string>): string[] {
+    const orderedIds = sanitizeHistoryMessages(currentMessages)
+      .map((message) => String(message?.id || "").trim())
+      .filter((messageId) => messageId && ids.has(messageId));
+    return orderedIds.reverse();
+  }
+
   async function hideRecalledMessages(messageIds: string[], source: string): Promise<void> {
     const ids = new Set(uniqueNonEmptyStrings(messageIds));
     if (!ids.size) return;
     const localPreview = source === `recall_message:${LOCAL_RECALL_PREVIEW_SOURCE}`;
-    if (!localPreview) rememberRecallHiddenMessages(ids, source);
-    const replacedMessages = replaceRecalledMessagesWithNotices(messagesRef.current, ids);
-    const nextMessages = localPreview
-      ? replacedMessages
-      : filterDeletedDisplayMessages(replacedMessages);
-    applyDisplayHistoryMessages(nextMessages);
-    requestAnimationFrame(() => {
-      const scroller = messagesScrollRef.current;
-      if (!scroller) return;
-      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
-    });
+    await waitMs(RECALL_MESSAGE_POST_POPUP_HIDE_DELAY_MS);
+    const sequenceIds = recalledMessageIdsBottomFirst(messagesRef.current, ids);
+    let nextMessages = messagesRef.current;
+    for (const [index, messageId] of sequenceIds.entries()) {
+      const currentId = String(messageId || "").trim();
+      if (!currentId) continue;
+      const currentIds = new Set([currentId]);
+      if (!localPreview) rememberRecallHiddenMessages(currentIds, source);
+      const replacedMessages = replaceRecalledMessagesWithNotices(messagesRef.current, currentIds);
+      nextMessages = localPreview
+        ? replacedMessages
+        : filterDeletedDisplayMessages(replacedMessages);
+      applyDisplayHistoryMessages(nextMessages);
+      requestAnimationFrame(() => {
+        const scroller = messagesScrollRef.current;
+        if (!scroller) return;
+        scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+      });
+      if (index < sequenceIds.length - 1) await waitMs(RECALL_MESSAGE_BUBBLE_STAGGER_MS);
+    }
     if (!localPreview) {
       const localDeviceId = String(deviceId || await getOrCreatePanelDeviceId()).trim();
       if (localDeviceId && historyWindowId) {
@@ -3082,7 +3100,11 @@ export function MainChatScreen({
     if (localRecallPreviewRunRef.current) return;
     localRecallPreviewRunRef.current = true;
     const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const targetMessageId = `local-recall-preview-user-${runId}`;
+    const targetMessageIds = [
+      `local-recall-preview-user-1-${runId}`,
+      `local-recall-preview-user-2-${runId}`,
+      `local-recall-preview-user-3-${runId}`,
+    ];
     const actionId = `${LOCAL_RECALL_PREVIEW_ACTION_PREFIX}${runId}`;
     const baseTime = Date.now();
     const previewMessages: ChatDraftMessage[] = [
@@ -3094,10 +3116,24 @@ export function MainChatScreen({
         status: "sent",
       },
       {
-        id: targetMessageId,
+        id: targetMessageIds[0],
         role: "user",
-        content: "这条是假数据，等下会被工具收走。",
+        content: "第一句是假数据。",
         createdAt: new Date(baseTime - 60000).toISOString(),
+        status: "sent",
+      },
+      {
+        id: targetMessageIds[1],
+        role: "user",
+        content: "第二句也会一起被收走。",
+        createdAt: new Date(baseTime - 57000).toISOString(),
+        status: "sent",
+      },
+      {
+        id: targetMessageIds[2],
+        role: "user",
+        content: "第三句在最下面，会先消失。",
+        createdAt: new Date(baseTime - 54000).toISOString(),
         status: "sent",
       },
       {
@@ -3122,11 +3158,11 @@ export function MainChatScreen({
         type: "recall_message",
         payload: {
           windowId: historyWindowId || MAIN_SUMITALK_DISPLAY_WINDOW_ID,
-          messageIds: [targetMessageId],
+          messageIds: targetMessageIds,
           popup: {
             texts: ["为什么", "为什么为什么", "为什么还要这样", "为什么不看我", "为什么要说这种话", "为什么为什么为什么"],
             finalTitle: "渡",
-            finalMessage: "这句先收走。你选一个。",
+            finalMessage: "这几句先收走。你选一个。",
             choices: [
               { id: "ok", label: "我知道了" },
               { id: "listen", label: "听你的" },

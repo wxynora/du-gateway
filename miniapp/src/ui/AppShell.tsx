@@ -181,7 +181,7 @@ export function AppShell({
   const [transparentBubbleEnabled, setTransparentBubbleEnabled] = useState(() => readStoredBoolean("miniapp.ui.transparentBubble"));
   const [showChatAvatars, setShowChatAvatars] = useState(() => readStoredBoolean("miniapp.ui.showAvatars", true));
   const [chatContentFontSize, setChatContentFontSize] = useState(() =>
-    clampStoredNumber(readStoredNumber("miniapp.ui.chatContentFontSize", 13), 12, 18, 13),
+    clampStoredNumber(readStoredNumber("miniapp.ui.chatContentFontSize", 13), 10, 18, 13),
   );
   const [chatTitleFontSize, setChatTitleFontSize] = useState(() =>
     clampStoredNumber(readStoredNumber("miniapp.ui.chatTitleFontSize", 15), 14, 20, 15),

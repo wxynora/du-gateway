@@ -47,7 +47,14 @@ def _private_board_sync_text(
         if isinstance(item, dict) and str(item.get("label") or item.get("id") or "").strip()
     ]
     description_rule = "如果要补充描述或对小玥说话，必须另起一行写成「【描述：...】」；不要把描述散写在指令外。"
-    if pending_actor == "du" and pending_type == "review" and pending_phase != "submitted":
+    if pending_reviewer == "du" and pending_type == "review" and pending_phase == "questioning":
+        rule_lines = [
+            "当前有真心话/提问类惩罚需要你先出题。",
+            "如果你要提交题目，回复第一行必须单独写精确指令「【提交】」，第二行必须用「【描述：题目内容】」写题目。",
+            description_rule,
+            "没有第一行「【提交】」时，只算局内聊天，不会触发出题。",
+        ]
+    elif pending_actor == "du" and pending_type == "review" and pending_phase != "submitted":
         rule_lines = [
             "当前有惩罚任务需要你提交。",
             "如果你要提交任务，回复第一行必须单独写精确指令「【提交】」，第二行必须用「【描述：提交内容】」写提交内容。",
@@ -118,6 +125,17 @@ def _private_board_sync_text(
         ]
         return "\n".join(parts).strip()
 
+    if mode == "state_update":
+        parts = [
+            "小玥正在和你玩「涩涩走格棋」。这是棋局状态同步，不是主聊天正文。",
+            "你会看到当前棋局；请按下面规则决定是否行动或处理待处理任务，不要解释工具、接口或系统流程。",
+            *rule_lines,
+            "",
+            "当前棋局：",
+            du_text,
+        ]
+        return "\n".join(parts).strip()
+
     parts = [
         "小玥正在和你玩「涩涩走格棋」。这是局内普通交流，不是棋局同步，也不是主聊天正文。",
         "这次只处理小玥刚刚说的话；前后文会由同一个聊天窗口的最近对话提供，不要额外复述整盘棋局。",
@@ -139,7 +157,7 @@ def register_routes(bp) -> None:
         save_id = str(body.get("save_id") or "default").strip() or "default"
         user_message = str(body.get("message") or "").strip()
         mode = str(body.get("mode") or "chat").strip().lower()
-        if mode not in {"chat", "roll_result", "final_note"}:
+        if mode not in {"chat", "roll_result", "state_update", "final_note"}:
             mode = "chat"
         roll_text = str(body.get("roll_text") or "").strip()
         payload = execute_game_command("private_board", "status", save_id)

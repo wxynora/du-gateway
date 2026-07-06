@@ -51,6 +51,15 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 随机模仿者网关私有工具 | `services/game_tool_runtime.py`、`services/random_imitator_td_tool.py`、`routes/miniapp/game_tools.py`、`routes/chat.py`、`pipeline/pipeline.py`、`services/chat_tools.py`、`scripts/test_random_imitator_td_tool.py` | du-gateway 私有游戏工具接入：`random_imitator_td` 是首个注册游戏；Prompt 开关只固定注入工具，只有专用游戏标记或工具结果自带 `game_tool_loop` 才跳过动态记忆写入与 BODY delta |
 | MiniApp 游戏大厅 / 涩涩走格棋 | `miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/tabs/SeseBoardGameTab.tsx`、`routes/miniapp/game_tools.py`、`services/private_board_game.py`、`services/private_board_tool.py`、`services/game_tool_runtime.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_private_board_game.py` | 「日常 > 游戏」入口，文游显示为「无限流」；`private_board` 走走格棋后端和前端棋盘。小玥通过前端按钮/输入参与，渡通过自然语言精确首行指令参与；右上角局内聊天只发本次消息，不自带局内历史；局内回复不外发主聊天但压缩归档进同一个 `tg_*` window 的 last4 |
 
+当前状态（2026-07-06 涩涩走格棋同步链路修正）：
+- 已完成：前端同步链路改为按“当前该谁操作”触发。小玥落格后如果生成小玥自己的 choice/review/duel pending，不再立刻同步给渡；等小玥选择、提交、Pass 或出拳后再同步。若落格后本来就是等渡出题/选择/验收/出拳，才立即同步给渡。
+- 已完成：渡回复 `【掷骰】` 后执行他的 roll，如果新状态仍是渡回合或生成渡自己的 pending，会继续用 `state_update` 同步给渡；渡处理完 choice/review/Pass 后若因停步等规则又轮到渡，也会继续同步，避免停在“等待渡选择/行动”。
+- 已完成：`routes/miniapp/game_tools.py` 新增 `state_update` 同步文案，并补上 `review/questioning` 等渡出题、duel 等渡出拳的精确首行指令提示，避免把状态同步误写成“小玥刚掷骰”。
+- 已完成：局内聊天改为浏览器本地持久化，刷新页面不会丢；成功开下一局时重置为初始提示。当前是同设备同浏览器保留，不写入服务器存档。
+- 已同步：开源版 `/Users/doraemon/Downloads/game-box/games/sese-board-game/frontend/SeseBoardGame.tsx` 按同一规则更新，使用 `ai/player` 命名，不带私有路由和私有人设。
+- 已验证：`cd miniapp && npx tsc --noEmit --pretty false`、`npm --prefix miniapp run build`、`python3 -m py_compile routes/miniapp/game_tools.py`、开源版 `python3 -m py_compile sese_board_game/engine.py preview_server.py && python3 tests/test_engine.py`、复用 `du-gateway/miniapp/node_modules` 的开源预览 `vite build` 均通过。
+- 未完成 / 下次继续：本轮不会手改线上存档；如果要把当前线上局面从旧 pending 继续下去，部署后让新前端接管，或再明确指定人工选择哪个 pending 选项。
+
 当前状态（2026-07-06 涩涩走格棋 Pass / 道具 / 棋盘密度修正）：
 - 已完成：`services/private_board_game.py` 的 `pass` 命令现在会对无卡、不可跳过、已提交、已达本局跳过上限等失败情况返回 `ok=false`；前端 `SeseBoardGameTab.tsx` 遇到 `ok=false` 只提示失败，不再追加“已使用Pass卡”或同步给渡。渡在局内聊天发 `【Pass】` 也走同一失败判定。
 - 已完成：道具惩罚随机池会优先避开当前玩家身上已有的同名道具；重复命中时不再堆出两条同名状态，支持档位的道具会升档，停步格命中已有道具时会延长行动限制。
@@ -2110,11 +2119,11 @@ npm -C miniapp run android
 当前状态（2026-07-06 SumiTalk App `recall_message` 撤回仪式）：
 - 已完成：新增渡可调用工具 `recall_message`，强制要求 `messageIds`，不猜“最近一条”；工具只发 App 聊天界面动作，不物理删除 R2/后端历史。
 - 已完成：`app_actions` 队列新增 `surface=chat_ui` 隔离，原生壳默认只轮询 `native`，聊天页通过 `chat_ui_device_actions` 实时事件或 `/miniapp-api/device-actions?surface=chat_ui&window_id=...` 兜底轮询领取，避免未知动作被 Android 壳误消费。
-- 已完成：MiniApp 聊天页收到撤回动作后先展示男鬼弹窗风格仪式，最后弹窗带 `countdownSeconds/timeoutChoiceId`；用户选择或倒计时自动选择后，并行回传结果给后端、执行消息消失动画、本地隐藏消息并写入 tombstone。
+- 已完成：MiniApp 聊天页收到撤回动作后先展示男鬼弹窗风格仪式，最后弹窗带 `countdownSeconds/timeoutChoiceId`；用户选择或倒计时自动选择后，并行回传结果给后端、执行前端撤回收尾、本地隐藏消息并写入 tombstone。
 - 已完成：`RecallMessageOverlay` 视觉按 `ui合集/男鬼弹窗` 的黑红故障弹窗方向重做：深红黑底、scanline、红色错误标题栏、glitch 文字、原版式 `createAlert()` 逐个 append、`delay = max(50, delay * 0.95)` 先慢后快堆叠、底部 `SYSTEM STATUS` 和同风格最终选择窗；App 窄屏下额外扩展横向随机溢出范围，避免原版坐标公式被 320px 视口压成整齐一列；本轮又下调了弹窗宽度、字号、红色实度、边框和阴影，避免故障窗过大过实。只改前端仪式表现，不改工具入队/回传/隐藏消息边界。
 - 已完成：新增 dev-only 本地直接测试入口 `http://127.0.0.1:5173/miniapp/?recallPreview=1`；入口绕过面板鉴权、直接进入渡单聊、注入假消息并本地触发 `recall_message`，不依赖真实后端动作队列，也不写真实聊天记录。为避免首屏首页预览误拉 history，预览模式初始 `activeScreen=du`。
 - 已完成：回执唤醒渡时带回最终选择和原消息，语义为“你已撤回她的这条消息：`【已撤回】原消息`”；新增 `recall_message_markers` runtime 表，后续 Last4 注入只在上下文展示层把对应用户消息标成 `【已撤回】原消息`，不改原始归档。
-- 已完成：小工审阅后补边界：前端 `recall_message` 动作改为串行队列，避免并发弹窗覆盖 resolver；目标消息暂未加载时最多重试再失败；最终弹窗支持长内容滚动、默认聚焦、44px 触控按钮、窄屏 clamp 和 reduced-motion 降级；最终弹窗结束后，被撤回的原用户消息直接替换为按撤回发生时间插入当前聊天底部的居中灰字提示“渡撤回了你的消息”，不显示原文、不冒充用户消息，并自动滚到提示位置。
+- 已完成：小工审阅后补边界：前端 `recall_message` 动作改为串行队列，避免并发弹窗覆盖 resolver；目标消息暂未加载时最多重试再失败；最终弹窗支持长内容滚动、默认聚焦、44px 触控按钮、窄屏 clamp 和 reduced-motion 降级；最终弹窗结束后先停顿 2 秒，再把被撤回的原用户消息直接替换为按撤回发生时间插入当前聊天底部的居中灰字提示“渡撤回了你的消息”；一次撤回多条同轮用户气泡时，按当前聊天列表从下往上每 650ms 逐条替换，不显示原文、不冒充用户消息，并自动滚到提示位置。
 - 已完成：小工审阅后补后端边界：`recall_message` 入队强制非空 `windowId`，`chat_ui` poll 要求请求窗口与动作窗口严格一致；回执/marker 以后端 action payload 的窗口为准，客户端回传窗口不再优先；global Last4 场景按全局 marker 补标，避免新窗口注入漏出已撤回原文。
 - 已验证：`.venv/bin/python -m py_compile storage/runtime_sqlite.py services/recall_message_markers.py storage/app_action_store.py services/realtime_publish.py services/realtime_app.py routes/miniapp/device_actions.py services/device_action_tools.py services/mcp_forum_tools.py services/chat_tools.py routes/chat.py pipeline/pipeline.py`、`git diff --check`、`npm --prefix miniapp run build` 通过；隔离 smoke 覆盖缺 `windowId` 入队失败、native 轮询捞不到 `recall_message`、chat_ui 同窗口能捞到、空/错窗口捞不到、客户端回错窗口时 marker 仍写 payload 窗口、global marker 可补标。黑红故障弹窗版本已用真实 MiniApp 本地页面验证，dev 预览入口在当前 in-app browser 320x701 视口下实测 `t+1.2s=4`、`t+3.7s=20`、`t+6.7s=77`、`t+11.5s=153/进入最终弹窗`，可见窗口上限 40 个；本轮横向范围已散到约 `x=-123..435`，宽高约 `152..298 / 126..189`，点击“我知道了”后假消息消失，且没有 `/miniapp-api` 请求。
 - 未完成 / 下次继续：还没有在真实 App 里点一次端到端效果；推送部署后优先测一条真实用户消息 id 的撤回，确认弹窗、回执唤醒、刷新后不回魂，以及 Last4 给渡的标记措辞。
