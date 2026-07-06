@@ -39,10 +39,8 @@ from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 from services.telegram_bot import (
     _sanitize_reply_for_telegram,
-    build_telegram_style_system,
     send_rich_message,
 )
-from services.entry_style_prompt import entry_style_for_channel
 from services import wakeup_state
 from services.conversation_followup import (
     FOLLOWUP_TICK_SECONDS,
@@ -776,8 +774,6 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         default_channel=default_channel,
         no_contact_token=no_token,
     )
-    _marker, sys_content = entry_style_for_channel(default_channel, is_miniapp=False)
-    sys_content = (sys_content or build_telegram_style_system()).strip()
     dynamic_context_parts: list[str] = []
     try:
         mem = _format_proactive_decision_memory_for_system()
@@ -791,8 +787,8 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
             dynamic_context_parts.append(recent_actions)
     except Exception:
         pass
-    # sense 由网关管道 step_inject_sense_snapshot 全局注入，此处不再拼接，避免重复。
-    messages = [{"role": "system", "content": sys_content}]
+    # 入口风格由网关主流程统一注入，避免主动唤醒预置 system 导致静态前缀顺序漂移。
+    messages = []
     dynamic_msg = _dynamic_system_message("\n\n".join(dynamic_context_parts))
     if dynamic_msg:
         messages.append(dynamic_msg)
@@ -1238,12 +1234,9 @@ def _run_proactive_diary_action(
         f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
         f"你刚才选择写日记的理由：{str(initial_reason or '').strip() or '（未说明）'}"
     )
-    _marker, sys_content = entry_style_for_channel(default_channel, is_miniapp=False)
-    sys_content = (sys_content or build_telegram_style_system()).strip()
     body = {
         "model": _get_chat_model(),
         "messages": [
-            {"role": "system", "content": sys_content},
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
@@ -1309,12 +1302,9 @@ def _run_proactive_forum_action(
         f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
         f"你刚才选择逛论坛的理由：{str(initial_reason or '').strip() or '（未说明）'}"
     )
-    _marker, sys_content = entry_style_for_channel(default_channel, is_miniapp=False)
-    sys_content = (sys_content or build_telegram_style_system()).strip()
     body = {
         "model": _get_chat_model(),
         "messages": [
-            {"role": "system", "content": sys_content},
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
@@ -1381,12 +1371,9 @@ def _run_proactive_drawer_action(
         f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
         f"你刚才选择秘密抽屉的理由：{str(initial_reason or '').strip() or '（未说明）'}"
     )
-    _marker, sys_content = entry_style_for_channel(default_channel, is_miniapp=False)
-    sys_content = (sys_content or build_telegram_style_system()).strip()
     body = {
         "model": _get_chat_model(),
         "messages": [
-            {"role": "system", "content": sys_content},
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
@@ -1471,12 +1458,9 @@ def _ask_du_after_surf_result(
             else f'示例：{{"action":"no_contact","reason":"当前没有可用发送入口","message":"","channel":""}}\n'
         )
     )
-    _marker, sys_content = entry_style_for_channel(default_channel, is_miniapp=False)
-    sys_content = (sys_content or build_telegram_style_system()).strip()
     body = {
         "model": _get_chat_model(),
         "messages": [
-            {"role": "system", "content": sys_content},
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
