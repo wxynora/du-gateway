@@ -96,12 +96,18 @@ def inject_entry_style_system(body: dict, *, reply_channel: str, is_miniapp: boo
     if not marker or not style_system:
         return body
     messages = list(body.get("messages") or [])
+    for msg in messages:
+        if not isinstance(msg, dict) or str(msg.get("role") or "").strip().lower() != "system":
+            continue
+        if marker in str(msg.get("content") or ""):
+            return body
+
     insert_idx = 0
     for i, msg in enumerate(messages):
         if not isinstance(msg, dict) or str(msg.get("role") or "").strip().lower() != "system":
             break
-        if marker in str(msg.get("content") or ""):
-            return body
+        if msg.get("__dynamic__") or msg.get("__summary_cache__") or msg.get("__summary_recent__"):
+            break
         insert_idx = i + 1
     messages.insert(insert_idx, {"role": "system", "content": style_system})
     body = dict(body)
