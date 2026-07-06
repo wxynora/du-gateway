@@ -39,16 +39,19 @@ def _private_board_sync_text(
     pending_type = str((pending or {}).get("type") or "").strip()
     pending_actor = str((pending or {}).get("actor") or "").strip()
     pending_reviewer = str((pending or {}).get("reviewer") or "").strip()
+    pending_current_actor = str((pending or {}).get("current_actor") or "").strip()
     pending_phase = str((pending or {}).get("phase") or "").strip()
     pending_choices = [
         str(item.get("label") or item.get("id") or "").strip()
         for item in ((pending or {}).get("choices") or [])
         if isinstance(item, dict) and str(item.get("label") or item.get("id") or "").strip()
     ]
+    description_rule = "如果要补充描述或对小玥说话，必须另起一行写成「【描述：...】」；不要把描述散写在指令外。"
     if pending_actor == "du" and pending_type == "review" and pending_phase != "submitted":
         rule_lines = [
             "当前有惩罚任务需要你提交。",
-            "如果你要提交任务，回复第一行必须单独写精确指令「【提交】」，第二行开始写提交内容。",
+            "如果你要提交任务，回复第一行必须单独写精确指令「【提交】」，第二行必须用「【描述：提交内容】」写提交内容。",
+            description_rule,
             "没有第一行「【提交】」时，只算局内聊天，不会触发提交。",
         ]
     elif pending_actor == "du" and pending_type == "choice":
@@ -56,19 +59,32 @@ def _private_board_sync_text(
         rule_lines = [
             "当前有选择惩罚需要你决定。",
             f"可选项：{choices_text}。",
-            "如果你要选择，回复第一行必须写「【选择：选项名】」，选项名要和可选项一致；第二行开始再说想对小玥说的话。",
-            "如果你要使用Pass卡，第一行写「【Pass】」。",
+            "如果你要选择，回复第一行必须单独写精确指令「【选择：选项名】」，选项名必须和可选项完全一致。",
+            "如果你要使用Pass卡，第一行必须单独写「【Pass】」。",
+            description_rule,
+            "没有第一行精确指令时，只算局内聊天，不会触发选择。",
+        ]
+    elif pending_type == "duel" and pending_current_actor == "du":
+        choices_text = " / ".join(pending_choices) if pending_choices else "石头 / 剪刀 / 布"
+        rule_lines = [
+            "当前正在等待你完成剪刀石头布对抗。",
+            f"可选项：{choices_text}。",
+            "回复第一行必须单独写精确指令「【剪刀石头布：石头】」「【剪刀石头布：剪刀】」或「【剪刀石头布：布】」。",
+            description_rule,
+            "没有第一行精确指令时，只算局内聊天，不会触发出拳。",
         ]
     elif pending_reviewer == "du" and pending_type == "review" and pending_phase == "submitted":
         rule_lines = [
             "当前有小玥提交的惩罚任务需要你验收。",
             "如果通过，回复第一行必须单独写「【通过】」；如果打回，回复第一行必须单独写「【不通过】」。",
-            "第二行开始再说想对小玥说的话；没有这两个精确指令时，只算局内聊天，不会触发验收。",
+            description_rule,
+            "没有这两个精确指令时，只算局内聊天，不会触发验收。",
         ]
     else:
         rule_lines = [
             f"当前行动方：{turn_label}。",
-            "如果现在轮到你，并且你决定行动，回复第一行必须单独写精确指令「【掷骰】」，第二行开始再说想对小玥说的话。",
+            "如果现在轮到你，并且你决定行动，回复第一行必须单独写精确指令「【掷骰】」。",
+            description_rule,
             "普通说「掷骰子」「我来投一下」，或者把「【掷骰】」写在句子中间，都只算聊天，不会触发行动。",
         ]
     if mode == "final_note":

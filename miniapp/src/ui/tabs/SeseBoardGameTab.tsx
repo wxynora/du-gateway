@@ -143,6 +143,7 @@ type MoveInfo = {
 
 type EventPopup = {
   position: number;
+  kicker?: string;
   actor?: Actor;
   actorLabel?: string;
   from?: number;
@@ -177,6 +178,11 @@ const RPS_UI_CHOICES = [
   { id: "rock", label: "石头", icon: "👊" },
   { id: "paper", label: "布", icon: "✋" },
 ];
+const RPS_BEATS: Record<string, string> = {
+  rock: "scissors",
+  scissors: "paper",
+  paper: "rock",
+};
 const RPS_CHOICE_ALIASES: Record<string, string> = {
   scissors: "scissors",
   剪刀: "scissors",
@@ -197,6 +203,24 @@ function normalizeRpsChoice(value: unknown): string {
   const raw = String(value || "").trim();
   if (!raw) return "";
   return RPS_CHOICE_ALIASES[raw] || raw;
+}
+
+function rpsChoiceLabel(value: unknown): string {
+  const normalized = normalizeRpsChoice(value);
+  return RPS_UI_CHOICES.find((choice) => choice.id === normalized)?.label || String(value || "").trim() || "未出拳";
+}
+
+function duelResultText(pending: PendingEvent | null | undefined, duChoice: string): string {
+  const myPick = normalizeRpsChoice(pending?.picks?.xinyue);
+  const duPick = normalizeRpsChoice(duChoice);
+  if (!myPick || !duPick) return "";
+  const myLabel = rpsChoiceLabel(myPick);
+  const duLabel = rpsChoiceLabel(duPick);
+  if (myPick === duPick) {
+    return `你出了${myLabel}，渡出了${duLabel}。平局，重新出拳。`;
+  }
+  const winner = RPS_BEATS[myPick] === duPick ? "你赢" : "渡赢";
+  return `你出了${myLabel}，渡出了${duLabel}。${winner}。`;
 }
 const FINAL_MATERIAL_LABELS: Partial<Record<string, string>> = {
   place: "最终地点",
@@ -511,12 +535,25 @@ type DuDirective =
   | { kind: "pass"; body: string }
   | { kind: ""; body: string };
 
+function directiveBody(lines: string[], startIndex: number): string {
+  return lines
+    .slice(startIndex)
+    .map((line) => {
+      const trimmed = line.trim();
+      const description = trimmed.match(/^【描述[:：](.*)】$/);
+      return description ? description[1].trim() : trimmed;
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
 function parseDuDirective(text: string): DuDirective {
   const lines = String(text || "").split(/\r?\n/);
   const firstIndex = lines.findIndex((line) => line.trim());
   if (firstIndex < 0) return { kind: "", body: "" };
   const first = lines[firstIndex].trim();
-  const body = lines.slice(firstIndex + 1).join("\n").trim();
+  const body = directiveBody(lines, firstIndex + 1);
   if (first === "【掷骰】") return { kind: "roll", body };
   if (first === "【提交】") return { kind: "submit", body };
   if (first === "【通过】") return { kind: "approve", body };
@@ -526,7 +563,7 @@ function parseDuDirective(text: string): DuDirective {
   if (choiceMatch) return { kind: "choose", choice: choiceMatch[1].trim(), body };
   const duelMatch = first.match(/^【(?:剪刀石头布|石头剪刀布)[:：](.+)】$/);
   if (duelMatch) return { kind: "choose", choice: duelMatch[1].trim(), body };
-  return { kind: "", body: String(text || "").trim() };
+  return { kind: "", body: directiveBody(lines, firstIndex) };
 }
 
 function firstPendingChoice(pending: PendingEvent | null | undefined, fallback = "rock"): string {
@@ -540,23 +577,23 @@ function localDuReplyForState(mode: PrivateBoardSyncMode, state: PrivateBoardSta
   }
   const pending = state?.pending_event || null;
   if (pending?.type === "duel" && pending.current_actor === "du") {
-    return "【剪刀石头布：石头】\n本地预览：我出石头。";
+    return "【剪刀石头布：石头】\n【描述：本地预览：我出石头。】";
   }
   if (pending?.type === "choice" && pending.actor === "du") {
     const choice = firstPendingChoice(pending, "");
-    if (choice) return `【选择：${choice}】\n本地预览：我选这个。`;
+    if (choice) return `【选择：${choice}】\n【描述：本地预览：我选这个。】`;
   }
   if (pending?.type === "review" && pending.reviewer === "du" && pending.phase === "questioning") {
-    return "【提交】\n本地预览：渡想问你的真心话问题。";
+    return "【提交】\n【描述：本地预览：渡想问你的真心话问题。】";
   }
   if (pending?.type === "review" && pending.actor === "du" && pending.phase === "assigned") {
-    return "【提交】\n本地预览：渡已经完成任务，提交给你验收。";
+    return "【提交】\n【描述：本地预览：渡已经完成任务，提交给你验收。】";
   }
   if (pending?.type === "review" && pending.reviewer === "du" && pending.phase === "submitted") {
-    return "【通过】\n本地预览：这次算你通过。";
+    return "【通过】\n【描述：本地预览：这次算你通过。】";
   }
   if (isDuTurnState(state)) {
-    return "【掷骰】\n本地预览：我来掷这一回合。";
+    return "【掷骰】\n【描述：本地预览：我来掷这一回合。】";
   }
   return "本地预览：我看到了，等你继续行动。";
 }
@@ -600,6 +637,8 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
   const chatOpenRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const rollOnceRef = useRef<((options?: { notifyAfterUserRoll?: boolean }) => Promise<void>) | null>(null);
+  const continueDuTurnRef = useRef<((state: PrivateBoardState | undefined, message?: string) => Promise<void>) | null>(null);
+  const continueAfterPopupRef = useRef<{ state: PrivateBoardState | undefined; message: string } | null>(null);
   const [payload, setPayload] = useState<PrivateBoardPayload | null>(null);
   const [displayPositions, setDisplayPositions] = useState<Partial<Record<Actor, number>>>(DEFAULT_POSITIONS);
   const [dice, setDice] = useState(1);
@@ -794,9 +833,27 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     try {
       if (pending?.type === "duel" && pending.current_actor === "du") {
         if (directive.kind !== "choose" || !directive.choice.trim()) return;
+        const resultText = duelResultText(pending, directive.choice.trim());
         const next = await executePrivateBoard(`choose ${directive.choice.trim()}`);
         applyPayload(next);
-        appendChat({ id: makeChatId("system"), speaker: "system", text: "渡已出拳，系统已判定对抗结果。" }, true);
+        const shouldContinueDuTurn = isDuTurnState(next.state) && !next.state?.pending_event;
+        if (resultText) {
+          continueAfterPopupRef.current = shouldContinueDuTurn
+            ? { state: next.state, message: "剪刀石头布对抗已结算，现在轮到渡行动。" }
+            : null;
+          setPopup({
+            position: Number(pending.cell || next.state?.positions?.du || 0),
+            kicker: "剪刀石头布对抗",
+            title: "对抗结果",
+            text: resultText,
+            detail: resultText,
+            kind: "event",
+          });
+        }
+        appendChat({ id: makeChatId("system"), speaker: "system", text: resultText || payloadFailureText(next, "渡已出拳，系统已判定对抗结果。") }, true);
+        if (!resultText && shouldContinueDuTurn) {
+          await continueDuTurnRef.current?.(next.state, "剪刀石头布对抗已结算，现在轮到渡行动。");
+        }
         return;
       }
       if (pending?.reviewer === "du" && pending.type === "review" && pending.phase === "questioning") {
@@ -893,6 +950,54 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     };
   }, [localPreviewEnabled]);
 
+  const continueDuTurn = useCallback(async (
+    stateForReply: PrivateBoardState | undefined,
+    message = "现在轮到渡行动。",
+  ) => {
+    if (!isDuTurnState(stateForReply) || stateForReply?.pending_event) return;
+    appendChat({
+      id: makeChatId("system"),
+      speaker: "system",
+      text: localPreviewEnabled ? "预览模式：轮到渡行动，已继续同步。" : "轮到渡行动，已把棋局发给渡。",
+    }, true);
+    setChatSending(true);
+    try {
+      const next = await syncPrivateBoardWithDu({
+        mode: "roll_result",
+        message,
+        rollText: "",
+      }, stateForReply);
+      if (next.state) {
+        applyPayload({
+          ok: true,
+          state: next.state,
+          player_text: next.player_text || "",
+        });
+      }
+      const reply = plainText(next.reply_text || next.wakeup?.reply_text || next.reply_preview || next.wakeup?.reply_preview || "").trim();
+      await processDuReply(reply, next.state || stateForReply);
+    } catch (e: any) {
+      const error = String(e?.message || e || "同步失败");
+      appendChat({ id: makeChatId("system"), speaker: "system", text: `渡行动同步失败：${error}` }, true);
+      toast(`渡行动同步失败：${error}`);
+    } finally {
+      setChatSending(false);
+    }
+  }, [appendChat, applyPayload, localPreviewEnabled, processDuReply, syncPrivateBoardWithDu, toast]);
+
+  useEffect(() => {
+    continueDuTurnRef.current = continueDuTurn;
+  }, [continueDuTurn]);
+
+  const closePopup = useCallback(() => {
+    const next = continueAfterPopupRef.current;
+    continueAfterPopupRef.current = null;
+    setPopup(null);
+    if (next) {
+      void continueDuTurnRef.current?.(next.state, next.message);
+    }
+  }, []);
+
   const notifyRollResultToDu = useCallback(async (rolled: PrivateBoardPayload, message = "小玥刚掷完骰子。") => {
     const rollText = plainText(rolled.text || rolled.du_text || rolled.player_text || "").trim();
     appendChat({
@@ -985,7 +1090,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     command: string,
     options: { success?: string; notify?: boolean; notifyMessage?: string } = {},
   ) => {
-    if (busy || animating || chatSending || !payload?.state) return;
+    if (busy || !payload?.state) return;
     let nextPayload: PrivateBoardPayload | null = null;
     setBusy(true);
     setPopup(null);
@@ -1009,7 +1114,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     if (nextPayload && options.notify) {
       await notifyRollResultToDu(nextPayload, options.notifyMessage || "小玥处理了涩涩走格棋的惩罚任务。");
     }
-  }, [animating, appendChat, applyPayload, busy, chatSending, notifyRollResultToDu, payload?.state, toast]);
+  }, [appendChat, applyPayload, busy, notifyRollResultToDu, payload?.state, toast]);
 
   const submitPending = useCallback(() => {
     const text = pendingSubmission.trim();
@@ -1042,13 +1147,20 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
 
   const choosePending = useCallback((choiceId: string) => {
     const isDuel = pendingEvent?.type === "duel";
-    const isDuDuelPick = isDuel && pendingEvent?.current_actor === "du";
+    const duelActor = pendingEvent?.current_actor || pendingEvent?.actor;
+    const isMyDuelPick = isDuel && duelActor === "xinyue";
+    if (isDuel && !isMyDuelPick) {
+      toast("等待渡出拳。");
+      return;
+    }
     void executePendingCommand(`choose ${choiceId}`, {
-      success: isDuDuelPick ? "已替渡出拳，系统已判定。" : isDuel ? "已出拳。" : "已选择惩罚，棋局继续。",
-      notify: !isDuDuelPick,
-      notifyMessage: isDuel ? "小玥已在剪刀石头布对抗中出拳，请你发送【剪刀石头布：石头/剪刀/布】。" : "小玥处理完选择惩罚，棋局继续。",
+      success: isDuel ? "已出拳，等待渡出拳。" : "已选择惩罚，棋局继续。",
+      notify: true,
+      notifyMessage: isDuel
+        ? "小玥已在剪刀石头布对抗中出拳。请第一行单独发送【剪刀石头布：石头】、【剪刀石头布：剪刀】或【剪刀石头布：布】；描述另起一行写成【描述：...】。"
+        : "小玥处理完选择惩罚，棋局继续。",
     });
-  }, [executePendingCommand, pendingEvent?.current_actor, pendingEvent?.type]);
+  }, [executePendingCommand, pendingEvent?.actor, pendingEvent?.current_actor, pendingEvent?.type, toast]);
 
   const passPending = useCallback(() => {
     void executePendingCommand("pass", {
@@ -1376,7 +1488,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
               passCount={myPassCount}
               passSkipsUsed={passSkipsUsed}
               submission={pendingSubmission}
-              disabled={busy || animating || chatSending}
+              disabled={busy}
               onSubmissionChange={setPendingSubmission}
               onSubmit={submitPending}
               onApprove={approvePending}
@@ -1430,7 +1542,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         <div className="sese-popup-mask" role="dialog" aria-modal="true">
           <div className={`sese-popup ${popup.kind === "draw" ? `sese-popup-draw tone-${popup.tone || "penalty"}` : ""}`}>
             <div className="sese-popup-kicker">
-              {displaySystemText(popup.actorLabel ? `${popup.actorLabel}走到第 ${popup.position} 格` : `第 ${popup.position} 格`)}
+              {displaySystemText(popup.kicker || (popup.actorLabel ? `${popup.actorLabel}走到第 ${popup.position} 格` : `第 ${popup.position} 格`))}
             </div>
             {popup.kind === "draw" ? (
               <div className={`sese-draw-card ${popup.tone === "reward" && !drawRevealed ? "is-covered" : "is-revealed"}`}>
@@ -1456,7 +1568,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
             ) : null}
             {popup.kind === "draw" ? null : <h2>{displaySystemText(popup.title)}</h2>}
             {popup.tone === "reward" && !drawRevealed ? <p>正在洗牌...</p> : popupDetailText(popup) ? <p>{popupDetailText(popup)}</p> : null}
-            {popup.tone === "reward" && !drawRevealed ? null : <button type="button" onClick={() => setPopup(null)}>确 认</button>}
+            {popup.tone === "reward" && !drawRevealed ? null : <button type="button" onClick={closePopup}>确 认</button>}
           </div>
         </div>
       ) : null}
@@ -3579,6 +3691,7 @@ function PendingEventPanel({
     setSelectedRps("");
   }, [pending.id, pending.current_actor, pending.phase]);
   const activeRpsPick = normalizeRpsChoice(selectedRps || pending.picks?.xinyue);
+  const hasMyRpsPick = Boolean(normalizeRpsChoice(pending.picks?.xinyue));
   if (pending.type === "choice") {
     return (
       <div className="sese-pending-card">
@@ -3625,7 +3738,7 @@ function PendingEventPanel({
               title={choice.label}
               aria-label={choice.label}
               aria-pressed={activeRpsPick === choice.id}
-              disabled={disabled}
+              disabled={disabled || !isMyTurn || hasMyRpsPick}
               onClick={() => {
                 setSelectedRps(normalizeRpsChoice(choice.id));
                 onChoose(choice.id);
@@ -3635,6 +3748,11 @@ function PendingEventPanel({
             </button>
           ))}
         </div>
+        {!isMyTurn ? (
+          <div className="sese-pending-wait">
+            {hasMyRpsPick ? "你的出拳已记录，等待渡出拳。" : "等待渡出拳。"}
+          </div>
+        ) : null}
       </div>
     );
   }
