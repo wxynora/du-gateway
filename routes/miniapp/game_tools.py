@@ -2,12 +2,36 @@ from __future__ import annotations
 
 from flask import jsonify, request
 
+from config import TELEGRAM_PROACTIVE_TARGET_USER_ID
 from services.game_tool_runtime import execute_game_command, list_game_tools
+from utils.time_aware import now_beijing_iso
 
 
 def _get_panel_device_id() -> str:
     payload = request.environ.get("miniapp_panel_payload") or {}
     return str(payload.get("device_id") or "").strip()
+
+
+def _primary_tg_window_id() -> str:
+    try:
+        uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    except Exception:
+        uid = 0
+    return f"tg_{uid}" if uid > 0 else ""
+
+
+def _mark_private_board_tg_activity(window_id: str, target: str) -> None:
+    primary = _primary_tg_window_id()
+    target_s = str(target or "").strip()
+    window_s = str(window_id or "").strip()
+    if not primary or (window_s != primary and target_s != primary.removeprefix("tg_")):
+        return
+    try:
+        from storage import r2_store
+
+        r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+    except Exception:
+        return
 
 
 def _clean_private_board_text(text: str) -> str:
@@ -219,6 +243,8 @@ def register_routes(bp) -> None:
             return_only=True,
         )
         ok = bool((wakeup or {}).get("ok"))
+        if ok:
+            _mark_private_board_tg_activity(window_id, target)
         reply_text = str((wakeup or {}).get("reply_text") or (wakeup or {}).get("reply_preview") or "")
         if ok and mode == "final_note":
             payload = execute_game_command("private_board", "final_note_sent", save_id)

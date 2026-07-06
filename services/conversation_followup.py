@@ -33,6 +33,8 @@ from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 logger = get_logger(__name__)
 sumitalk_logger = get_logger("sumitalk")
 
+_DYNAMIC_SYSTEM_MARKER = "__dynamic__"
+
 FOLLOWUP_AFTER_MINUTES = 5
 FOLLOWUP_TICK_SECONDS = 60
 FOLLOWUP_MAX_CONSECUTIVE = 3
@@ -605,6 +607,7 @@ def _send_wakeup_event(
     allow_tool_only_reply: bool = False,
     skip_qq_group_activity: bool = False,
     system_event_user_summary: str = "",
+    dynamic_system_event: bool = False,
     spring_dream_archive_meta: dict | None = None,
     return_only: bool = False,
 ) -> dict:
@@ -661,7 +664,10 @@ def _send_wakeup_event(
     if generation_channel == "tg":
         body["messages"].insert(0, {"role": "system", "content": build_telegram_style_system(include_channel_hint=False)})
     if system_event and not image:
-        body["messages"].append({"role": "system", "content": message_content})
+        system_msg = {"role": "system", "content": message_content}
+        if dynamic_system_event:
+            system_msg[_DYNAMIC_SYSTEM_MARKER] = True
+        body["messages"].append(system_msg)
         body["messages"].append(
             {
                 "role": "user",
@@ -914,6 +920,7 @@ def send_private_board_wakeup(
         wakeup_kind="private_board",
         system_event=True,
         system_event_user_summary="请根据上面的涩涩走格棋游戏内交流回应小玥。",
+        dynamic_system_event=True,
         preferred_channel_override=preferred_channel,
         preferred_target_override=target,
         preferred_meta_override=preferred_meta,
