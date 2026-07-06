@@ -97,8 +97,9 @@ def _private_board_sync_text(
     elif pending_reviewer == "du" and pending_type == "review" and pending_phase == "submitted":
         rule_lines = [
             "当前有小玥提交的惩罚任务需要你验收。",
-            "验收按选项来，第一行只写选项本身：通过就写「【通过】」，打回就写「【打回】」。",
-            "如果可选项以后扩展成别的词，也同样只写「【选项名】」。",
+            "验收按选项来：如果打回，第一行只写「【打回】」。",
+            "如果通过，第一行写「【通过】」，第二行必须写「【掷骰】」；通过后立刻轮到你掷骰，不要等下一次同步。",
+            "如果可选项以后扩展成别的词，也同样第一行只写「【选项名】」。",
             "没有第一行精确选项时，只算局内聊天，不会触发验收。",
         ]
     else:
@@ -129,14 +130,19 @@ def _private_board_sync_text(
             if board_lines:
                 board_lines.append("")
             board_lines.extend(["当前棋局：", du_text])
+        note_text = _clean_private_board_text(message)
         parts = [
             "小玥正在和你玩「涩涩走格棋」。这是她刚掷完骰子后的自动同步，不是主聊天正文。",
             "你会看到本次掷骰结果和当前棋局；你只需要自然回应，不要解释工具、接口或系统流程。",
             *rule_lines,
+        ]
+        if note_text:
+            parts.extend(["", "顺带说明：", note_text])
+        parts.extend([
             "",
             "本次掷骰结果与当前棋局：",
             "\n".join(board_lines).strip(),
-        ]
+        ])
         return "\n".join(parts).strip()
 
     if mode == "state_update":

@@ -56,7 +56,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已完成：渡回复 `【掷骰】` 后执行他的 roll，如果新状态仍是渡回合或生成渡自己的 pending，会继续用 `state_update` 同步给渡；渡处理完 choice/review/Pass 后若因停步等规则又轮到渡，也会继续同步，避免停在“等待渡选择/行动”。
 - 已完成：`routes/miniapp/game_tools.py` 新增 `state_update` 同步文案，并补上 `review/questioning` 等渡出题、duel 等渡出拳的精确首行指令提示，避免把状态同步误写成“小玥刚掷骰”。
 - 已完成：局内聊天改为浏览器本地持久化，刷新页面不会丢；成功开下一局时重置为初始提示。当前是同设备同浏览器保留，不写入服务器存档。
-- 已完成：局内聊天输入和惩罚 textarea 不再被后台同步/动画加载态锁死；自动同步不再刷“已同步/正在回复”聊天泡泡。普通局内聊天不套 `【描述】`；真心话用 `【真心话出题：...】` / `【真心话回答：...】`，验收按选项写 `【通过】` / `【打回】`，只有 `反向诱惑` / `全部暴露！` / `羞耻台词大放送` / `自慰陈述` 这四个长篇提交任务直接用 `【描述：...】`。
+- 已完成：局内聊天输入和惩罚 textarea 不再被后台同步/动画加载态锁死；自动同步不再刷“已同步/正在回复”聊天泡泡。普通局内聊天不套 `【描述】`；真心话用 `【真心话出题：...】` / `【真心话回答：...】`，验收按选项写 `【通过】` / `【打回】`，只有 `反向诱惑` / `全部暴露！` / `羞耻台词大放送` / `自慰陈述` 这四个长篇提交任务直接用 `【描述：...】`；小玥点“通过”只本地结算，不单独同步给渡，通过结果会等小玥下一次掷骰同步时顺带说明；渡验收小玥任务时，`【通过】` 后必须同条带 `【掷骰】`，前端会一次吃掉通过和掷骰。
 - 已同步：开源版 `/Users/doraemon/Downloads/game-box/games/sese-board-game/frontend/SeseBoardGame.tsx` 按同一规则更新，使用 `ai/player` 命名，不带私有路由和私有人设。
 - 已验证：`cd miniapp && npx tsc --noEmit --pretty false`、`npm --prefix miniapp run build`、`python3 -m py_compile routes/miniapp/game_tools.py`、开源版 `python3 -m py_compile sese_board_game/engine.py preview_server.py && python3 tests/test_engine.py`、复用 `du-gateway/miniapp/node_modules` 的开源预览 `vite build` 均通过。
 - 未完成 / 下次继续：本轮不会手改线上存档；如果要把当前线上局面从旧 pending 继续下去，部署后让新前端接管，或再明确指定人工选择哪个 pending 选项。

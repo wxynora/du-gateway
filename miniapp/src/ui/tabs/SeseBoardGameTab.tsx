@@ -571,6 +571,12 @@ function duWantsRoll(text: string): boolean {
   return firstLine === "【掷骰】";
 }
 
+function duIncludesRollDirective(text: string): boolean {
+  return String(text || "")
+    .split(/\r?\n/)
+    .some((line) => line.trim() === "【掷骰】");
+}
+
 type DuDirective =
   | { kind: "roll"; body: string }
   | { kind: "submit"; body: string }
@@ -585,6 +591,7 @@ function directiveBody(lines: string[], startIndex: number): string {
     .slice(startIndex)
     .map((line) => {
       const trimmed = line.trim();
+      if (trimmed === "【掷骰】") return "";
       const description = trimmed.match(/^【描述[:：](.*)】$/);
       return description ? description[1].trim() : trimmed;
     })
@@ -725,6 +732,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
   const rollOnceRef = useRef<((options?: { notifyAfterUserRoll?: boolean }) => Promise<void>) | null>(null);
   const continueDuTurnRef = useRef<((state: PrivateBoardState | undefined, message?: string) => Promise<void>) | null>(null);
   const continueAfterPopupRef = useRef<{ state: PrivateBoardState | undefined; message: string } | null>(null);
+  const pendingRollSyncNoteRef = useRef("");
   const [payload, setPayload] = useState<PrivateBoardPayload | null>(null);
   const [displayPositions, setDisplayPositions] = useState<Partial<Record<Actor, number>>>(DEFAULT_POSITIONS);
   const [dice, setDice] = useState(1);
@@ -990,9 +998,19 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
       }
       if (pending?.reviewer === "du" && pending.type === "review" && pending.phase === "submitted") {
         if (directive.kind === "approve") {
+          const shouldRollAfterApprove = duIncludesRollDirective(duReply);
           const next = await executePrivateBoard("approve");
           applyPayload(next);
-          appendChat({ id: makeChatId("system"), speaker: "system", text: "渡验收通过，棋局继续。" }, true);
+          appendChat({
+            id: makeChatId("system"),
+            speaker: "system",
+            text: shouldRollAfterApprove ? "渡验收通过，并继续掷骰。" : "渡验收通过，棋局继续。",
+          }, true);
+          if (shouldRollAfterApprove && isDuTurnState(next.state)) {
+            await wait(260);
+            await rollOnceRef.current?.({ notifyAfterUserRoll: false });
+            return;
+          }
           await continueDuTurnRef.current?.(next.state, duFollowupMessage(next.state));
           return;
         }
@@ -1088,13 +1106,19 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
 
   const notifyRollResultToDu = useCallback(async (rolled: PrivateBoardPayload, message = "小玥刚掷完骰子。") => {
     const rollText = plainText(rolled.text || rolled.du_text || rolled.player_text || "").trim();
+    const pendingNote = pendingRollSyncNoteRef.current.trim();
+    const baseMessage = message.trim() === "小玥刚掷完骰子。" ? "" : message.trim();
+    const syncMessage = [pendingNote, baseMessage].filter(Boolean).join("\n");
     setDuSyncing(true);
     try {
       const next = await syncPrivateBoardWithDu({
         mode: "roll_result",
-        message,
+        message: syncMessage,
         rollText,
       }, rolled.state);
+      if (pendingNote && pendingRollSyncNoteRef.current.trim() === pendingNote) {
+        pendingRollSyncNoteRef.current = "";
+      }
       if (next.state) {
         applyPayload({
           ok: true,
@@ -1178,7 +1202,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
 
   const executePendingCommand = useCallback(async (
     command: string,
-    options: { success?: string; notify?: boolean; notifyMessage?: string } = {},
+    options: { success?: string; syncAfter?: boolean; syncMessage?: string; deferSyncMessage?: string } = {},
   ) => {
     if (busy || !payload?.state) return;
     let nextPayload: PrivateBoardPayload | null = null;
@@ -1196,15 +1220,18 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
       if (options.success) {
         appendChat({ id: makeChatId("system"), speaker: "system", text: options.success }, true);
       }
+      if (options.deferSyncMessage?.trim()) {
+        pendingRollSyncNoteRef.current = options.deferSyncMessage.trim();
+      }
     } catch (e: any) {
       toast(`处理惩罚任务失败：${e?.message || e}`);
     } finally {
       setBusy(false);
     }
-    if (nextPayload && options.notify) {
-      await notifyRollResultToDu(nextPayload, options.notifyMessage || "小玥处理了涩涩走格棋的惩罚任务。");
+    if (nextPayload && options.syncAfter) {
+      await continueDuTurnRef.current?.(nextPayload.state, options.syncMessage || duFollowupMessage(nextPayload.state));
     }
-  }, [appendChat, applyPayload, busy, notifyRollResultToDu, payload?.state, toast]);
+  }, [appendChat, applyPayload, busy, payload?.state, toast]);
 
   const submitPending = useCallback(() => {
     const text = pendingSubmission.trim();
@@ -1214,24 +1241,23 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     }
     void executePendingCommand(`submit ${text}`, {
       success: "已提交任务，等渡验收。",
-      notify: true,
-      notifyMessage: "小玥提交了惩罚任务，请你验收。",
+      syncAfter: true,
+      syncMessage: "小玥提交了惩罚任务，请你验收。",
     });
   }, [executePendingCommand, pendingSubmission, toast]);
 
   const approvePending = useCallback(() => {
     void executePendingCommand("approve", {
       success: "你通过了任务，棋局继续。",
-      notify: true,
-      notifyMessage: "小玥通过了你的惩罚任务。",
+      deferSyncMessage: "小玥刚刚通过了你的惩罚任务。",
     });
   }, [executePendingCommand]);
 
   const rejectPending = useCallback(() => {
     void executePendingCommand("reject", {
       success: "你打回了任务，等渡重新提交。",
-      notify: true,
-      notifyMessage: "小玥打回了你的惩罚任务，请重新提交。",
+      syncAfter: true,
+      syncMessage: "小玥打回了你的惩罚任务，请重新提交。",
     });
   }, [executePendingCommand]);
 
@@ -1245,8 +1271,8 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     }
     void executePendingCommand(`choose ${choiceId}`, {
       success: isDuel ? "已出拳，等待渡出拳。" : "已选择惩罚，棋局继续。",
-      notify: true,
-      notifyMessage: isDuel
+      syncAfter: true,
+      syncMessage: isDuel
         ? "小玥已在剪刀石头布对抗中出拳。请第一行单独发送【剪刀石头布：石头】、【剪刀石头布：剪刀】或【剪刀石头布：布】。"
         : "小玥处理完选择惩罚，棋局继续。",
     });
@@ -1255,8 +1281,8 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
   const passPending = useCallback(() => {
     void executePendingCommand("pass", {
       success: "已使用Pass卡跳过惩罚。",
-      notify: true,
-      notifyMessage: "小玥使用Pass卡跳过了惩罚任务。",
+      syncAfter: true,
+      syncMessage: "小玥使用Pass卡跳过了惩罚任务。",
     });
   }, [executePendingCommand]);
 
