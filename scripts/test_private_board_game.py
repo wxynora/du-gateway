@@ -811,6 +811,58 @@ def test_private_board_migrates_ended_save_without_final_note() -> None:
         _assert("避孕套" not in str(payload.get("player_text") or ""), "invalid prop should not leak into player text")
 
 
+def test_private_board_wakeup_uses_dynamic_system() -> None:
+    from services import conversation_followup as cf
+    from storage import upstream_store
+
+    captured: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"choices":[{"message":{"content":"ok"}}]}'
+        text = content.decode("utf-8")
+
+        def json(self) -> dict:
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    old_model = upstream_store.get_cached_active_model
+    old_post = cf.requests.post
+    old_preference = cf._choice_dialog_delivery_preference
+    try:
+        upstream_store.get_cached_active_model = lambda refresh_if_missing=False: "test-model"
+        cf._choice_dialog_delivery_preference = lambda target: ("tg", str(target or ""), {})
+        cf.requests.post = lambda url, headers=None, json=None, timeout=None: captured.update(
+            {"url": url, "headers": headers, "json": json}
+        ) or FakeResponse()
+
+        result = cf.send_private_board_wakeup(
+            window_id="tg_123",
+            target="123",
+            event_text="小玥同步了本轮涩涩走格棋状态：等待渡选择。",
+            preferred_channel="tg",
+            return_only=True,
+        )
+
+        _assert(bool(result.get("ok")), f"private board wakeup should succeed: {result}")
+        messages = ((captured.get("json") or {}).get("messages") or [])
+        board_system = next((msg for msg in messages if "涩涩走格棋" in str(msg.get("content") or "")), None)
+        _assert(isinstance(board_system, dict), "private board event should stay in a system message")
+        _assert(board_system.get("role") == "system", "private board event should be a system event")
+        _assert(board_system.get("__dynamic__") is True, "private board event must be dynamic system, not static prefix")
+        _assert(
+            all(
+                msg.get("__dynamic__") or "涩涩走格棋" not in str(msg.get("content") or "")
+                for msg in messages
+                if isinstance(msg, dict) and msg.get("role") == "system"
+            ),
+            "private board content must not appear in a plain static system message",
+        )
+    finally:
+        upstream_store.get_cached_active_model = old_model
+        cf.requests.post = old_post
+        cf._choice_dialog_delivery_preference = old_preference
+
+
 if __name__ == "__main__":
     test_private_board_views()
     test_private_board_reset_self_cell()
@@ -834,4 +886,5 @@ if __name__ == "__main__":
     test_private_board_finish_generates_final_note()
     test_private_board_winner_can_append_final_status()
     test_private_board_migrates_ended_save_without_final_note()
+    test_private_board_wakeup_uses_dynamic_system()
     print("private_board_game tests ok")
