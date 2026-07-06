@@ -24,6 +24,7 @@ VOICE_CALL_TOOL_NAMES = ("start_voice_call",)
 DU_SURF_TOOL_NAMES = ("du_surf",)
 SEX_PLAY_DRAW_TOOL_NAMES = ("sex_play_draw",)
 SECRET_DRAWER_TOOL_NAMES = ("secret_drawer",)
+DU_PAGE_TOOL_NAMES = ("du_page",)
 
 
 def get_gateway_xiaoai_tools() -> List[dict]:
@@ -275,8 +276,18 @@ def execute_secret_drawer_tool(name: str, arguments: dict) -> str:
     return _execute(name, arguments if isinstance(arguments, dict) else {})
 
 
+def execute_du_page_tool(name: str, arguments: dict) -> str:
+    """执行渡的页笺工具，返回给渡的 JSON 字符串。"""
+    if name not in DU_PAGE_TOOL_NAMES:
+        return json.dumps({"ok": False, "error": "UNKNOWN_TOOL"}, ensure_ascii=False)
+    from services.du_pages import execute_du_page_tool as _execute
+
+    return _execute(name, arguments if isinstance(arguments, dict) else {})
+
+
 def get_gateway_tools_for_inject() -> List[dict]:
     """返回不依赖 Notion 开关的网关工具。"""
+    from services.du_pages import get_du_page_tools_for_inject
     from services.secret_drawer import get_secret_drawer_tools_for_inject
 
     return [
@@ -285,6 +296,7 @@ def get_gateway_tools_for_inject() -> List[dict]:
         *get_gateway_sex_play_draw_tools(),
         *get_gateway_du_surf_tools(),
         *get_secret_drawer_tools_for_inject(),
+        *get_du_page_tools_for_inject(),
     ]
 
 

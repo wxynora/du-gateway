@@ -12,10 +12,12 @@ from services.forum_mcp_client import (
 from services.device_action_tools import (
     TOOL_CREATE_CALENDAR_EVENT,
     TOOL_CREATE_SYSTEM_ALARM,
+    TOOL_RECALL_MESSAGE,
     TOOL_REQUEST_SCREEN_CHECK,
     TOOL_SHOW_CHOICE_DIALOG,
     execute_create_calendar_event,
     execute_create_system_alarm,
+    execute_recall_message,
     execute_request_screen_check,
     execute_show_choice_dialog,
 )
@@ -229,6 +231,7 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
         TOOL_CREATE_SYSTEM_ALARM,
         TOOL_CREATE_CALENDAR_EVENT,
         TOOL_SHOW_CHOICE_DIALOG,
+        TOOL_RECALL_MESSAGE,
         TOOL_REQUEST_SCREEN_CHECK,
     ]
     if mode == "daily":
@@ -498,6 +501,8 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         return execute_create_calendar_event(args)
     if name == "show_choice_dialog":
         return execute_show_choice_dialog(args)
+    if name == "recall_message":
+        return execute_recall_message(args)
     if name == "request_screen_check":
         return execute_request_screen_check(args)
 

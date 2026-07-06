@@ -20,19 +20,31 @@ export type SumiTalkChatRealtimeEvent = {
   duration_ms?: number;
 };
 
+export type SumiTalkChatUiDeviceAction = {
+  id?: string;
+  type?: string;
+  payload?: Record<string, any>;
+};
+
 type Options = {
   enabled: boolean;
   deviceId: string;
   windowId: string;
   onEvent: (event: SumiTalkChatRealtimeEvent) => void;
+  onChatUiActions?: (actions: SumiTalkChatUiDeviceAction[], source?: string) => void;
 };
 
-export function useSumiTalkChatRealtime({ enabled, deviceId, windowId, onEvent }: Options) {
+export function useSumiTalkChatRealtime({ enabled, deviceId, windowId, onEvent, onChatUiActions }: Options) {
   const onEventRef = useRef(onEvent);
+  const onChatUiActionsRef = useRef(onChatUiActions);
 
   useEffect(() => {
     onEventRef.current = onEvent;
   }, [onEvent]);
+
+  useEffect(() => {
+    onChatUiActionsRef.current = onChatUiActions;
+  }, [onChatUiActions]);
 
   useEffect(() => {
     const did = String(deviceId || "").trim();
@@ -73,9 +85,15 @@ export function useSumiTalkChatRealtime({ enabled, deviceId, windowId, onEvent }
         } catch {
           return;
         }
-        if (data?.type !== "sumitalk_chat_event") return;
-        const payload = data?.event && typeof data.event === "object" ? data.event : data;
-        onEventRef.current(payload);
+        if (data?.type === "sumitalk_chat_event") {
+          const payload = data?.event && typeof data.event === "object" ? data.event : data;
+          onEventRef.current(payload);
+          return;
+        }
+        if (data?.type === "chat_ui_device_actions") {
+          const actions = Array.isArray(data?.actions) ? data.actions.filter((item: any) => item && typeof item === "object") : [];
+          if (actions.length) onChatUiActionsRef.current?.(actions, String(data?.source || "realtime"));
+        }
       };
       socket.onclose = () => {
         if (!cancelled) scheduleReconnect();

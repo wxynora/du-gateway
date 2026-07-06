@@ -6,7 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { StringDecoder } = require("string_decoder");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 const { Readable } = require("stream");
 
 const PORT = parseInt(process.env.PORT || "8082");
@@ -26,6 +26,24 @@ const CLAUDE_OAUTH_FILE = process.env.CLAUDE_OAUTH_FILE || "";
 const CLAUDE_OAUTH_JSON = process.env.CLAUDE_OAUTH_JSON || "";
 const CLAUDE_OAUTH_KEYCHAIN_SERVICE =
   process.env.CLAUDE_OAUTH_KEYCHAIN_SERVICE || "Claude Code-credentials";
+const CLAUDE_OAUTH_TOKEN_URL =
+  process.env.CLAUDE_OAUTH_TOKEN_URL || "https://platform.claude.com/v1/oauth/token";
+const CLAUDE_OAUTH_CLIENT_ID =
+  process.env.CLAUDE_OAUTH_CLIENT_ID || "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CLAUDE_OAUTH_REFRESH_PYTHON =
+  process.env.CLAUDE_OAUTH_REFRESH_PYTHON || selectPythonWithRequests();
+const CLAUDE_OAUTH_REFRESH_TIMEOUT_SECONDS = Math.max(
+  1,
+  parseInt(process.env.CLAUDE_OAUTH_REFRESH_TIMEOUT_SECONDS || "10", 10)
+);
+const CLAUDE_OAUTH_REFRESH_MAX_ATTEMPTS = Math.max(
+  1,
+  parseInt(process.env.CLAUDE_OAUTH_REFRESH_MAX_ATTEMPTS || "3", 10)
+);
+const CLAUDE_OAUTH_REFRESH_PROCESS_TIMEOUT_MS = Math.max(
+  5000,
+  parseInt(process.env.CLAUDE_OAUTH_REFRESH_PROCESS_TIMEOUT_MS || "45000", 10)
+);
 const REFRESH_SKEW_MS = Math.max(
   60,
   parseInt(process.env.CLAUDE_REFRESH_SKEW_SECONDS || "60", 10)
@@ -77,9 +95,39 @@ let cachedOAuthSource = "";
 let lastUnauthorizedAt = 0;
 let lastUnauthorizedRoute = "";
 let lastRateLimitSnapshot = null;
+let refreshInFlight = null;
 
 function log(msg) {
   console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
+}
+
+function pythonHasRequests(candidate) {
+  try {
+    execFileSync(candidate, ["-c", "import requests"], { stdio: "ignore", timeout: 3000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function selectPythonWithRequests() {
+  const candidates = [
+    process.env.VIRTUAL_ENV ? path.join(process.env.VIRTUAL_ENV, "bin/python") : "",
+    path.join(process.cwd(), ".venv/bin/python"),
+    path.join(__dirname, "..", ".venv", "bin", "python"),
+    "/opt/homebrew/bin/python3",
+    "/usr/local/bin/python3",
+    "/usr/bin/python3",
+    "python3",
+  ];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    if (!candidate || seen.has(candidate)) continue;
+    seen.add(candidate);
+    if (candidate.includes("/") && !fs.existsSync(candidate)) continue;
+    if (pythonHasRequests(candidate)) return candidate;
+  }
+  return "python3";
 }
 
 function readKeychainOAuth() {
@@ -110,15 +158,51 @@ function normalizeOAuth(raw) {
     obj.metadata ||
     obj.tokens ||
     obj;
-  const accessToken = src.accessToken || src.access_token;
-  const refreshToken = src.refreshToken || src.refresh_token;
-  if (!accessToken) {
-    throw new Error("OAuth credentials must include accessToken/access_token");
+  const accessToken = src.accessToken || src.access_token || src.access || "";
+  const refreshToken = src.refreshToken || src.refresh_token || src.refresh || "";
+  if (!accessToken && !refreshToken) {
+    throw new Error("OAuth credentials must include accessToken/access_token or refreshToken/refresh_token");
   }
   return {
     accessToken,
     refreshToken,
     expiresAt: parseExpiresAt(src.expiresAt || src.expires_at || src.expiry || src.expires || src.expired),
+  };
+}
+
+function cloneJson(value) {
+  if (!value || typeof value !== "object") return {};
+  return JSON.parse(JSON.stringify(value));
+}
+
+function oauthCredentialContainer(raw) {
+  const root = raw && typeof raw === "object" ? raw : {};
+  for (const key of ["claudeAiOauth", "oauth", "metadata", "tokens"]) {
+    if (root[key] && typeof root[key] === "object" && !Array.isArray(root[key])) {
+      return root[key];
+    }
+  }
+  return root;
+}
+
+function buildRefreshedOAuthRaw(refreshed) {
+  const root = cloneJson(cachedOAuthRaw);
+  const target = oauthCredentialContainer(root);
+  const expiresAtMs = refreshed.expiresAt;
+  target.accessToken = refreshed.accessToken;
+  target.refreshToken = refreshed.refreshToken;
+  target.expiresAt = expiresAtMs;
+  if ("access_token" in target) target.access_token = refreshed.accessToken;
+  if ("refresh_token" in target) target.refresh_token = refreshed.refreshToken;
+  if ("access" in target) target.access = refreshed.accessToken;
+  if ("refresh" in target) target.refresh = refreshed.refreshToken;
+  if ("expires_at" in target) target.expires_at = Math.floor(expiresAtMs / 1000);
+  if ("expiry" in target) target.expiry = expiresAtMs;
+  if ("expires" in target) target.expires = expiresAtMs;
+  return root && Object.keys(root).length ? root : {
+    accessToken: refreshed.accessToken,
+    refreshToken: refreshed.refreshToken,
+    expiresAt: expiresAtMs,
   };
 }
 
@@ -153,7 +237,7 @@ function writeSyncedOAuthCredentials(raw) {
     throw new Error("CLAUDE_OAUTH_FILE is required for OAuth sync");
   }
   const normalized = normalizeOAuth(raw);
-  if (!normalized.expiresAt || normalized.expiresAt <= Date.now()) {
+  if (!normalized.refreshToken && (!normalized.expiresAt || normalized.expiresAt <= Date.now())) {
     throw new Error("Synced OAuth token is already expired");
   }
   fs.mkdirSync(path.dirname(CLAUDE_OAUTH_FILE), { recursive: true, mode: 0o700 });
@@ -166,24 +250,161 @@ function writeSyncedOAuthCredentials(raw) {
   return normalized;
 }
 
-async function getAccessToken() {
+function refreshOAuthWithPython(refreshToken) {
+  return new Promise((resolve, reject) => {
+    const script = `
+import json
+import sys
+import time
+
+try:
+    import requests
+except Exception as exc:
+    print(json.dumps({"error": "missing_requests", "message": str(exc)}), file=sys.stderr)
+    sys.exit(21)
+
+payload = json.loads(sys.stdin.read() or "{}")
+token_url = payload["token_url"]
+client_id = payload["client_id"]
+refresh_token = payload["refresh_token"]
+timeout_s = int(payload.get("timeout_s") or 10)
+max_attempts = int(payload.get("max_attempts") or 3)
+
+last_error = None
+for attempt in range(max_attempts):
+    if attempt > 0:
+        time.sleep(2 ** (attempt - 1))
+    try:
+        resp = requests.post(
+            token_url,
+            json={
+                "grant_type": "refresh_token",
+                "client_id": client_id,
+                "refresh_token": refresh_token,
+            },
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            timeout=timeout_s,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            print(json.dumps({
+                "accessToken": data["access_token"],
+                "refreshToken": data["refresh_token"],
+                "expiresAt": int((time.time() + int(data["expires_in"]) - 300) * 1000),
+            }))
+            sys.exit(0)
+        if 500 <= resp.status_code < 600:
+            last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            continue
+        print(json.dumps({
+            "error": "permanent_refresh_failure",
+            "status": resp.status_code,
+            "body": resp.text[:500],
+        }), file=sys.stderr)
+        sys.exit(20)
+    except (requests.Timeout, requests.ConnectionError) as exc:
+        last_error = f"{type(exc).__name__}: {exc}"
+        continue
+    except Exception as exc:
+        print(json.dumps({"error": "unexpected_refresh_error", "message": str(exc)}), file=sys.stderr)
+        sys.exit(21)
+
+print(json.dumps({"error": "refresh_gave_up", "last": last_error}), file=sys.stderr)
+sys.exit(22)
+`.trim();
+
+    const child = spawn(CLAUDE_OAUTH_REFRESH_PYTHON, ["-c", script], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: process.env,
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("OAuth refresh helper timed out"));
+    }, CLAUDE_OAUTH_REFRESH_PROCESS_TIMEOUT_MS);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        const details = stderr.trim() || stdout.trim() || `exit ${code}`;
+        reject(new Error(`OAuth refresh failed: ${details.slice(0, 700)}`));
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdout.trim());
+        if (!parsed.accessToken || !parsed.refreshToken || !parsed.expiresAt) {
+          throw new Error("refresh response missing token fields");
+        }
+        resolve(parsed);
+      } catch (e) {
+        reject(new Error(`OAuth refresh helper returned invalid JSON: ${e.message}`));
+      }
+    });
+    child.stdin.end(
+      JSON.stringify({
+        token_url: CLAUDE_OAUTH_TOKEN_URL,
+        client_id: CLAUDE_OAUTH_CLIENT_ID,
+        refresh_token: refreshToken,
+        timeout_s: CLAUDE_OAUTH_REFRESH_TIMEOUT_SECONDS,
+        max_attempts: CLAUDE_OAUTH_REFRESH_MAX_ATTEMPTS,
+      })
+    );
+  });
+}
+
+async function refreshOAuthCredentials(reason) {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    if (!cachedOAuth) {
+      loadOAuthCredentials();
+    }
+    const refreshToken = cachedOAuth.refreshToken;
+    if (!refreshToken) {
+      throw new Error("Claude OAuth refresh token is missing");
+    }
+    log(`Refreshing Claude OAuth token via gist-compatible requests client (${reason || "token refresh"})`);
+    const refreshed = await refreshOAuthWithPython(refreshToken);
+    const raw = buildRefreshedOAuthRaw(refreshed);
+    if (CLAUDE_OAUTH_FILE) {
+      writeSyncedOAuthCredentials(raw);
+    } else {
+      cachedOAuthRaw = raw;
+      cachedOAuth = normalizeOAuth(raw);
+      cachedOAuthSource = cachedOAuthSource || "memory";
+    }
+    log(`OAuth refreshed by proxy (expires ${new Date(cachedOAuth.expiresAt).toLocaleString()})`);
+    return cachedOAuth;
+  })().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+function oauthExpiresInSeconds() {
+  if (!cachedOAuth?.expiresAt) return 0;
+  return Math.floor((cachedOAuth.expiresAt - Date.now()) / 1000);
+}
+
+async function getAccessToken(routeLabel = "forwarded request") {
   if (!cachedOAuth) {
     loadOAuthCredentials();
   }
-  if (Date.now() > cachedOAuth.expiresAt - REFRESH_SKEW_MS) {
-    const staleAccessToken = cachedOAuth.accessToken;
-    log("Token is near expiry; re-reading synced credentials instead of proxy refresh");
-    loadOAuthCredentials("re-read");
-    if (
-      cachedOAuth.accessToken === staleAccessToken &&
-      Date.now() > cachedOAuth.expiresAt - REFRESH_SKEW_MS
-    ) {
-      throw new Error(
-        `Claude OAuth token is expired or near expiry (expires ${new Date(
-          cachedOAuth.expiresAt
-        ).toLocaleString()}); proxy-side refresh is disabled, waiting for local token sync`
-      );
-    }
+  const expiresInSeconds = oauthExpiresInSeconds();
+  if (expiresInSeconds <= Math.ceil(REFRESH_SKEW_MS / 1000)) {
+    log(
+      `Holding ${routeLabel} until OAuth refresh completes (expires in ${expiresInSeconds}s)`
+    );
+    await refreshOAuthCredentials(`${routeLabel} near expiry`);
   }
   return cachedOAuth.accessToken;
 }
@@ -257,16 +478,6 @@ function claudeBillingSystemBlock(firstText) {
 
 function isClaudeBillingSystemBlock(item) {
   return String(item?.text || "").trimStart().startsWith(BILLING_HEADER_PREFIX);
-}
-
-function containsRefreshToken(value) {
-  if (!value || typeof value !== "object") return false;
-  if (Array.isArray(value)) return value.some(containsRefreshToken);
-  for (const [key, child] of Object.entries(value)) {
-    if (key === "refreshToken" || key === "refresh_token") return true;
-    if (containsRefreshToken(child)) return true;
-  }
-  return false;
 }
 
 function safeJsonParse(value, fallback = {}) {
@@ -1000,10 +1211,11 @@ function oauthStatusPayload() {
       ).toLocaleString()})`
     );
   }
-  const expiresInSeconds = Math.floor((cachedOAuth.expiresAt - Date.now()) / 1000);
+  const expiresInSeconds = oauthExpiresInSeconds();
   return {
     ok: true,
     source: cachedOAuthSource || "unknown",
+    canRefresh: Boolean(cachedOAuth.refreshToken),
     expiresAt: cachedOAuth.expiresAt,
     expiresInSeconds,
     stale: expiresInSeconds <= Math.ceil(REFRESH_SKEW_MS / 1000),
@@ -1151,34 +1363,32 @@ async function retryGetAfterUnauthorized(proxyRes, path, routeLabel) {
   lastUnauthorizedAt = Date.now();
   lastUnauthorizedRoute = routeLabel || path || "";
   const staleAccessToken = cachedOAuth?.accessToken || "";
-  log(`Got 401 from Anthropic for ${routeLabel}; re-reading synced credentials only${hint}`);
+  log(`Got 401 from Anthropic for ${routeLabel}; refreshing OAuth token${hint}`);
 
   try {
-    loadOAuthCredentials("re-read after 401");
+    await refreshOAuthCredentials(`401 from ${routeLabel || path || "Anthropic"}`);
   } catch (e) {
-    log(`OAuth credential re-read failed after 401: ${e.message}`);
+    log(`OAuth refresh failed after 401: ${e.message}`);
     return makeJsonProxyResponse(401, {
       error: {
         type: "authentication_error",
-        message:
-          "Claude OAuth token was rejected; proxy-side refresh is disabled and synced credentials could not be re-read",
+        message: `Claude OAuth token was rejected and proxy refresh failed: ${e.message}`,
       },
     });
   }
 
   if (!cachedOAuth.accessToken || cachedOAuth.accessToken === staleAccessToken) {
-    log("OAuth credentials unchanged after 401; proxy-side refresh is disabled");
+    log("OAuth credentials unchanged after 401 refresh");
     return makeJsonProxyResponse(401, {
       error: {
         type: "authentication_error",
-        message:
-          "Claude OAuth token was rejected; proxy-side refresh is disabled, waiting for local token sync",
+        message: "Claude OAuth token was rejected and refresh did not produce a new access token",
       },
     });
   }
 
   const retryRes = await proxyGetAnthropic(cachedOAuth.accessToken, path);
-  log(`<= ${retryRes.statusCode} ${routeLabel} (retry after synced token re-read)`);
+  log(`<= ${retryRes.statusCode} ${routeLabel} (retry after proxy refresh)`);
   return retryRes;
 }
 
@@ -1188,34 +1398,32 @@ async function retryAfterUnauthorized(proxyRes, path, payload, routeLabel) {
   lastUnauthorizedAt = Date.now();
   lastUnauthorizedRoute = routeLabel || path || "";
   const staleAccessToken = cachedOAuth?.accessToken || "";
-  log(`Got 401 from Anthropic for ${routeLabel}; re-reading synced credentials only${hint}`);
+  log(`Got 401 from Anthropic for ${routeLabel}; refreshing OAuth token${hint}`);
 
   try {
-    loadOAuthCredentials("re-read after 401");
+    await refreshOAuthCredentials(`401 from ${routeLabel || path || "Anthropic"}`);
   } catch (e) {
-    log(`OAuth credential re-read failed after 401: ${e.message}`);
+    log(`OAuth refresh failed after 401: ${e.message}`);
     return makeJsonProxyResponse(401, {
       error: {
         type: "authentication_error",
-        message:
-          "Claude OAuth token was rejected; proxy-side refresh is disabled and synced credentials could not be re-read",
+        message: `Claude OAuth token was rejected and proxy refresh failed: ${e.message}`,
       },
     });
   }
 
   if (!cachedOAuth.accessToken || cachedOAuth.accessToken === staleAccessToken) {
-    log("OAuth credentials unchanged after 401; proxy-side refresh is disabled");
+    log("OAuth credentials unchanged after 401 refresh");
     return makeJsonProxyResponse(401, {
       error: {
         type: "authentication_error",
-        message:
-          "Claude OAuth token was rejected; proxy-side refresh is disabled, waiting for local token sync",
+        message: "Claude OAuth token was rejected and refresh did not produce a new access token",
       },
     });
   }
 
   const retryRes = await proxyToAnthropic(cachedOAuth.accessToken, path, payload);
-  log(`<= ${retryRes.statusCode} ${routeLabel} (retry after synced token re-read)`);
+  log(`<= ${retryRes.statusCode} ${routeLabel} (retry after proxy refresh)`);
   return retryRes;
 }
 
@@ -1273,15 +1481,13 @@ const server = http.createServer(async (req, res) => {
     } catch {
       return sendError(res, 400, "Invalid JSON body");
     }
-    if (containsRefreshToken(payload)) {
-      return sendError(res, 400, "refresh token must not be synced");
-    }
     try {
       const synced = writeSyncedOAuthCredentials(payload);
-      log(`OAuth synced by HTTP (expires ${new Date(synced.expiresAt).toLocaleString()})`);
+      log(`OAuth credentials synced by HTTP (expires ${new Date(synced.expiresAt).toLocaleString()})`);
       return sendJson(res, 200, {
         ok: true,
         source: cachedOAuthSource,
+        canRefresh: Boolean(synced.refreshToken),
         expiresAt: synced.expiresAt,
         expiresInSeconds: Math.floor((synced.expiresAt - Date.now()) / 1000),
         lastUnauthorizedAt,
@@ -1303,7 +1509,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && req.url.startsWith("/v1/models")) {
     log(`=> ${req.method} ${req.url}`);
     try {
-      const token = await getAccessToken();
+      const token = await getAccessToken(req.url);
       let proxyRes = await proxyGetAnthropic(token, req.url);
       log(`<= ${proxyRes.statusCode} ${req.url}`);
 
@@ -1335,7 +1541,7 @@ const server = http.createServer(async (req, res) => {
   const isOpenAI = req.url.startsWith("/v1/chat/completions");
 
   try {
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.url);
 
     if (isOpenAI) {
       // ─── OpenAI 兼容路径 ───

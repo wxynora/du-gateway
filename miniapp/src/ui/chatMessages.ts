@@ -68,6 +68,8 @@ export type ChatDraftMessage = {
   };
   attachments?: ChatAttachment[];
   displayParts?: ChatDisplayPart[];
+  recallNotice?: boolean;
+  recallOriginalMessageId?: string;
 };
 
 const JSON_TEXT_FIELD_RE = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/;
@@ -738,6 +740,8 @@ export type ChatMessageGroup = {
     systemCard?: SumiTalkSystemCard | null;
     attachments?: ChatAttachment[];
     displayPart?: ChatDisplayPart;
+    recallNotice?: boolean;
+    recallOriginalMessageId?: string;
   }>;
 };
 
@@ -1054,6 +1058,8 @@ export function groupChatMessages(
     const normalizedContent = String(msg?.content || "").trim();
     const normalizedReasoning = String(msg?.reasoning || "").trim();
     const attachments = normalizeChatAttachments(msg?.attachments);
+    const recallNotice = Boolean((msg as any)?.recallNotice);
+    const recallOriginalMessageId = String((msg as any)?.recallOriginalMessageId || "").trim() || undefined;
     if (!normalizedContent && !normalizedReasoning && !attachments.length && !displayParts.length) continue;
     const finalContent = displayParts.length ? stripDisplayedTextPrefixes(normalizedContent, displayParts) : normalizedContent;
     const displaySegments = displayParts.map((part) => ({
@@ -1090,7 +1096,19 @@ export function groupChatMessages(
         systemCard: segment.systemCard,
         displayPart: (segment as any).displayPart,
         attachments: index === 0 ? attachments : undefined,
+        recallNotice,
+        recallOriginalMessageId,
       }));
+    if (recallNotice) {
+      groups.push({
+        id: msg.id,
+        role: msg.role,
+        createdAt: msg.createdAt,
+        lastCreatedAt: msg.createdAt,
+        parts: [...safeParts],
+      });
+      continue;
+    }
     const last = groups[groups.length - 1];
     if (last && last.role === msg.role && !shouldShowGroupTime(msg.createdAt, last.lastCreatedAt)) {
       last.parts.push(...safeParts);

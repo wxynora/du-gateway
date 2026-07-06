@@ -103,6 +103,19 @@ def publish_device_actions(device_id: str = "", actions: list[dict] | None = Non
     })
 
 
+def publish_chat_ui_device_actions(device_id: str = "", window_id: str = "", actions: list[dict] | None = None) -> bool:
+    rows = [row for row in (actions or []) if isinstance(row, dict)]
+    if not rows:
+        return False
+    return _post_event({
+        "type": "chat_ui_device_actions",
+        "event_id": uuid4().hex,
+        "device_id": str(device_id or "").strip(),
+        "window_id": str(window_id or "").strip(),
+        "actions": rows,
+    })
+
+
 def publish_codex_group_task(task: dict | None) -> bool:
     if not isinstance(task, dict):
         return False

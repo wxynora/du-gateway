@@ -757,14 +757,16 @@ def _append_content_to_page(page_id: str, content: str, add_timestamp: bool = Tr
     return True, "已追加"
 
 
-def execute_tool(name: str, arguments: dict) -> str:
+def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str:
     """执行单个工具（Notion、网关、小爱、天气、黄历等），返回给模型的字符串结果。"""
     from services.gateway_tools import (
+        DU_PAGE_TOOL_NAMES,
         DU_SURF_TOOL_NAMES,
         SECRET_DRAWER_TOOL_NAMES,
         SEX_PLAY_DRAW_TOOL_NAMES,
         VOICE_CALL_TOOL_NAMES,
         XIAOAI_TOOL_NAMES,
+        execute_du_page_tool,
         execute_du_surf_tool,
         execute_secret_drawer_tool,
         execute_sex_play_draw_tool,
@@ -776,10 +778,6 @@ def execute_tool(name: str, arguments: dict) -> str:
         from services.wenyou_service import execute_player_tool
 
         return execute_player_tool(int(WENYOU_SESSION_ID or 0), name, arguments if isinstance(arguments, dict) else {})
-    if name == "publish_html_preview":
-        from services.html_preview_tools import execute_publish_html_preview
-
-        return execute_publish_html_preview(arguments if isinstance(arguments, dict) else {})
     if name in XIAOAI_TOOL_NAMES:
         return execute_xiaoai_tool(name, arguments)
     if name in VOICE_CALL_TOOL_NAMES:
@@ -790,6 +788,8 @@ def execute_tool(name: str, arguments: dict) -> str:
         return execute_du_surf_tool(name, arguments)
     if name in SECRET_DRAWER_TOOL_NAMES:
         return execute_secret_drawer_tool(name, arguments)
+    if name in DU_PAGE_TOOL_NAMES:
+        return execute_du_page_tool(name, arguments)
     if name in ("get_time_info", "get_weather", "get_almanac"):
         from services.weather_almanac import execute_weather_almanac_tool
         return execute_weather_almanac_tool(name, arguments)
@@ -806,6 +806,13 @@ def execute_tool(name: str, arguments: dict) -> str:
         execute_random_imitator_td_tool = None
     if name in RANDOM_IMITATOR_TD_TOOL_NAMES and execute_random_imitator_td_tool:
         return execute_random_imitator_td_tool(arguments if isinstance(arguments, dict) else {})
+    try:
+        from services.private_board_tool import PRIVATE_BOARD_TOOL_NAMES, execute_private_board_tool
+    except Exception:
+        PRIVATE_BOARD_TOOL_NAMES = ()
+        execute_private_board_tool = None
+    if name in PRIVATE_BOARD_TOOL_NAMES and execute_private_board_tool:
+        return execute_private_board_tool(arguments if isinstance(arguments, dict) else {})
     if str(name or "").strip().startswith("maps_"):
         from services.amap_mcp_tools import execute_amap_mcp_tool
         return execute_amap_mcp_tool(name, arguments if isinstance(arguments, dict) else {})
@@ -830,9 +837,13 @@ def execute_tool(name: str, arguments: dict) -> str:
         "create_system_alarm",
         "create_calendar_event",
         "show_choice_dialog",
+        "recall_message",
         "request_screen_check",
     ):
-        return execute_forum_tool(name, arguments)
+        args = arguments if isinstance(arguments, dict) else {}
+        if name == "recall_message" and isinstance(context, dict):
+            args = {**args, "_context": context}
+        return execute_forum_tool(name, args)
     try:
         if name == "exchange_diary_create":
             return _execute_exchange_diary_create(arguments)

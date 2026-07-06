@@ -49,6 +49,15 @@ def _screen_check_wakeup_event(item: dict) -> dict:
         return {}
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     result = item.get("result") if isinstance(item.get("result"), dict) else {}
+    payload_window_id = str(payload.get("windowId") or payload.get("window_id") or "").strip()
+    result_window_id = str(result.get("windowId") or result.get("window_id") or "").strip()
+    if payload_window_id and result_window_id and payload_window_id != result_window_id:
+        sumitalk_logger.warning(
+            "recall_message_result_window_mismatch action_id=%s payload_window=%s result_window=%s",
+            str(item.get("id") or ""),
+            payload_window_id,
+            result_window_id,
+        )
     title = str(payload.get("title") or "查岗申请").strip() or "查岗申请"
     message = str(payload.get("message") or "").strip()
     if not result.get("approved"):
@@ -88,9 +97,71 @@ def _screen_check_wakeup_event(item: dict) -> dict:
     return {"text": text, "image_url": image_url}
 
 
+def _recall_message_wakeup_event_text(item: dict) -> str:
+    if not isinstance(item, dict) or str(item.get("type") or "").strip() != "recall_message":
+        return ""
+    if str(item.get("status") or "").strip().lower() != "done":
+        return ""
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    result = item.get("result") if isinstance(item.get("result"), dict) else {}
+    raw_messages = result.get("recalledMessages")
+    if not isinstance(raw_messages, list):
+        raw_messages = result.get("recalled_messages")
+    if not isinstance(raw_messages, list) or not raw_messages:
+        return ""
+    lines = ["你刚刚在 SumiTalk App 里撤回了她的消息。"]
+    for raw in raw_messages[:4]:
+        if not isinstance(raw, dict):
+            continue
+        content = str(raw.get("content") or raw.get("text") or "").strip()
+        if not content:
+            continue
+        if not content.startswith("【已撤回】"):
+            content = f"【已撤回】{content}"
+        if len(content) > 900:
+            content = content[:900].rstrip() + "..."
+        lines.append(f"你已撤回她的这条消息：\n{content}")
+    choice_label = str(result.get("choiceLabel") or result.get("label") or "").strip()
+    choice_id = str(result.get("choiceId") or result.get("choice_id") or "").strip()
+    auto_selected = bool(result.get("autoSelected") or result.get("auto_selected"))
+    if choice_label:
+        if auto_selected:
+            lines.append(f"最后的弹窗倒计时结束，已自动替她选择「{choice_label}」。")
+        else:
+            lines.append(f"她在最后的弹窗里选择了「{choice_label}」。")
+    elif choice_id:
+        if auto_selected:
+            lines.append(f"最后的弹窗倒计时结束，已自动选择 {choice_id}。")
+        else:
+            lines.append(f"她在最后的弹窗里选择了 {choice_id}。")
+    window_id = payload_window_id or result_window_id
+    if window_id:
+        lines.append(f"窗口：{window_id}")
+    lines.append("请接着这个结果自然回应，记住这不是她撤回自己消息，是你撤回了她的这条消息。")
+    return "\n".join([line for line in lines if line])
+
+
 def _wake_du_for_device_action_results(device_id: str, items: list[dict]) -> int:
     events = []
     for item in items or []:
+        recall_text = _recall_message_wakeup_event_text(item)
+        if recall_text:
+            try:
+                from services.recall_message_markers import record_recall_message_result
+
+                record_recall_message_result(item)
+            except Exception:
+                sumitalk_logger.debug("recall_message_marker_record_failed", exc_info=True)
+            payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            result = item.get("result") if isinstance(item.get("result"), dict) else {}
+            payload_window_id = str(payload.get("windowId") or payload.get("window_id") or "").strip()
+            events.append({
+                "text": recall_text,
+                "image_url": "",
+                "kind": "recall_message",
+                "window_id": payload_window_id or str(result.get("windowId") or result.get("window_id") or "").strip(),
+            })
+            continue
         text = _choice_dialog_wakeup_event_text(item)
         if text:
             events.append({"text": text, "image_url": "", "kind": "choice_dialog"})
@@ -102,7 +173,8 @@ def _wake_du_for_device_action_results(device_id: str, items: list[dict]) -> int
     if not events:
         return 0
     context = resolve_recent_reply_context(default_target=device_id)
-    window_id = str(context.get("window_id") or "").strip()
+    forced_window_id = next((str(event.get("window_id") or "").strip() for event in events if str(event.get("window_id") or "").strip()), "")
+    window_id = forced_window_id or str(context.get("window_id") or "").strip()
     target = str(context.get("target") or "").strip() or device_id
     channel = str(context.get("channel") or "").strip().lower()
     meta = context.get("meta") if isinstance(context.get("meta"), dict) else {}
@@ -161,12 +233,16 @@ def register_routes(bp) -> None:
             limit = int(request.args.get("limit") or 10)
         except Exception:
             limit = 10
-        result = r2_store.poll_app_actions(device_id=device_id, limit=limit)
+        surface = str(request.args.get("surface") or "native").strip().lower()
+        window_id = str(request.args.get("window_id") or request.args.get("windowId") or "").strip()
+        result = r2_store.poll_app_actions(device_id=device_id, limit=limit, surface=surface, window_id=window_id)
         actions = result.get("actions") if isinstance(result, dict) else None
         if isinstance(actions, list) and actions:
             sumitalk_logger.info(
-                "device_actions_poll device_id=%s count=%s ids=%s types=%s",
+                "device_actions_poll device_id=%s surface=%s window_id=%s count=%s ids=%s types=%s",
                 device_id,
+                surface,
+                window_id,
                 len(actions),
                 [str((x or {}).get("id") or "") for x in actions if isinstance(x, dict)],
                 [str((x or {}).get("type") or "") for x in actions if isinstance(x, dict)],

@@ -20,7 +20,7 @@ from routes.miniapp_api import bp as miniapp_api_bp
 from routes.mcp_api import bp as mcp_api_bp
 from routes.pc_command import bp as pc_command_bp
 from routes.co_read_api import bp as co_read_api_bp
-from routes.html_preview import bp as html_preview_bp
+from routes.du_pages import bp as du_pages_bp
 from routes.memory_api import bp as memory_api_bp
 from routes.miniapp_static import bp as miniapp_static_bp
 from routes.sense_api import bp as sense_api_bp
@@ -42,7 +42,7 @@ app.register_blueprint(miniapp_api_bp)
 app.register_blueprint(mcp_api_bp)
 app.register_blueprint(pc_command_bp)
 app.register_blueprint(co_read_api_bp)
-app.register_blueprint(html_preview_bp)
+app.register_blueprint(du_pages_bp)
 app.register_blueprint(memory_api_bp)
 app.register_blueprint(miniapp_static_bp)
 app.register_blueprint(sense_api_bp)

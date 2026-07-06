@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>18X 情趣限制审稿台</title>
+  <style>
+    :root {
+      --bg: #fff6fa;
+      --panel: #ffffff;
+      --ink: #4b3144;
+      --muted: #8b7284;
+      --line: #f0cfe0;
+      --pink: #f5a8c6;
+      --hot: #df4f89;
+      --yellow: #fff4a8;
+      --ok: #dff5ea;
+      --shadow: 0 14px 36px rgba(109, 54, 89, 0.14);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: rgba(255, 246, 250, 0.94);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+    }
+    .top {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 16px 20px;
+      display: grid;
+      gap: 12px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.1;
+    }
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    input[type="search"] {
+      min-width: min(420px, 100%);
+      flex: 1;
+      border: 2px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      color: var(--ink);
+      padding: 11px 13px;
+      font: inherit;
+      outline: none;
+    }
+    button {
+      border: 0;
+      border-radius: 14px;
+      background: var(--pink);
+      color: #fff;
+      padding: 11px 14px;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: inset 0 -4px 0 rgba(179, 40, 98, 0.22);
+    }
+    button.secondary {
+      background: #fff;
+      color: var(--ink);
+      border: 2px solid var(--line);
+      box-shadow: none;
+    }
+    button.small {
+      padding: 7px 10px;
+      border-radius: 10px;
+      font-size: 13px;
+    }
+    main {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 18px 20px 28px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 18px;
+      align-items: start;
+    }
+    .stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .stat {
+      border-radius: 999px;
+      background: #fff;
+      border: 1px solid var(--line);
+      padding: 6px 10px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .stat strong { color: var(--hot); }
+    .theme-list {
+      display: grid;
+      gap: 14px;
+    }
+    .theme-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .theme-card.hidden { display: none; }
+    .theme-head {
+      padding: 13px 14px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      background: #fffafc;
+    }
+    .theme-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .theme-title h2 {
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.25;
+    }
+    .need {
+      white-space: nowrap;
+      border-radius: 999px;
+      background: var(--yellow);
+      color: #805673;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .need.done { background: var(--ok); color: #3d745a; }
+    .theme-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .entry-list {
+      display: grid;
+      gap: 0;
+    }
+    label.entry {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid #f7e2ed;
+      cursor: pointer;
+    }
+    label.entry:last-child { border-bottom: 0; }
+    label.entry:hover { background: #fff9fc; }
+    label.entry.kept { background: #fff0f6; }
+    input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      margin-top: 2px;
+      accent-color: var(--hot);
+    }
+    .entry-text {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    aside {
+      position: sticky;
+      top: 108px;
+      display: grid;
+      gap: 12px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .panel h2 {
+      margin: 0;
+      font-size: 16px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 210px;
+      resize: vertical;
+      border: 2px solid var(--line);
+      border-radius: 14px;
+      padding: 10px;
+      color: var(--ink);
+      background: #fffafd;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+      outline: none;
+    }
+    .hint {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+      aside { position: static; }
+      .theme-head { align-items: flex-start; flex-direction: column; }
+      .theme-actions { justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="top">
+      <h1>18X 情趣限制审稿台</h1>
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="搜索条目" />
+        <button id="copyPrompt">复制续写提示</button>
+        <button id="copyKept" class="secondary">复制保留 JSON</button>
+        <button id="clearAll" class="secondary">清空勾选</button>
+      </div>
+      <div class="stats" id="stats"></div>
+    </div>
+  </header>
+  <main>
+    <section class="theme-list" id="themeList"></section>
+    <aside>
+      <section class="panel">
+        <h2>续写提示</h2>
+        <p class="hint">这里只审通用、日常、18X 的 ooxx 情趣玩法限制，不服务走格过程。</p>
+        <textarea id="promptOut" readonly></textarea>
+      </section>
+      <section class="panel">
+        <h2>保留 JSON</h2>
+        <textarea id="jsonOut" readonly></textarea>
+      </section>
+    </aside>
+  </main>
+  <script src="./private_board_limit_review_data.js"></script>
+  <script>
+    const RAW_DATA = window.LIMIT_REVIEW_DATA?.rawData || [];
+    const INITIAL_KEPT = window.LIMIT_REVIEW_DATA?.initialKept || {};
+    const EXTRA_ITEMS = window.LIMIT_REVIEW_DATA?.extraItems || {};
+    const REMOVED_THEMES = new Set(window.LIMIT_REVIEW_DATA?.removedThemes || []);
+    const DATA = RAW_DATA
+      .filter((group) => !REMOVED_THEMES.has(group.theme))
+      .map((group) => ({
+        theme: group.theme,
+        items: uniqueItems([...(group.items || []), ...(INITIAL_KEPT[group.theme] || []), ...(EXTRA_ITEMS[group.theme] || [])]),
+      }))
+      .filter((group) => group.items.length);
+
+    const STORAGE_KEY = window.LIMIT_REVIEW_DATA?.storageKey || "private-board-limit-review-v2";
+    const $ = (selector) => document.querySelector(selector);
+    const themeList = $("#themeList");
+    const stats = $("#stats");
+    const search = $("#search");
+    const promptOut = $("#promptOut");
+    const jsonOut = $("#jsonOut");
+
+    const savedKept = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    let kept = new Set(Array.isArray(savedKept) ? savedKept : initialKeptIds());
+
+    function entryId(theme, index) {
+      return `${theme}::${index}`;
+    }
+
+    function uniqueItems(items) {
+      return [...new Set(items.filter(Boolean))];
+    }
+
+    function initialKeptIds() {
+      const ids = [];
+      DATA.forEach((group) => {
+        const initial = new Set(INITIAL_KEPT[group.theme] || []);
+        group.items.forEach((item, index) => {
+          if (initial.has(item)) ids.push(entryId(group.theme, index));
+        });
+      });
+      return ids;
+    }
+
+    function save() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([...kept]));
+    }
+
+    function render() {
+      themeList.innerHTML = "";
+      DATA.forEach((group) => {
+        const card = document.createElement("article");
+        card.className = "theme-card";
+        card.dataset.theme = group.theme;
+        card.innerHTML = `
+          <div class="theme-head">
+            <div class="theme-title">
+              <h2>${escapeHtml(group.theme)}</h2>
+              <span class="need"></span>
+            </div>
+            <div class="theme-actions">
+              <button class="small secondary" data-action="theme-all">本组全留</button>
+              <button class="small secondary" data-action="theme-clear">本组清空</button>
+            </div>
+          </div>
+          <div class="entry-list"></div>
+        `;
+        const list = card.querySelector(".entry-list");
+        group.items.forEach((item, index) => {
+          const id = entryId(group.theme, index);
+          const label = document.createElement("label");
+          label.className = `entry ${kept.has(id) ? "kept" : ""}`;
+          label.innerHTML = `
+            <input type="checkbox" ${kept.has(id) ? "checked" : ""} data-id="${escapeAttr(id)}" />
+            <span class="entry-text">${escapeHtml(item)}</span>
+          `;
+          list.appendChild(label);
+        });
+        card.addEventListener("change", (event) => {
+          const input = event.target.closest("input[type='checkbox']");
+          if (!input) return;
+          if (input.checked) kept.add(input.dataset.id);
+          else kept.delete(input.dataset.id);
+          input.closest(".entry").classList.toggle("kept", input.checked);
+          save();
+          update();
+        });
+        card.addEventListener("click", (event) => {
+          const button = event.target.closest("button[data-action]");
+          if (!button) return;
+          group.items.forEach((_, index) => {
+            const id = entryId(group.theme, index);
+            if (button.dataset.action === "theme-all") kept.add(id);
+            if (button.dataset.action === "theme-clear") kept.delete(id);
+          });
+          save();
+          render();
+        });
+        themeList.appendChild(card);
+      });
+      update();
+    }
+
+    function selectedByTheme() {
+      const out = {};
+      DATA.forEach((group) => {
+        const items = group.items.filter((_, index) => kept.has(entryId(group.theme, index)));
+        if (items.length) out[group.theme] = items;
+      });
+      return out;
+    }
+
+    const REVIEW_MODE = window.LIMIT_REVIEW_DATA?.mode || "theme";
+
+    function missingByTheme() {
+      if (REVIEW_MODE !== "theme") return [];
+      return DATA.map((group) => {
+        const keptCount = group.items.filter((_, index) => kept.has(entryId(group.theme, index))).length;
+        return { theme: group.theme, keptCount, missing: Math.max(0, 3 - keptCount) };
+      }).filter((item) => item.missing > 0);
+    }
+
+    function update() {
+      const total = DATA.reduce((sum, group) => sum + group.items.length, 0);
+      const missing = missingByTheme();
+      const keptCount = kept.size;
+      const needCount = missing.reduce((sum, item) => sum + item.missing, 0);
+      stats.innerHTML = REVIEW_MODE !== "theme" ? `
+        <span class="stat">已保留 <strong>${keptCount}</strong> / ${total}</span>
+        <span class="stat">候选分组 <strong>${DATA.length}</strong> 个</span>
+      ` : `
+        <span class="stat">已保留 <strong>${keptCount}</strong> / ${total}</span>
+        <span class="stat">需要续写 <strong>${needCount}</strong> 条</span>
+        <span class="stat">涉及主题 <strong>${missing.length}</strong> 个</span>
+      `;
+      document.querySelectorAll(".theme-card").forEach((card) => {
+        const group = DATA.find((item) => item.theme === card.dataset.theme);
+        const keptCount = group.items.filter((_, index) => kept.has(entryId(group.theme, index))).length;
+        const badge = card.querySelector(".need");
+        if (REVIEW_MODE !== "theme") {
+          badge.textContent = `已选 ${keptCount} / ${group.items.length}`;
+          badge.classList.toggle("done", keptCount > 0);
+        } else {
+          const missing = Math.max(0, 3 - keptCount);
+          badge.textContent = missing ? `还缺 ${missing} 条` : "已满 3 条";
+          badge.classList.toggle("done", !missing);
+        }
+      });
+      const selected = selectedByTheme();
+      jsonOut.value = JSON.stringify(selected, null, 2);
+      promptOut.value = buildPrompt(selected, missing);
+      applyFilter();
+    }
+
+    function buildPrompt(selected, missing) {
+      const keptLines = Object.entries(selected)
+        .map(([theme, items]) => `${theme}\n${items.map((item) => `- ${item}`).join("\n")}`)
+        .join("\n\n") || "无";
+      if (REVIEW_MODE !== "theme") {
+        return [
+          "你是成人情趣走格棋的语料创作者。",
+          "任务：继续生成少量通用、日常、18X 的 ooxx 情趣玩法限制。",
+          "这些限制用于两个成年人之间的私密亲密互动，不是游戏内规则，也不是角色主题本身。",
+          "不要使用抽象身份标签；直接写成只能、不许、必须、想做某事必须先怎样的限制句。",
+          "可写方向：称呼、姿势、手的位置、能否遮挡、能否主动结束、说话格式、等待许可、被对方注视时的反应、身体感受表达、道具/衣物是否保留、敏感部位互动、高潮/射精许可。",
+          "不要写游戏流程、任务流程或胜负流程相关内容；不要把角色、装束、身份主题硬写成职业流程或生活杂务。",
+          "不要解释，不要写注意事项，不要写玩法说明；不要重复已保留文案。",
+          "输出格式：每条前面用 - 。",
+          "",
+          "已保留文案：",
+          keptLines,
+          "",
+          "需要继续生成：",
+          "请生成 8-12 条 18X 情趣限制候选。",
+        ].join("\n");
+      }
+      const missingLines = missing
+        .map((item) => `- ${item.theme}：还需要 ${item.missing} 条`)
+        .join("\n") || "无";
+      return [
+        "你是成人情趣走格棋的语料创作者。",
+        "任务：根据下面列出的 play 主题，继续生成“限制”文案，把每个主题补足到 3 条。",
+        "“限制”指会实时生效的状态规则，不要把角色、装束、身份主题硬写成限制。",
+        "不要解释，不要写注意事项，不要写玩法说明；不要重复已保留文案。",
+        "输出格式：按主题分组，每条前面用 - 。",
+        "",
+        "已保留文案：",
+        keptLines,
+        "",
+        "需要继续生成：",
+        missingLines,
+      ].join("\n");
+    }
+
+    function applyFilter() {
+      const q = search.value.trim().toLowerCase();
+      document.querySelectorAll(".theme-card").forEach((card) => {
+        const haystack = card.textContent.toLowerCase();
+        card.classList.toggle("hidden", q && !haystack.includes(q));
+      });
+    }
+
+    async function copyText(text, button) {
+      await navigator.clipboard.writeText(text);
+      const old = button.textContent;
+      button.textContent = "已复制";
+      setTimeout(() => { button.textContent = old; }, 900);
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[char]));
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value);
+    }
+
+    search.addEventListener("input", applyFilter);
+    $("#copyPrompt").addEventListener("click", (event) => copyText(promptOut.value, event.currentTarget));
+    $("#copyKept").addEventListener("click", (event) => copyText(jsonOut.value, event.currentTarget));
+    $("#clearAll").addEventListener("click", () => {
+      kept = new Set();
+      save();
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>

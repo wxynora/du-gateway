@@ -13,7 +13,7 @@ from flask import Response, jsonify, request
 
 from config import R2_PUBLIC_URL, TELEGRAM_PROACTIVE_TARGET_USER_ID, VOICE_CALL_MAX_BYTES, VOICE_CALL_MAX_SECONDS, VOICE_CALL_WINDOW_ID
 from storage import r2_store
-from services.html_preview_store import resolve_preview_base_url_for_http_request
+from services.public_url import resolve_public_base_url_for_http_request
 from utils.time_aware import now_beijing_iso
 
 try:
@@ -68,7 +68,7 @@ def _miniapp_voice_avatar_url(avatar_version: int) -> str:
 
 def _chat_media_public_url(key: str) -> str:
     media_key = str(key or "").strip()
-    base = resolve_preview_base_url_for_http_request(request.url_root or "").strip().rstrip("/")
+    base = resolve_public_base_url_for_http_request(request.url_root or "").strip().rstrip("/")
     if base:
         return f"{base}/miniapp-api/chat-media/raw-public?key={quote(media_key, safe='/')}"
     public_base = (R2_PUBLIC_URL or "").strip().rstrip("/")

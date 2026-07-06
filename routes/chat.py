@@ -73,7 +73,6 @@ from pipeline.pipeline import (
     step_inject_forum_tools,
     step_inject_amap_mcp_tools,
     step_inject_websearch_tools,
-    step_inject_html_preview_tool,
     step_trim_messages_if_over_limit,
     step_archive_and_maybe_summary,
     step_archive_round,
@@ -140,8 +139,6 @@ from services.chat_request_helpers import (
 )
 from services.chat_response_enrichers import (
     dedupe_stream_sumitalk_cards,
-    html_preview_suffix_for_stream,
-    merge_html_preview_into_nonstream_response as _merge_html_preview_into_nonstream_response,
     merge_sumitalk_card_into_nonstream_response as _merge_sumitalk_card_into_nonstream_response,
     sumitalk_card_suffix_for_stream,
 )
@@ -1170,6 +1167,7 @@ def _stream_with_r2_archive(
     skip_post_archive_dynamic_memory_write: bool = False,
     skip_post_archive_body_delta: bool = False,
     du_request_id: str = "",
+    tool_executor=None,
 ):
     """
     包装流式响应：原样转发 SSE，同时在流结束后用收集到的 content 写 R2。
@@ -1423,7 +1421,9 @@ def _stream_with_r2_archive(
                     yield _sse_delta_chunk_bytes(cap_hint)
                     content_parts.append(cap_hint)
                     break
-                from services.chat_tools import execute_tool
+                execute_tool_func = tool_executor
+                if execute_tool_func is None:
+                    from services.chat_tools import execute_tool as execute_tool_func
                 _append_visible_tool_round_content(tool_visible_content_parts, parsed.get("content") or "")
                 msg = {"content": parsed.get("content") or None, "tool_calls": tool_calls}
                 if parsed.get("reasoning"):
@@ -1437,7 +1437,7 @@ def _stream_with_r2_archive(
                 if parsed.get("reasoning_omitted"):
                     msg["reasoning_omitted"] = True
                     reasoning_omitted = True
-                current_body = _append_tool_results_and_continue(current_body, msg, tool_calls, execute_tool)
+                current_body = _append_tool_results_and_continue(current_body, msg, tool_calls, execute_tool_func)
                 tool_rounds_used += 1
                 if _game_tool_checkpoint_from_messages(current_body.get("messages") or []):
                     logger.info("game tool checkpoint 流式回合转普通收口 window_id=%s round=%s", window_id, tool_rounds_used)
@@ -1491,15 +1491,6 @@ def _stream_with_r2_archive(
                         safe_chunk = _transform_pseudo_cot_sse_chunk_bytes(safe_chunk, pseudo_cot_state)
                     yield transform_sse_chunk_bytes_pcmd(safe_chunk, du_state)
             content_parts.append(parsed_content)
-            # 模型常不在正文复述预览链接：从 tool 结果补发 SSE + 存档拼接
-            suf = html_preview_suffix_for_stream(
-                parsed_content, current_body.get("messages") or []
-            )
-            if suf:
-                extra_vis = du_state.feed_delta(suf)
-                if extra_vis:
-                    yield _sse_delta_chunk_bytes(extra_vis)
-                    content_parts.append(extra_vis)
             if _reply_channel() == "sumitalk":
                 extra_card = sumitalk_card_suffix_for_stream(parsed_content, current_body.get("messages") or [])
                 if extra_card:
@@ -1899,6 +1890,21 @@ def chat_completions():
                 kind,
                 exc_info=True,
             )
+
+    def _execute_tool_with_chat_context(name: str, arguments: dict) -> str:
+        from services.chat_tools import execute_tool
+
+        return execute_tool(
+            name,
+            arguments if isinstance(arguments, dict) else {},
+            context={
+                "reply_target": reply_target,
+                "reply_channel": reply_channel,
+                "window_id": window_id,
+                "client_request_id": sumitalk_client_request_id,
+            },
+        )
+
     # 记录最近窗口，供 MiniApp 思维链面板展示可选窗口列表
     try:
         wid_for_recent = window_id if (window_id or "").strip() else "__default__"
@@ -2074,7 +2080,6 @@ def chat_completions():
     body = step_inject_forum_tools(body)
     body = step_inject_amap_mcp_tools(body)
     body = step_inject_websearch_tools(body)
-    body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
     body = step_inject_reference_note(body)
     body = step_inject_du_midterm_memory(body, window_id)
     body = _inject_music_bgm_context(body, reply_channel=reply_channel)
@@ -2129,6 +2134,7 @@ def chat_completions():
                 skip_post_archive_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
                 skip_post_archive_body_delta=skip_post_archive_body_delta,
                 du_request_id=du_request_id,
+                tool_executor=_execute_tool_with_chat_context,
             )
         )
     resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
@@ -2275,13 +2281,12 @@ def chat_completions():
                             "text": visible_tool_content,
                         },
                     )
-            from services.chat_tools import execute_tool
             current_round = tool_rounds_used + 1
             body = _append_tool_results_and_continue(
                 body,
                 msg,
                 tool_calls,
-                execute_tool,
+                _execute_tool_with_chat_context,
                 on_tool_event=lambda kind, payload, round_no=current_round: _emit_sumitalk_chat_event(
                     kind,
                     {
@@ -2386,7 +2391,6 @@ def chat_completions():
             reply_channel=reply_channel,
             du_request_id=du_request_id,
         )
-        resp_json = _merge_html_preview_into_nonstream_response(resp_json, body.get("messages") or [])
         if is_sumitalk_request:
             resp_json = _merge_sumitalk_card_into_nonstream_response(resp_json, body.get("messages") or [])
         sumitalk_final_reasoning_text = ""

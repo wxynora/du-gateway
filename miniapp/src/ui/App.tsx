@@ -5,6 +5,17 @@ import { AppShell } from "./AppShell";
 import { DeviceManagerModal } from "./DeviceManagerModal";
 import { migrateLocalChatHistoriesToDevice, migrateLocalChatHistoryDevice } from "./storage/chatHistoryDb";
 
+function isLocalRecallPreviewRoute(): boolean {
+  if (!import.meta.env.DEV || typeof window === "undefined") return false;
+  try {
+    const enabled = new URLSearchParams(window.location.search).get("recallPreview") === "1";
+    if (enabled) (window as any).__sumitalkLocalRecallPreview = true;
+    return enabled || (window as any).__sumitalkLocalRecallPreview === true;
+  } catch {
+    return (window as any).__sumitalkLocalRecallPreview === true;
+  }
+}
+
 export function App() {
   return (
     <ToastProvider>
@@ -43,6 +54,12 @@ function AppWithAuth() {
   }
 
   useEffect(() => {
+    if (isLocalRecallPreviewRoute()) {
+      setAuthEnabled(false);
+      setReady(true);
+      setMetaLoading(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {

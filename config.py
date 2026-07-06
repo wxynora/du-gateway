@@ -427,27 +427,13 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 # 电脑指令队列鉴权：电脑端轮询/回执必须携带该 token
 PC_COMMAND_TOKEN = os.environ.get("PC_COMMAND_TOKEN", "").strip()
 
-# HTML 临时预览：POST 存稿、GET token 拉取整页（与聊天主链路无关）
-HTML_PREVIEW_SECRET = os.environ.get("HTML_PREVIEW_SECRET", "").strip()
-HTML_PREVIEW_TTL_SECONDS = int(os.environ.get("HTML_PREVIEW_TTL_SECONDS", "7200"))  # 默认 2 小时
-HTML_PREVIEW_MAX_BYTES = int(os.environ.get("HTML_PREVIEW_MAX_BYTES", str(2 * 1024 * 1024)))  # 默认 2MB
-HTML_PREVIEW_MAX_ITEMS = int(os.environ.get("HTML_PREVIEW_MAX_ITEMS", "200"))
-# 预览链接用的公网根（https://域名，无尾斜杠）。勿填 127.0.0.1；与下面 GATEWAY_PUBLIC_BASE_URL 二选一或都填（前者优先）
-HTML_PREVIEW_PUBLIC_BASE_URL = os.environ.get("HTML_PREVIEW_PUBLIC_BASE_URL", "").strip().rstrip("/")
 # 网关对外访问根 URL（手机/外网能打开的域名）。Bot 仍可用 TELEGRAM_GATEWAY_URL=127.0.0.1 调本机，预览与工具拼链接会优先用本项
 GATEWAY_PUBLIC_BASE_URL = os.environ.get("GATEWAY_PUBLIC_BASE_URL", "").strip().rstrip("/")
-# 是否向模型注入 publish_html_preview 工具（默认开启；设 0 关闭）
-HTML_PREVIEW_TOOL_ENABLED = os.environ.get("HTML_PREVIEW_TOOL_ENABLED", "1").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-)
-# RikkaHub 客户端对工具流解析有已知问题：默认不对其 UA 注入 HTML 预览工具（设 0 则恢复注入）
-HTML_PREVIEW_TOOL_SKIP_RIKKAHUB_UA = os.environ.get("HTML_PREVIEW_TOOL_SKIP_RIKKAHUB_UA", "1").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-)
+
+# 网关临时/附件类资源限制：XiaoAI 音频、页笺 HTML 等共用。
+ARTIFACT_TTL_SECONDS = int(os.environ.get("ARTIFACT_TTL_SECONDS", "7200"))
+ARTIFACT_MAX_BYTES = int(os.environ.get("ARTIFACT_MAX_BYTES", str(2 * 1024 * 1024)))
+ARTIFACT_MAX_ITEMS = int(os.environ.get("ARTIFACT_MAX_ITEMS", "200"))
 
 # PC open: 白名单（逗号分隔，小写英文名）；[PCMD:open:xxx] 仅允许此处应用
 _PC_OPEN_APP_ALLOWLIST_STR = os.environ.get(

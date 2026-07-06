@@ -627,9 +627,9 @@ def register_routes(bp) -> None:
         )
         if not saved:
             return jsonify({"ok": False, "error": "截图保存失败"}), 500
-        from services.html_preview_store import resolve_preview_base_url_for_http_request
+        from services.public_url import resolve_public_base_url_for_http_request
 
-        base = resolve_preview_base_url_for_http_request(request.url_root or "")
+        base = resolve_public_base_url_for_http_request(request.url_root or "")
         key = str(saved.get("key") or "")
         token = str(saved.get("accessToken") or "")
         url = ""

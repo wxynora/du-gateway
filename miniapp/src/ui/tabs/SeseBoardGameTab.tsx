@@ -10,7 +10,7 @@ type CellEvent = {
   kind?: string;
   slot?: string;
   name?: string;
-  effect?: Record<string, unknown>;
+  effect?: string;
 };
 
 type StatusItem = {
@@ -22,6 +22,62 @@ type StatusItem = {
   minutes?: number;
   expires_at?: string;
   blocks_action?: boolean;
+  level?: number;
+};
+
+type StatusDisplayGroup = {
+  label: string;
+  values: string[];
+};
+
+type RewardHand = Partial<Record<"pass", number>>;
+
+type PendingChoice = {
+  id?: string;
+  label?: string;
+  effect?: Record<string, unknown>;
+};
+
+type PendingEvent = {
+  id?: string;
+  type?: "review" | "choice" | "duel" | string;
+  card_id?: string;
+  name?: string;
+  actor?: Actor;
+  reviewer?: Actor;
+  opponent?: Actor;
+  current_actor?: Actor;
+  phase?: "assigned" | "questioning" | "submitted" | string;
+  task?: string;
+  prompt?: string;
+  submission?: string;
+  submission_text?: string;
+  question_prompt?: string;
+  question_text?: string;
+  waiting_task?: string;
+  pass_result?: string;
+  reject_prompt?: string;
+  pass_allowed?: boolean;
+  cell?: number;
+  theme?: string;
+  reject_count?: number;
+  choices?: PendingChoice[];
+  picks?: Partial<Record<Actor, string>>;
+};
+
+type FinalNote = {
+  id?: string;
+  winner?: Actor;
+  target?: Actor;
+  theme?: string;
+  text?: string;
+  du_text?: string;
+  target_status?: string;
+  final_note_items?: string;
+  final_place?: string;
+  final_pose?: string;
+  sent?: boolean;
+  sent_at?: string;
 };
 
 type PrivateBoardState = {
@@ -29,11 +85,17 @@ type PrivateBoardState = {
   positions?: Partial<Record<Actor, number>>;
   turn_actor?: Actor;
   statuses?: Partial<Record<Actor, StatusItem[]>>;
+  final_note_items?: StatusItem[];
+  hands?: Partial<Record<Actor, RewardHand>>;
+  pass_skips_used?: number;
+  pending_event?: PendingEvent | null;
+  final_note?: FinalNote | null;
   theme_profile?: {
     theme?: string;
     direction?: string;
     direction_label?: string;
   };
+  theme_options?: string[];
   cell_events?: CellEvent[];
   game_over?: boolean;
   winner?: Actor | "";
@@ -69,7 +131,8 @@ type PrivateBoardSyncPayload = {
   error?: string;
 };
 
-type PrivateBoardSyncMode = "roll_result" | "chat";
+type PrivateBoardSyncMode = "roll_result" | "chat" | "final_note";
+type FinalAppendSlot = "prop";
 
 type MoveInfo = {
   actor: Actor;
@@ -80,8 +143,24 @@ type MoveInfo = {
 
 type EventPopup = {
   position: number;
+  actor?: Actor;
+  actorLabel?: string;
+  from?: number;
+  to?: number;
   title: string;
   text: string;
+  detail: string;
+  kind: "event" | "draw";
+  cardTitle?: string;
+  cardType?: string;
+  tone?: "reward" | "penalty" | "choice";
+};
+
+type ThemeDraw = {
+  theme: string;
+  direction: string;
+  items: string[];
+  spinKey: string;
 };
 
 type GameChatMessage = {
@@ -93,6 +172,38 @@ type GameChatMessage = {
 const ACTORS: Actor[] = ["xinyue", "du"];
 const ACTOR_LABEL: Record<Actor, string> = { xinyue: "我", du: "渡" };
 const DEFAULT_POSITIONS: Record<Actor, number> = { xinyue: 0, du: 0 };
+const RPS_UI_CHOICES = [
+  { id: "scissors", label: "剪刀", icon: "✌️" },
+  { id: "rock", label: "石头", icon: "👊" },
+  { id: "paper", label: "布", icon: "✋" },
+];
+const RPS_CHOICE_ALIASES: Record<string, string> = {
+  scissors: "scissors",
+  剪刀: "scissors",
+  "✌️": "scissors",
+  "✌": "scissors",
+  rock: "rock",
+  stone: "rock",
+  石头: "rock",
+  拳头: "rock",
+  "👊": "rock",
+  paper: "paper",
+  布: "paper",
+  包袱: "paper",
+  "✋": "paper",
+};
+
+function normalizeRpsChoice(value: unknown): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  return RPS_CHOICE_ALIASES[raw] || raw;
+}
+const FINAL_MATERIAL_LABELS: Partial<Record<string, string>> = {
+  place: "最终地点",
+  pose: "最终姿势",
+};
+const FINAL_TOY_PROP_OPTIONS = ["跳蛋", "震动乳夹", "震动环", "乳夹", "锁精环", "飞机杯", "软绳", "手腕绑带", "眼罩", "口球", "春药"];
+const LEVELABLE_PROP_PATTERNS = ["跳蛋", "震动", "按摩棒", "飞机杯", "吸乳器", "吸吮器"];
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -101,8 +212,23 @@ function displayText(value: unknown): string {
   return String(value || "").replace(/小玥/g, "我");
 }
 
+function displaySystemText(value: unknown): string {
+  return String(value || "")
+    .replace(/小玥/g, "你")
+    .replace(/(^|[^自])我/g, "$1你");
+}
+
 function plainText(value: unknown): string {
   return String(value || "");
+}
+
+function payloadFailureText(payload: PrivateBoardPayload, fallback: string): string {
+  const source = displayText(payload.player_text || payload.text || payload.error || "");
+  const line = source
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .find((item) => item && !item.startsWith("【") && !/^(进度|主题|轮到|手牌|我的状态|渡的状态|最终地点|最终姿势|待处理|可用命令)/.test(item));
+  return line || fallback;
 }
 
 function makeChatId(prefix: string): string {
@@ -134,6 +260,9 @@ function eventKind(event: CellEvent | undefined, position: number, boardSize: nu
   if (position === boardSize) return "end";
   if (!event) return "empty";
   const raw = `${event.kind || ""} ${event.slot || ""}`.toLowerCase();
+  if (/empty/.test(raw)) return "empty";
+  if (/finish_self|finish-jump/.test(raw)) return "finish-jump";
+  if (/reset/.test(raw)) return "reset";
   if (/swap/.test(raw)) return "swap";
   if (/move|back|forward/.test(raw)) return "move";
   if (/lock|pause|item/.test(raw)) return "item";
@@ -152,6 +281,8 @@ function eventIcon(kind: string): string {
   if (kind === "place") return "🏫";
   if (kind === "item") return "🎁";
   if (kind === "move") return "⏪";
+  if (kind === "reset") return "🔁";
+  if (kind === "finish-jump") return "🏁";
   if (kind === "swap") return "🔄";
   if (kind === "clear") return "✨";
   if (kind === "time") return "⏳";
@@ -179,33 +310,167 @@ function parseMove(text: string): MoveInfo | null {
   };
 }
 
-function parseEventPopup(text: string): EventPopup | null {
-  const line = displayText(text)
+function stripTrailingPunctuation(value: string): string {
+  return value.replace(/[。.!！?？\s]+$/g, "").trim();
+}
+
+function eventEffectDetail(rawDetail: string, followingLines: string[], fallbackActorLabel: string, title: string): string {
+  const candidates = [rawDetail, ...followingLines]
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item) => !/^下一次行动[:：]/.test(item) && !/^待处理[:：]/.test(item));
+  const combined = candidates.join(" ");
+  if (/双方回到起点/.test(combined)) return "双方回到起点";
+  let match = combined.match(/(我|你|渡|对方|双方)?\s*从\s*\d+\s*(前进|后退)\s*(\d+)\s*格(?:到|至)\s*\d+/);
+  if (match) {
+    const actor = match[1] || fallbackActorLabel || "玩家";
+    return `${actor}${match[2]}了 ${match[3]} 格`;
+  }
+  match = combined.match(/(我|你|渡|对方|双方)\s*(前进|后退)\s*(\d+)\s*格/);
+  if (match) return `${match[1]}${match[2]}了 ${match[3]} 格`;
+  match = combined.match(/(我|你|渡|对方)\s*从\s*\d+\s*回到起点/);
+  if (match) return `${match[1]}回到起点`;
+  match = combined.match(/(我|你|渡|对方)\s*从\s*\d+\s*直达终点/);
+  if (match) return `${match[1]}直达终点`;
+  if (stripTrailingPunctuation(rawDetail) === stripTrailingPunctuation(title)) return "";
+  return rawDetail ? `触发：${rawDetail}` : "";
+}
+
+function parseEventPopup(text: string, move?: MoveInfo | null): EventPopup | null {
+  const lines = displayText(text)
     .split("\n")
     .map((item) => item.trim())
-    .find((item) => /^第\s*\d+\s*格：/.test(item));
+    .filter(Boolean);
+  const eventIndex = lines.findIndex((item) => /^第\s*\d+\s*格：/.test(item));
+  const line = eventIndex >= 0 ? lines[eventIndex] : "";
   if (!line) return null;
   const match = line.match(/^第\s*(\d+)\s*格：([^，。]+)/);
+  const title = match?.[2] || "格子事件";
+  const drawnCard = line.match(/抽到「([^」]+)」/)?.[1] || "";
+  const rewardCard = line.match(/获得\s*([^（，。]+)/)?.[1] || "";
+  const isDraw = Boolean(drawnCard || rewardCard || /抽卡|惩罚任务|选择惩罚/.test(title));
+  const tone: EventPopup["tone"] = /奖励|Pass卡|获得/.test(line) ? "reward" : /选择/.test(title) ? "choice" : "penalty";
+  const position = Number(match?.[1] || 0);
+  const actor = move?.actor;
+  const rawDetail = line.replace(/^第\s*\d+\s*格：/, "").trim();
+  const actorLabel = actor ? ACTOR_LABEL[actor] : "";
+  const detail = eventEffectDetail(rawDetail, lines.slice(eventIndex + 1, eventIndex + 4), actorLabel, title);
   return {
-    position: Number(match?.[1] || 0),
-    title: match?.[2] || "格子事件",
+    position,
+    actor,
+    actorLabel,
+    from: move?.from,
+    to: move?.to ?? position,
+    title,
     text: line,
+    detail,
+    kind: isDraw ? "draw" : "event",
+    cardTitle: drawnCard || rewardCard || title,
+    cardType: tone === "reward" ? "奖励卡" : tone === "choice" ? "选择惩罚" : "惩罚任务",
+    tone,
+  };
+}
+
+function popupCardTypeText(popup: EventPopup): string {
+  const type = displaySystemText(popup.cardType || "").trim();
+  const title = displaySystemText(popup.cardTitle || popup.title).trim();
+  const eventTitle = displaySystemText(popup.title).trim();
+  if (!type || type === title || type === eventTitle) return "";
+  return type;
+}
+
+function popupDetailText(popup: EventPopup): string {
+  const detail = displaySystemText(popup.detail || "").trim();
+  const title = displaySystemText(popup.title).trim();
+  if (!detail) return "";
+  if (stripTrailingPunctuation(detail.replace(/^触发[:：]\s*/, "")) === stripTrailingPunctuation(title)) return "";
+  return detail;
+}
+
+function buildThemeDraw(theme: unknown, direction: unknown, options: unknown): ThemeDraw | null {
+  const themeText = displayText(theme).trim();
+  if (!themeText) return null;
+  const source = Array.isArray(options) ? options.map((item) => displayText(item).trim()).filter(Boolean) : [];
+  const unique = Array.from(new Set(source));
+  const pool = unique.filter((item) => item !== themeText);
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  const items = [...shuffled.slice(0, 7), themeText];
+  while (items.length < 8) items.unshift(themeText);
+  return {
+    theme: themeText,
+    direction: displayText(direction || "待定"),
+    items,
+    spinKey: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   };
 }
 
 function statusDuration(item: StatusItem): string {
   const duration = String(item.duration_type || "");
-  if (duration === "actions") return `剩余 ${Math.max(0, Number(item.remaining_actions || 0))} 次行动`;
+  if (duration === "actions") {
+    const count = Math.max(0, Number(item.remaining_actions || 0));
+    return item.blocks_action ? `停步剩余 ${count} 次` : `剩余 ${count} 次行动`;
+  }
   if (duration === "minutes") return `${Math.max(1, Number(item.minutes || 0))} 分钟`;
-  if (duration === "until_finish") return "到终点";
+  if (duration === "until_finish") return "到终点前有效";
   if (duration === "until_clear") return "待解除";
+  if (duration === "final_note") return "";
   return "";
+}
+
+function isFinalMaterialSlot(slot: unknown): boolean {
+  return Boolean(FINAL_MATERIAL_LABELS[String(slot || "").trim()]);
+}
+
+function finalMaterialItemsFrom(items: StatusItem[] | undefined, note?: FinalNote | null): StatusDisplayGroup[] {
+  const latest = new Map<string, string>();
+  for (const item of items || []) {
+    const slot = String(item?.slot || "").trim();
+    if (!isFinalMaterialSlot(slot)) continue;
+    const value = displayText(item?.value || "").trim();
+    if (value) latest.set(slot, value);
+  }
+  const finalPlace = displayText(note?.final_place || "").trim();
+  const finalPose = displayText(note?.final_pose || "").trim();
+  if (finalPlace && !latest.has("place")) latest.set("place", finalPlace);
+  if (finalPose && !latest.has("pose")) latest.set("pose", finalPose);
+  return ["place", "pose"]
+    .map((slot) => {
+      const value = latest.get(slot);
+      return value ? { label: FINAL_MATERIAL_LABELS[slot] || "终局素材", values: [value] } : null;
+    })
+    .filter((item): item is StatusDisplayGroup => Boolean(item));
 }
 
 function statusLabel(item: StatusItem): string {
   const label = displayText(item.label || item.slot || "状态");
   if (item.slot === "prop" || label === "道具") return "道具惩罚";
   return label;
+}
+
+function statusValueText(item: StatusItem): string {
+  const value = displayText(item.value || "");
+  const detailParts: string[] = [];
+  const level = Math.max(1, Number(item.level || 1));
+  if (item.slot === "prop" && level > 1 && isLevelableProp(value)) detailParts.push(`${level}档`);
+  const duration = statusDuration(item);
+  if (duration) detailParts.push(duration);
+  if (!value) return detailParts.length ? detailParts.join("，") : "状态";
+  return detailParts.length ? `${value}（${detailParts.join("，")}）` : value;
+}
+
+function isLevelableProp(value: string): boolean {
+  return LEVELABLE_PROP_PATTERNS.some((pattern) => value.includes(pattern));
+}
+
+function groupStatusItems(statuses: StatusItem[]): StatusDisplayGroup[] {
+  const groups = new Map<string, string[]>();
+  statuses.filter((item) => !isFinalMaterialSlot(item.slot)).slice(-6).forEach((item) => {
+    const label = statusLabel(item);
+    const values = groups.get(label) || [];
+    values.push(statusValueText(item));
+    groups.set(label, values);
+  });
+  return Array.from(groups.entries()).map(([label, values]) => ({ label, values }));
 }
 
 function actorPaused(statuses: StatusItem[] | undefined): boolean {
@@ -235,6 +500,65 @@ function duWantsRoll(text: string): boolean {
     .map((line) => line.trim())
     .find(Boolean);
   return firstLine === "【掷骰】";
+}
+
+type DuDirective =
+  | { kind: "roll"; body: string }
+  | { kind: "submit"; body: string }
+  | { kind: "approve"; body: string }
+  | { kind: "reject"; body: string }
+  | { kind: "choose"; choice: string; body: string }
+  | { kind: "pass"; body: string }
+  | { kind: ""; body: string };
+
+function parseDuDirective(text: string): DuDirective {
+  const lines = String(text || "").split(/\r?\n/);
+  const firstIndex = lines.findIndex((line) => line.trim());
+  if (firstIndex < 0) return { kind: "", body: "" };
+  const first = lines[firstIndex].trim();
+  const body = lines.slice(firstIndex + 1).join("\n").trim();
+  if (first === "【掷骰】") return { kind: "roll", body };
+  if (first === "【提交】") return { kind: "submit", body };
+  if (first === "【通过】") return { kind: "approve", body };
+  if (first === "【不通过】") return { kind: "reject", body };
+  if (first === "【Pass】" || first === "【PASS】" || first === "【使用Pass卡】") return { kind: "pass", body };
+  const choiceMatch = first.match(/^【选择[:：](.+)】$/);
+  if (choiceMatch) return { kind: "choose", choice: choiceMatch[1].trim(), body };
+  const duelMatch = first.match(/^【(?:剪刀石头布|石头剪刀布)[:：](.+)】$/);
+  if (duelMatch) return { kind: "choose", choice: duelMatch[1].trim(), body };
+  return { kind: "", body: String(text || "").trim() };
+}
+
+function firstPendingChoice(pending: PendingEvent | null | undefined, fallback = "rock"): string {
+  const first = (pending?.choices || []).find((choice) => choice?.id || choice?.label);
+  return String(first?.id || first?.label || fallback).trim();
+}
+
+function localDuReplyForState(mode: PrivateBoardSyncMode, state: PrivateBoardState | undefined): string {
+  if (mode === "final_note") {
+    return "本地预览：终局小纸条收到了。";
+  }
+  const pending = state?.pending_event || null;
+  if (pending?.type === "duel" && pending.current_actor === "du") {
+    return "【剪刀石头布：石头】\n本地预览：我出石头。";
+  }
+  if (pending?.type === "choice" && pending.actor === "du") {
+    const choice = firstPendingChoice(pending, "");
+    if (choice) return `【选择：${choice}】\n本地预览：我选这个。`;
+  }
+  if (pending?.type === "review" && pending.reviewer === "du" && pending.phase === "questioning") {
+    return "【提交】\n本地预览：渡想问你的真心话问题。";
+  }
+  if (pending?.type === "review" && pending.actor === "du" && pending.phase === "assigned") {
+    return "【提交】\n本地预览：渡已经完成任务，提交给你验收。";
+  }
+  if (pending?.type === "review" && pending.reviewer === "du" && pending.phase === "submitted") {
+    return "【通过】\n本地预览：这次算你通过。";
+  }
+  if (isDuTurnState(state)) {
+    return "【掷骰】\n本地预览：我来掷这一回合。";
+  }
+  return "本地预览：我看到了，等你继续行动。";
 }
 
 async function executePrivateBoard(command: string): Promise<PrivateBoardPayload> {
@@ -284,15 +608,22 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
   const [animating, setAnimating] = useState(false);
   const [activeTile, setActiveTile] = useState<number | null>(null);
   const [popup, setPopup] = useState<EventPopup | null>(null);
+  const [drawRevealed, setDrawRevealed] = useState(true);
+  const [themeDraw, setThemeDraw] = useState<ThemeDraw | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatUnread, setChatUnread] = useState(0);
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
+  const [finalNoteOpen, setFinalNoteOpen] = useState(false);
+  const [finalNoteSeenKey, setFinalNoteSeenKey] = useState("");
+  const [toyConsoleOpen, setToyConsoleOpen] = useState(false);
+  const [toyConsoleLevel, setToyConsoleLevel] = useState(1);
+  const [pendingSubmission, setPendingSubmission] = useState("");
   const [chatMessages, setChatMessages] = useState<GameChatMessage[]>([
     {
       id: "system-ready",
       speaker: "system",
-      text: "游戏内交流在这里。渡的第一行是【掷骰】时，棋盘才会执行他的行动。",
+      text: "游戏内交流在这里。渡明确发送【掷骰】时，棋盘才会执行他的行动。",
     },
   ]);
 
@@ -302,6 +633,14 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
   const currentActor = state.turn_actor === "du" ? "du" : "xinyue";
   const isGameOver = Boolean(state.game_over || payload?.game_over);
   const isDuTurn = currentActor === "du" && !isGameOver;
+  const pendingEvent = state.pending_event || null;
+  const localPreviewEnabled = useMemo(() => {
+    try {
+      return Boolean(import.meta.env.DEV || new URLSearchParams(window.location.search).has("preview"));
+    } catch {
+      return Boolean(import.meta.env.DEV);
+    }
+  }, []);
 
   useLayoutEffect(() => {
     if (gameRef.current) gameRef.current.scrollTop = 0;
@@ -316,6 +655,16 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     if (!chatOpen) return;
     window.setTimeout(() => chatEndRef.current?.scrollIntoView({ block: "end" }), 40);
   }, [chatMessages.length, chatOpen, chatSending]);
+
+  useEffect(() => {
+    if (!popup || popup.kind !== "draw" || popup.tone !== "reward") {
+      setDrawRevealed(true);
+      return;
+    }
+    setDrawRevealed(false);
+    const timer = window.setTimeout(() => setDrawRevealed(true), 900);
+    return () => window.clearTimeout(timer);
+  }, [popup]);
 
   const appendChat = useCallback((message: GameChatMessage, unread = false) => {
     setChatMessages((items) => [...items, message]);
@@ -413,6 +762,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
       const next = await executePrivateBoard("new_game");
       setDice(1);
       applyPayload(next);
+      setThemeDraw(buildThemeDraw(next.state?.theme_profile?.theme, next.state?.theme_profile?.direction_label, next.state?.theme_options));
     } catch (e: any) {
       toast(`开新局失败：${e?.message || e}`);
     } finally {
@@ -435,24 +785,157 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
 
   const processDuReply = useCallback(async (reply: string, nextState: PrivateBoardState | undefined) => {
     const duReply = reply.trim() || "我看到了。";
-    appendChat({ id: makeChatId("du"), speaker: "du", text: duReply }, true);
-    if (isDuTurnState(nextState) && duWantsRoll(duReply)) {
-      await wait(260);
-      appendChat({ id: makeChatId("system"), speaker: "system", text: "渡第一行发出【掷骰】，已执行他的行动。" }, true);
-      await rollOnceRef.current?.({ notifyAfterUserRoll: false });
+    const directive = parseDuDirective(duReply);
+    const duChatText = directive.body.trim();
+    if (duChatText) {
+      appendChat({ id: makeChatId("du"), speaker: "du", text: duChatText }, true);
     }
-  }, [appendChat]);
+    const pending = nextState?.pending_event || null;
+    try {
+      if (pending?.type === "duel" && pending.current_actor === "du") {
+        if (directive.kind !== "choose" || !directive.choice.trim()) return;
+        const next = await executePrivateBoard(`choose ${directive.choice.trim()}`);
+        applyPayload(next);
+        appendChat({ id: makeChatId("system"), speaker: "system", text: "渡已出拳，系统已判定对抗结果。" }, true);
+        return;
+      }
+      if (pending?.reviewer === "du" && pending.type === "review" && pending.phase === "questioning") {
+        if (directive.kind !== "submit") return;
+        const question = directive.body.trim();
+        if (!question) {
+          appendChat({ id: makeChatId("system"), speaker: "system", text: "渡发了【提交】，但后面没有题目。" }, true);
+          return;
+        }
+        const next = await executePrivateBoard(`submit ${question}`);
+        applyPayload(next);
+        appendChat({ id: makeChatId("system"), speaker: "system", text: "渡已出题，轮到你回答。" }, true);
+        return;
+      }
+      if (pending?.actor === "du" && pending.type === "review" && pending.phase === "assigned") {
+        if (directive.kind !== "submit") return;
+        const submission = directive.body.trim();
+        if (!submission) {
+          appendChat({ id: makeChatId("system"), speaker: "system", text: "渡发了【提交】，但后面没有提交内容。" }, true);
+          return;
+        }
+        const next = await executePrivateBoard(`submit ${submission}`);
+        applyPayload(next);
+        appendChat({ id: makeChatId("system"), speaker: "system", text: "渡已提交惩罚任务，等你验收。" }, true);
+        return;
+      }
+      if (pending?.actor === "du" && pending.type === "choice") {
+        if (directive.kind === "pass") {
+          const next = await executePrivateBoard("pass");
+          applyPayload(next);
+          if (next.ok === false) {
+            appendChat({ id: makeChatId("system"), speaker: "system", text: payloadFailureText(next, "渡没有Pass卡，不能跳过。") }, true);
+            return;
+          }
+          appendChat({ id: makeChatId("system"), speaker: "system", text: "渡使用Pass卡跳过了惩罚。" }, true);
+          return;
+        }
+        if (directive.kind !== "choose" || !directive.choice.trim()) return;
+        const next = await executePrivateBoard(`choose ${directive.choice.trim()}`);
+        applyPayload(next);
+        appendChat({ id: makeChatId("system"), speaker: "system", text: "渡已选择惩罚选项。" }, true);
+        return;
+      }
+      if (pending?.reviewer === "du" && pending.type === "review" && pending.phase === "submitted") {
+        if (directive.kind === "approve") {
+          const next = await executePrivateBoard("approve");
+          applyPayload(next);
+          appendChat({ id: makeChatId("system"), speaker: "system", text: "渡验收通过，棋局继续。" }, true);
+          return;
+        }
+        if (directive.kind === "reject") {
+          const next = await executePrivateBoard(directive.body.trim() ? `reject ${directive.body.trim()}` : "reject");
+          applyPayload(next);
+          appendChat({ id: makeChatId("system"), speaker: "system", text: "渡打回了任务，需要重新提交。" }, true);
+          return;
+        }
+        return;
+      }
+      if (isDuTurnState(nextState) && duWantsRoll(duReply)) {
+        await wait(260);
+        appendChat({ id: makeChatId("system"), speaker: "system", text: "渡发送【掷骰】，已执行他的行动。" }, true);
+        await rollOnceRef.current?.({ notifyAfterUserRoll: false });
+      }
+    } catch (e: any) {
+      appendChat({ id: makeChatId("system"), speaker: "system", text: `渡的指令执行失败：${String(e?.message || e)}` }, true);
+    }
+  }, [appendChat, applyPayload]);
 
-  const notifyRollResultToDu = useCallback(async (rolled: PrivateBoardPayload) => {
+  const syncPrivateBoardWithDu = useCallback(async (
+    options: { mode: PrivateBoardSyncMode; message?: string; rollText?: string },
+    stateForReply: PrivateBoardState | undefined,
+  ): Promise<PrivateBoardSyncPayload> => {
+    if (!localPreviewEnabled) {
+      return sendPrivateBoardToDu(options);
+    }
+    let nextState = stateForReply;
+    let playerText = "";
+    if (options.mode === "final_note") {
+      const marked = await executePrivateBoard("final_note_sent");
+      nextState = marked.state || nextState;
+      playerText = marked.player_text || marked.text || "";
+    }
+    const reply = localDuReplyForState(options.mode, nextState);
+    return {
+      ok: true,
+      state: nextState,
+      player_text: playerText,
+      reply_text: reply,
+      reply_preview: reply.slice(0, 120),
+      wakeup: {
+        reply_text: reply,
+        reply_preview: reply.slice(0, 120),
+      },
+    };
+  }, [localPreviewEnabled]);
+
+  const processLocalDuPending = useCallback(async () => {
+    if (busy || animating || chatSending || !payload?.state) return;
+    const pending = payload.state.pending_event || null;
+    const needsDuReply = Boolean(
+      isDuTurnState(payload.state)
+        || (pending?.type === "choice" && pending.actor === "du")
+        || (pending?.type === "duel" && pending.current_actor === "du")
+        || (pending?.type === "review" && pending.actor === "du" && pending.phase === "assigned")
+        || (pending?.type === "review" && pending.reviewer === "du" && ["questioning", "submitted"].includes(String(pending.phase || ""))),
+    );
+    if (!needsDuReply) {
+      toast("当前没有需要假渡回应的内容。");
+      return;
+    }
+    setChatSending(true);
+    setPopup(null);
+    try {
+      await processDuReply(localDuReplyForState("chat", payload.state), payload.state);
+    } catch (e: any) {
+      toast(`本地假渡回应失败：${e?.message || e}`);
+    } finally {
+      setChatSending(false);
+    }
+  }, [animating, busy, chatSending, payload?.state, processDuReply, toast]);
+
+  const notifyRollResultToDu = useCallback(async (rolled: PrivateBoardPayload, message = "小玥刚掷完骰子。") => {
     const rollText = plainText(rolled.text || rolled.du_text || rolled.player_text || "").trim();
-    appendChat({ id: makeChatId("system"), speaker: "system", text: "已把这次掷骰结果和当前棋局发给渡。" }, true);
+    appendChat({
+      id: makeChatId("system"),
+      speaker: "system",
+      text: localPreviewEnabled
+        ? "本地假渡已收到这次棋局同步。"
+        : message.includes("掷")
+          ? "已把这次掷骰结果和当前棋局发给渡。"
+          : "已把棋局变化发给渡。",
+    }, true);
     setChatSending(true);
     try {
-      const next = await sendPrivateBoardToDu({
+      const next = await syncPrivateBoardWithDu({
         mode: "roll_result",
-        message: "小玥刚掷完骰子。",
+        message,
         rollText,
-      });
+      }, rolled.state);
       if (next.state) {
         applyPayload({
           ok: true,
@@ -469,7 +952,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     } finally {
       setChatSending(false);
     }
-  }, [appendChat, applyPayload, processDuReply, toast]);
+  }, [appendChat, applyPayload, localPreviewEnabled, processDuReply, syncPrivateBoardWithDu, toast]);
 
   const rollOnce = useCallback(async (options: { notifyAfterUserRoll?: boolean } = {}) => {
     if (busy || animating || isGameOver) return;
@@ -481,6 +964,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
       xinyue: Number(state.positions?.xinyue || 0),
       du: Number(state.positions?.du || 0),
     };
+    const actorBeforeRoll = state.turn_actor === "du" ? "du" : "xinyue";
     const visualPositions = { ...beforePositions };
     try {
       const next = await executePrivateBoard("roll");
@@ -501,9 +985,9 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         }
       }
       applyPayload(next);
-      const nextPopup = parseEventPopup(next.player_text || "");
+      const nextPopup = parseEventPopup(next.player_text || "", move);
       if (nextPopup) setPopup(nextPopup);
-      if (options.notifyAfterUserRoll !== false && next.state?.turn_actor === "du" && !next.state?.game_over) {
+      if (options.notifyAfterUserRoll !== false && actorBeforeRoll === "xinyue" && !next.state?.game_over) {
         notifyPayload = next;
       }
     } catch (e: any) {
@@ -516,11 +1000,157 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     if (notifyPayload) {
       await notifyRollResultToDu(notifyPayload);
     }
-  }, [animateActor, animateDice, animating, applyPayload, busy, isGameOver, notifyRollResultToDu, state.positions, toast]);
+  }, [animateActor, animateDice, animating, applyPayload, busy, isGameOver, notifyRollResultToDu, state.positions, state.turn_actor, toast]);
 
   useEffect(() => {
     rollOnceRef.current = rollOnce;
   }, [rollOnce]);
+
+  const executePendingCommand = useCallback(async (
+    command: string,
+    options: { success?: string; notify?: boolean; notifyMessage?: string } = {},
+  ) => {
+    if (busy || animating || chatSending || !payload?.state) return;
+    let nextPayload: PrivateBoardPayload | null = null;
+    setBusy(true);
+    setPopup(null);
+    try {
+      const next = await executePrivateBoard(command);
+      nextPayload = next;
+      applyPayload(next);
+      if (next.ok === false) {
+        toast(payloadFailureText(next, "这次操作没有生效。"));
+        return;
+      }
+      setPendingSubmission("");
+      if (options.success) {
+        appendChat({ id: makeChatId("system"), speaker: "system", text: options.success }, true);
+      }
+    } catch (e: any) {
+      toast(`处理惩罚任务失败：${e?.message || e}`);
+    } finally {
+      setBusy(false);
+    }
+    if (nextPayload && options.notify) {
+      await notifyRollResultToDu(nextPayload, options.notifyMessage || "小玥处理了涩涩走格棋的惩罚任务。");
+    }
+  }, [animating, appendChat, applyPayload, busy, chatSending, notifyRollResultToDu, payload?.state, toast]);
+
+  const submitPending = useCallback(() => {
+    const text = pendingSubmission.trim();
+    if (!text) {
+      toast("先写提交内容。");
+      return;
+    }
+    void executePendingCommand(`submit ${text}`, {
+      success: "已提交任务，等渡验收。",
+      notify: true,
+      notifyMessage: "小玥提交了惩罚任务，请你验收。",
+    });
+  }, [executePendingCommand, pendingSubmission, toast]);
+
+  const approvePending = useCallback(() => {
+    void executePendingCommand("approve", {
+      success: "你通过了任务，棋局继续。",
+      notify: true,
+      notifyMessage: "小玥通过了你的惩罚任务。",
+    });
+  }, [executePendingCommand]);
+
+  const rejectPending = useCallback(() => {
+    void executePendingCommand("reject", {
+      success: "你打回了任务，等渡重新提交。",
+      notify: true,
+      notifyMessage: "小玥打回了你的惩罚任务，请重新提交。",
+    });
+  }, [executePendingCommand]);
+
+  const choosePending = useCallback((choiceId: string) => {
+    const isDuel = pendingEvent?.type === "duel";
+    const isDuDuelPick = isDuel && pendingEvent?.current_actor === "du";
+    void executePendingCommand(`choose ${choiceId}`, {
+      success: isDuDuelPick ? "已替渡出拳，系统已判定。" : isDuel ? "已出拳。" : "已选择惩罚，棋局继续。",
+      notify: !isDuDuelPick,
+      notifyMessage: isDuel ? "小玥已在剪刀石头布对抗中出拳，请你发送【剪刀石头布：石头/剪刀/布】。" : "小玥处理完选择惩罚，棋局继续。",
+    });
+  }, [executePendingCommand, pendingEvent?.current_actor, pendingEvent?.type]);
+
+  const passPending = useCallback(() => {
+    void executePendingCommand("pass", {
+      success: "已使用Pass卡跳过惩罚。",
+      notify: true,
+      notifyMessage: "小玥使用Pass卡跳过了惩罚任务。",
+    });
+  }, [executePendingCommand]);
+
+  const sendFinalNote = useCallback(async () => {
+    const note = payload?.state?.final_note || null;
+    if (chatSending || busy || animating || !payload?.state || !note || note.sent) return;
+    setChatSending(true);
+    try {
+      const next = await syncPrivateBoardWithDu({
+        mode: "final_note",
+        message: note.text || "",
+      }, payload.state);
+      if (next.state) {
+        applyPayload({
+          ok: true,
+          state: next.state,
+          player_text: next.player_text || payload.player_text || "",
+        });
+      }
+      appendChat({ id: makeChatId("system"), speaker: "system", text: localPreviewEnabled ? "终局小纸条已本地发送给假渡。" : "终局小纸条已发送给渡。" }, true);
+      const reply = plainText(next.reply_text || next.wakeup?.reply_text || next.reply_preview || next.wakeup?.reply_preview || "").trim();
+      if (reply) appendChat({ id: makeChatId("du"), speaker: "du", text: reply }, true);
+      setFinalNoteOpen(false);
+    } catch (e: any) {
+      const message = String(e?.message || e || "同步失败");
+      appendChat({ id: makeChatId("system"), speaker: "system", text: `小纸条发送失败：${message}` }, true);
+      toast(`发送终局小纸条失败：${message}`);
+    } finally {
+      setChatSending(false);
+    }
+  }, [animating, appendChat, applyPayload, busy, chatSending, localPreviewEnabled, payload, syncPrivateBoardWithDu, toast]);
+
+  const appendFinalStatus = useCallback(async (slot: FinalAppendSlot, value: string, level = 1) => {
+    if (chatSending || busy || animating || !payload?.state) return;
+    const cleanValue = value.replace(/\s+/g, " ").trim();
+    if (!cleanValue) {
+      toast("先选要追加的内容。");
+      return;
+    }
+    const levelPart = slot === "prop" && isLevelableProp(cleanValue)
+      ? ` level=${Math.max(1, Math.min(5, Math.round(Number(level) || 1)))}`
+      : "";
+    setBusy(true);
+    try {
+      const next = await executePrivateBoard(`append_final_status ${slot} ${cleanValue}${levelPart}`);
+      applyPayload(next);
+      setFinalNoteOpen(true);
+      toast(`已启用：${cleanValue}`);
+    } catch (e: any) {
+      toast(`追加失败：${e?.message || e}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [animating, applyPayload, busy, chatSending, payload?.state, toast]);
+
+  const removeFinalStatus = useCallback(async (slot: FinalAppendSlot, value: string) => {
+    if (chatSending || busy || animating || !payload?.state) return;
+    const cleanValue = value.replace(/\s+/g, " ").trim();
+    if (!cleanValue) return;
+    setBusy(true);
+    try {
+      const next = await executePrivateBoard(`remove_final_status ${slot} ${cleanValue}`);
+      applyPayload(next);
+      setFinalNoteOpen(true);
+      toast(`已取消：${cleanValue}`);
+    } catch (e: any) {
+      toast(`取消失败：${e?.message || e}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [animating, applyPayload, busy, chatSending, payload?.state, toast]);
 
   const sendGameChat = useCallback(async () => {
     if (chatSending || busy || animating || !payload?.state) return;
@@ -531,10 +1161,10 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     appendChat(userChatMessage);
     setChatSending(true);
     try {
-      const next = await sendPrivateBoardToDu({
+      const next = await syncPrivateBoardWithDu({
         mode: "chat",
         message,
-      });
+      }, payload.state);
       if (next.state) {
         applyPayload({
           ok: true,
@@ -551,7 +1181,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     } finally {
       setChatSending(false);
     }
-  }, [animating, appendChat, applyPayload, busy, chatInput, chatSending, payload, processDuReply, toast]);
+  }, [animating, appendChat, applyPayload, busy, chatInput, chatSending, payload, processDuReply, syncPrivateBoardWithDu, toast]);
 
   const themeName = displayText(state.theme_profile?.theme || "未触发");
   const directionLabel = displayText(state.theme_profile?.direction_label || "待定");
@@ -559,12 +1189,55 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
   const duProgress = progressPosition(state.positions?.du, boardSize);
   const winnerLabel = state.winner ? ACTOR_LABEL[state.winner] : "";
   const lines = recentLines(payload?.player_text || "");
-  const rollDisabled = busy || animating || chatSending || !payload?.state || isDuTurn;
-  const chatDisabled = chatSending || busy || animating || !payload?.state;
+  const finalNote = state.final_note || null;
+  const finalMaterialItems = finalMaterialItemsFrom(state.final_note_items || [], finalNote);
+  const finalNoteKey = String(finalNote?.id || `${state.winner || ""}-${state.updated_at || ""}`);
+  const canUseToyConsole = Boolean(
+    isGameOver
+      && state.winner === "xinyue"
+      && (!finalNote || finalNote.target === "du")
+      && !finalNote?.sent
+  );
+  const finalTargetStatuses = state.statuses?.du || [];
+  const activeFinalProps = finalTargetStatuses.filter((item) => item.slot === "prop").map((item) => displayText(item.value || ""));
+
+  useEffect(() => {
+    if (!isGameOver || !finalNote || !finalNoteKey) return;
+    if (finalNoteSeenKey === finalNoteKey) return;
+    setFinalNoteSeenKey(finalNoteKey);
+    setFinalNoteOpen(true);
+  }, [finalNote, finalNoteKey, finalNoteSeenKey, isGameOver]);
+  const myPassCount = Math.max(0, Number(state.hands?.xinyue?.pass || 0));
+  const passSkipsUsed = Math.max(0, Number(state.pass_skips_used || 0));
   const pausedByActor: Record<Actor, boolean> = {
     xinyue: actorPaused(state.statuses?.xinyue),
     du: actorPaused(state.statuses?.du),
   };
+  const canProcessDuPause = isDuTurn && pausedByActor.du && !pendingEvent;
+  const rollDisabled = busy || animating || chatSending || !payload?.state || Boolean(pendingEvent) || (isDuTurn && !canProcessDuPause);
+  const canLocalProcessDuPending = Boolean(
+        pendingEvent
+      && (
+	        (pendingEvent.type === "choice" && pendingEvent.actor === "du")
+	        || (pendingEvent.type === "duel" && pendingEvent.current_actor === "du")
+	        || (pendingEvent.type === "review" && pendingEvent.actor === "du" && pendingEvent.phase === "assigned")
+	        || (pendingEvent.type === "review" && pendingEvent.reviewer === "du" && pendingEvent.phase === "questioning")
+	        || (pendingEvent.type === "review" && pendingEvent.reviewer === "du" && pendingEvent.phase === "submitted")
+	      )
+	  );
+  const canLocalDuReply = Boolean(payload?.state && (isDuTurn || canLocalProcessDuPending));
+  const localDuPendingLabel = pendingEvent?.type === "choice"
+    ? "本地模拟渡选择"
+    : pendingEvent?.type === "duel" && pendingEvent.current_actor === "du"
+      ? "本地模拟渡出拳"
+    : pendingEvent?.type === "review" && pendingEvent.reviewer === "du" && pendingEvent.phase === "questioning"
+      ? "本地模拟渡出题"
+      : pendingEvent?.type === "review" && pendingEvent.actor === "du" && pendingEvent.phase === "assigned"
+      ? "本地模拟渡提交"
+      : pendingEvent?.type === "review" && pendingEvent.reviewer === "du" && pendingEvent.phase === "submitted"
+        ? "本地模拟渡验收"
+        : "本地处理渡待办";
+  const chatDisabled = chatSending || busy || animating || !payload?.state;
 
   return (
     <div className="sese-game" ref={gameRef}>
@@ -619,8 +1292,23 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
       <section className="sese-controls">
         <div className="sese-player-states">
           <PlayerStateCard actor="xinyue" statuses={state.statuses?.xinyue || []} active={currentActor === "xinyue"} />
-          <PlayerStateCard actor="du" statuses={state.statuses?.du || []} active={currentActor === "du"} />
+          <PlayerStateCard
+            actor="du"
+            statuses={state.statuses?.du || []}
+            active={currentActor === "du"}
+          />
         </div>
+
+        {finalMaterialItems.length ? (
+          <div className="sese-final-pose-panel">
+            {finalMaterialItems.map((item) => (
+              <div className="sese-final-material-row" key={item.label}>
+                <span>{item.label}</span>
+                <strong>{item.values.join("、")}</strong>
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         <div className="sese-action-area">
           <div className={`sese-dice ${rolling ? "rolling" : ""}`} aria-label={`骰子 ${dice}`}>
@@ -632,9 +1320,30 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
             disabled={rollDisabled}
             onClick={isGameOver ? startNewGame : () => void rollOnce({ notifyAfterUserRoll: true })}
           >
-            {isGameOver ? "开新局" : isDuTurn ? "等渡掷骰" : busy || animating ? "移动中" : chatSending ? "等渡回应" : "掷骰子"}
+            {isGameOver ? "开新局" : pendingEvent ? "先处理任务" : canProcessDuPause ? "处理停步" : isDuTurn ? "等渡掷骰" : busy || animating ? "移动中" : chatSending ? "等渡回应" : "掷骰子"}
+          </button>
+          <button
+            className="sese-restart-button"
+            type="button"
+            disabled={busy || animating || chatSending}
+            onClick={startNewGame}
+          >
+            重开
           </button>
         </div>
+
+        {localPreviewEnabled ? (
+          <div className="sese-preview-tools">
+            <button
+              type="button"
+              disabled={busy || animating || chatSending || !canLocalDuReply}
+              onClick={() => void processLocalDuPending()}
+            >
+              本地假渡回应
+            </button>
+            <span>{pendingEvent ? "假渡会按自然语言指令回应" : isDuTurn ? "假渡会先发【掷骰】" : "轮到渡时可用"}</span>
+          </div>
+        ) : null}
 
         <div className="sese-history">
           {lines.length ? `最近：${lines[0]}` : "最近：等待第一次掷骰"}
@@ -647,7 +1356,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
             <div className="sese-chat-head">
               <div>
                 <strong>游戏内交流</strong>
-                <span>{isDuTurn ? "渡第一行【掷骰】才算指令" : "当前轮到我行动"}</span>
+                <span>{isDuTurn ? "等待渡发送【掷骰】" : "当前轮到你行动"}</span>
               </div>
               <button type="button" onClick={() => setChatOpen(false)} aria-label="关闭交流">×</button>
             </div>
@@ -684,13 +1393,134 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         </div>
       ) : null}
 
+      {themeDraw ? (
+        <div className="sese-theme-mask" role="dialog" aria-modal="true" aria-label="开局主题抽取">
+          <div className="sese-theme-modal">
+            <div className="sese-slot-lights" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+            </div>
+            <div className="sese-slot-marquee">
+              <span>THEME</span>
+              <strong>JACKPOT</strong>
+            </div>
+            <div className="sese-slot-face">
+              <div className="sese-theme-window">
+                <div className="sese-theme-strip" key={themeDraw.spinKey}>
+                  {themeDraw.items.map((item, index) => (
+                    <div className="sese-theme-item" key={`${item}-${index}`}>{displayText(item)}</div>
+                  ))}
+                </div>
+              </div>
+              <p className="sese-slot-plaque">主导方：{themeDraw.direction}</p>
+              <div className="sese-theme-actions">
+                <button className="secondary" type="button" disabled={busy} onClick={startNewGame}>{busy ? "重抽中" : "重抽主题"}</button>
+                <button type="button" onClick={() => setThemeDraw(null)}>开始本局</button>
+              </div>
+              <div className="sese-slot-tray" aria-hidden="true" />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {pendingEvent && !popup ? (
+        <div className="sese-pending-mask" role="dialog" aria-modal="true" aria-label="待处理惩罚">
+          <div className="sese-pending-modal">
+            <PendingEventPanel
+              pending={pendingEvent}
+              passCount={myPassCount}
+              passSkipsUsed={passSkipsUsed}
+              submission={pendingSubmission}
+              disabled={busy || animating || chatSending}
+              onSubmissionChange={setPendingSubmission}
+              onSubmit={submitPending}
+              onApprove={approvePending}
+              onReject={rejectPending}
+              onChoose={choosePending}
+              onPass={passPending}
+              localPreviewEnabled={localPreviewEnabled}
+              canLocalProcess={canLocalProcessDuPending}
+              localProcessLabel={localDuPendingLabel}
+              onLocalProcess={processLocalDuPending}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {isGameOver && finalNote && finalNoteOpen ? (
+        <div className="sese-final-note-mask" role="dialog" aria-modal="true" aria-label="终局小纸条">
+          <div className="sese-final-note-modal">
+            <div className="sese-final-note-head">
+              <span>终局小纸条</span>
+              <button type="button" onClick={() => setFinalNoteOpen(false)} aria-label="关闭终局小纸条">关闭</button>
+            </div>
+            <h2>{winnerLabel || "玩家"} 到达终点</h2>
+            <FinalNoteContent
+              note={finalNote}
+              canAddStatus={canUseToyConsole}
+              onAddStatus={() => setToyConsoleOpen(true)}
+            />
+            {finalNote.sent ? (
+              <em>已发送给渡</em>
+            ) : (
+              <button className="sese-final-note-send" type="button" disabled={chatSending || busy || animating} onClick={() => void sendFinalNote()}>
+                {chatSending ? "发送中" : "发送给渡"}
+              </button>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {canUseToyConsole && toyConsoleOpen ? (
+        <ToyConsoleSheet
+          level={toyConsoleLevel}
+          activeProps={activeFinalProps}
+          disabled={chatSending || busy || animating}
+          onClose={() => setToyConsoleOpen(false)}
+          onLevelChange={setToyConsoleLevel}
+          onToggleProp={(value, active) => {
+            if (active) void removeFinalStatus("prop", value);
+            else void appendFinalStatus("prop", value, toyConsoleLevel);
+          }}
+        />
+      ) : null}
+
       {popup ? (
         <div className="sese-popup-mask" role="dialog" aria-modal="true">
-          <div className="sese-popup">
-            <div className="sese-popup-kicker">第 {popup.position} 格</div>
-            <h2>{displayText(popup.title)}</h2>
-            <p>{displayText(popup.text)}</p>
-            <button type="button" onClick={() => setPopup(null)}>确 认</button>
+          <div className={`sese-popup ${popup.kind === "draw" ? `sese-popup-draw tone-${popup.tone || "penalty"}` : ""}`}>
+            <div className="sese-popup-kicker">
+              {displaySystemText(popup.actorLabel ? `${popup.actorLabel}走到第 ${popup.position} 格` : `第 ${popup.position} 格`)}
+            </div>
+            {popup.kind === "draw" ? (
+              <div className={`sese-draw-card ${popup.tone === "reward" && !drawRevealed ? "is-covered" : "is-revealed"}`}>
+                {popup.tone === "reward" && !drawRevealed ? (
+                  <>
+                    <div className="sese-card-pile" aria-hidden="true">
+                      <i />
+                      <i />
+                      <i />
+                      <i />
+                      <b />
+                    </div>
+                    <span>奖励抽卡</span>
+                    <em>抽卡中</em>
+                  </>
+                ) : (
+                  <>
+                    {popupCardTypeText(popup) ? <span>{popupCardTypeText(popup)}</span> : null}
+                    <strong>{displaySystemText(popup.cardTitle || popup.title)}</strong>
+                  </>
+                )}
+              </div>
+            ) : null}
+            {popup.kind === "draw" ? null : <h2>{displaySystemText(popup.title)}</h2>}
+            {popup.tone === "reward" && !drawRevealed ? <p>正在洗牌...</p> : popupDetailText(popup) ? <p>{popupDetailText(popup)}</p> : null}
+            {popup.tone === "reward" && !drawRevealed ? null : <button type="button" onClick={() => setPopup(null)}>确 认</button>}
           </div>
         </div>
       ) : null}
@@ -719,6 +1549,10 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           color: var(--text-main);
           font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
           padding: var(--sese-safe-top) 14px calc(env(safe-area-inset-bottom, 0px) + 22px);
+        }
+        .sese-game,
+        .sese-game * {
+          box-sizing: border-box;
         }
         .sese-header {
           display: flex;
@@ -856,12 +1690,26 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         .sese-tile-item { background: #f3e5f5; }
         .sese-tile-task { background: #f8bbd0; }
         .sese-tile-move { background: #fff9c4; }
+        .sese-tile-reset { background: #ffe0ec; }
+        .sese-tile-finish-jump { background: #fff3b0; }
         .sese-tile-swap { background: #e0f2f1; }
         .sese-tile-clear { background: #ffffff; }
         .sese-tile-time { background: #fff7dd; }
         .sese-tile-limit { background: #ffe3ea; }
         .sese-tile-pose { background: #edf7ff; }
         .sese-tile-theme { background: #f6e9ff; }
+        .sese-tile-empty {
+          border-color: rgba(255, 255, 255, 0.55);
+          background: rgba(255, 255, 255, 0.46);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.62);
+        }
+        .sese-tile-empty .sese-tile-icon {
+          display: none;
+        }
+        .sese-tile-empty .sese-tile-name {
+          color: rgba(136, 77, 138, 0.38);
+          font-weight: 700;
+        }
         .sese-tile-number {
           position: absolute;
           left: 6px;
@@ -943,8 +1791,15 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           background: rgba(255, 255, 255, 0.74);
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.78);
         }
-        .sese-player-card h2 {
+        .sese-player-card-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
           margin: 0 0 7px;
+        }
+        .sese-player-card h2 {
+          margin: 0;
           color: var(--text-main);
           font-size: 14px;
           font-weight: 900;
@@ -953,9 +1808,8 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         .sese-status-list {
           display: flex;
           flex-direction: column;
-          gap: 5px;
+          gap: 6px;
         }
-        .sese-status-item,
         .sese-status-empty {
           border-radius: 12px;
           background: rgba(248, 187, 208, 0.22);
@@ -965,12 +1819,55 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           font-weight: 800;
           line-height: 1.25;
         }
-        .sese-status-item span {
-          display: block;
-          margin-top: 2px;
+        .sese-status-group {
+          display: grid;
+          gap: 4px;
+        }
+        .sese-status-group-label {
           color: rgba(124, 74, 128, 0.62);
           font-size: 10px;
+          font-weight: 900;
+          line-height: 1.2;
+        }
+        .sese-status-chip-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+        }
+        .sese-status-chip {
+          display: inline-flex;
+          align-items: center;
+          box-sizing: border-box;
+          max-width: 100%;
+          min-height: 22px;
+          border-radius: 999px;
+          background: rgba(248, 187, 208, 0.26);
+          color: #7c4a80;
+          padding: 4px 7px;
+          font-size: 11px;
           font-weight: 800;
+          line-height: 1.2;
+        }
+        .sese-pending-mask {
+          position: fixed;
+          inset: 0;
+          z-index: 92;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(136, 77, 138, 0.34);
+          padding: max(env(safe-area-inset-top, 0px), 18px) 18px max(env(safe-area-inset-bottom, 0px), 18px);
+          backdrop-filter: blur(6px);
+        }
+        .sese-pending-modal {
+          width: min(360px, 100%);
+        }
+        .sese-pending-modal .sese-pending-card {
+          border-width: 4px;
+          border-radius: var(--radius-lg);
+          background: rgba(255, 255, 255, 0.97);
+          padding: 18px;
+          box-shadow: 0 20px 40px rgba(0,0,0,0.2);
         }
         .sese-roll-row {
           display: grid;
@@ -1128,7 +2025,6 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           --radius-md: 16px;
           --shadow-soft: 0 4px 12px rgba(233, 30, 99, 0.1);
           --sese-safe-top: max(calc(env(safe-area-inset-top, 0px) + 12px), 44px);
-          --wavy-border: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 120' preserveAspectRatio='none'%3E%3Cpath d='M0,0V46.29c47.79,22.2,103.59,32.17,158,28,70.36-5.37,136.33-33.31,206.8-37.5C438.64,32.43,512.34,53.67,583,72.05c69.27,18,138.3,24.88,209.4,13.08,36.15-6,69.85-17.84,104.45-29.34C989.49,25,1113-14.29,1200,52.47V0Z' fill='%23f8bbd0'/%3E%3C/svg%3E");
           display: flex;
           flex-direction: column;
           min-height: 100dvh;
@@ -1147,17 +2043,6 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           margin: 0;
           background-color: var(--primary-pink);
           padding: var(--sese-safe-top) 16px 18px;
-        }
-        .sese-header::after {
-          content: "";
-          position: absolute;
-          bottom: -24px;
-          left: 0;
-          width: 100%;
-          height: 28px;
-          background-image: var(--wavy-border);
-          background-size: cover;
-          transform: rotate(180deg);
         }
         .sese-back {
           position: absolute;
@@ -1266,7 +2151,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           align-items: center;
           justify-content: center;
           overflow: visible;
-          padding: 30px 12px 20px;
+          padding: 14px 12px 20px;
         }
         .sese-board {
           display: grid;
@@ -1307,6 +2192,20 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         .sese-tile-task { background: #f8bbd0; }
         .sese-tile-place { background: #e1f5fe; }
         .sese-tile-pose { background: #d1c4e9; }
+        .sese-tile-reset { background: #ffe0ec; }
+        .sese-tile-finish-jump { background: #fff3b0; }
+        .sese-tile-empty {
+          border-color: rgba(255,255,255,0.45);
+          background: rgba(255,255,255,0.42);
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,0.26);
+        }
+        .sese-tile-empty .sese-tile-icon {
+          display: none;
+        }
+        .sese-tile-empty .sese-tile-name {
+          color: rgba(136, 77, 138, 0.42);
+          font-weight: 400;
+        }
         .sese-tile-number {
           position: absolute;
           top: 2px;
@@ -1383,6 +2282,29 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           display: flex;
           gap: 10px;
         }
+        .sese-final-pose-panel {
+          display: grid;
+          gap: 4px;
+          border-radius: var(--radius-md);
+          background: rgba(255, 249, 196, 0.72);
+          padding: 8px 10px;
+          color: var(--text-main);
+        }
+        .sese-final-material-row {
+          display: grid;
+          gap: 2px;
+        }
+        .sese-final-pose-panel span {
+          color: var(--text-light);
+          font-size: 10px;
+          font-weight: 900;
+          line-height: 1.2;
+        }
+        .sese-final-pose-panel strong {
+          font-size: 11px;
+          font-weight: 900;
+          line-height: 1.35;
+        }
         .sese-player-card {
           flex: 1;
           min-height: 80px;
@@ -1393,17 +2315,24 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           box-shadow: none;
         }
         .sese-player-card.active { border: 2px solid var(--primary-pink); }
-        .sese-player-card h2 {
+        .sese-player-card-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 6px;
           margin: 0 0 4px;
+        }
+        .sese-player-card h2 {
+          margin: 0;
           color: var(--text-main);
           font-size: 11px;
           font-weight: 900;
           line-height: 1.2;
         }
         .sese-status-list {
-          display: block;
+          display: grid;
+          gap: 4px;
         }
-        .sese-status-item,
         .sese-status-empty {
           display: inline-block;
           margin: 2px;
@@ -1416,12 +2345,174 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           font-weight: 400;
           line-height: 1.2;
         }
-        .sese-status-item span {
-          display: inline;
-          margin: 0 0 0 4px;
+        .sese-status-group {
+          display: grid;
+          gap: 3px;
+        }
+        .sese-status-group-label {
           color: var(--text-light);
           font-size: 9px;
+          font-weight: 700;
+          line-height: 1.2;
+        }
+        .sese-status-chip-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 3px;
+        }
+        .sese-status-chip {
+          display: inline-flex;
+          align-items: center;
+          box-sizing: border-box;
+          max-width: 100%;
+          border: 1px solid rgba(0,0,0,0.05);
+          border-radius: 999px;
+          background: var(--soft-lavender);
+          color: var(--text-main);
+          padding: 2px 6px;
+          font-size: 9px;
           font-weight: 400;
+          line-height: 1.2;
+        }
+        .sese-pending-card {
+          border: 2px solid rgba(248, 187, 208, 0.9);
+          border-radius: var(--radius-md);
+          background: rgba(255, 255, 255, 0.9);
+          padding: 10px;
+          box-shadow: var(--shadow-soft);
+        }
+        .sese-pending-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          margin-bottom: 6px;
+        }
+        .sese-pending-head span {
+          flex: 0 0 auto;
+          border-radius: 999px;
+          background: var(--accent-yellow);
+          padding: 3px 7px;
+          color: var(--text-main);
+          font-size: 9px;
+          font-weight: 900;
+          line-height: 1;
+        }
+        .sese-pending-head strong {
+          min-width: 0;
+          overflow: hidden;
+          color: var(--text-main);
+          font-size: 13px;
+          font-weight: 900;
+          line-height: 1.2;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .sese-pending-card p,
+        .sese-pending-tip,
+        .sese-pending-wait {
+          margin: 0;
+          color: #7c4a80;
+          font-size: 11px;
+          font-weight: 700;
+          line-height: 1.45;
+        }
+        .sese-pending-tip,
+        .sese-pending-wait {
+          margin-top: 6px;
+          border-radius: 10px;
+          background: var(--soft-lavender);
+          padding: 6px 8px;
+        }
+        .sese-local-pending-button {
+          display: block;
+          width: 100%;
+          min-height: 34px;
+          margin-top: 8px;
+          border: 0;
+          border-radius: 14px;
+          background: var(--primary-pink);
+          color: #fff;
+          font-size: 11px;
+          font-weight: 900;
+          box-shadow: 0 3px 0 #d81b60;
+        }
+        .sese-local-pending-button:disabled {
+          opacity: 0.55;
+          box-shadow: none;
+        }
+        .sese-submission-text {
+          min-height: 44px;
+          white-space: pre-wrap;
+          word-break: break-word;
+        }
+        .sese-pending-card textarea {
+          display: block;
+          width: 100%;
+          min-height: 82px;
+          margin-top: 8px;
+          resize: vertical;
+          border: 1px solid rgba(186, 104, 200, 0.24);
+          border-radius: 12px;
+          background: #fff;
+          color: var(--text-main);
+          padding: 8px 10px;
+          font-size: 12px;
+          line-height: 1.45;
+          outline: none;
+        }
+        .sese-choice-list,
+        .sese-review-actions {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+          margin-top: 9px;
+        }
+        .sese-choice-list button,
+        .sese-review-actions button,
+        .sese-pass-button {
+          min-height: 36px;
+          border: 0;
+          border-radius: 14px;
+          background: var(--primary-pink);
+          color: #fff;
+          padding: 7px 9px;
+          font-size: 11px;
+          font-weight: 900;
+          line-height: 1.25;
+          box-shadow: 0 3px 0 #d81b60;
+        }
+        .sese-choice-list button:disabled,
+        .sese-review-actions button:disabled,
+        .sese-pass-button:disabled {
+          opacity: 0.5;
+        }
+        .sese-rps-list {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+        .sese-choice-list .sese-rps-button {
+          min-height: 54px;
+          border-radius: 18px;
+          background: #ffffff;
+          color: var(--text-main);
+          font-size: 26px;
+          line-height: 1;
+          box-shadow: inset 0 0 0 2px rgba(248, 187, 208, 0.82), 0 4px 0 #f48fb1;
+        }
+        .sese-choice-list .sese-rps-button.is-selected {
+          background: var(--primary-pink);
+          color: #ffffff;
+          box-shadow: inset 0 0 0 2px #ffffff, 0 4px 0 #d81b60;
+          transform: translateY(1px);
+        }
+        .sese-choice-list .sese-rps-button.is-selected:disabled {
+          opacity: 1;
+        }
+        .sese-pass-button {
+          width: 100%;
+          margin-top: 8px;
+          background: #ba68c8;
+          box-shadow: 0 3px 0 #8e24aa;
         }
         .sese-action-area {
           display: flex;
@@ -1467,6 +2558,237 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           background: #ce93d8;
           box-shadow: 0 4px 0 #ab47bc;
           opacity: 0.7;
+        }
+        .sese-restart-button {
+          flex: 0 0 46px;
+          height: 42px;
+          border: 0;
+          border-radius: 21px;
+          background: #fff;
+          color: var(--text-main);
+          font-size: 12px;
+          font-weight: 900;
+          box-shadow: 0 3px 0 rgba(136, 77, 138, 0.18);
+        }
+        .sese-restart-button:disabled {
+          opacity: 0.5;
+        }
+        .sese-preview-tools {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          min-height: 30px;
+          color: rgba(136, 77, 138, 0.66);
+          font-size: 10px;
+          font-weight: 800;
+        }
+        .sese-preview-tools button {
+          height: 30px;
+          border: 0;
+          border-radius: 15px;
+          background: #ffffff;
+          color: var(--text-main);
+          padding: 0 12px;
+          font-size: 11px;
+          font-weight: 900;
+          box-shadow: 0 3px 0 rgba(136, 77, 138, 0.16);
+        }
+        .sese-preview-tools button:active {
+          transform: translateY(1px);
+        }
+        .sese-preview-tools button:disabled {
+          opacity: 0.45;
+        }
+        .sese-theme-mask {
+          position: fixed;
+          inset: 0;
+          z-index: 105;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(136, 77, 138, 0.42);
+          padding: max(env(safe-area-inset-top, 0px), 18px) 18px max(env(safe-area-inset-bottom, 0px), 18px);
+          backdrop-filter: blur(6px);
+        }
+        .sese-theme-modal {
+          position: relative;
+          width: min(380px, calc(100vw - 54px));
+          border: 5px solid #ffffff;
+          border-radius: 32px 32px 26px 26px;
+          background: #e975a5;
+          padding: 13px 16px 18px;
+          text-align: center;
+          box-shadow:
+            0 24px 50px rgba(73, 34, 81, 0.32),
+            inset 0 2px 0 rgba(255,255,255,0.74),
+            inset 0 -7px 0 rgba(174, 42, 100, 0.28);
+        }
+        .sese-slot-lights {
+          display: flex;
+          justify-content: center;
+          gap: 7px;
+          margin-bottom: 8px;
+        }
+        .sese-slot-lights i {
+          width: 11px;
+          height: 11px;
+          border: 2px solid rgba(255,255,255,0.86);
+          border-radius: 50%;
+          background: #fff7a8;
+          box-shadow: 0 0 12px rgba(255, 247, 168, 0.88);
+          animation: seseSlotLight 900ms ease-in-out infinite alternate;
+        }
+        .sese-slot-lights i:nth-child(2),
+        .sese-slot-lights i:nth-child(4) {
+          background: #ffffff;
+          animation-delay: 180ms;
+        }
+        .sese-slot-marquee {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 2px;
+          margin-bottom: 10px;
+          border: 3px solid #7b3c78;
+          border-radius: 18px;
+          background: #fff2ac;
+          padding: 7px 12px;
+          box-shadow: inset 0 -4px 0 rgba(123,60,120,0.16), 0 5px 0 rgba(123,60,120,0.22);
+        }
+        .sese-slot-marquee span,
+        .sese-slot-marquee strong {
+          color: #7b3c78;
+          line-height: 1;
+          letter-spacing: 0;
+        }
+        .sese-slot-marquee span {
+          font-size: 10px;
+          font-weight: 900;
+        }
+        .sese-slot-marquee strong {
+          font-size: 20px;
+          font-weight: 900;
+        }
+        .sese-slot-face {
+          position: relative;
+          border: 4px solid rgba(255,255,255,0.88);
+          border-radius: 24px;
+          background: #fff4fa;
+          padding: 13px;
+          box-shadow:
+            inset 0 0 0 2px rgba(216, 95, 146, 0.16),
+            0 8px 0 rgba(157, 47, 103, 0.25);
+        }
+        .sese-reel-bank {
+          display: grid;
+          grid-template-columns: 58px minmax(0, 1fr) 58px;
+          gap: 7px;
+          border: 4px solid #7b3c78;
+          border-radius: 20px;
+          background: #7b3c78;
+          padding: 7px;
+          box-shadow: inset 0 0 0 2px rgba(255,255,255,0.22);
+        }
+        .sese-theme-window {
+          position: relative;
+          height: 70px;
+          margin: 0;
+          overflow: hidden;
+          border: 3px solid #fff;
+          border-radius: 14px;
+          background: #fff;
+          box-shadow:
+            inset 0 8px 12px rgba(74, 34, 78, 0.12),
+            inset 0 -8px 12px rgba(74, 34, 78, 0.1);
+        }
+        .sese-theme-window-main {
+          border-width: 4px;
+        }
+        .sese-theme-window-side {
+          background: #fff7c8;
+        }
+        .sese-theme-window::before,
+        .sese-theme-window::after {
+          content: "";
+          position: absolute;
+          left: 0;
+          right: 0;
+          z-index: 2;
+          height: 16px;
+          pointer-events: none;
+        }
+        .sese-theme-window::before {
+          top: 0;
+          border-top: 5px solid rgba(123,60,120,0.18);
+        }
+        .sese-theme-window::after {
+          bottom: 0;
+          border-bottom: 5px solid rgba(123,60,120,0.16);
+        }
+        .sese-theme-strip {
+          animation: seseThemeSpin 1200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+        .sese-theme-item {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 70px;
+          color: var(--text-main);
+          font-size: 18px;
+          font-weight: 900;
+          line-height: 1;
+          text-align: center;
+          word-break: keep-all;
+          padding: 0 8px;
+        }
+        .sese-theme-window-side .sese-theme-item {
+          color: #9b3f78;
+          font-size: 12px;
+          padding: 0 3px;
+        }
+        .sese-slot-plaque {
+          margin: 12px 0 10px;
+          border-radius: 14px;
+          background: #f3e5f5;
+          color: #7c4a80;
+          padding: 8px 10px;
+          font-size: 13px;
+          font-weight: 900;
+        }
+        .sese-theme-actions {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+        .sese-theme-modal button {
+          min-width: 0;
+          min-height: 38px;
+          border: 0;
+          border-radius: 16px;
+          background: #ff6f9f;
+          color: #fff;
+          padding: 8px 12px;
+          font-size: 12px;
+          font-weight: 900;
+          box-shadow: 0 4px 0 #bd3367;
+        }
+        .sese-theme-modal button.secondary {
+          background: #ffffff;
+          color: #7b3c78;
+          box-shadow: 0 4px 0 rgba(123,60,120,0.22);
+        }
+        .sese-theme-modal button:disabled {
+          opacity: 0.52;
+          box-shadow: none;
+        }
+        .sese-slot-tray {
+          width: 70px;
+          height: 11px;
+          margin: 13px auto 0;
+          border-radius: 999px;
+          background: #7b3c78;
+          box-shadow: inset 0 3px 0 rgba(0,0,0,0.18), 0 2px 0 rgba(255,255,255,0.54);
         }
         .sese-history {
           padding: 0 10px;
@@ -1624,6 +2946,296 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         .sese-chat-form button:disabled {
           opacity: 0.5;
         }
+        .sese-final-note-mask {
+          position: fixed;
+          inset: 0;
+          z-index: 110;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(136, 77, 138, 0.34);
+          padding: 18px;
+          backdrop-filter: blur(4px);
+        }
+        .sese-final-note-modal {
+          width: min(430px, 100%);
+          border: 4px solid var(--primary-pink);
+          border-radius: var(--radius-lg);
+          background: rgba(255, 255, 255, 0.96);
+          padding: 22px;
+          box-shadow: 0 18px 36px rgba(136, 77, 138, 0.22);
+        }
+        .sese-final-note-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+        }
+        .sese-final-note-head span {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          height: 24px;
+          padding: 0 12px;
+          border-radius: 999px;
+          background: #fff9c4;
+          color: var(--text-main);
+          font-size: 11px;
+          font-weight: 900;
+        }
+        .sese-final-note-head button {
+          height: 28px;
+          border: 0;
+          border-radius: 14px;
+          background: rgba(240, 98, 146, 0.12);
+          color: var(--text-light);
+          padding: 0 10px;
+          font-size: 12px;
+          font-weight: 900;
+        }
+        .sese-final-note-modal h2 {
+          margin: 12px 0 10px;
+          color: var(--text-main);
+          font-size: 22px;
+          line-height: 1.18;
+          text-align: center;
+        }
+        .sese-final-note-body {
+          display: grid;
+          gap: 10px;
+          margin-top: 12px;
+        }
+        .sese-final-note-intro,
+        .sese-final-note-closing {
+          border-radius: 16px;
+          background: #fff7fb;
+          color: #875183;
+          padding: 10px 12px;
+          font-size: 13px;
+          font-weight: 900;
+          line-height: 1.55;
+        }
+        .sese-final-note-section {
+          display: grid;
+          gap: 9px;
+          border: 1px solid #f3c6dd;
+          border-radius: 18px;
+          background: #fff;
+          padding: 11px 12px;
+        }
+        .sese-final-note-section > span {
+          color: #b45a91;
+          font-size: 11px;
+          font-weight: 900;
+          line-height: 1.2;
+        }
+        .sese-final-note-section-title {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+        }
+        .sese-final-note-section-title > span {
+          color: #b45a91;
+          font-size: 11px;
+          font-weight: 900;
+          line-height: 1.2;
+        }
+        .sese-final-note-section-title > button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex: 0 0 auto;
+          width: 26px;
+          height: 26px;
+          border: 0;
+          border-radius: 50%;
+          background: #f8a9c6;
+          color: #fff;
+          box-shadow: 0 3px 0 #d81b60;
+        }
+        .sese-final-note-section-title > button svg {
+          width: 15px;
+          height: 15px;
+          fill: none;
+          stroke: currentColor;
+          stroke-width: 3;
+          stroke-linecap: round;
+        }
+        .sese-final-note-section-title > button:active {
+          transform: translateY(1px);
+          box-shadow: 0 2px 0 #d81b60;
+        }
+        .sese-final-note-section > strong {
+          color: var(--text-main);
+          font-size: 14px;
+          line-height: 1.35;
+        }
+        .sese-final-note-status-group {
+          display: grid;
+          gap: 7px;
+        }
+        .sese-final-note-status-group > b {
+          justify-self: start;
+          border-radius: 999px;
+          background: #fff1f7;
+          color: #8d4a86;
+          padding: 4px 9px;
+          font-size: 11px;
+          line-height: 1.2;
+        }
+        .sese-final-note-status-values {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .sese-final-note-status-values span {
+          display: inline-flex;
+          align-items: center;
+          box-sizing: border-box;
+          max-width: 100%;
+          border-radius: 999px;
+          background: #f8edf6;
+          color: #795078;
+          padding: 6px 10px;
+          font-size: 12px;
+          line-height: 1.25;
+          word-break: break-word;
+        }
+        .sese-final-note-empty {
+          color: #9b7598;
+          font-size: 12px;
+          line-height: 1.45;
+        }
+        .sese-final-note-closing {
+          text-align: center;
+          background: #fff9c4;
+        }
+        .sese-toy-console-mask {
+          position: fixed;
+          inset: 0;
+          z-index: 125;
+          display: flex;
+          align-items: flex-end;
+          justify-content: center;
+          background: rgba(74, 37, 70, 0.28);
+          padding: 14px;
+          backdrop-filter: blur(4px);
+        }
+        .sese-toy-console-sheet {
+          width: min(460px, 100%);
+          max-height: min(78vh, 620px);
+          overflow: auto;
+          border: 3px solid #f4a9c5;
+          border-radius: 28px 28px 20px 20px;
+          background: #fffafc;
+          padding: 18px;
+          box-shadow: 0 18px 42px rgba(112, 63, 105, 0.24);
+        }
+        .sese-toy-console-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 14px;
+        }
+        .sese-toy-console-head div {
+          display: grid;
+          gap: 5px;
+        }
+        .sese-toy-console-head span {
+          color: var(--text-main);
+          font-size: 20px;
+          font-weight: 900;
+          line-height: 1.2;
+        }
+        .sese-toy-console-head strong {
+          color: #9b6b97;
+          font-size: 12px;
+          font-weight: 900;
+          line-height: 1.35;
+        }
+        .sese-toy-console-head button {
+          flex: 0 0 auto;
+          height: 30px;
+          border: 0;
+          border-radius: 15px;
+          background: #fce5ef;
+          color: var(--text-light);
+          padding: 0 11px;
+          font-size: 12px;
+          font-weight: 900;
+        }
+        .sese-toy-console-section {
+          display: grid;
+          gap: 9px;
+          margin-top: 14px;
+        }
+        .sese-toy-console-section label {
+          color: #8d4a86;
+          font-size: 12px;
+          font-weight: 900;
+          line-height: 1.2;
+        }
+        .sese-toy-level-row,
+        .sese-toy-chip-grid {
+          display: grid;
+          gap: 8px;
+        }
+        .sese-toy-level-row {
+          grid-template-columns: repeat(5, minmax(0, 1fr));
+        }
+        .sese-toy-chip-grid {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+        .sese-toy-level-row button,
+        .sese-toy-chip-grid button {
+          min-height: 38px;
+          border: 2px solid #f1c2d6;
+          border-radius: 14px;
+          background: #fff;
+          color: var(--text-main);
+          padding: 7px 9px;
+          font-size: 12px;
+          font-weight: 900;
+          line-height: 1.25;
+          box-shadow: 0 3px 0 rgba(216, 27, 96, 0.18);
+        }
+        .sese-toy-level-row button.selected,
+        .sese-toy-chip-grid button.selected {
+          border-color: #e91e63;
+          background: #f8a9c6;
+          color: #fff;
+          box-shadow: 0 3px 0 #d81b60;
+        }
+        .sese-toy-level-row button:disabled,
+        .sese-toy-chip-grid button:disabled {
+          opacity: 0.58;
+        }
+        .sese-final-note-modal em {
+          display: block;
+          margin-top: 18px;
+          color: var(--text-light);
+          font-size: 13px;
+          font-style: normal;
+          font-weight: 900;
+          text-align: center;
+        }
+        .sese-final-note-send {
+          width: 100%;
+          height: 46px;
+          margin-top: 18px;
+          border: 0;
+          border-radius: 23px;
+          background: #f06292;
+          color: #fff;
+          font-size: 15px;
+          font-weight: 900;
+          box-shadow: 0 4px 0 #d81b60;
+        }
+        .sese-final-note-send:disabled {
+          opacity: 0.58;
+        }
         .sese-popup-mask {
           position: fixed;
           inset: 0;
@@ -1644,7 +3256,128 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           text-align: center;
           box-shadow: 0 20px 40px rgba(0,0,0,0.2);
         }
-        .sese-popup-kicker { display: none; }
+        .sese-popup-draw {
+          overflow: hidden;
+        }
+        .sese-popup-kicker {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          margin: 0 auto 10px;
+          border-radius: 999px;
+          background: var(--accent-yellow);
+          padding: 5px 12px;
+          color: var(--text-main);
+          font-size: 12px;
+          font-weight: 900;
+          line-height: 1.2;
+        }
+        .sese-draw-card {
+          margin: 0 auto 14px;
+          border-radius: 18px;
+          background: var(--soft-lavender);
+          padding: 16px 12px;
+          box-shadow: inset 0 0 0 2px rgba(248, 187, 208, 0.8);
+          animation: seseDrawCard 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+        .sese-draw-card.is-covered {
+          min-height: 118px;
+          border: 3px solid #ffffff;
+          background: #e975a5;
+          box-shadow:
+            inset 0 0 0 3px rgba(123,60,120,0.18),
+            inset 0 -6px 0 rgba(123,60,120,0.18),
+            0 8px 0 rgba(123,60,120,0.22);
+          animation: seseDrawCard 360ms cubic-bezier(0.16, 1, 0.3, 1) both, seseCardPulse 740ms ease-in-out infinite alternate;
+        }
+        .sese-card-pile {
+          position: relative;
+          width: 132px;
+          height: 94px;
+          margin: 2px auto 12px;
+        }
+        .sese-card-pile i,
+        .sese-card-pile b {
+          position: absolute;
+          display: block;
+          width: 62px;
+          height: 82px;
+          border: 3px solid #ffffff;
+          border-radius: 12px;
+          background: #fff2ac;
+          box-shadow: 0 5px 0 rgba(123,60,120,0.16), inset 0 -5px 0 rgba(123,60,120,0.1);
+        }
+        .sese-card-pile i:nth-child(1) {
+          left: 13px;
+          top: 9px;
+          transform: rotate(-9deg);
+          background: #f3e5f5;
+        }
+        .sese-card-pile i:nth-child(2) {
+          left: 18px;
+          top: 6px;
+          transform: rotate(-4deg);
+          background: #fff2ac;
+        }
+        .sese-card-pile i:nth-child(3) {
+          left: 23px;
+          top: 3px;
+          transform: rotate(3deg);
+          background: #ffe0ec;
+        }
+        .sese-card-pile i:nth-child(4) {
+          left: 28px;
+          top: 0;
+          transform: rotate(7deg);
+          background: #ffffff;
+        }
+        .sese-card-pile b {
+          left: 52px;
+          top: 3px;
+          z-index: 2;
+          background: #fff7c8;
+          animation: seseCardDrawOut 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+        .sese-draw-card span {
+          display: block;
+          color: var(--text-light);
+          font-size: 11px;
+          font-weight: 900;
+          line-height: 1;
+        }
+        .sese-draw-card strong {
+          display: block;
+          margin-top: 8px;
+          color: var(--text-main);
+          font-size: 20px;
+          font-weight: 900;
+          line-height: 1.2;
+        }
+        .sese-draw-card em {
+          display: block;
+          margin-top: 8px;
+          color: #fff;
+          font-size: 12px;
+          font-style: normal;
+          font-weight: 900;
+        }
+        .sese-draw-card.is-covered span,
+        .sese-draw-card.is-covered strong {
+          color: #fff;
+        }
+        .sese-draw-card.is-covered strong {
+          margin-top: 0;
+          font-size: 28px;
+        }
+        .sese-popup-draw.tone-reward .sese-draw-card {
+          background: var(--accent-yellow);
+        }
+        .sese-popup-draw.tone-reward .sese-draw-card.is-covered {
+          background: #e975a5;
+        }
+        .sese-popup-draw.tone-choice .sese-draw-card {
+          background: #f8bbd0;
+        }
         .sese-popup h2 {
           margin: 0 0 12px;
           color: var(--text-main);
@@ -1678,6 +3411,27 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           50% { transform: rotate(10deg) scale(1.1); }
           100% { transform: rotate(-10deg) scale(1); }
         }
+        @keyframes seseThemeSpin {
+          from { transform: translateY(0); }
+          to { transform: translateY(-490px); }
+        }
+        @keyframes seseSlotLight {
+          from { opacity: 0.58; transform: scale(0.86); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes seseDrawCard {
+          from { transform: translateY(18px) scale(0.94); opacity: 0; }
+          to { transform: translateY(0) scale(1); opacity: 1; }
+        }
+        @keyframes seseCardPulse {
+          from { transform: translateY(0) rotate(-1deg); }
+          to { transform: translateY(-3px) rotate(1deg); }
+        }
+        @keyframes seseCardDrawOut {
+          0% { transform: translateX(-18px) rotate(7deg) scale(0.96); opacity: 0.86; }
+          58% { transform: translateX(28px) translateY(-10px) rotate(13deg) scale(1); opacity: 1; }
+          100% { transform: translateX(36px) translateY(-14px) rotate(10deg) scale(1.04); opacity: 1; }
+        }
         `}
       </style>
     </div>
@@ -1693,24 +3447,407 @@ function StatusPill({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PlayerStateCard({ actor, statuses, active }: { actor: Actor; statuses: StatusItem[]; active: boolean }) {
-  const shown = statuses.slice(-3).reverse();
+function PlayerStateCard({
+  actor,
+  statuses,
+  active,
+}: {
+  actor: Actor;
+  statuses: StatusItem[];
+  active: boolean;
+}) {
+  const shown = groupStatusItems(statuses);
   return (
     <div className={`sese-player-card sese-player-card-${actor} ${active ? "active" : ""}`}>
-      <h2>{actor === "xinyue" ? "我的状态" : "渡的状态"}</h2>
+      <div className="sese-player-card-head">
+        <h2>{actor === "xinyue" ? "我的状态" : "渡的状态"}</h2>
+      </div>
       <div className="sese-status-list">
-        {shown.length ? shown.map((item, index) => {
-          const label = statusLabel(item);
-          const value = displayText(item.value || "");
-          const duration = statusDuration(item);
+        {shown.length ? shown.map((item) => {
           return (
-            <div className="sese-status-item" key={`${label}-${value}-${index}`}>
-              {label}{value ? `：${value}` : ""}
-              {duration ? <span>{duration}</span> : null}
+            <div className="sese-status-group" key={item.label}>
+              <span className="sese-status-group-label">{item.label}</span>
+              <div className="sese-status-chip-row">
+                {item.values.map((value) => (
+                  <span className="sese-status-chip" key={`${item.label}-${value}`}>
+                    {value}
+                  </span>
+                ))}
+              </div>
             </div>
           );
         }) : <div className="sese-status-empty">无状态</div>}
       </div>
+    </div>
+  );
+}
+
+function ToyConsoleSheet({
+  level,
+  activeProps,
+  disabled,
+  onClose,
+  onLevelChange,
+  onToggleProp,
+}: {
+  level: number;
+  activeProps: string[];
+  disabled: boolean;
+  onClose: () => void;
+  onLevelChange: (level: number) => void;
+  onToggleProp: (value: string, active: boolean) => void;
+}) {
+  const activePropSet = new Set(activeProps);
+  return (
+    <div className="sese-toy-console-mask" role="dialog" aria-modal="true" aria-label="玩具控制台" onClick={onClose}>
+      <div className="sese-toy-console-sheet" onClick={(event) => event.stopPropagation()}>
+        <div className="sese-toy-console-head">
+          <div>
+            <span>玩具控制台</span>
+            <strong>控制渡当前状态</strong>
+          </div>
+          <button type="button" onClick={onClose} aria-label="关闭玩具控制台">关闭</button>
+        </div>
+
+        <div className="sese-toy-console-section">
+          <label>道具档位</label>
+          <div className="sese-toy-level-row">
+            {[1, 2, 3, 4, 5].map((item) => (
+              <button
+                key={item}
+                type="button"
+                disabled={disabled}
+                className={item === level ? "selected" : ""}
+                onClick={() => onLevelChange(item)}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="sese-toy-console-section">
+          <label>启用道具</label>
+          <div className="sese-toy-chip-grid">
+            {FINAL_TOY_PROP_OPTIONS.map((item) => (
+              (() => {
+                const active = activePropSet.has(item);
+                return (
+                  <button
+                    key={item}
+                    type="button"
+                    disabled={disabled}
+                    className={active ? "selected" : ""}
+                    aria-pressed={active}
+                    aria-label={active ? `取消启用${item}` : `启用${item}`}
+                    onClick={() => onToggleProp(item, active)}
+                  >
+                    {item}
+                  </button>
+                );
+              })()
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FinalNoteContent({
+  note,
+  canAddStatus = false,
+  onAddStatus,
+}: {
+  note: FinalNote;
+  canAddStatus?: boolean;
+  onAddStatus?: () => void;
+}) {
+  const intro = finalNoteIntro(note);
+  const theme = displayText(note.theme || "本局主题");
+  const targetLabel = note.target === "du" ? "渡当前状态" : "你的当前状态";
+  const statusGroups = finalNoteStatusGroups(note.target_status || "");
+  const finalMaterials = finalMaterialItemsFrom([], note);
+  return (
+    <div className="sese-final-note-body">
+      <div className="sese-final-note-intro">{intro}</div>
+      <div className="sese-final-note-section">
+        <span>本局主题</span>
+        <strong>{theme}</strong>
+      </div>
+      <div className="sese-final-note-section">
+        <div className="sese-final-note-section-title">
+          <span>{targetLabel}</span>
+          {canAddStatus ? (
+            <button type="button" onClick={onAddStatus} aria-label="打开玩具控制台">
+              <PlusIcon />
+            </button>
+          ) : null}
+        </div>
+        {statusGroups.length ? (
+          statusGroups.map((group) => (
+            <div className="sese-final-note-status-group" key={group.label}>
+              <b>{group.label}</b>
+              <div className="sese-final-note-status-values">
+                {group.values.map((value) => <span key={value}>{value}</span>)}
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="sese-final-note-empty">没有遗留状态，可以自由决定最后玩法。</div>
+        )}
+      </div>
+      {finalMaterials.map((item) => (
+        <div className="sese-final-note-section" key={item.label}>
+          <span>{item.label}</span>
+          <strong>{item.values.join("、")}</strong>
+        </div>
+      ))}
+      <div className="sese-final-note-closing">请尽情享受你们的ooxx吧！</div>
+    </div>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+function finalNoteIntro(note: FinalNote): string {
+  const lines = displaySystemText(note.text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const line = lines.find((item) => {
+    return !item.startsWith("【") && !item.startsWith("请根据") && !item.startsWith("本局主题") && !item.startsWith("请尽情");
+  });
+  return line || "终点已到达，赢家状态已清空。";
+}
+
+function finalNoteStatusGroups(summary: string): { label: string; values: string[] }[] {
+  const cleaned = displaySystemText(summary).trim();
+  if (!cleaned || cleaned === "无") return [];
+  return cleaned
+    .split("；")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const index = part.indexOf("：");
+      if (index < 0) return { label: "状态", values: [part] };
+      const label = part.slice(0, index).trim() || "状态";
+      const values = part
+        .slice(index + 1)
+        .split("、")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      return { label, values: values.length ? values : ["无"] };
+    });
+}
+
+function PendingEventPanel({
+  pending,
+  passCount,
+  passSkipsUsed,
+  submission,
+  disabled,
+  onSubmissionChange,
+  onSubmit,
+  onApprove,
+  onReject,
+  onChoose,
+  onPass,
+  localPreviewEnabled,
+  canLocalProcess,
+  localProcessLabel,
+  onLocalProcess,
+}: {
+  pending: PendingEvent;
+  passCount: number;
+  passSkipsUsed: number;
+  submission: string;
+  disabled: boolean;
+  onSubmissionChange: (value: string) => void;
+  onSubmit: () => void;
+  onApprove: () => void;
+  onReject: () => void;
+  onChoose: (choiceId: string) => void;
+  onPass: () => void;
+  localPreviewEnabled?: boolean;
+  canLocalProcess?: boolean;
+  localProcessLabel?: string;
+  onLocalProcess?: () => void;
+}) {
+  const name = displaySystemText(pending.name || "惩罚任务");
+  const actor = pending.actor || "xinyue";
+  const reviewer = pending.reviewer || (actor === "xinyue" ? "du" : "xinyue");
+  const currentActor = pending.current_actor || actor;
+  const isMine = actor === "xinyue";
+  const isMyTurn = currentActor === "xinyue";
+  const isMyReview = reviewer === "xinyue";
+  const hasQuestionText = Boolean(displayText(pending.question_text || "").trim());
+  const canPass = isMine && pending.pass_allowed !== false && passCount > 0 && passSkipsUsed < 1 && !["submitted", "questioning"].includes(String(pending.phase || ""));
+  const rawSubmissionHint = displaySystemText(pending.submission || "").trim();
+  const submissionHint = /^你的回答[。.]?$/.test(rawSubmissionHint) ? "" : rawSubmissionHint;
+  const [selectedRps, setSelectedRps] = useState("");
+  useEffect(() => {
+    setSelectedRps("");
+  }, [pending.id, pending.current_actor, pending.phase]);
+  const activeRpsPick = normalizeRpsChoice(selectedRps || pending.picks?.xinyue);
+  const localProcessButton = localPreviewEnabled && canLocalProcess && onLocalProcess ? (
+    <button className="sese-local-pending-button" type="button" disabled={disabled} onClick={onLocalProcess}>
+      {localProcessLabel || "本地模拟渡处理"}
+    </button>
+  ) : null;
+
+  if (pending.type === "choice") {
+    return (
+      <div className="sese-pending-card">
+        <div className="sese-pending-head">
+          <span>{isMine ? "你的选择惩罚" : "等待渡选择"}</span>
+          <strong>{name}</strong>
+        </div>
+        <p>{displaySystemText(pending.prompt || "选择一项惩罚。")}</p>
+        {isMine ? (
+          <div className="sese-choice-list">
+            {(pending.choices || []).map((choice) => {
+              const id = String(choice.id || choice.label || "");
+              return (
+                <button key={id} type="button" disabled={disabled || !id} onClick={() => onChoose(id)}>
+                  {displaySystemText(choice.label || id)}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="sese-pending-wait">
+            等待渡选择惩罚。
+            {localProcessButton}
+          </div>
+        )}
+        {canPass ? <button className="sese-pass-button" type="button" disabled={disabled} onClick={onPass}>使用Pass卡跳过</button> : null}
+      </div>
+    );
+  }
+
+  if (pending.type === "duel") {
+    return (
+      <div className="sese-pending-card">
+        <div className="sese-pending-head">
+          <span>{isMyTurn ? "轮到你出拳" : "等待渡出拳"}</span>
+          <strong>{name || "剪刀石头布对抗"}</strong>
+        </div>
+        <p>同格触发对抗。双方各出石头、剪刀或布，系统判定胜负；赢的前进 3 格，输的后退 3 格。</p>
+        <div className="sese-choice-list sese-rps-list">
+          {RPS_UI_CHOICES.map((choice) => (
+            <button
+              key={choice.id}
+              className={`sese-rps-button ${activeRpsPick === choice.id ? "is-selected" : ""}`}
+              type="button"
+              title={choice.label}
+              aria-label={choice.label}
+              aria-pressed={activeRpsPick === choice.id}
+              disabled={disabled}
+              onClick={() => {
+                setSelectedRps(normalizeRpsChoice(choice.id));
+                onChoose(choice.id);
+              }}
+            >
+              {choice.icon}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (pending.phase === "submitted") {
+    return (
+      <div className="sese-pending-card">
+        <div className="sese-pending-head">
+          <span>{isMyReview ? "需要你验收" : "等待渡验收"}</span>
+          <strong>{name}</strong>
+        </div>
+        <p className="sese-submission-text">{displayText(pending.submission_text || "")}</p>
+        {isMyReview ? (
+          <div className="sese-review-actions">
+            <button type="button" disabled={disabled} onClick={onApprove}>通过</button>
+            <button type="button" disabled={disabled} onClick={onReject}>打回</button>
+          </div>
+        ) : (
+          <div className="sese-pending-wait">
+            等待渡验收你的提交。
+            {localProcessButton}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (pending.phase === "questioning") {
+    const questionPrompt = displaySystemText(pending.question_prompt || "请问对方一个你很想知道答案却一直没有问的问题。");
+    const waitingTask = displaySystemText(pending.waiting_task || "对方正在出题中。");
+    return (
+      <div className="sese-pending-card">
+        <div className="sese-pending-head">
+          <span>{isMyReview ? "你来出题" : "等待渡出题"}</span>
+          <strong>{name}</strong>
+        </div>
+        {isMyReview ? (
+          <>
+            <p>{questionPrompt}</p>
+            <textarea
+              value={submission}
+              disabled={disabled}
+              placeholder="写下你的问题"
+              onChange={(event) => onSubmissionChange(event.target.value)}
+            />
+            <div className="sese-review-actions">
+              <button type="button" disabled={disabled || !submission.trim()} onClick={onSubmit}>提交题目</button>
+            </div>
+          </>
+        ) : (
+          <div className="sese-pending-wait">
+            {waitingTask === "对方正在出题中。" ? "等待渡给出真心话题目。" : waitingTask}
+            {localProcessButton}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const waitingText = hasQuestionText ? "等待渡回答这个问题。" : "等待渡完成并提交任务。";
+
+  return (
+    <div className="sese-pending-card">
+      <div className="sese-pending-head">
+        <span>{isMine ? "你的惩罚任务" : "等待渡提交"}</span>
+        <strong>{name}</strong>
+      </div>
+      {hasQuestionText ? <p className="sese-submission-text">题目：{displayText(pending.question_text)}</p> : null}
+      {isMine ? (
+        <>
+          {!hasQuestionText ? <p>{displaySystemText(pending.task || "")}</p> : null}
+          {!hasQuestionText && submissionHint ? <div className="sese-pending-tip">提交要求：{submissionHint}</div> : null}
+          <textarea
+            value={submission}
+            disabled={disabled}
+            placeholder={hasQuestionText ? "在这里写回答" : "在这里写提交内容"}
+            onChange={(event) => onSubmissionChange(event.target.value)}
+          />
+          <div className="sese-review-actions">
+            <button type="button" disabled={disabled || !submission.trim()} onClick={onSubmit}>{hasQuestionText ? "提交回答" : "提交验收"}</button>
+            {canPass ? <button type="button" disabled={disabled} onClick={onPass}>使用Pass卡</button> : null}
+          </div>
+        </>
+      ) : (
+        <div className="sese-pending-wait">
+          <span>{waitingText}</span>
+          {localProcessButton}
+        </div>
+      )}
     </div>
   );
 }

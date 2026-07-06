@@ -35,11 +35,55 @@ def _private_board_sync_text(
     state = (payload or {}).get("state") if isinstance((payload or {}).get("state"), dict) else {}
     turn_actor = str((state or {}).get("turn_actor") or "").strip()
     turn_label = "你" if turn_actor == "du" else "小玥"
-    rule_lines = [
-        f"当前行动方：{turn_label}。",
-        "如果现在轮到你，并且你决定行动，回复第一行必须单独写精确指令「【掷骰】」，第二行开始再说想对小玥说的话。",
-        "普通说「掷骰子」「我来投一下」，或者把「【掷骰】」写在句子中间，都只算聊天，不会触发行动。",
+    pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else {}
+    pending_type = str((pending or {}).get("type") or "").strip()
+    pending_actor = str((pending or {}).get("actor") or "").strip()
+    pending_reviewer = str((pending or {}).get("reviewer") or "").strip()
+    pending_phase = str((pending or {}).get("phase") or "").strip()
+    pending_choices = [
+        str(item.get("label") or item.get("id") or "").strip()
+        for item in ((pending or {}).get("choices") or [])
+        if isinstance(item, dict) and str(item.get("label") or item.get("id") or "").strip()
     ]
+    if pending_actor == "du" and pending_type == "review" and pending_phase != "submitted":
+        rule_lines = [
+            "当前有惩罚任务需要你提交。",
+            "如果你要提交任务，回复第一行必须单独写精确指令「【提交】」，第二行开始写提交内容。",
+            "没有第一行「【提交】」时，只算局内聊天，不会触发提交。",
+        ]
+    elif pending_actor == "du" and pending_type == "choice":
+        choices_text = " / ".join(pending_choices) if pending_choices else "可选项见棋局文本"
+        rule_lines = [
+            "当前有选择惩罚需要你决定。",
+            f"可选项：{choices_text}。",
+            "如果你要选择，回复第一行必须写「【选择：选项名】」，选项名要和可选项一致；第二行开始再说想对小玥说的话。",
+            "如果你要使用Pass卡，第一行写「【Pass】」。",
+        ]
+    elif pending_reviewer == "du" and pending_type == "review" and pending_phase == "submitted":
+        rule_lines = [
+            "当前有小玥提交的惩罚任务需要你验收。",
+            "如果通过，回复第一行必须单独写「【通过】」；如果打回，回复第一行必须单独写「【不通过】」。",
+            "第二行开始再说想对小玥说的话；没有这两个精确指令时，只算局内聊天，不会触发验收。",
+        ]
+    else:
+        rule_lines = [
+            f"当前行动方：{turn_label}。",
+            "如果现在轮到你，并且你决定行动，回复第一行必须单独写精确指令「【掷骰】」，第二行开始再说想对小玥说的话。",
+            "普通说「掷骰子」「我来投一下」，或者把「【掷骰】」写在句子中间，都只算聊天，不会触发行动。",
+        ]
+    if mode == "final_note":
+        final_note = state.get("final_note") if isinstance(state.get("final_note"), dict) else {}
+        note_text = _clean_private_board_text(str((final_note or {}).get("du_text") or message or "").strip())
+        if not note_text:
+            return ""
+        return "\n".join([
+            "小玥正在和你玩「涩涩走格棋」。这是终局小纸条，不是普通主聊天正文。",
+            "请自然接住终局结果，不要解释工具、接口或系统流程。",
+            "",
+            "终局小纸条：",
+            note_text,
+        ]).strip()
+
     if mode == "roll_result":
         board_lines: list[str] = []
         if roll_result:
@@ -79,7 +123,7 @@ def register_routes(bp) -> None:
         save_id = str(body.get("save_id") or "default").strip() or "default"
         user_message = str(body.get("message") or "").strip()
         mode = str(body.get("mode") or "chat").strip().lower()
-        if mode not in {"chat", "roll_result"}:
+        if mode not in {"chat", "roll_result", "final_note"}:
             mode = "chat"
         roll_text = str(body.get("roll_text") or "").strip()
         payload = execute_game_command("private_board", "status", save_id)
@@ -121,6 +165,8 @@ def register_routes(bp) -> None:
         )
         ok = bool((wakeup or {}).get("ok"))
         reply_text = str((wakeup or {}).get("reply_text") or (wakeup or {}).get("reply_preview") or "")
+        if ok and mode == "final_note":
+            payload = execute_game_command("private_board", "final_note_sent", save_id)
         return jsonify({
             "ok": ok,
             "state": payload.get("state") or {},

@@ -177,7 +177,7 @@ EOF
 chmod 600 ~/claude-proxy/.env'
 ```
 
-负责刷新的本地组件可以持有 refresh token；Claude OAuth proxy 只读取 access-only 文件。第一版更稳的做法是：在新 VPS 上跑本地 token sync，从 Claude Code credential 读取/刷新 token，再把过滤后的 `accessToken/expiresAt` 写到 `CLAUDE_OAUTH_FILE`。
+Claude OAuth proxy 读取完整 Claude Code OAuth credential 文件，可以持有 refresh token，并在过期/临近过期时由新 VPS proxy 自己刷新。本机 Mac 新授权后只负责把 Keychain 里的完整 credential 同步过去，不在本机强刷。
 
 创建 user systemd 服务。先由 root/sudo 允许 `duproxy` 用户服务开机常驻：
 
@@ -230,7 +230,7 @@ curl -sS --max-time 5 "http://$NEW_VPS_IP:8082/v1/models" || echo "expected: pub
 
 适合最终方案：Claude Code 和 proxy 都在新 VPS，本机 Mac 不再参与 token sync。
 
-需要写一个新 VPS 本地同步脚本，从 Claude Code 本机 credential 中读取 refresh token 并刷新，然后把 access-only JSON 写到：
+需要保证 `CLAUDE_OAUTH_FILE` 里有完整 credential，至少包含可用 access token 或 refresh token。proxy 会读取这个文件，并在需要时用 refresh token 刷新后原子写回：
 
 ```text
 /home/duproxy/.cli-proxy-api/claude-oauth.json
@@ -244,7 +244,7 @@ curl -sS --max-time 5 "http://$NEW_VPS_IP:8082/v1/models" || echo "expected: pub
 
 ### 方式 B：过渡期继续用旧网关转发 sync
 
-适合先跑通 tunnel：本机 Mac 的 `/Users/doraemon/claude-token-sync.sh` POST 到旧网关 `/internal/claude-oauth-sync`，旧网关再经 tunnel 转给新 VPS `/internal/oauth-sync`。
+适合先跑通 tunnel：本机 Mac 或一次性手动 POST 把完整 Keychain credential 发到旧网关 `/internal/claude-oauth-sync`，旧网关再经 tunnel 转给新 VPS `/internal/oauth-sync`。
 
 需要保证旧 VPS 的 `CLAUDE_OAUTH_SYNC_TARGET_BASE` 仍指向：
 
@@ -254,7 +254,7 @@ http://127.0.0.1:8082
 
 这样旧网关不用知道新 VPS 存在。
 
-当前用户更想取消本机脚本，所以最终目标是方式 A。方式 B 只作为短期救火。
+当前目标是：新授权后完整同步一次给新 VPS，此后由新 VPS proxy 自己刷新；方式 B 只作为旧网关转发入口，不代表本机要定时强刷。
 
 ## 旧 VPS 创建 SSH Tunnel
 

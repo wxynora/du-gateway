@@ -18,6 +18,7 @@ _APP_ACTION_ALLOWLIST = {
     "show_system_notification",
     "request_screen_check",
     "voice_call_invite",
+    "recall_message",
 }
 _APP_ACTION_HISTORY_MAX = 100
 _APP_ACTION_EXPIRES_DEFAULT = 900
@@ -48,6 +49,15 @@ def _payload_log_summary(payload: Any) -> dict:
         summary["timeoutSeconds"] = payload.get("timeoutSeconds")
     if "choices" in payload and isinstance(payload.get("choices"), list):
         summary["choices"] = len(payload.get("choices") or [])
+    surface = str(payload.get("surface") or "").strip()
+    if surface:
+        summary["surface"] = surface
+    window_id = str(payload.get("windowId") or payload.get("window_id") or "").strip()
+    if window_id:
+        summary["windowId"] = window_id[:80]
+    message_ids = payload.get("messageIds") or payload.get("message_ids")
+    if isinstance(message_ids, list):
+        summary["message_count"] = len(message_ids)
     return summary
 
 
@@ -61,7 +71,10 @@ def _result_log_summary(result: Any) -> dict:
         "stage": str(detail.get("stage") or "").strip(),
         "approved": detail.get("approved") if "approved" in detail else "",
         "choice_id": str(detail.get("choice_id") or "").strip(),
+        "choiceId": str(detail.get("choiceId") or "").strip(),
         "timeout": detail.get("timeout") if "timeout" in detail else "",
+        "autoSelected": detail.get("autoSelected") if "autoSelected" in detail else "",
+        "message_count": len(detail.get("recalledMessages") or []) if isinstance(detail.get("recalledMessages"), list) else "",
         "detail_error": str(detail.get("error") or "").strip()[:120],
     }
 
@@ -361,6 +374,8 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         return _normalize_screen_check_payload(payload)
     if action_type == "voice_call_invite":
         return _normalize_voice_call_invite_payload(payload)
+    if action_type == "recall_message":
+        return _normalize_recall_message_payload(payload)
     if action_type != "create_system_alarm":
         return None, f"不支持的 app action: {action_type}"
     src = payload if isinstance(payload, dict) else {}
@@ -538,6 +553,124 @@ def _normalize_voice_call_invite_payload(payload: dict) -> tuple[Optional[dict],
     }, None
 
 
+def _normalize_recall_choice(raw: Any, fallback_id: str, fallback_label: str) -> dict:
+    if isinstance(raw, dict):
+        choice_id = str(raw.get("id") or raw.get("choiceId") or raw.get("choice_id") or fallback_id).strip() or fallback_id
+        label = str(raw.get("label") or raw.get("text") or raw.get("title") or fallback_label).strip() or fallback_label
+    else:
+        choice_id = fallback_id
+        label = str(raw or fallback_label).strip() or fallback_label
+    return {
+        "id": choice_id[:40],
+        "label": label[:18],
+    }
+
+
+def _normalize_recall_message_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    src = payload if isinstance(payload, dict) else {}
+    raw_ids = src.get("messageIds")
+    if raw_ids is None:
+        raw_ids = src.get("message_ids")
+    if raw_ids is None and src.get("messageId"):
+        raw_ids = [src.get("messageId")]
+    if raw_ids is None and src.get("message_id"):
+        raw_ids = [src.get("message_id")]
+    if not isinstance(raw_ids, list):
+        return None, "messageIds 必须是数组"
+    message_ids: list[str] = []
+    seen: set[str] = set()
+    for raw_id in raw_ids:
+        mid = str(raw_id or "").strip()
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        message_ids.append(mid[:160])
+    if not message_ids:
+        return None, "messageIds 不能为空"
+    if len(message_ids) > 8:
+        message_ids = message_ids[:8]
+
+    popup_src = src.get("popup") if isinstance(src.get("popup"), dict) else {}
+    raw_texts = popup_src.get("texts") or src.get("texts")
+    texts: list[str] = []
+    if isinstance(raw_texts, list):
+        for item in raw_texts:
+            text = str(item or "").strip()
+            if text:
+                texts.append(text[:80])
+            if len(texts) >= 12:
+                break
+    if not texts:
+        texts = ["为什么", "为什么", "为什么"]
+
+    final_title = str(popup_src.get("finalTitle") or popup_src.get("title") or src.get("finalTitle") or "渡").strip() or "渡"
+    final_message = str(
+        popup_src.get("finalMessage")
+        or popup_src.get("message")
+        or src.get("finalMessage")
+        or "你刚刚说的话，他想先收走。"
+    ).strip()
+    raw_choices = popup_src.get("choices") or src.get("choices")
+    choices: list[dict] = []
+    if isinstance(raw_choices, list):
+        for idx, raw_choice in enumerate(raw_choices[:2]):
+            choices.append(_normalize_recall_choice(raw_choice, f"choice_{idx + 1}", "我知道了" if idx == 0 else "我认错"))
+    if not choices:
+        choices = [
+            {"id": "apologize", "label": "我认错"},
+            {"id": "listen", "label": "听你的"},
+        ]
+    if len(choices) == 1:
+        choices.append({"id": "listen", "label": "听你的"})
+
+    try:
+        countdown_seconds = int(
+            popup_src.get("countdownSeconds")
+            if "countdownSeconds" in popup_src
+            else popup_src.get("countdown_seconds", src.get("countdownSeconds", 8))
+        )
+    except Exception:
+        countdown_seconds = 8
+    countdown_seconds = max(3, min(30, countdown_seconds))
+    timeout_choice_id = str(
+        popup_src.get("timeoutChoiceId")
+        or popup_src.get("timeout_choice_id")
+        or src.get("timeoutChoiceId")
+        or choices[0].get("id")
+        or ""
+    ).strip()
+    choice_ids = {str(choice.get("id") or "").strip() for choice in choices}
+    if timeout_choice_id not in choice_ids:
+        timeout_choice_id = str(choices[0].get("id") or "").strip()
+    window_id = str(src.get("windowId") or src.get("window_id") or "").strip()
+    if not window_id:
+        return None, "recall_message 必须带 windowId"
+    return {
+        "surface": "chat_ui",
+        "windowId": window_id[:160],
+        "messageIds": message_ids,
+        "popup": {
+            "texts": texts,
+            "finalTitle": final_title[:60],
+            "finalMessage": final_message[:240],
+            "choices": choices[:2],
+            "countdownSeconds": countdown_seconds,
+            "timeoutChoiceId": timeout_choice_id,
+        },
+    }, None
+
+
+def _action_surface(payload: Any) -> str:
+    surface = str((payload or {}).get("surface") or "").strip().lower() if isinstance(payload, dict) else ""
+    return "chat_ui" if surface == "chat_ui" else "native"
+
+
+def _action_window_id(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("windowId") or payload.get("window_id") or "").strip()
+
+
 def _public_app_action(item: dict) -> dict:
     return {
         "id": str((item or {}).get("id") or ""),
@@ -548,15 +681,26 @@ def _public_app_action(item: dict) -> dict:
 
 def _publish_app_action(item: dict) -> None:
     try:
-        from services.realtime_publish import publish_device_actions
+        from services.realtime_publish import publish_chat_ui_device_actions, publish_device_actions
 
         target_device = str((item or {}).get("deviceId") or "").strip()
-        ok = publish_device_actions(device_id=target_device, actions=[_public_app_action(item)])
+        payload = (item or {}).get("payload") if isinstance((item or {}).get("payload"), dict) else {}
+        surface = _action_surface(payload)
+        if surface == "chat_ui":
+            ok = publish_chat_ui_device_actions(
+                device_id=target_device,
+                window_id=_action_window_id(payload),
+                actions=[_public_app_action(item)],
+            )
+        else:
+            ok = publish_device_actions(device_id=target_device, actions=[_public_app_action(item)])
         logger.info(
-            "app_action_realtime_publish id=%s type=%s target_device=%s ok=%s",
+            "app_action_realtime_publish id=%s type=%s surface=%s target_device=%s window_id=%s ok=%s",
             str((item or {}).get("id") or ""),
             str((item or {}).get("type") or ""),
+            surface,
             target_device,
+            _action_window_id(payload),
             ok,
         )
     except Exception as e:
@@ -664,9 +808,11 @@ def append_app_action(
             return None, str(e)
 
 
-def poll_app_actions(device_id: str = "", limit: int = 10) -> dict:
+def poll_app_actions(device_id: str = "", limit: int = 10, surface: str = "native", window_id: str = "") -> dict:
     """安卓壳轮询待执行 app 原生命令。"""
     device = str(device_id or "").strip()
+    wanted_surface = "chat_ui" if str(surface or "").strip().lower() == "chat_ui" else "native"
+    wanted_window_id = str(window_id or "").strip()
     try:
         max_items = max(1, min(20, int(limit or 10)))
     except Exception:
@@ -717,6 +863,14 @@ def poll_app_actions(device_id: str = "", limit: int = 10) -> dict:
                         target_device = item["deviceId"].strip()
                         if target_device and device and target_device != device:
                             continue
+                        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+                        item_surface = _action_surface(payload)
+                        if item_surface != wanted_surface:
+                            continue
+                        item_window_id = _action_window_id(payload)
+                        if wanted_surface == "chat_ui":
+                            if not wanted_window_id or not item_window_id or item_window_id != wanted_window_id:
+                                continue
                         leased = _parse_utc_iso(item["leasedUntil"])
                         if leased and leased > now:
                             continue
@@ -768,9 +922,11 @@ def poll_app_actions(device_id: str = "", limit: int = 10) -> dict:
                             item["retryCount"] = retry_count
                             out.append(_public_app_action(item))
                             logger.info(
-                                "app_action_leased id=%s type=%s device_id=%s target_device=%s retry=%s leased_until=%s via=poll",
+                                "app_action_leased id=%s type=%s surface=%s window_id=%s device_id=%s target_device=%s retry=%s leased_until=%s via=poll",
                                 item_id,
                                 item["type"],
+                                item_surface,
+                                item_window_id,
                                 device,
                                 target_device,
                                 retry_count,
@@ -788,7 +944,14 @@ def poll_app_actions(device_id: str = "", limit: int = 10) -> dict:
                     raise
             return {"ok": True, "actions": out, "pollAfterSec": 20}
         except Exception as e:
-            logger.error("poll_app_actions 失败 device_id=%s error=%s", device, e, exc_info=True)
+            logger.error(
+                "poll_app_actions 失败 device_id=%s surface=%s window_id=%s error=%s",
+                device,
+                wanted_surface,
+                wanted_window_id,
+                e,
+                exc_info=True,
+            )
             return {"ok": False, "actions": [], "pollAfterSec": 20, "error": str(e)}
 
 

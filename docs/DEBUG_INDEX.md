@@ -49,16 +49,27 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | Claude OAuth proxy | `scripts/claude_oauth_proxy.js`、`docs/claude_proxy_new_vps_migration_plan.md` | 自用 Claude 反代、thinking/cache/tool 格式转换；旧 VPS 继续用 `127.0.0.1:8082`，新 VPS 单独承载 Claude Code + OAuth proxy 的迁移手册 |
 | 植物大战僵尸模仿者版原型 | `du_imitator_pvz/`、`scripts/test_imitator_pvz_*.py`、`scripts/sim_imitator_pvz_balance.py`、`docs/植物大战僵尸模仿者版.md` | 纯 Python headless 随机模仿者塔防模拟器：P0/P2 合同、随机池、植物/僵尸行为、玩家回合复盘、v2 小工测试、铲子动作、僵王事件、主动重开、玩家棋盘文本视图 |
 | 随机模仿者网关私有工具 | `services/game_tool_runtime.py`、`services/random_imitator_td_tool.py`、`routes/miniapp/game_tools.py`、`routes/chat.py`、`pipeline/pipeline.py`、`services/chat_tools.py`、`scripts/test_random_imitator_td_tool.py` | du-gateway 私有游戏工具接入：`random_imitator_td` 是首个注册游戏；Prompt 开关只固定注入工具，只有专用游戏标记或工具结果自带 `game_tool_loop` 才跳过动态记忆写入与 BODY delta |
-| MiniApp 游戏大厅 / 涩涩走格棋 | `miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/tabs/SeseBoardGameTab.tsx`、`routes/miniapp/game_tools.py`、`services/private_board_game.py`、`services/game_tool_runtime.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_private_board_game.py` | 「日常 > 游戏」入口，文游显示为「无限流」；`private_board` 走走格棋后端和前端棋盘。小玥掷骰后自动把本次结果/当前棋局同步给渡；右上角局内聊天只发本次消息，不自带局内历史；渡第一行精确 `【掷骰】` 才触发行动；局内回复不外发主聊天但压缩归档进同一个 `tg_*` window 的 last4 |
+| MiniApp 游戏大厅 / 涩涩走格棋 | `miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/tabs/SeseBoardGameTab.tsx`、`routes/miniapp/game_tools.py`、`services/private_board_game.py`、`services/private_board_tool.py`、`services/game_tool_runtime.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_private_board_game.py` | 「日常 > 游戏」入口，文游显示为「无限流」；`private_board` 走走格棋后端和前端棋盘。小玥通过前端按钮/输入参与，渡通过自然语言精确首行指令参与；右上角局内聊天只发本次消息，不自带局内历史；局内回复不外发主聊天但压缩归档进同一个 `tg_*` window 的 last4 |
+
+当前状态（2026-07-06 涩涩走格棋 Pass / 道具 / 棋盘密度修正）：
+- 已完成：`services/private_board_game.py` 的 `pass` 命令现在会对无卡、不可跳过、已提交、已达本局跳过上限等失败情况返回 `ok=false`；前端 `SeseBoardGameTab.tsx` 遇到 `ok=false` 只提示失败，不再追加“已使用Pass卡”或同步给渡。渡在局内聊天发 `【Pass】` 也走同一失败判定。
+- 已完成：道具惩罚随机池会优先避开当前玩家身上已有的同名道具；重复命中时不再堆出两条同名状态，支持档位的道具会升档，停步格命中已有道具时会延长行动限制。
+- 已完成：36 格棋盘重新留出空格，移除导致拖局的双方回起点、对方回起点、全员后退等循环源；保留 27 格「重回起点」，奖励格仍为 5/22/32，提交类惩罚格仍为 4/11/20/26/33，选择惩罚格仍为 9/21/30。
+- 已同步：开源版 `game-box/games/sese-board-game` 的引擎、前端失败处理和测试已按同一规则更新；开源预览 API `127.0.0.1:8766` 已重启，`127.0.0.1:5176` 页面确认有空格、Pass x0 时不显示 Pass 按钮。
+- 已验证：`python3 -m py_compile services/private_board_game.py`、开源版 `python3 -m py_compile sese_board_game/engine.py && python3 tests/test_engine.py`、`npm --prefix miniapp run build` 通过；手动 smoke 覆盖私有版和开源版无 Pass 卡不能跳过、pending 不消失、手牌仍为 0、同名道具不重复。
+- 未完成 / 下次继续：本轮没有 push、没有重启 du-gateway 主服务；`npm --prefix miniapp run build` 重建了 `miniapp_static` 哈希产物，提交前需要按发布策略一起处理或重新收束。
 
 当前状态（2026-07-05 MiniApp 游戏大厅与涩涩走格棋）：
 - 已完成：`GamesHubTab.tsx` 新增游戏大厅；文游入口改名「无限流」并移入「日常 > 游戏」；新增「涩涩走格棋」入口。
 - 已完成：`services/private_board_game.py` 注册 `private_board`，支持 36 格走格棋、主题/主导方、状态/道具持续回合或时间、暂停行动、前进/后退/交换/解除/延长等格子事件；前端 `SeseBoardGameTab.tsx` 展示完整棋盘、棋子、骰子、移动动画、状态卡和右上角局内交流气泡。
 - 已完成：小玥在前端掷骰后，页面会自动调用 `/miniapp-api/game-tools/private_board/sync-du`，把本次掷骰结果和当前棋局同步给渡；渡回复第一行只有精确 `【掷骰】` 才会触发他的行动，普通“掷骰子/我来投一下”只算聊天。
+- 已完成：新增奖励/惩罚卡池：Pass卡、4 张提交验收类惩罚、8 张选择类惩罚；选择类支持新增状态、道具惩罚档位上调、退格和停步，档位上调只在当前玩家已有 `prop` 状态时可选，`锁精环` 不会随机给人类玩家。
+- 已完成：前端不是壳；小玥通过界面按钮处理提交、通过、打回、选择惩罚、Pass卡、重开和停步回合。渡侧精确指令扩展为 `【掷骰】`、`【提交】`、`【通过】`、`【不通过】`、`【选择：选项名】`、`【Pass】`，普通闲聊不触发棋局动作。
+- 已完成：`services/private_board_tool.py` 提供 `private_board` OpenAI function schema 和 executor，复用 `execute_game_command()`；当前只作为规范工具适配和手动接入口，不主动污染日常聊天工具注入。
 - 已完成：右上角局内聊天只发送本次 `message`，不再上传 `chat_messages` 或自带局内上下文；前后文依赖同一个 `tg_*` 窗口的正常 last4。`return_only=True` 只是不外发到 Telegram/主聊天界面，但 `_send_wakeup_event()` 仍带 `X-DU-FOLLOWUP-ARCHIVE: 1` 归档到同一窗口。
 - 已完成：`routes/chat.py` 对 `X-DU-WAKEUP-KIND: private_board` 做专门压缩归档，last4 里写成 `[涩涩走格棋] 小玥在局内说...` 或 `小玥同步了掷骰结果...`，不会把整段系统 prompt 或棋局大 JSON 塞进近期上下文。
 - 边界：游戏内同步请求带 `X-Force-Last4: 1`、`X-Skip-Dynamic-Memory: 1`、`X-Skip-Post-Archive-Dynamic-Memory: 1`；不带 `X-Skip-Post-Archive-Body-Delta`。也就是读取正常注入和 last4，跳过动态记忆召回/写入，不跳过 BODY delta。
-- 已验证：`.venv/bin/python -m py_compile routes/chat.py routes/miniapp/game_tools.py services/conversation_followup.py services/private_board_game.py services/game_tool_runtime.py`、`.venv/bin/python scripts/test_private_board_game.py`、`npm --prefix miniapp run build`、`npm --prefix miniapp exec tsc -- --noEmit --pretty false`、归档/header smoke 均通过；小工只读审查未发现 P0/P1/P2 阻断问题。未真实点击掷骰端到端，因为会改当前局面并实际叫渡。
+- 已验证：`.venv/bin/python -m py_compile services/private_board_game.py services/private_board_tool.py services/chat_tools.py services/game_tool_runtime.py routes/miniapp/game_tools.py scripts/test_private_board_game.py`、`.venv/bin/python scripts/test_private_board_game.py`、`npm --prefix miniapp run build` 均通过；2026-07-05 复跑 `cd miniapp && npx tsc --noEmit --pretty false` 已通过。浏览器只读检查确认 5174 页面游戏大厅/走格棋能渲染，但 5174 纯 Vite dev server 无 `/miniapp-api` 代理，接口检查以 Flask/game runtime 测试为准。
 
 当前状态（2026-07-04 思维链 Prompt Cache 计费估算）：
 - 已完成：`routes/miniapp/reasoning.py` 的 Claude cost 估算改为按每条 `cache_debug` 的实际模型拆分计费，再汇总到思维链日志页；返回中保留 `pricing_per_million`、`total_usd` 等旧字段，同时新增 `pricing_per_model` 和 `cost_lines` 方便排查混合模型。
@@ -1057,6 +1068,7 @@ rg -n "core-prompt|核心|入口风格|SumiTalk|禁言|silence" routes services 
 - 服务器 Claude 上游配置：`.env` 的 `TARGET_AI_URLS`
 - 网关转发：`routes/chat.py`
 - 上游选择：`storage/upstream_store.py`
+- 当前转发 VPS：`duproxy@45.76.171.91`，proxy 路径 `/home/duproxy/claude-proxy/proxy.js`
 - 本机 token 同步脚本：`/Users/doraemon/claude-token-sync.sh`
 - 本机 LaunchAgent：`/Users/doraemon/Library/LaunchAgents/com.doraemon.claude-token-sync.plist`
 
@@ -1065,21 +1077,24 @@ rg -n "core-prompt|核心|入口风格|SumiTalk|禁言|silence" routes services 
 ```bash
 rg -n "claude|anthropic|thinking|cache_control|tool_use|oauth|8317|8082" scripts routes storage .env
 ssh -o ControlMaster=no ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
-ssh -o ControlMaster=no ali-du 'systemctl --user list-units --type=service --all | grep -Ei "claude|proxy|oauth"'
+ssh -o ControlMaster=no ali-du 'sudo systemctl status claude-proxy-tunnel.service --no-pager -l | sed -n "1,80p"'
+ssh -o ControlMaster=no duproxy@45.76.171.91 'systemctl status claude-oauth-proxy.service --no-pager -l | sed -n "1,80p"'
 ```
 
 注意：
 - Claude OAuth proxy 是 Claude 反代，不是 CPA。CPA 另有一节，按 Codex 反代排查。
-- 不要擅自改 `/Users/doraemon/claude-token-sync.sh` 的默认重启服务；默认应是 `claude-oauth-proxy.service`。只有用户明确说服务名变了，才改 `CLAUDE_PROXY_SERVICE` 或脚本默认值。
+- 旧网关本机 `127.0.0.1:8082` 不是本地 Claude proxy，而是 `claude-proxy-tunnel.service` 经 SSH 隧道转到新 VPS；旧网关上的 `claude-oauth-proxy.service` 应保持停用。
+- 转发 VPS 的 `claude-oauth-proxy.service` 是 system service，运行用户是 `duproxy`，只监听新 VPS 本机 `127.0.0.1:8082`。
+- 不要擅自改 `/Users/doraemon/claude-token-sync.sh` 的默认重启服务；当前主链路是同步完整 credential 到转发 VPS，由转发 VPS proxy 自刷新。只有用户明确说服务名变了，才改 `CLAUDE_PROXY_SERVICE` 或脚本默认值。
 - Claude OAuth proxy 401 不要先猜模型，先分清是哪层 401：
-  - `Invalid proxy key` / `AUTH REJECTED`：网关到代理的 key 不匹配，查 `.env` 的 `TARGET_AI_API_KEYS` 和代理服务配置。
+  - `Invalid proxy key` / `AUTH REJECTED`：网关到代理的 key 不匹配，查旧网关 `/root/du-gateway/.env` 的 `TARGET_AI_API_KEYS` 里 `http://127.0.0.1:8082/v1/chat/completions` 对应项，必须和新 VPS `/home/duproxy/claude-proxy/.env` 的 `PROXY_KEY` 一致。
   - `<= 401 /v1/chat/completions`、`Got 401`、`Refresh failed`：代理到 Anthropic / Claude OAuth 的 token 问题，优先查 token sync。
   - `Refresh failed: HTTP 403 ... Just a moment... Cloudflare`：服务器自己刷新 token 被 Cloudflare 挡住，不能指望远端自动刷新；要用 Mac 本地 Keychain 的 token 同步到 VPS。
   - `429`：额度/限流，不是 token sync 能修。
 
 ### Claude token sync 快查
 
-这套脚本是为了修 Claude OAuth proxy 401：从 Mac 本机 Claude Code Keychain 取 OAuth JSON，必要时由本机脚本持有 refresh token 并直连 OAuth endpoint 刷新；同步给 VPS 的 Claude OAuth proxy 时只发送 access-only 包。HTTP POST 是主链路；只有 POST 最终失败时，才允许 SSH fallback 把过滤后的 access-only JSON 写到远端 auth 文件并重启 Claude OAuth proxy。不要再把“同步 token”做成 SSH 写文件 + 重启服务的主链路。
+当前 Claude OAuth sync 口径：Claude Code 刚授权后，本机只从 Keychain 读取完整 OAuth credential JSON，不在本机强制刷新；通过 HTTP POST 同步给转发 VPS 的 Claude OAuth proxy。转发 VPS 持有 refresh token，并在 proxy 内部按过期时间自行刷新。不要再把新授权后的 token sync 做成 access-only 过滤包，也不要用旧脚本口径判断这条链路。
 
 关键路径：
 - 脚本：`/Users/doraemon/claude-token-sync.sh`
@@ -1088,13 +1103,13 @@ ssh -o ControlMaster=no ali-du 'systemctl --user list-units --type=service --all
 - launchd stdout/stderr：`/Users/doraemon/claude-token-sync.launchd.log`、`/Users/doraemon/claude-token-sync.launchd.err`
 - 状态文件：`/Users/doraemon/.claude-token-sync.state`、`/Users/doraemon/.claude-token-sync.wake`
 - 本机 Keychain service：`Claude Code-credentials`
-- 远端 Claude OAuth auth 文件：`/home/nora/.cli-proxy-api/claude-sumikamiss@gmail.com.json`
+- 远端 Claude OAuth auth 文件：新 VPS 默认 `/home/duproxy/.cli-proxy-api/claude-oauth.json`；旧 nora 路径只作为历史记录排查。
 - Claude OAuth proxy 内部同步接口：`POST /internal/oauth-sync`
 - 网关转发同步接口：`POST /internal/claude-oauth-sync`
 - 网关转发状态接口：`GET /internal/claude-oauth-status`
 - 本机私有配置：`/Users/doraemon/.claude-token-sync.env`
 
-LaunchAgent 默认 `StartInterval=300`，也就是约 5 分钟跑一次。脚本先查本机 Keychain token 是否进入刷新窗口，必要时用 Keychain 里的 refresh token 直连 `https://platform.claude.com/v1/oauth/token` 刷新本机 token，再 POST access-only 同步包；远端状态接口若报告新 401 或远端 token 比本机旧，也会触发 POST。远端 401 只是补救信号，不强制本机刷新；脚本只以本机 Keychain 当前 `expiresAt` 为准。
+LaunchAgent / 本机脚本属于旧救火链路；新授权后的主链路不是本机定时强刷，而是把 Keychain 里的完整 credential 同步到转发 VPS。远端 401 只是补救信号，不代表要立刻在本机刷新。
 
 本机配置示例（不要提交，不要贴密钥）：
 
@@ -1104,7 +1119,7 @@ CLAUDE_PROXY_STATUS_URL=https://duxy-home.com/internal/claude-oauth-status
 CLAUDE_PROXY_SYNC_KEY=...
 CLAUDE_PROXY_SSH_FALLBACK=1
 CLAUDE_PROXY_SSH_HOST=ali-du
-CLAUDE_PROXY_SSH_AUTH_FILE=/home/nora/.cli-proxy-api/claude-sumikamiss@gmail.com.json
+CLAUDE_PROXY_SSH_AUTH_FILE=/home/duproxy/.cli-proxy-api/claude-oauth.json
 CLAUDE_PROXY_SSH_SERVICE=claude-oauth-proxy.service
 CLAUDE_REFRESH_BUFFER_SECONDS=60
 ```
@@ -1112,8 +1127,8 @@ CLAUDE_REFRESH_BUFFER_SECONDS=60
 服务端约束：
 - `scripts/claude_oauth_proxy.js` 的同步接口用 `CLAUDE_OAUTH_SYNC_KEY` 校验；未配置时默认复用 `PROXY_KEY`。
 - Claude OAuth proxy 应继续只监听服务器本机或内网；公网只暴露网关转发接口或受控内网入口。
-- 同步接口只接收 access-only OAuth JSON，验证 `accessToken/expiresAt`，拒收任何 `refreshToken/refresh_token`，原子写入 `CLAUDE_OAUTH_FILE`，并热更新内存 token，不需要 `systemctl restart`。
-- SSH fallback 只在 HTTP POST 失败后触发；它会先在本地生成过滤后的 access-only 同步包，再通过 `ssh ali-du` 写远端 auth 文件，最后 `systemctl --user restart claude-oauth-proxy.service` 让进程重新加载文件。不要打印 token 或 sync key。
+- 同步接口接收完整 Claude Code OAuth credential JSON，验证至少存在可用 access token 或 refresh token，原子写入 `CLAUDE_OAUTH_FILE`，并热更新内存 token；响应只允许返回 `expiresAt`、`canRefresh` 等摘要，不打印 token。
+- SSH fallback 不再是默认主链路；必须先确认 HTTP POST 不通，且只写受控远端 auth 文件。不要打印 token、refresh token 或 sync key。
 
 先查本机脚本有没有跑：
 
@@ -1134,29 +1149,29 @@ launchctl kickstart -k gui/$(id -u)/com.doraemon.claude-token-sync
 查远端 Claude OAuth proxy 服务：
 
 ```bash
-ssh -o ControlMaster=no ali-du 'systemctl --user is-active claude-oauth-proxy.service'
-ssh -o ControlMaster=no ali-du 'ss -ltnp 2>/dev/null | grep -E "(:8082|:8317)"'
-ssh -o ControlMaster=no ali-du 'journalctl --user -u claude-oauth-proxy.service -n 120 --no-pager -o cat | grep -Ei "401|refresh|auth file|cloudflare|error|model"'
+ssh -o ControlMaster=no ali-du 'sudo systemctl show claude-proxy-tunnel.service -p ActiveState -p SubState -p MainPID --no-pager; ss -ltnp 2>/dev/null | grep ":8082" || true'
+ssh -o ControlMaster=no duproxy@45.76.171.91 'systemctl show claude-oauth-proxy.service -p ActiveState -p SubState -p MainPID --no-pager; ss -ltnp 2>/dev/null | grep ":8082" || true'
+ssh -o ControlMaster=no duproxy@45.76.171.91 'journalctl -u claude-oauth-proxy.service -n 120 --no-pager -o cat | grep -Ei "401|refresh|auth file|cloudflare|error|model|Invalid proxy key"'
 ```
 
-干净重启 Claude OAuth proxy 时，不要手动 `cd /home/nora/claude-proxy && node proxy.js`，也不要只按某个旧 PID kill。必须让 user systemd 接管；如果 8082 已被脱管 node 占用，按 cwd/cmdline 校验后先清掉脱管进程：
+干净重启 Claude OAuth proxy 时，不要手动 `cd /home/duproxy/claude-proxy && node proxy.js`，也不要只按某个旧 PID kill。必须让 systemd 接管；如果 8082 已被脱管 node 占用，按 cwd/cmdline 校验后先清掉脱管进程：
 
 ```bash
-ssh -o ControlMaster=no ali-du 'set -e
-systemctl --user stop --no-block claude-oauth-proxy.service || true
-for pid in $(pgrep -u nora -f "node proxy.js|/home/nora/claude-proxy/proxy.js" || true); do
+ssh -o ControlMaster=no duproxy@45.76.171.91 'set -e
+systemctl stop --no-block claude-oauth-proxy.service || true
+for pid in $(pgrep -u duproxy -f "node proxy.js|/home/duproxy/claude-proxy/proxy.js" || true); do
   cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)
   cmd=$(tr "\0" " " <"/proc/$pid/cmdline" 2>/dev/null || true)
   cg=$(cat "/proc/$pid/cgroup" 2>/dev/null || true)
-  if [ "$cwd" = "/home/nora/claude-proxy" ] && printf "%s" "$cg" | grep -q "session-"; then
+  if [ "$cwd" = "/home/duproxy/claude-proxy" ] && printf "%s" "$cg" | grep -q "session-"; then
     echo "kill orphan claude proxy pid=$pid cmd=$cmd"
     kill "$pid" || true
   fi
 done
 sleep 1
-systemctl --user reset-failed claude-oauth-proxy.service || true
-systemctl --user start claude-oauth-proxy.service
-systemctl --user status claude-oauth-proxy.service --no-pager -l | sed -n "1,45p"
+systemctl reset-failed claude-oauth-proxy.service || true
+systemctl start claude-oauth-proxy.service
+systemctl status claude-oauth-proxy.service --no-pager -l | sed -n "1,45p"
 ss -ltnp 2>/dev/null | grep ":8082"
 '
 ```
@@ -1188,6 +1203,15 @@ PY
 3. 用 `GET /internal/claude-oauth-status` 看远端 `expiresAt`、`lastUnauthorizedAt`。
 4. 看远端 `claude-oauth-proxy.service` journal 是否继续 `Refresh failed: HTTP 403 ... Cloudflare`。
 5. 确认脚本走的是 Claude OAuth sync URL，不要把 CPA/Codex 反代服务混进来。
+
+当前状态（2026-07-04）：
+- 主链路：旧网关 `ali-du` 仍把 Claude OAuth upstream 配成 `http://127.0.0.1:8082/v1/chat/completions`；这个本机 8082 由 `claude-proxy-tunnel.service` 转发到新 VPS `duproxy@45.76.171.91:127.0.0.1:8082`。旧网关本地 `claude-oauth-proxy.service` 应保持 `inactive/dead`。
+- 新 VPS：`claude-oauth-proxy.service` 是 system service，运行 `duproxy` 用户，路径 `/home/duproxy/claude-proxy/proxy.js`，只监听 `127.0.0.1:8082`；refresh token 由新 VPS proxy 持有并自刷新。
+- 已修：旧网关 `/root/du-gateway/.env` 中 `http://127.0.0.1:8082/v1/chat/completions` 对应的 `TARGET_AI_API_KEYS` 已更新为新 VPS 当前 `PROXY_KEY`，旧 key 备份在 `/root/du-gateway/.env.bak-claude-key-20260704-161039`。
+- 已修：旧网关 `/root/du-gateway/.env` 中 `CLAUDE_OAUTH_SYNC_KEY` 已更新为新 VPS 当前 sync key，用于 MiniApp/API 管理查询 `/internal/oauth-status`；旧 key 备份在 `/root/du-gateway/.env.bak-claude-sync-key-20260704-163203`。
+- 已修：旧网关 tunnel 单元已从 `root@45.76.171.91` 改为 `duproxy@45.76.171.91`；转发 VPS 已禁 root SSH，`duproxy` 有免密 sudo。旧网关 tunnel 私钥 `/root/.ssh/du_new_vps_ed25519` 的公钥已加入新 VPS `duproxy`。
+- 已验证：旧网关带 `.env` 的 8082 key 请求 `http://127.0.0.1:8082/v1/models` 返回 `200 OK`，模型数 9，包含 `claude-sonnet-5`、`claude-fable-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-sonnet-4-6`；旧网关带 `CLAUDE_OAUTH_SYNC_KEY` 请求 `http://127.0.0.1:8082/internal/oauth-status` 返回 `ok=True`、`canRefresh=True`、`expiresInSeconds` 和 `rateLimitSnapshot`；`du-gateway.service` 和 `du-sumitalk-chat-worker.service` 已重启为 active/running。
+- 排查优先级：MiniApp/API 管理里 `models 401` 且返回 `Invalid proxy key` 时，优先查旧网关 `.env` 的 8082 key 和新 VPS `PROXY_KEY` 是否一致；`状态查询 401` 时优先查旧网关 `CLAUDE_OAUTH_SYNC_KEY` 和新 VPS `CLAUDE_OAUTH_SYNC_KEY` 是否一致，不要先查 Claude OAuth access token。
 
 当前状态（2026-05-16）：
 - 已纠正：不要把 Claude OAuth proxy 和 CPA 混在一起；Claude 401 先查 Claude OAuth proxy 和 token sync。
@@ -1658,7 +1682,7 @@ npm -C miniapp run android
 - 未完成 / 下次继续：需要用户主观确认听到的是渡语音内容；若后续再次出现音乐，优先看 runner 日志是否有 `music_audio_id_mismatch` 和实际 `play_song_detail.audio_id`。
 
 当前状态（2026-05-28 小爱音频 URL 静默排查）：
-- 已完成：确认 runner 日志里 `播放 URL 结果：ok` 只代表 MiGPT/MiNA 接受播放命令，不代表小爱成功拉到 mp3；线上最近 `last_audio_url` 直接 GET 返回 404，根因是 `services/xiaoai_audio_store.py` 原先只把音频存在 Python 进程内存，生产多 worker、进程重启或请求落到不同进程时 `/api/xiaoai/tts/<token>.mp3` 会失效。已改为写入 `DATA_DIR/xiaoai_audio/` 并在 GET 时从落盘文件恢复，仍按 `HTML_PREVIEW_TTL_SECONDS` 和 `HTML_PREVIEW_MAX_ITEMS` 清理。
+- 已完成：确认 runner 日志里 `播放 URL 结果：ok` 只代表 MiGPT/MiNA 接受播放命令，不代表小爱成功拉到 mp3；线上最近 `last_audio_url` 直接 GET 返回 404，根因是 `services/xiaoai_audio_store.py` 原先只把音频存在 Python 进程内存，生产多 worker、进程重启或请求落到不同进程时 `/api/xiaoai/tts/<token>.mp3` 会失效。已改为写入 `DATA_DIR/xiaoai_audio/` 并在 GET 时从落盘文件恢复，按 `ARTIFACT_TTL_SECONDS` 和 `ARTIFACT_MAX_ITEMS` 清理。
 - 已验证：`.venv/bin/python -m py_compile services/xiaoai_audio_store.py routes/xiaoai_api.py` 通过；临时目录 smoke 验证清空内存 `_store` 后仍能用 token 从落盘文件读回音频；非法 token 返回空。
 - 未完成 / 下次继续：需要部署到生产并重启 du-gateway 后再让小爱实测；当前 Mac Docker runner 不需要为这个修复重建，除非同时改 runner 播放策略。
 
@@ -2065,9 +2089,32 @@ npm -C miniapp run android
 - 已验证：`git diff --check -- docs/claude_proxy_new_vps_migration_plan.md docs/DEBUG_INDEX.md` 通过；本轮只写文档，不改服务、不改 env、不重启。
 - 未完成 / 下次继续：买好新 VPS 后，从方案的“新 VPS 初始化”开始执行；执行前先确认新 VPS IP、旧 VPS SSH alias、旧 VPS 实际运行用户和 proxy 文件路径。
 
-当前状态（2026-06-29 Claude OAuth gist 风格刷新与请求形状）：
-- 已完成：`/Users/doraemon/claude-token-sync.sh` 不再走 `claude -p` 触发刷新，改为本机 Keychain 读取 refresh token 后直连 `https://platform.claude.com/v1/oauth/token`，POST JSON `{grant_type, client_id, refresh_token}`，请求头只带 `Content-Type: application/json` 和 `Accept: application/json`；默认只在过期前 60 秒窗口内刷新。
-- 已完成：同步给 Claude OAuth proxy 的 payload 只包含 `accessToken` 和 `expiresAt`，不包含 refresh token；`/Users/doraemon/claude-token-sync.sh` 在 HTTP/SSH 同步前会统一生成 access-only 过滤包，`scripts/claude_oauth_proxy.js` 的 `/internal/oauth-sync` 和网关转发层 `routes/claude_oauth_sync.py` 也会拒收任何 `refreshToken/refresh_token` 字段，避免误落盘。
+当前状态（2026-07-04 Claude OAuth 新授权同步口径）：
+- 已完成：新授权后不在本机强制刷新；本机只读取 Claude Code Keychain 中的完整 OAuth credential JSON，并通过 HTTP POST 同步给转发 VPS。转发 VPS 的 Claude OAuth proxy 持有 refresh token，后续由 proxy 自己在过期/临近过期时刷新。
+- 已完成：`scripts/claude_oauth_proxy.js` 的 `/internal/oauth-sync` 和网关转发层 `routes/claude_oauth_sync.py` 允许完整 credential 透传/落盘；同步响应只回 `expiresAt`、`canRefresh` 等摘要，不回 token。
 - 已完成：Claude OAuth proxy 不再插入 `You are Claude Code...` 系统提示词，只在 `system[0]` 注入 `x-anthropic-billing-header` 计费块；模型请求头带 `Authorization`、`anthropic-version: 2023-06-01`、`anthropic-beta`、`User-Agent: claude-code/2.1.195 (external, cli)`、`Content-Type: application/json`。`anthropic-beta` 的前两项按 gist 顺序为 `oauth-2025-04-20,claude-code-20250219`，后面继续保留现有 interleaved thinking / prompt cache scope / context management beta，避免砍掉当前功能。
-- 已验证：`node --check scripts/claude_oauth_proxy.js`、`.venv/bin/python -m py_compile routes/claude_oauth_sync.py`、`bash -n /Users/doraemon/claude-token-sync.sh` 通过；残留搜索未找到 `You are Claude Code`、`SYSTEM_PROMPT_PREFIX`、`staticSystemPromptBlock`、`claude -p`、`CLAUDE_BIN`、旧 refresh helper；`routes.claude_oauth_sync._contains_refresh_token()` smoke 覆盖 access-only 不误伤、refresh token 会拦截。
-- 未完成 / 下次继续：本轮没有 push、没有部署、没有重启，也没有触发真实 OAuth 刷新；线上生效仍需按既有流程同步 `scripts/claude_oauth_proxy.js` 到实际运行的 proxy 文件并重启相关服务。
+- 待验证：本轮改动需要重新跑 `node --check scripts/claude_oauth_proxy.js`、`.venv/bin/python -m py_compile routes/claude_oauth_sync.py`，然后同步到实际运行的 proxy 文件并重启相关服务。
+
+当前状态（2026-07-05 渡的页笺与旧临时预览收束）：
+- 已完成：新增长期保存“渡的页笺”的后端骨架；`storage/du_pages_store.py` 使用 `data/du_pages.sqlite3` 持久化完整 HTML、标题、emoji、说明、标签、来源和软删除状态，列表默认不返回 HTML 正文，避免管理页加载全量源码。
+- 已完成：新增公开打开路由 `GET /du-pages/v/<page_id>`，返回 `text/html; charset=utf-8` 并加 `noindex/no-store`、`Referrer-Policy` 和基础 CSP；链接是稳定长期链接，不走临时预览 TTL，也不依赖进程内存。
+- 已完成：新增 MiniApp 管理 API `GET/POST /miniapp-api/du-pages`、`GET/PATCH/DELETE /miniapp-api/du-pages/<id>`、`POST /miniapp-api/du-pages/<id>/restore`、`GET /miniapp-api/du-pages/stats`，供后续前端 UI 列表、打开、编辑、删除、恢复使用。
+- 已完成：新增渡可用工具 `du_page`，只用一个工具名，通过 `action=save/list/get/update/delete/restore/stats` 分流；生成 HTML 页面、情书、小网页、小游戏和排版作品时必须 `action=save` 并传完整 `html`，保存后返回长期链接。
+- 已完成：模型侧旧临时 HTML 工具、旧 HTTP 写入口、旧临时预览 store 均已删除；聊天链路不再注入、不再执行、不再自动补临时预览链接。后续写 HTML 统一走 `du_page` 落到“渡的页笺”。
+- 已完成：新增 `services/public_url.py` 作为通用公网根地址 helper；XiaoAI 音频、截图媒体、页笺链接共用它，不再依赖旧预览模块命名。
+- 已完成：MiniApp “渡的页笺”入口接到日常页；列表、详情、编辑、删除、内置 iframe 预览已接后端 API；本地 demo/fallback 已移除，真实为空就显示空态，不再把旧救援页伪装成真实记录。
+- 已修复：`list_pages(tag=...)` 不再先按 limit 截断后筛标签，避免标签过滤漏掉较旧页笺。
+- 已验证：`.venv/bin/python -m py_compile storage/du_pages_store.py services/du_pages.py routes/du_pages.py routes/miniapp/du_pages.py app.py routes/miniapp_api.py services/gateway_tools.py services/chat_tools.py` 通过；本地 smoke 覆盖保存、列表、标签筛选、读取、软删除；`du_page` 工具分发正常，旧临时 HTML 工具未注入；`app` 路由表有 `/du-pages/v/<id>` 且无旧临时预览路由；`cd miniapp && npx tsc --noEmit --pretty false` 与 `cd miniapp && npm run build` 均通过；旧工具/旧路由关键字全仓库扫描无残留。
+- 未完成 / 下次继续：需要把线上那份大富翁 HTML 作为真实 `du_page` 记录导入；推送部署后需验证 `du_page` 工具保存、`/du-pages/v/<id>` 打开、MiniApp 列表加载与删除。
+
+当前状态（2026-07-06 SumiTalk App `recall_message` 撤回仪式）：
+- 已完成：新增渡可调用工具 `recall_message`，强制要求 `messageIds`，不猜“最近一条”；工具只发 App 聊天界面动作，不物理删除 R2/后端历史。
+- 已完成：`app_actions` 队列新增 `surface=chat_ui` 隔离，原生壳默认只轮询 `native`，聊天页通过 `chat_ui_device_actions` 实时事件或 `/miniapp-api/device-actions?surface=chat_ui&window_id=...` 兜底轮询领取，避免未知动作被 Android 壳误消费。
+- 已完成：MiniApp 聊天页收到撤回动作后先展示男鬼弹窗风格仪式，最后弹窗带 `countdownSeconds/timeoutChoiceId`；用户选择或倒计时自动选择后，并行回传结果给后端、执行消息消失动画、本地隐藏消息并写入 tombstone。
+- 已完成：`RecallMessageOverlay` 视觉按 `ui合集/男鬼弹窗` 的黑红故障弹窗方向重做：深红黑底、scanline、红色错误标题栏、glitch 文字、原版式 `createAlert()` 逐个 append、`delay = max(50, delay * 0.95)` 先慢后快堆叠、底部 `SYSTEM STATUS` 和同风格最终选择窗；App 窄屏下额外扩展横向随机溢出范围，避免原版坐标公式被 320px 视口压成整齐一列；本轮又下调了弹窗宽度、字号、红色实度、边框和阴影，避免故障窗过大过实。只改前端仪式表现，不改工具入队/回传/隐藏消息边界。
+- 已完成：新增 dev-only 本地直接测试入口 `http://127.0.0.1:5173/miniapp/?recallPreview=1`；入口绕过面板鉴权、直接进入渡单聊、注入假消息并本地触发 `recall_message`，不依赖真实后端动作队列，也不写真实聊天记录。为避免首屏首页预览误拉 history，预览模式初始 `activeScreen=du`。
+- 已完成：回执唤醒渡时带回最终选择和原消息，语义为“你已撤回她的这条消息：`【已撤回】原消息`”；新增 `recall_message_markers` runtime 表，后续 Last4 注入只在上下文展示层把对应用户消息标成 `【已撤回】原消息`，不改原始归档。
+- 已完成：小工审阅后补边界：前端 `recall_message` 动作改为串行队列，避免并发弹窗覆盖 resolver；目标消息暂未加载时最多重试再失败；最终弹窗支持长内容滚动、默认聚焦、44px 触控按钮、窄屏 clamp 和 reduced-motion 降级；最终弹窗结束后，被撤回的原用户消息直接替换为按撤回发生时间插入当前聊天底部的居中灰字提示“渡撤回了你的消息”，不显示原文、不冒充用户消息，并自动滚到提示位置。
+- 已完成：小工审阅后补后端边界：`recall_message` 入队强制非空 `windowId`，`chat_ui` poll 要求请求窗口与动作窗口严格一致；回执/marker 以后端 action payload 的窗口为准，客户端回传窗口不再优先；global Last4 场景按全局 marker 补标，避免新窗口注入漏出已撤回原文。
+- 已验证：`.venv/bin/python -m py_compile storage/runtime_sqlite.py services/recall_message_markers.py storage/app_action_store.py services/realtime_publish.py services/realtime_app.py routes/miniapp/device_actions.py services/device_action_tools.py services/mcp_forum_tools.py services/chat_tools.py routes/chat.py pipeline/pipeline.py`、`git diff --check`、`npm --prefix miniapp run build` 通过；隔离 smoke 覆盖缺 `windowId` 入队失败、native 轮询捞不到 `recall_message`、chat_ui 同窗口能捞到、空/错窗口捞不到、客户端回错窗口时 marker 仍写 payload 窗口、global marker 可补标。黑红故障弹窗版本已用真实 MiniApp 本地页面验证，dev 预览入口在当前 in-app browser 320x701 视口下实测 `t+1.2s=4`、`t+3.7s=20`、`t+6.7s=77`、`t+11.5s=153/进入最终弹窗`，可见窗口上限 40 个；本轮横向范围已散到约 `x=-123..435`，宽高约 `152..298 / 126..189`，点击“我知道了”后假消息消失，且没有 `/miniapp-api` 请求。
+- 未完成 / 下次继续：还没有在真实 App 里点一次端到端效果；推送部署后优先测一条真实用户消息 id 的撤回，确认弹窗、回执唤醒、刷新后不回魂，以及 Last4 给渡的标记措辞。

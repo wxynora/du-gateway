@@ -81,6 +81,17 @@ function nextChatFont(font: ChatFontKey): ChatFontKey {
   return CHAT_FONT_KEYS[(index + 1) % CHAT_FONT_KEYS.length] || "system";
 }
 
+function isLocalRecallPreviewRoute(): boolean {
+  if (!import.meta.env.DEV || typeof window === "undefined") return false;
+  try {
+    const enabled = new URLSearchParams(window.location.search).get("recallPreview") === "1";
+    if (enabled) (window as any).__sumitalkLocalRecallPreview = true;
+    return enabled || (window as any).__sumitalkLocalRecallPreview === true;
+  } catch {
+    return (window as any).__sumitalkLocalRecallPreview === true;
+  }
+}
+
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
 const SettingsUpstream = lazy(() => import("./tabs/SettingsUpstream").then((m) => ({ default: m.SettingsUpstream })));
 const ReasoningTab = lazy(() => import("./tabs/ReasoningTab").then((m) => ({ default: m.ReasoningTab })));
@@ -91,6 +102,7 @@ const MemoryNebulaTab = lazy(() => import("./tabs/MemoryNebulaTab").then((m) => 
 const DuDayTab = lazy(() => import("./tabs/DuDayTab").then((m) => ({ default: m.DuDayTab })));
 const DreamArchiveTab = lazy(() => import("./tabs/DreamArchiveTab").then((m) => ({ default: m.DreamArchiveTab })));
 const DuNotebookTab = lazy(() => import("./tabs/DuNotebookTab").then((m) => ({ default: m.DuNotebookTab })));
+const DuPagesTab = lazy(() => import("./tabs/DuPagesTab").then((m) => ({ default: m.DuPagesTab })));
 const ExchangeDiaryTab = lazy(() => import("./tabs/ExchangeDiaryTab").then((m) => ({ default: m.ExchangeDiaryTab })));
 const BudgetCheckInTab = lazy(() => import("./tabs/BudgetCheckInTab").then((m) => ({ default: m.BudgetCheckInTab })));
 const GamesHubTab = lazy(() => import("./tabs/GamesHubTab").then((m) => ({ default: m.GamesHubTab })));
@@ -109,7 +121,7 @@ const ReportingManagementScreen = lazy(() => import("./tabs/ReportingManagementS
 const ChatStorageManagementScreen = lazy(() => import("./tabs/ChatStorageManagementScreen").then((m) => ({ default: m.ChatStorageManagementScreen })));
 const SecretDrawerTab = lazy(() => import("./tabs/SecretDrawerTab").then((m) => ({ default: m.SecretDrawerTab })));
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "dream-archive" | "du-notebook" | "study-room" | "budget-checkin" | "secret-drawer" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "dream-archive" | "du-notebook" | "du-pages" | "study-room" | "budget-checkin" | "secret-drawer" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
 type AvatarImageKind = "myAvatar" | "duAvatar" | "benbenAvatar";
 type ChatScreenId = "du" | "group" | "games" | "wenyou" | "sese-board" | null;
 type BackHandler = () => boolean;
@@ -132,6 +144,7 @@ export function AppShell({
   onCloseDevices?: () => void;
 }) {
   const toast = useToast();
+  const localRecallPreviewRoute = isLocalRecallPreviewRoute();
   const [panel, setPanel] = useState<PanelId>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showPromptManager, setShowPromptManager] = useState(false);
@@ -151,11 +164,12 @@ export function AppShell({
   const [incomingVoiceCallInvite, setIncomingVoiceCallInvite] = useState<IncomingVoiceCallInvite | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
-  const [activeScreen, setActiveScreen] = useState<ChatScreenId>(null);
+  const [activeScreen, setActiveScreen] = useState<ChatScreenId>(() => (localRecallPreviewRoute ? "du" : null));
   const wenyouBackHandlerRef = useRef<(() => boolean) | null>(null);
   const callHubBackHandlerRef = useRef<BackHandler | null>(null);
   const promptManagerBackHandlerRef = useRef<BackHandler | null>(null);
   const dreamArchiveBackHandlerRef = useRef<BackHandler | null>(null);
+  const duPagesBackHandlerRef = useRef<BackHandler | null>(null);
   const secretDrawerBackHandlerRef = useRef<BackHandler | null>(null);
   const exchangeDiaryBackHandlerRef = useRef<BackHandler | null>(null);
   const [groupFreeChatEnabled, setGroupFreeChatEnabled] = useState(() => readStoredBoolean(GROUP_FREE_CHAT_MODE_STORAGE_KEY, true));
@@ -297,17 +311,24 @@ export function AppShell({
     // 不强制全屏，保持 Telegram 默认的半屏/弹层体验。
     tgReady(false);
     applyTelegramThemeToHtmlClass();
-    apiJson<{ ok?: boolean; window_id?: string }>("/miniapp-api/chat-window")
-      .then((j) => {
-        const wid = String(j?.window_id || "").trim();
-        if (wid) setSharedChatWindowId(wid);
-      })
-      .catch(() => {});
+    const localRecallPreview = localRecallPreviewRoute;
+    if (localRecallPreview) {
+      setMainTab("chats");
+      setActiveScreen("du");
+    }
+    if (!localRecallPreview) {
+      apiJson<{ ok?: boolean; window_id?: string }>("/miniapp-api/chat-window")
+        .then((j) => {
+          const wid = String(j?.window_id || "").trim();
+          if (wid) setSharedChatWindowId(wid);
+        })
+        .catch(() => {});
+    }
     const timer = window.setTimeout(() => {
       setDeferHomeExtras(true);
     }, 320);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [localRecallPreviewRoute]);
 
   useEffect(() => {
     try {
@@ -325,6 +346,7 @@ export function AppShell({
   }, [handleIncomingVoiceCallInvite]);
 
   useEffect(() => {
+    if (isLocalRecallPreviewRoute()) return;
     if (!deferHomeExtras) return;
     void loadDailyWhisper(false);
   }, [deferHomeExtras, loadDailyWhisper]);
@@ -548,6 +570,9 @@ export function AppShell({
       if (panel === "dream-archive" && dreamArchiveBackHandlerRef.current?.()) {
         return;
       }
+      if (panel === "du-pages" && duPagesBackHandlerRef.current?.()) {
+        return;
+      }
       if (panel === "secret-drawer" && secretDrawerBackHandlerRef.current?.()) {
         return;
       }
@@ -735,6 +760,11 @@ export function AppShell({
               onClick={() => setPanel("du-notebook")}
             />
             <ListRow
+              icon={<FileTextIcon />}
+              label="渡的页笺"
+              onClick={() => setPanel("du-pages")}
+            />
+            <ListRow
               icon={<CabinetFilingIconMini />}
               label="秘密抽屉"
               onClick={() => setPanel("secret-drawer")}
@@ -873,6 +903,7 @@ export function AppShell({
           duAvatarImage={duAvatarImage}
           benbenAvatarImage={benbenAvatarImage}
           chatBackgroundImage={chatBackgroundImage}
+          localRecallPreview={localRecallPreviewRoute}
           onBack={() => setActiveScreen(null)}
           onOpenStickers={() => setPanel("stickers")}
           onOpenCall={() => openCallHub("voice")}
@@ -967,6 +998,9 @@ export function AppShell({
         <FullScreenPane title="渡的记事本" accent="neutral" onBack={() => setPanel(null)}>
           <LazyPane><DuNotebookTab /></LazyPane>
         </FullScreenPane>
+      ) : null}
+      {panel === "du-pages" ? (
+        <LazyPane><DuPagesTab onExit={() => setPanel(null)} backHandlerRef={duPagesBackHandlerRef} /></LazyPane>
       ) : null}
       {panel === "dream-archive" ? (
         <LazyPane><DreamArchiveTab backHandlerRef={dreamArchiveBackHandlerRef} /></LazyPane>

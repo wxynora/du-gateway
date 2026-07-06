@@ -110,6 +110,52 @@ TOOL_SHOW_CHOICE_DIALOG = {
 }
 
 
+TOOL_RECALL_MESSAGE = {
+    "type": "function",
+    "function": {
+        "name": "recall_message",
+        "description": (
+            "在 SumiTalk App 聊天界面撤回辛玥发出的指定消息。"
+            "这不是后端物理删除，只会让她当前 App 聊天界面用男鬼弹窗仪式后隐藏这些消息，并在你的后续短程上下文里标为【已撤回】原消息。"
+            "必须传 messageIds，不能让系统猜最近一条；只用于你要撤回她刚刚说过的话时。"
+            "最终弹窗有倒计时，超时会自动选择 timeoutChoiceId。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "messageIds": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "必填：要撤回的 App 消息 id 列表，至少 1 个。",
+                },
+                "texts": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "可选：铺满屏幕的小弹窗文案，比如多个「为什么」。",
+                },
+                "finalTitle": {"type": "string", "description": "可选：最后可选择弹窗标题。"},
+                "finalMessage": {"type": "string", "description": "可选：最后可选择弹窗正文。"},
+                "choices": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "label": {"type": "string"},
+                        },
+                        "required": ["id", "label"],
+                    },
+                    "description": "可选：两个选项；两个都可以是你想让她选的方向。",
+                },
+                "countdownSeconds": {"type": "integer", "description": "可选：最后弹窗倒计时秒数，3-30，默认 8。"},
+                "timeoutChoiceId": {"type": "string", "description": "可选：倒计时结束后自动选择的 choice id。"},
+            },
+            "required": ["messageIds"],
+        },
+    },
+}
+
+
 TOOL_REQUEST_SCREEN_CHECK = {
     "type": "function",
     "function": {
@@ -389,6 +435,76 @@ def execute_show_choice_dialog(arguments: dict) -> str:
             "message": payload.get("message") or message,
             "choices": payload.get("choices") or [],
             "note": "已交给 SumiTalk 安卓壳弹出双选项对话框；手机在线时通常会在几十秒内执行。",
+        },
+        ensure_ascii=False,
+    )
+
+
+def _normalize_recall_message_ids(args: dict) -> list[str]:
+    raw_ids = args.get("messageIds")
+    if raw_ids is None:
+        raw_ids = args.get("message_ids")
+    if raw_ids is None and args.get("messageId"):
+        raw_ids = [args.get("messageId")]
+    if raw_ids is None and args.get("message_id"):
+        raw_ids = [args.get("message_id")]
+    if not isinstance(raw_ids, list):
+        return []
+    ids: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_ids:
+        mid = str(raw or "").strip()
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        ids.append(mid)
+    return ids
+
+
+def execute_recall_message(arguments: dict) -> str:
+    args = arguments if isinstance(arguments, dict) else {}
+    context = args.get("_context") if isinstance(args.get("_context"), dict) else {}
+    message_ids = _normalize_recall_message_ids(args)
+    if not message_ids:
+        return json.dumps({"ok": False, "error": "messageIds 必须传，不能猜最近一条"}, ensure_ascii=False)
+    window_id = str(args.get("windowId") or args.get("window_id") or context.get("window_id") or "").strip()
+    if not window_id:
+        return json.dumps({"ok": False, "error": "recall_message 必须在明确的 SumiTalk windowId 内调用"}, ensure_ascii=False)
+    reply_target = str(context.get("reply_target") or context.get("device_id") or "").strip()
+    popup = {
+        "texts": args.get("texts") if isinstance(args.get("texts"), list) else None,
+        "finalTitle": args.get("finalTitle") or args.get("final_title") or "",
+        "finalMessage": args.get("finalMessage") or args.get("final_message") or "",
+        "choices": args.get("choices") if isinstance(args.get("choices"), list) else None,
+        "countdownSeconds": args.get("countdownSeconds", args.get("countdown_seconds")),
+        "timeoutChoiceId": args.get("timeoutChoiceId", args.get("timeout_choice_id")),
+    }
+    crc_src = f"{window_id}\n{','.join(message_ids)}\n{popup.get('finalMessage') or ''}"
+    crc = zlib.crc32(crc_src.encode("utf-8")) & 0xffffffff
+    item, err = r2_store.append_app_action(
+        "recall_message",
+        {
+            "windowId": window_id,
+            "messageIds": message_ids,
+            "popup": popup,
+        },
+        device_id=reply_target,
+        source="tool",
+        expires_in_sec=1800,
+        idempotency_key=f"recall_message_{crc}_{int(time.time() // 10)}",
+    )
+    if err or not item:
+        return json.dumps({"ok": False, "error": err or "入队失败"}, ensure_ascii=False)
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    return json.dumps(
+        {
+            "ok": True,
+            "queued": True,
+            "id": item.get("id"),
+            "type": "recall_message",
+            "messageIds": payload.get("messageIds") or message_ids,
+            "windowId": payload.get("windowId") or window_id,
+            "note": "已交给 SumiTalk 聊天界面执行撤回仪式；前端会弹出最后选择框，选择或超时后回传结果。",
         },
         ensure_ascii=False,
     )

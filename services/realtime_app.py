@@ -76,7 +76,7 @@ class RealtimeConnectionManager:
                 if (not did or conn.device_id == did)
                 and (not wid or conn.window_id == wid)
             ]
-        if str((payload or {}).get("type") or "").strip() == "device_actions":
+        if str((payload or {}).get("type") or "").strip() in {"device_actions", "chat_ui_device_actions"}:
             logger.info(
                 "device_actions_broadcast_targets target_device=%s target_window=%s targets=%s",
                 did,
@@ -389,7 +389,7 @@ async def _sender_loop(conn: RealtimeConnection) -> None:
                 last_message_key = latest_key
                 await _send_json(conn, {"type": "assistant_message", "message": latest, "source": "fallback_poll"})
 
-            actions = await asyncio.to_thread(r2_store.poll_app_actions, device_id=conn.device_id, limit=_ACTION_LIMIT)
+            actions = await asyncio.to_thread(r2_store.poll_app_actions, device_id=conn.device_id, limit=_ACTION_LIMIT, surface="native")
             pending = actions.get("actions") if isinstance(actions, dict) else None
             if isinstance(pending, list) and pending:
                 logger.info(
@@ -400,6 +400,25 @@ async def _sender_loop(conn: RealtimeConnection) -> None:
                     [str((x or {}).get("type") or "") for x in pending if isinstance(x, dict)],
                 )
                 await _send_json(conn, {"type": "device_actions", "actions": pending, "source": "fallback_poll"})
+
+            chat_ui_actions = await asyncio.to_thread(
+                r2_store.poll_app_actions,
+                device_id=conn.device_id,
+                limit=_ACTION_LIMIT,
+                surface="chat_ui",
+                window_id=conn.window_id,
+            )
+            chat_ui_pending = chat_ui_actions.get("actions") if isinstance(chat_ui_actions, dict) else None
+            if isinstance(chat_ui_pending, list) and chat_ui_pending:
+                logger.info(
+                    "chat_ui_device_actions_send_realtime device_id=%s window_id=%s source=fallback_poll count=%s ids=%s types=%s",
+                    conn.device_id,
+                    conn.window_id,
+                    len(chat_ui_pending),
+                    [str((x or {}).get("id") or "") for x in chat_ui_pending if isinstance(x, dict)],
+                    [str((x or {}).get("type") or "") for x in chat_ui_pending if isinstance(x, dict)],
+                )
+                await _send_json(conn, {"type": "chat_ui_device_actions", "actions": chat_ui_pending, "source": "fallback_poll"})
 
             codex_tasks = await asyncio.to_thread(_codex_group_tasks_for_device, conn.device_id)
             for task in codex_tasks:
@@ -452,9 +471,11 @@ def _event_payload_from_internal(body: dict) -> tuple[str, str, dict]:
         payload["message"] = message if isinstance(message, dict) else {}
         if window_id:
             payload["window_id"] = window_id
-    elif event_type == "device_actions":
+    elif event_type in {"device_actions", "chat_ui_device_actions"}:
         actions = (body or {}).get("actions")
         payload["actions"] = actions if isinstance(actions, list) else []
+        if window_id:
+            payload["window_id"] = window_id
     elif event_type == "codex_group_chat_task":
         task = (body or {}).get("task")
         payload["task"] = task if isinstance(task, dict) else {}
@@ -484,11 +505,13 @@ async def internal_publish(request: Request, x_realtime_token: str = Header(defa
     if not payload.get("type"):
         return JSONResponse({"ok": False, "error": "missing_type"}, status_code=400)
     sent = await _connections.broadcast(payload, device_id=device_id, window_id=window_id)
-    if payload.get("type") == "device_actions":
+    if payload.get("type") in {"device_actions", "chat_ui_device_actions"}:
         actions = payload.get("actions") if isinstance(payload.get("actions"), list) else []
         logger.info(
-            "device_actions_broadcast target_device=%s sent=%s count=%s ids=%s types=%s",
+            "device_actions_broadcast type=%s target_device=%s target_window=%s sent=%s count=%s ids=%s types=%s",
+            payload.get("type"),
             device_id,
+            window_id,
             sent,
             len(actions),
             [str((x or {}).get("id") or "") for x in actions if isinstance(x, dict)],

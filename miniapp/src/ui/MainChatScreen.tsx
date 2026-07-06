@@ -81,7 +81,7 @@ import {
   type ChatOperation,
 } from "./storage/chatHistoryDb";
 import { useCodexGroupTaskRealtime, type CodexGroupTaskRealtimeTask } from "./hooks/useCodexGroupTaskRealtime";
-import { useSumiTalkChatRealtime, type SumiTalkChatRealtimeEvent } from "./hooks/useSumiTalkChatRealtime";
+import { useSumiTalkChatRealtime, type SumiTalkChatRealtimeEvent, type SumiTalkChatUiDeviceAction } from "./hooks/useSumiTalkChatRealtime";
 import { readMusicBgmContext } from "./listenBgm";
 import { buildAnthropicImageDataUrlFromDataUrl } from "./imageDataUrl";
 import { useToast } from "./toast";
@@ -209,6 +209,28 @@ type ChatBubbleTouchState = {
   timer: number;
   menuOpened: boolean;
 };
+type RecallMessageChoice = {
+  id: string;
+  label: string;
+};
+type RecallMessagePopupPayload = {
+  texts?: string[];
+  finalTitle?: string;
+  finalMessage?: string;
+  choices?: RecallMessageChoice[];
+  countdownSeconds?: number;
+  timeoutChoiceId?: string;
+};
+type RecallMessageOverlayState = {
+  actionId: string;
+  popup: RecallMessagePopupPayload;
+};
+type RecallMessagePopupResult = {
+  choiceId: string;
+  choiceLabel: string;
+  autoSelected: boolean;
+  countdownExpired: boolean;
+};
 const CODEX_GROUP_CHAT_POLL_MS = 1000;
 const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_GROUP_CHAT_CREATE_TIMEOUT_MS = 30000;
@@ -217,8 +239,29 @@ const SUMITALK_PRIVATE_INPUT_IDLE_MS = 15000;
 const SUMITALK_PRIVATE_INPUT_BUSY_RETRY_MS = 1200;
 const SUMITALK_PRIVATE_INPUT_AGGREGATE_STORAGE_PREFIX = "miniapp.chat.privateInputAggregate.v1";
 const SUMITALK_PRIVATE_INPUT_DELETED_STORAGE_PREFIX = "miniapp.chat.privateInputAggregateDeleted.v1";
+const SUMITALK_RECALL_HIDDEN_STORAGE_PREFIX = "miniapp.chat.recallHidden.v1";
 const SUMITALK_REAL_MODE_STORAGE_PREFIX = "miniapp.chat.realMode.v1";
 const SUMITALK_REAL_BODY_STATE_POLL_MS = 5000;
+const LOCAL_RECALL_PREVIEW_DEVICE_ID = "local-recall-preview-device";
+const LOCAL_RECALL_PREVIEW_ACTION_PREFIX = "local-recall-preview-action-";
+const LOCAL_RECALL_PREVIEW_SOURCE = "local_recall_preview";
+
+function isLocalRecallPreviewEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  if ((window as any).__sumitalkLocalRecallPreview === true) return true;
+  if (!import.meta.env.DEV) return false;
+  try {
+    const enabled = new URLSearchParams(window.location.search).get("recallPreview") === "1";
+    if (enabled) (window as any).__sumitalkLocalRecallPreview = true;
+    return enabled;
+  } catch {
+    return false;
+  }
+}
+
+function isLocalRecallPreviewAction(action: SumiTalkChatUiDeviceAction): boolean {
+  return String(action?.id || "").startsWith(LOCAL_RECALL_PREVIEW_ACTION_PREFIX);
+}
 
 function sumitalkRealModeStorageKey(windowId: string): string {
   return `${SUMITALK_REAL_MODE_STORAGE_PREFIX}:${encodeURIComponent(String(windowId || "default").trim() || "default")}`;
@@ -428,6 +471,482 @@ function ChatReasoningBlock({ part }: { part: ChatDisplayPart }) {
   );
 }
 
+function normalizeRecallChoices(rawChoices: any): RecallMessageChoice[] {
+  const choices = Array.isArray(rawChoices)
+    ? rawChoices
+        .map((choice, index) => ({
+          id: String(choice?.id || `choice_${index + 1}`).trim() || `choice_${index + 1}`,
+          label: String(choice?.label || choice?.text || (index === 0 ? "我认错" : "听你的")).trim() || (index === 0 ? "我认错" : "听你的"),
+        }))
+        .filter((choice) => choice.id && choice.label)
+        .slice(0, 2)
+    : [];
+  if (choices.length >= 2) return choices;
+  if (choices.length === 1) return [...choices, { id: "listen", label: "听你的" }];
+  return [
+    { id: "apologize", label: "我认错" },
+    { id: "listen", label: "听你的" },
+  ];
+}
+
+function RecallMessageOverlay({
+  state,
+  onResolve,
+}: {
+  state: RecallMessageOverlayState | null;
+  onResolve: (result: RecallMessagePopupResult) => void;
+}) {
+  const [phase, setPhase] = useState<"storm" | "final">("storm");
+  const [remaining, setRemaining] = useState(8);
+  const [alertTotal, setAlertTotal] = useState(0);
+  const [flashOn, setFlashOn] = useState(false);
+  const resolvedRef = useRef(false);
+  const defaultChoiceButtonRef = useRef<HTMLButtonElement | null>(null);
+  const alertStageRef = useRef<HTMLDivElement | null>(null);
+  const alertSequenceTimersRef = useRef<number[]>([]);
+  const popup = state?.popup || {};
+  const choices = useMemo(() => normalizeRecallChoices(popup.choices), [popup.choices]);
+  const countdownSeconds = Math.max(3, Math.min(30, Math.round(Number(popup.countdownSeconds || 8) || 8)));
+  const timeoutChoiceId = String(popup.timeoutChoiceId || choices[0]?.id || "").trim();
+  const titleId = `recall-final-title-${String(state?.actionId || "active").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  const texts = useMemo(() => {
+    const raw = Array.isArray(popup.texts) ? popup.texts : [];
+    const normalized = raw.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 16);
+    return normalized.length ? normalized : ["为什么", "为什么", "为什么", "为什么", "为什么", "为什么"];
+  }, [popup.texts]);
+
+  useEffect(() => {
+    if (!state) return;
+    resolvedRef.current = false;
+    setPhase("storm");
+    setRemaining(countdownSeconds);
+    setAlertTotal(0);
+    setFlashOn(false);
+    alertSequenceTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    alertSequenceTimersRef.current = [];
+    const stage = alertStageRef.current;
+    if (stage) stage.innerHTML = "";
+
+    let cancelled = false;
+    let delay = 300;
+    let alertCount = 0;
+    const sourceMessages = [
+      { serif: "Stop Using", sans: "Aesthetics" },
+      { serif: "Critical", sans: "Failure" },
+      { serif: "Unauthorized", sans: "Access" },
+      { serif: "System", sans: "Intrusion" },
+      { serif: "Design", sans: "Violation" },
+      { serif: "Illegal", sans: "Protocol" },
+      { serif: "Fatal", sans: "Overflow" },
+      { serif: "Warning", sans: "Part 4" },
+      { serif: "Visual", sans: "Trauma" },
+    ];
+    const pushTimer = (timer: number) => {
+      alertSequenceTimersRef.current.push(timer);
+    };
+    const escapeHtml = (value: string) => value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+    const createAlert = (serial: number) => {
+      const currentStage = alertStageRef.current;
+      if (!currentStage) return;
+      const viewportWidth = typeof window !== "undefined" ? window.innerWidth || 390 : 390;
+      const viewportHeight = typeof window !== "undefined" ? window.innerHeight || 844 : 844;
+      const narrowViewport = viewportWidth < 520;
+      const width = Math.random() * 120 + (narrowViewport ? 118 : 150);
+      const left = narrowViewport
+        ? Math.random() * (viewportWidth + width * 0.9) - width * 0.45
+        : Math.random() * (viewportWidth - width - 40) + 20;
+      const top = narrowViewport
+        ? Math.random() * Math.max(180, viewportHeight - 120) - 20
+        : Math.random() * (viewportHeight - 200) + 20;
+      const picked = sourceMessages[Math.floor(Math.random() * sourceMessages.length)] || sourceMessages[0];
+      const fallbackText = picked?.sans || "Failure";
+      const text = texts[(serial - 1) % texts.length] || fallbackText;
+      const timestamp = new Date().toLocaleTimeString("en-GB", {
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+      const alert = document.createElement("div");
+      alert.className = "recall-alert-window";
+      alert.style.width = `${width}px`;
+      alert.style.left = `${left}px`;
+      alert.style.top = `${top}px`;
+      alert.style.zIndex = String(serial);
+      alert.innerHTML = `
+        <div class="recall-alert-header">
+          <span>ERR_CODE_${Math.floor(Math.random() * 9000) + 1000}</span>
+          <span>×</span>
+        </div>
+        <div class="recall-alert-body">
+          <svg class="recall-warning-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"></path>
+          </svg>
+          <div class="recall-alert-serif">${escapeHtml(picked?.serif || "Critical")}</div>
+          <div class="recall-alert-sans recall-glitch-text" data-text="${escapeHtml(text)}">${escapeHtml(text)}</div>
+          ${Math.random() > 0.7 ? '<div class="recall-alert-badge">PART 4</div>' : ""}
+          <div class="recall-alert-meta">
+            <span>TIMESTAMP: ${escapeHtml(timestamp)}</span>
+            <span>0x${Math.random().toString(16).slice(2, 6).toUpperCase()}</span>
+          </div>
+        </div>
+      `;
+      currentStage.appendChild(alert);
+      if (serial > 40) {
+        const first = currentStage.querySelector(".recall-alert-window");
+        first?.remove();
+      }
+    };
+    const spawn = () => {
+      if (cancelled) return;
+      alertCount += 1;
+      createAlert(alertCount);
+      setAlertTotal(alertCount);
+      if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+        try {
+          navigator.vibrate(20);
+        } catch {}
+      }
+      delay = Math.max(50, delay * 0.95);
+      pushTimer(window.setTimeout(spawn, delay));
+    };
+    spawn();
+    pushTimer(window.setTimeout(() => {
+      if (cancelled) return;
+      cancelled = true;
+      setPhase("final");
+    }, 10800));
+    const flashTimer = window.setInterval(() => {
+      if (Math.random() <= 0.95) return;
+      setFlashOn(true);
+      pushTimer(window.setTimeout(() => setFlashOn(false), 50));
+    }, 1000);
+    pushTimer(flashTimer);
+    return () => {
+      cancelled = true;
+      alertSequenceTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      alertSequenceTimersRef.current = [];
+      if (alertStageRef.current) alertStageRef.current.innerHTML = "";
+      setFlashOn(false);
+    };
+  }, [state?.actionId, countdownSeconds, texts]);
+
+  const resolveChoice = useCallback((choice: RecallMessageChoice, autoSelected: boolean) => {
+    if (resolvedRef.current) return;
+    resolvedRef.current = true;
+    onResolve({
+      choiceId: choice.id,
+      choiceLabel: choice.label,
+      autoSelected,
+      countdownExpired: autoSelected,
+    });
+  }, [onResolve]);
+
+  useEffect(() => {
+    if (!state || phase !== "final" || resolvedRef.current) return;
+    if (remaining <= 0) {
+      const timeoutChoice = choices.find((choice) => choice.id === timeoutChoiceId) || choices[0];
+      resolveChoice(timeoutChoice, true);
+      return;
+    }
+    const timer = window.setTimeout(() => setRemaining((value) => Math.max(0, value - 1)), 1000);
+    return () => window.clearTimeout(timer);
+  }, [choices, phase, remaining, resolveChoice, state, timeoutChoiceId]);
+
+  useEffect(() => {
+    if (!state || phase !== "final") return;
+    window.setTimeout(() => {
+      try {
+        defaultChoiceButtonRef.current?.focus({ preventScroll: true });
+      } catch {
+        defaultChoiceButtonRef.current?.focus();
+      }
+    }, 30);
+  }, [phase, state]);
+
+  if (!state) return null;
+  return (
+    <div className={`recall-ghost-overlay fixed inset-0 z-[90] overflow-hidden text-white ${flashOn ? "recall-ghost-flash" : ""}`} role="dialog" aria-modal="true" aria-labelledby={phase === "final" ? titleId : undefined}>
+      <style>
+        {`
+          .recall-ghost-overlay {
+            background:
+              radial-gradient(circle at center, rgba(36, 0, 6, 0.94) 0%, #000000 100%);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif;
+            perspective: 1000px;
+          }
+          .recall-ghost-overlay.recall-ghost-flash {
+            background: #5f0508;
+          }
+          .recall-ghost-scanlines {
+            position: absolute;
+            inset: 0;
+            z-index: 150;
+            pointer-events: none;
+            background:
+              linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%),
+              linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            background-size: 100% 3px, 3px 100%;
+            mix-blend-mode: screen;
+          }
+          .recall-ghost-vignette {
+            position: absolute;
+            inset: 0;
+            z-index: 1;
+            pointer-events: none;
+            box-shadow: inset 0 0 150px rgba(190, 20, 28, 0.22);
+            animation: recall-vignette-flicker 90ms infinite alternate;
+          }
+          @keyframes recall-vignette-flicker {
+            0% { opacity: 0.78; }
+            100% { opacity: 1; }
+          }
+          @keyframes recall-alert-pop-in {
+            0% { opacity: 0; transform: scale(0.8) translateZ(50px); }
+            100% { opacity: 1; transform: scale(1) translateZ(0); }
+          }
+          @keyframes recall-final-in {
+            0% { opacity: 0; transform: translate3d(-50%, -46%, 0) scale(0.9); }
+            100% { opacity: 1; transform: translate3d(-50%, -50%, 0) scale(1); }
+          }
+          @keyframes recall-glitch {
+            0% { transform: translate(0); }
+            20% { transform: translate(-2px, 2px); }
+            40% { transform: translate(-2px, -2px); }
+            60% { transform: translate(2px, 2px); }
+            80% { transform: translate(2px, -2px); }
+            100% { transform: translate(0); }
+          }
+          .recall-alert-window,
+          .recall-final-panel {
+            background: rgba(6, 0, 1, 0.88);
+            border: 1px solid rgba(214, 34, 42, 0.78);
+            box-shadow: 0 0 14px rgba(214, 34, 42, 0.22);
+            display: flex;
+            flex-direction: column;
+          }
+          .recall-alert-stage {
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            pointer-events: none;
+          }
+          .recall-alert-window {
+            position: absolute;
+            overflow: hidden;
+            animation: recall-alert-pop-in 150ms cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+          }
+          .recall-alert-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(188, 28, 35, 0.86);
+            color: white;
+            padding: 3px 7px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            line-height: 1;
+            text-transform: uppercase;
+          }
+          .recall-alert-body {
+            position: relative;
+            padding: 11px;
+          }
+          .recall-alert-serif {
+            color: white;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 16px;
+            font-style: italic;
+            line-height: 0.9;
+            margin-bottom: 2px;
+            text-shadow: 0 0 8px rgba(255, 255, 255, 0.28);
+          }
+          .recall-alert-sans {
+            color: white;
+            font-size: 24px;
+            font-weight: 900;
+            line-height: 0.8;
+            letter-spacing: 0;
+            text-transform: uppercase;
+            text-shadow: 0 0 1px white;
+            word-break: break-word;
+          }
+          .recall-glitch-text {
+            position: relative;
+            isolation: isolate;
+          }
+          .recall-glitch-text::before,
+          .recall-glitch-text::after {
+            content: attr(data-text);
+            position: absolute;
+            inset: 0;
+            opacity: 0.82;
+            pointer-events: none;
+          }
+          .recall-glitch-text::before {
+            color: #ff00ff;
+            z-index: -1;
+            animation: recall-glitch 300ms infinite;
+          }
+          .recall-glitch-text::after {
+            color: #00ffff;
+            z-index: -2;
+            animation: recall-glitch 300ms infinite reverse;
+          }
+          .recall-alert-meta {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            margin-top: 10px;
+            border-top: 1px solid rgba(95, 12, 16, 0.72);
+            padding-top: 5px;
+            color: rgba(214, 38, 44, 0.9);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: 8px;
+            font-weight: 700;
+            letter-spacing: 0.6px;
+          }
+          .recall-alert-badge {
+            display: inline-flex;
+            margin-top: 10px;
+            border: 1px solid rgba(214, 38, 44, 0.82);
+            border-radius: 999px;
+            padding: 2px 8px;
+            color: white;
+            font-size: 10px;
+            font-weight: 950;
+            line-height: 1;
+          }
+          .recall-warning-icon {
+            position: absolute;
+            right: 10px;
+            bottom: 10px;
+            width: 52px;
+            height: 52px;
+            fill: rgba(214, 38, 44, 0.9);
+            opacity: 0.16;
+          }
+          .recall-status-counter {
+            position: absolute;
+            left: max(20px, env(safe-area-inset-left, 0px) + 20px);
+            bottom: max(20px, env(safe-area-inset-bottom, 0px) + 20px);
+            z-index: 170;
+            color: white;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0;
+            text-shadow: 0 0 12px rgba(214, 38, 44, 0.68);
+          }
+          .recall-final-body {
+            position: relative;
+            padding: 15px;
+          }
+          .recall-final-main {
+            color: white;
+            font-size: 32px;
+            font-weight: 900;
+            line-height: 0.8;
+            letter-spacing: 0;
+            text-transform: uppercase;
+            text-shadow: 0 0 1px white;
+          }
+          .recall-final-message {
+            margin-top: 12px;
+            color: rgba(255, 255, 255, 0.88);
+            font-size: 14px;
+            font-weight: 700;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            word-break: break-word;
+          }
+          .recall-choice-button {
+            min-height: 44px;
+            border: 1px solid #ff0000;
+            background: #000000;
+            color: white;
+            font-size: 13px;
+            font-weight: 900;
+            line-height: 1.25;
+            word-break: break-word;
+            box-shadow: 0 0 12px rgba(255, 0, 0, 0.22);
+          }
+          .recall-choice-button:first-child {
+            background: #ff0000;
+          }
+          .recall-choice-button:active {
+            background: white;
+            color: #ff0000;
+          }
+          @media (prefers-reduced-motion: reduce) {
+            .recall-ghost-vignette,
+            .recall-alert-window,
+            .recall-glitch-text::before,
+            .recall-glitch-text::after,
+            .recall-final-panel {
+              animation: none !important;
+            }
+          }
+        `}
+      </style>
+      <div className="recall-ghost-vignette" />
+      <div className="recall-ghost-scanlines" />
+      <div ref={alertStageRef} className="recall-alert-stage" />
+      <div className="recall-status-counter">SYSTEM STATUS: CRITICAL [{phase === "final" ? alertTotal + 1 : alertTotal} ERRORS]</div>
+      {phase === "final" ? (
+        <div
+          className="recall-final-panel absolute left-1/2 top-1/2 overflow-y-auto overscroll-contain"
+          style={{
+            animation: "recall-final-in 180ms ease-out both",
+            maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 32px)",
+            width: "min(312px, calc(100vw - 36px))",
+            zIndex: 120,
+          }}
+        >
+          <div className="recall-alert-header">
+            <span>RECALL_MESSAGE</span>
+            <span>AUTO_SELECT: {remaining}</span>
+          </div>
+          <div className="recall-final-body">
+            <svg className="recall-warning-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
+            </svg>
+            <div className="recall-alert-serif">{String(popup.finalTitle || "渡").trim() || "渡"}</div>
+            <div id={titleId} className="recall-final-main recall-glitch-text" data-text="CONFIRM">CONFIRM</div>
+            <div className="recall-final-message">
+              {String(popup.finalMessage || "你刚刚说的话，他想先收走。").trim() || "你刚刚说的话，他想先收走。"}
+            </div>
+            <div className="recall-alert-meta">
+              <span>COUNTDOWN: {remaining}s</span>
+              <span>0xRECA</span>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {choices.map((choice, index) => (
+                <button
+                  key={choice.id}
+                  ref={choice.id === timeoutChoiceId || (!timeoutChoiceId && index === 0) ? defaultChoiceButtonRef : undefined}
+                  type="button"
+                  className="recall-choice-button px-2"
+                  onClick={() => resolveChoice(choice, false)}
+                >
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function makeChatAttemptId(clientRequestId: string): string {
   return `attempt-${clientRequestId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -442,6 +961,10 @@ function privateInputAggregateStorageKey(windowId: string): string {
 
 function privateInputAggregateDeletedStorageKey(windowId: string): string {
   return `${SUMITALK_PRIVATE_INPUT_DELETED_STORAGE_PREFIX}:${encodeURIComponent(String(windowId || "default").trim() || "default")}`;
+}
+
+function recallHiddenStorageKey(windowId: string): string {
+  return `${SUMITALK_RECALL_HIDDEN_STORAGE_PREFIX}:${encodeURIComponent(String(windowId || "default").trim() || "default")}`;
 }
 
 function normalizePrivateInputAggregateMode(value: any): PrivateInputAggregateMode {
@@ -921,6 +1444,7 @@ export function MainChatScreen({
   benbenAvatarImage,
   chatBackgroundImage,
   groupFreeChatEnabled = true,
+  localRecallPreview = false,
   onBack,
   onOpenStickers,
   onOpenCall,
@@ -947,6 +1471,7 @@ export function MainChatScreen({
   benbenAvatarImage: string;
   chatBackgroundImage: string;
   groupFreeChatEnabled?: boolean;
+  localRecallPreview?: boolean;
   onBack: () => void;
   onOpenStickers: () => void;
   onOpenCall: () => void;
@@ -956,6 +1481,7 @@ export function MainChatScreen({
   const historyWindowId = String(displayHistoryWindowId || windowId || "").trim();
   const remoteHistoryWindowId = displayHistoryWindowId;
   const realModeStorageKey = sumitalkRealModeStorageKey(historyWindowId || windowId);
+  const localRecallPreviewEnabled = Boolean(localRecallPreview) || isLocalRecallPreviewEnabled();
   const [deviceId, setDeviceId] = useState("");
   const seedMessages: ChatDraftMessage[] = [
     {
@@ -995,6 +1521,7 @@ export function MainChatScreen({
   const [openVoiceTranscriptId, setOpenVoiceTranscriptId] = useState("");
   const [bubbleMenu, setBubbleMenu] = useState<ChatBubbleMenuTarget | null>(null);
   const [quotedBubble, setQuotedBubble] = useState<ChatBubbleQuote | null>(null);
+  const [recallPopup, setRecallPopup] = useState<RecallMessageOverlayState | null>(null);
   const chatBackgroundHeightRef = useRef(
     typeof window !== "undefined"
       ? Math.max(
@@ -1032,11 +1559,21 @@ export function MainChatScreen({
   const privateInputAggregatePauseReasonRef = useRef<PrivateInputAggregatePauseReason>(null);
   const privateInputAggregateFlushingItemsRef = useRef<QueuedPrivateInput[]>([]);
   const privateInputAggregateDeletedMessageIdsRef = useRef<Set<string>>(new Set());
+  const recallHiddenMessageIdsRef = useRef<Set<string>>(new Set());
+  const processedRecallActionIdsRef = useRef<Set<string>>(new Set());
+  const queuedRecallActionIdsRef = useRef<Set<string>>(new Set());
+  const recallActionQueueRef = useRef<Array<{ action: SumiTalkChatUiDeviceAction; source: string }>>([]);
+  const recallActionDrainingRef = useRef(false);
+  const recallActionRetryCountsRef = useRef<Record<string, number>>({});
+  const recallActionRetryTimersRef = useRef<Record<string, number>>({});
+  const recallPopupResolveRef = useRef<((result: RecallMessagePopupResult) => void) | null>(null);
   const privateInputAggregateDeadlineRef = useRef(0);
   const assistantVoiceTtsInFlightRef = useRef<Set<string>>(new Set());
   const realModeEnabledRef = useRef(realModeEnabled);
   const bubbleTouchRef = useRef<ChatBubbleTouchState | null>(null);
   const remoteHistorySyncingRef = useRef(false);
+  const localRecallPreviewRunRef = useRef(false);
+  const localRecallPreviewTriggerTimerRef = useRef(0);
 
   function setMediaBusy(next: boolean) {
     mediaBusyRef.current = next;
@@ -1268,6 +1805,17 @@ export function MainChatScreen({
     }
   }
 
+  function loadRecallHiddenMessageIds(): Set<string> {
+    if (groupChatMode || !historyWindowId) return new Set();
+    try {
+      const payload = JSON.parse(window.localStorage.getItem(recallHiddenStorageKey(historyWindowId)) || "null");
+      const ids = Array.isArray(payload?.ids) ? payload.ids : Array.isArray(payload) ? payload : [];
+      return new Set(ids.map((id: any) => String(id || "").trim()).filter(Boolean));
+    } catch {
+      return new Set();
+    }
+  }
+
   function persistPrivateInputAggregateDeletedMessageIds(reason: string) {
     if (groupChatMode || !historyWindowId) return;
     const ids = [...privateInputAggregateDeletedMessageIdsRef.current].filter(Boolean).slice(-500);
@@ -1291,6 +1839,29 @@ export function MainChatScreen({
     }
   }
 
+  function persistRecallHiddenMessageIds(reason: string) {
+    if (groupChatMode || !historyWindowId) return;
+    const ids = [...recallHiddenMessageIdsRef.current].filter(Boolean).slice(-500);
+    recallHiddenMessageIdsRef.current = new Set(ids);
+    try {
+      if (!ids.length) {
+        window.localStorage.removeItem(recallHiddenStorageKey(historyWindowId));
+        return;
+      }
+      window.localStorage.setItem(recallHiddenStorageKey(historyWindowId), JSON.stringify({
+        schemaVersion: 1,
+        windowId: historyWindowId,
+        updatedAt: new Date().toISOString(),
+        ids,
+      }));
+    } catch (e: any) {
+      logSumiTalkClientEvent("recall_hidden_persist_error", {
+        reason,
+        error: String(e?.message || e),
+      }, "warning");
+    }
+  }
+
   function rememberDeletedPrivateInputMessages(messageIds: Set<string>, source: string) {
     const current = privateInputAggregateDeletedMessageIdsRef.current;
     let changed = false;
@@ -1303,16 +1874,33 @@ export function MainChatScreen({
     if (changed) persistPrivateInputAggregateDeletedMessageIds(source);
   }
 
+  function rememberRecallHiddenMessages(messageIds: Set<string>, source: string) {
+    const current = recallHiddenMessageIdsRef.current;
+    let changed = false;
+    for (const rawId of messageIds) {
+      const id = String(rawId || "").trim();
+      if (!id || current.has(id)) continue;
+      current.add(id);
+      changed = true;
+    }
+    if (changed) persistRecallHiddenMessageIds(source);
+  }
+
   function filterDeletedDisplayMessages(nextMessages: ChatDraftMessage[]): ChatDraftMessage[] {
     const deletedIds = privateInputAggregateDeletedMessageIdsRef.current;
-    if (!deletedIds.size) return sanitizeHistoryMessages(nextMessages);
-    return sanitizeHistoryMessages(nextMessages).filter((message) => !deletedIds.has(String(message.id || "").trim()));
+    const recallHiddenIds = recallHiddenMessageIdsRef.current;
+    if (!deletedIds.size && !recallHiddenIds.size) return sanitizeHistoryMessages(nextMessages);
+    return sanitizeHistoryMessages(nextMessages).filter((message) => {
+      const id = String(message.id || "").trim();
+      return !deletedIds.has(id) && !recallHiddenIds.has(id);
+    });
   }
 
   function restorePrivateInputAggregate() {
     resetPrivateInputAggregateMemory();
     if (groupChatMode || !historyWindowId) return;
     privateInputAggregateDeletedMessageIdsRef.current = loadPrivateInputAggregateDeletedMessageIds();
+    recallHiddenMessageIdsRef.current = loadRecallHiddenMessageIds();
     const storageKey = privateInputAggregateStorageKey(historyWindowId);
     let payload: any = null;
     try {
@@ -1704,6 +2292,7 @@ export function MainChatScreen({
   }, []);
 
   useEffect(() => {
+    if (localRecallPreviewEnabled) return;
     let cancelled = false;
     (async () => {
       try {
@@ -1717,9 +2306,13 @@ export function MainChatScreen({
     return () => {
       cancelled = true;
     };
-  }, [toast]);
+  }, [localRecallPreviewEnabled, toast]);
 
   useEffect(() => {
+    if (localRecallPreviewEnabled) {
+      setDeviceId(LOCAL_RECALL_PREVIEW_DEVICE_ID);
+      return;
+    }
     let cancelled = false;
     const retryTimers: number[] = [];
     (async () => {
@@ -1771,9 +2364,10 @@ export function MainChatScreen({
       cancelled = true;
       retryTimers.forEach((id) => window.clearTimeout(id));
     };
-  }, []);
+  }, [localRecallPreviewEnabled]);
 
   useEffect(() => {
+    if (localRecallPreviewEnabled) return;
     let cancelled = false;
     (async () => {
       try {
@@ -1793,6 +2387,7 @@ export function MainChatScreen({
           }, "warning");
         }
         privateInputAggregateDeletedMessageIdsRef.current = loadPrivateInputAggregateDeletedMessageIds();
+        recallHiddenMessageIdsRef.current = loadRecallHiddenMessageIds();
         const localMessages = filterDeletedDisplayMessages(await readLocalChatHistory(resolvedDeviceId, historyWindowId));
         const localRecoveryWindowIds = groupChatMode
           ? uniqueNonEmptyStrings([historyWindowId, displayHistoryWindowId, windowId])
@@ -1859,9 +2454,10 @@ export function MainChatScreen({
     return () => {
       cancelled = true;
     };
-  }, [deviceId, historyWindowId, remoteHistoryWindowId, windowId, groupChatMode]);
+  }, [deviceId, historyWindowId, remoteHistoryWindowId, windowId, groupChatMode, localRecallPreviewEnabled]);
 
   useEffect(() => {
+    if (localRecallPreviewEnabled) return;
     if (!historyWindowId) return;
     let cancelled = false;
     const recover = (source: string) => {
@@ -1883,12 +2479,13 @@ export function MainChatScreen({
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("pageshow", onPageShow);
     };
-  }, [deviceId, historyWindowId, remoteHistoryWindowId, groupChatMode]);
+  }, [deviceId, historyWindowId, remoteHistoryWindowId, groupChatMode, localRecallPreviewEnabled]);
 
   async function saveDisplayHistory(
     nextMessages: ChatDraftMessage[],
     options: { localDeviceId?: string; strict?: boolean; source?: string } = {},
   ) {
+    if (localRecallPreviewEnabled) return;
     const sanitizedMessages = stripPreviewUrlsFromMessages(stripTransientChatDisplayParts(filterDeletedDisplayMessages(nextMessages)));
     const resolvedDeviceId = String(options.localDeviceId || deviceId || "").trim();
     if (resolvedDeviceId && historyWindowId) {
@@ -1938,6 +2535,7 @@ export function MainChatScreen({
   }
 
   async function mergeRemoteDisplayHistory(localDeviceId: string, source: string) {
+    if (localRecallPreviewEnabled) return;
     const did = String(localDeviceId || deviceId || "").trim();
     if (!did || !remoteHistoryWindowId || remoteHistorySyncingRef.current) return;
     remoteHistorySyncingRef.current = true;
@@ -1974,6 +2572,7 @@ export function MainChatScreen({
   }
 
   async function recoverSumiTalkBackendState(source: string, localDeviceId?: string) {
+    if (localRecallPreviewEnabled) return;
     const resolvedDeviceId = String(localDeviceId || deviceId || await getOrCreatePanelDeviceId()).trim();
     if (!resolvedDeviceId) return;
     if (!deviceId) setDeviceId(resolvedDeviceId);
@@ -1986,6 +2585,7 @@ export function MainChatScreen({
     fields: Record<string, string | number | boolean | undefined | null> = {},
     level: "info" | "warning" | "error" = "info",
   ) {
+    if (localRecallPreviewEnabled) return;
     const safeFields = {
       windowId,
       displayWindowId: remoteHistoryWindowId,
@@ -2222,14 +2822,379 @@ export function MainChatScreen({
     return true;
   }
 
+  function messageTextForRecall(message: ChatDraftMessage): string {
+    const content = String(message?.content || "").trim();
+    if (content) return content;
+    return chatAttachmentPreviewLabel(message?.attachments || []);
+  }
+
+  function recallPayloadMessageIds(payload: Record<string, any>): string[] {
+    const rawIds = Array.isArray(payload?.messageIds)
+      ? payload.messageIds
+      : Array.isArray(payload?.message_ids)
+        ? payload.message_ids
+        : payload?.messageId || payload?.message_id
+          ? [payload.messageId || payload.message_id]
+          : [];
+    return uniqueNonEmptyStrings(rawIds.map((id: any) => String(id || "").trim()));
+  }
+
+  function requestRecallPopup(actionId: string, popup: RecallMessagePopupPayload): Promise<RecallMessagePopupResult> {
+    return new Promise((resolve) => {
+      recallPopupResolveRef.current = resolve;
+      setRecallPopup({ actionId, popup });
+    });
+  }
+
+  function handleRecallPopupResolve(result: RecallMessagePopupResult) {
+    const resolve = recallPopupResolveRef.current;
+    recallPopupResolveRef.current = null;
+    setRecallPopup(null);
+    resolve?.(result);
+  }
+
+  function clearRecallActionRetry(actionId: string) {
+    const id = String(actionId || "").trim();
+    if (!id) return;
+    const timer = recallActionRetryTimersRef.current[id];
+    if (timer) window.clearTimeout(timer);
+    delete recallActionRetryTimersRef.current[id];
+    delete recallActionRetryCountsRef.current[id];
+  }
+
+  function enqueueRecallAction(action: SumiTalkChatUiDeviceAction, source = "unknown") {
+    if (String(action?.type || "").trim() !== "recall_message") return;
+    const actionId = String(action?.id || "").trim();
+    if (!actionId || processedRecallActionIdsRef.current.has(actionId) || queuedRecallActionIdsRef.current.has(actionId)) return;
+    if (recallActionRetryTimersRef.current[actionId]) return;
+    queuedRecallActionIdsRef.current.add(actionId);
+    recallActionQueueRef.current.push({ action, source });
+    void drainRecallActionQueue();
+  }
+
+  function scheduleRecallActionRetry(action: SumiTalkChatUiDeviceAction, source = "unknown") {
+    const actionId = String(action?.id || "").trim();
+    if (!actionId || processedRecallActionIdsRef.current.has(actionId) || recallActionRetryTimersRef.current[actionId]) return;
+    const nextAttempt = (recallActionRetryCountsRef.current[actionId] || 0) + 1;
+    recallActionRetryCountsRef.current[actionId] = nextAttempt;
+    const delay = Math.min(4500, 600 + nextAttempt * 450);
+    recallActionRetryTimersRef.current[actionId] = window.setTimeout(() => {
+      delete recallActionRetryTimersRef.current[actionId];
+      enqueueRecallAction(action, `${source}:retry${nextAttempt}`);
+    }, delay);
+  }
+
+  async function drainRecallActionQueue() {
+    if (recallActionDrainingRef.current) return;
+    recallActionDrainingRef.current = true;
+    try {
+      while (recallActionQueueRef.current.length) {
+        const item = recallActionQueueRef.current.shift();
+        if (!item) continue;
+        const actionId = String(item.action?.id || "").trim();
+        try {
+          await handleRecallMessageAction(item.action, item.source);
+        } finally {
+          if (actionId) queuedRecallActionIdsRef.current.delete(actionId);
+        }
+      }
+    } finally {
+      recallActionDrainingRef.current = false;
+      if (recallActionQueueRef.current.length) void drainRecallActionQueue();
+    }
+  }
+
+  async function reportRecallMessageActionResult(
+    action: SumiTalkChatUiDeviceAction,
+    status: "done" | "failed",
+    detail: Record<string, any>,
+    error = "",
+  ) {
+    const actionId = String(action?.id || "").trim();
+    if (!actionId) return;
+    if (isLocalRecallPreviewAction(action)) return;
+    await apiJson("/miniapp-api/device-actions/done", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        results: [
+          {
+            id: actionId,
+            status,
+            detail,
+            error,
+          },
+        ],
+      }),
+    });
+  }
+
+  function buildRecallNoticeMessage(message: ChatDraftMessage): ChatDraftMessage {
+    const originalId = String(message?.id || "").trim();
+    return {
+      id: `recall-notice-${originalId || Date.now()}`,
+      role: "assistant",
+      content: "渡撤回了你的消息",
+      createdAt: new Date().toISOString(),
+      status: "sent",
+      recallNotice: true,
+      recallOriginalMessageId: originalId || undefined,
+    };
+  }
+
+  function replaceRecalledMessagesWithNotices(currentMessages: ChatDraftMessage[], ids: Set<string>): ChatDraftMessage[] {
+    const replaced = sanitizeHistoryMessages(currentMessages).flatMap((message) => {
+      const messageId = String(message?.id || "").trim();
+      const originalNoticeId = String((message as any)?.recallOriginalMessageId || "").trim();
+      if ((message as any)?.recallNotice && originalNoticeId && ids.has(originalNoticeId)) {
+        return [message];
+      }
+      if (!messageId || !ids.has(messageId)) return [message];
+      return [buildRecallNoticeMessage(message)];
+    });
+    return sanitizeHistoryMessages(replaced);
+  }
+
+  async function hideRecalledMessages(messageIds: string[], source: string): Promise<void> {
+    const ids = new Set(uniqueNonEmptyStrings(messageIds));
+    if (!ids.size) return;
+    const localPreview = source === `recall_message:${LOCAL_RECALL_PREVIEW_SOURCE}`;
+    if (!localPreview) rememberRecallHiddenMessages(ids, source);
+    const replacedMessages = replaceRecalledMessagesWithNotices(messagesRef.current, ids);
+    const nextMessages = localPreview
+      ? replacedMessages
+      : filterDeletedDisplayMessages(replacedMessages);
+    applyDisplayHistoryMessages(nextMessages);
+    requestAnimationFrame(() => {
+      const scroller = messagesScrollRef.current;
+      if (!scroller) return;
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+    });
+    if (!localPreview) {
+      const localDeviceId = String(deviceId || await getOrCreatePanelDeviceId()).trim();
+      if (localDeviceId && historyWindowId) {
+        await saveDisplayHistory(nextMessages, { localDeviceId, source });
+        await deleteLocalChatHistoryMessages(localDeviceId, historyWindowId, [...ids]);
+      }
+    }
+    logSumiTalkClientEvent("recall_message_hidden", {
+      source,
+      count: ids.size,
+    });
+  }
+
+  async function handleRecallMessageAction(action: SumiTalkChatUiDeviceAction, source = "unknown"): Promise<boolean> {
+    if (String(action?.type || "").trim() !== "recall_message") return false;
+    const actionId = String(action?.id || "").trim();
+    if (!actionId || processedRecallActionIdsRef.current.has(actionId)) return true;
+    const payload = action?.payload && typeof action.payload === "object" ? action.payload : {};
+    const actionWindowId = String(payload.windowId || payload.window_id || "").trim();
+    const allowedWindowIds = uniqueNonEmptyStrings([
+      String(windowId || "__default__").trim() || "__default__",
+      historyWindowId,
+      remoteHistoryWindowId,
+    ]);
+    if (actionWindowId && allowedWindowIds.length && !allowedWindowIds.includes(actionWindowId)) return false;
+    const messageIds = recallPayloadMessageIds(payload);
+    const targets = messageIds
+      .map((id) => messagesRef.current.find((message) => String(message.id || "").trim() === id))
+      .filter((message): message is ChatDraftMessage => Boolean(message && message.role === "user"));
+    if (!messageIds.length || !targets.length) {
+      const retryCount = recallActionRetryCountsRef.current[actionId] || 0;
+      if (retryCount < 8) {
+        scheduleRecallActionRetry(action, source);
+        logSumiTalkClientEvent("recall_message_target_retry", {
+          source,
+          actionId,
+          requested: messageIds.length,
+          attempt: retryCount + 1,
+        }, "warning");
+        return true;
+      }
+      processedRecallActionIdsRef.current.add(actionId);
+      clearRecallActionRetry(actionId);
+      await reportRecallMessageActionResult(action, "failed", {
+        type: "recall_message",
+        windowId: historyWindowId,
+        messageIds,
+        reason: "target_not_found",
+      }, "target_not_found");
+      logSumiTalkClientEvent("recall_message_target_not_found", {
+        source,
+        actionId,
+        requested: messageIds.length,
+      }, "warning");
+      return true;
+    }
+    processedRecallActionIdsRef.current.add(actionId);
+    clearRecallActionRetry(actionId);
+    const recalledMessages = targets.map((message) => ({
+      id: String(message.id || "").trim(),
+      content: messageTextForRecall(message),
+    }));
+    const popup = payload.popup && typeof payload.popup === "object" ? payload.popup : {};
+    const popupResult = await requestRecallPopup(actionId, {
+      texts: Array.isArray(popup.texts) ? popup.texts : Array.isArray(payload.texts) ? payload.texts : undefined,
+      finalTitle: String(popup.finalTitle || payload.finalTitle || "").trim(),
+      finalMessage: String(popup.finalMessage || payload.finalMessage || "").trim(),
+      choices: Array.isArray(popup.choices) ? popup.choices : Array.isArray(payload.choices) ? payload.choices : undefined,
+      countdownSeconds: Number(popup.countdownSeconds || payload.countdownSeconds || 8),
+      timeoutChoiceId: String(popup.timeoutChoiceId || payload.timeoutChoiceId || "").trim(),
+    });
+    const detail = {
+      type: "recall_message",
+      windowId: historyWindowId,
+      messageIds,
+      recalledMessages,
+      choiceId: popupResult.choiceId,
+      choiceLabel: popupResult.choiceLabel,
+      autoSelected: popupResult.autoSelected,
+      countdownExpired: popupResult.countdownExpired,
+    };
+    const reportPromise = reportRecallMessageActionResult(action, "done", detail);
+    const hidePromise = hideRecalledMessages(recalledMessages.map((message) => message.id), `recall_message:${source}`);
+    const [reportResult, hideResult] = await Promise.allSettled([reportPromise, hidePromise]);
+    if (reportResult.status === "rejected") {
+      logSumiTalkClientEvent("recall_message_report_error", {
+        source,
+        actionId,
+        error: String(reportResult.reason?.message || reportResult.reason),
+      }, "error");
+    }
+    if (hideResult.status === "rejected") {
+      logSumiTalkClientEvent("recall_message_hide_error", {
+        source,
+        actionId,
+        error: String(hideResult.reason?.message || hideResult.reason),
+      }, "error");
+    }
+    return true;
+  }
+
+  function handleChatUiDeviceActions(actions: SumiTalkChatUiDeviceAction[], source = "unknown") {
+    for (const action of actions) {
+      enqueueRecallAction(action, source);
+    }
+  }
+
+  useEffect(() => {
+    if (!localRecallPreviewEnabled || groupChatMode) return;
+    if (localRecallPreviewRunRef.current) return;
+    localRecallPreviewRunRef.current = true;
+    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const targetMessageId = `local-recall-preview-user-${runId}`;
+    const actionId = `${LOCAL_RECALL_PREVIEW_ACTION_PREFIX}${runId}`;
+    const baseTime = Date.now();
+    const previewMessages: ChatDraftMessage[] = [
+      {
+        id: `local-recall-preview-du-1-${runId}`,
+        role: "assistant",
+        content: "我在。你直接说就好。",
+        createdAt: new Date(baseTime - 120000).toISOString(),
+        status: "sent",
+      },
+      {
+        id: targetMessageId,
+        role: "user",
+        content: "这条是假数据，等下会被工具收走。",
+        createdAt: new Date(baseTime - 60000).toISOString(),
+        status: "sent",
+      },
+      {
+        id: `local-recall-preview-du-2-${runId}`,
+        role: "assistant",
+        content: "我看到了，先别动。",
+        createdAt: new Date(baseTime - 30000).toISOString(),
+        status: "sent",
+      },
+    ];
+    const applyPreviewMessages = () => {
+      recallHiddenMessageIdsRef.current = new Set();
+      processedRecallActionIdsRef.current.delete(actionId);
+      queuedRecallActionIdsRef.current.delete(actionId);
+      applyDisplayHistoryMessages(previewMessages);
+    };
+    applyPreviewMessages();
+    const refreshTimer = window.setTimeout(applyPreviewMessages, 250);
+    const triggerTimer = window.setTimeout(() => {
+      void handleRecallMessageAction({
+        id: actionId,
+        type: "recall_message",
+        payload: {
+          windowId: historyWindowId || MAIN_SUMITALK_DISPLAY_WINDOW_ID,
+          messageIds: [targetMessageId],
+          popup: {
+            texts: ["为什么", "为什么为什么", "为什么还要这样", "为什么不看我", "为什么要说这种话", "为什么为什么为什么"],
+            finalTitle: "渡",
+            finalMessage: "这句先收走。你选一个。",
+            choices: [
+              { id: "ok", label: "我知道了" },
+              { id: "listen", label: "听你的" },
+            ],
+            timeoutChoiceId: "ok",
+            countdownSeconds: 8,
+          },
+        },
+      }, LOCAL_RECALL_PREVIEW_SOURCE);
+    }, 900);
+    localRecallPreviewTriggerTimerRef.current = triggerTimer;
+    return () => {
+      localRecallPreviewRunRef.current = false;
+      window.clearTimeout(refreshTimer);
+      if (localRecallPreviewTriggerTimerRef.current) window.clearTimeout(localRecallPreviewTriggerTimerRef.current);
+    };
+  }, [groupChatMode, historyWindowId, localRecallPreviewEnabled]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(recallActionRetryTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+      recallActionRetryTimersRef.current = {};
+      recallActionQueueRef.current = [];
+      queuedRecallActionIdsRef.current.clear();
+      recallPopupResolveRef.current = null;
+    };
+  }, []);
+
   useSumiTalkChatRealtime({
-    enabled: Boolean(deviceId),
+    enabled: Boolean(deviceId) && !localRecallPreviewEnabled,
     deviceId,
     windowId: String(windowId || "__default__").trim() || "__default__",
     onEvent: (event: SumiTalkChatRealtimeEvent) => {
       applyStreamingSumiTalkChatEvent(event);
     },
+    onChatUiActions: handleChatUiDeviceActions,
   });
+
+  useEffect(() => {
+    if (localRecallPreviewEnabled) return;
+    const did = String(deviceId || "").trim();
+    if (!did || !historyWindowId) return;
+    let cancelled = false;
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const data = await apiJson<any>(
+          `/miniapp-api/device-actions?surface=chat_ui&window_id=${encodeURIComponent(historyWindowId)}&limit=5`,
+        );
+        if (!cancelled && Array.isArray(data?.actions) && data.actions.length) {
+          handleChatUiDeviceActions(data.actions, "http_poll");
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          logSumiTalkClientEvent("recall_message_poll_error", {
+            error: String(e?.message || e),
+          }, "warning");
+        }
+      } finally {
+        if (!cancelled) timer = window.setTimeout(poll, 5000);
+      }
+    };
+    timer = window.setTimeout(poll, 800);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [deviceId, historyWindowId, windowId, remoteHistoryWindowId, localRecallPreviewEnabled]);
 
   async function appendSystemAlarmCreatedCard(detail: { hour?: number; minute?: number; title?: string }) {
     if (groupChatMode) return;
@@ -4306,7 +5271,13 @@ export function MainChatScreen({
                   </span>
                 </div>
               ) : null}
-              {group.role === "user" ? (
+              {group.parts.length === 1 && group.parts[0]?.recallNotice ? (
+                <div className="my-1 flex justify-center px-4" data-recall-notice="1">
+                  <span className="rounded-full bg-black/[0.06] px-2.5 py-1 text-[11px] font-medium leading-none text-gray-500">
+                    {group.parts[0]?.content || "渡撤回了你的消息"}
+                  </span>
+                </div>
+              ) : group.role === "user" ? (
                 <div className="flex items-start justify-end space-x-2 rounded-[22px]">
                   <div className={`mt-[2px] flex ${chatMessageColumnWidthClass} flex-col items-end space-y-1.5`}>
                     {groupChatMode ? <div className="px-1 text-[11px] font-medium leading-none text-gray-400">辛玥</div> : null}
@@ -4799,6 +5770,7 @@ export function MainChatScreen({
           )}
           </div>
         </div>
+        <RecallMessageOverlay state={recallPopup} onResolve={handleRecallPopupResolve} />
         {bubbleMenu ? (
           <>
             <button

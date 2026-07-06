@@ -130,23 +130,45 @@ def _sanitize_rate_limit_snapshot(data) -> dict | None:
     return out or None
 
 
+def _oauth_status_key_candidates(it: dict, label: str) -> list[str]:
+    candidates: list[str] = []
+    env_key = _oauth_status_key(label)
+    if env_key:
+        candidates.append(env_key)
+    upstream_key = str((it or {}).get("api_key") or "").strip()
+    if upstream_key:
+        candidates.append(upstream_key)
+    out: list[str] = []
+    seen: set[str] = set()
+    for key in candidates:
+        if key and key not in seen:
+            out.append(key)
+            seen.add(key)
+    return out
+
+
 def _oauth_status_for_item(it: dict, label: str) -> tuple[dict | None, str]:
     parsed = _parsed_url(str(it.get("url") or ""))
     if not parsed or not parsed.scheme or not parsed.netloc:
         return None, "url_invalid"
-    headers: dict[str, str] = {}
-    key = _oauth_status_key(label)
-    if key:
-        headers["X-OAuth-Sync-Key"] = key
-    else:
+    keys = _oauth_status_key_candidates(it, label)
+    if not keys:
         return None, "sync_key_missing"
     base = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    last_error = ""
     try:
-        resp = requests.get(f"{base}/internal/oauth-status", headers=headers, timeout=1.0)
-        if not (200 <= resp.status_code < 300):
-            return None, f"http_{resp.status_code}"
-        status = _sanitize_oauth_status(resp.json() if resp.content else {})
-        return status, "" if status else "status_empty"
+        for key in keys:
+            resp = requests.get(
+                f"{base}/internal/oauth-status",
+                headers={"X-OAuth-Sync-Key": key},
+                timeout=1.0,
+            )
+            if not (200 <= resp.status_code < 300):
+                last_error = f"http_{resp.status_code}"
+                continue
+            status = _sanitize_oauth_status(resp.json() if resp.content else {})
+            return status, "" if status else "status_empty"
+        return None, last_error or "request_failed"
     except Exception as e:
         logger.debug("oauth status unavailable label=%s url=%s err=%s", label, base, e)
         return None, "request_failed"

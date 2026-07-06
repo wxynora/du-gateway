@@ -1041,6 +1041,13 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
         return body
     desc_map = r2_store.get_recent_image_description_map(desc_scope_window_id)
     rounds = image_desc.replace_image_placeholders_in_obj(rounds, desc_map)
+    try:
+        from services.recall_message_markers import apply_recall_markers_to_rounds
+
+        marker_window_id = desc_scope_window_id if desc_scope_window_id is not None else ""
+        rounds = apply_recall_markers_to_rounds(rounds, marker_window_id)
+    except Exception:
+        logger.debug("recall_message_markers_apply_failed window_id=%s", window_id, exc_info=True)
     # Telegram 注入时保留来源标签，便于后续扩展其它入口时区分上下文。
     if is_telegram_window:
         lines = []
@@ -3097,46 +3104,6 @@ def step_inject_websearch_tools(body: dict) -> dict:
     from services.web_search_tools import get_web_search_tools_for_inject
 
     tools = get_web_search_tools_for_inject()
-    if not tools:
-        return body
-
-    body = copy.deepcopy(body)
-    existing = body.get("tools")
-    if isinstance(existing, list):
-        existing_names = set()
-        for t in existing:
-            if isinstance(t, dict):
-                fn = t.get("function") or {}
-                if isinstance(fn, dict):
-                    name = fn.get("name")
-                    if name:
-                        existing_names.add(name)
-        for t in tools:
-            fn = (t.get("function") or {}) if isinstance(t, dict) else {}
-            if isinstance(fn, dict):
-                name = fn.get("name")
-                if name and name not in existing_names:
-                    existing.append(t)
-    else:
-        body["tools"] = tools
-
-    body["tool_choice"] = body.get("tool_choice") or "auto"
-    return body
-
-
-def step_inject_html_preview_tool(body: dict, user_agent: str = "") -> dict:
-    """
-    注入 publish_html_preview：渡可把 HTML 发布为临时链接（与 /html-preview/ 共用存储）。
-    user_agent 参数保留仅为兼容旧调用；工具集合不再按入口变化。
-    """
-    from config import HTML_PREVIEW_TOOL_ENABLED
-
-    if not HTML_PREVIEW_TOOL_ENABLED:
-        return body
-
-    from services.html_preview_tools import get_html_preview_tools_for_inject
-
-    tools = get_html_preview_tools_for_inject()
     if not tools:
         return body
 

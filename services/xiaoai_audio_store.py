@@ -7,8 +7,8 @@ import json
 from pathlib import Path
 from typing import Any, Optional, Tuple, Union
 
-from config import DATA_DIR, HTML_PREVIEW_MAX_ITEMS, HTML_PREVIEW_TTL_SECONDS
-from services.html_preview_store import resolve_preview_base_url_for_http_request
+from config import ARTIFACT_MAX_ITEMS, ARTIFACT_TTL_SECONDS, DATA_DIR
+from services.public_url import resolve_public_base_url_for_http_request
 
 _lock = threading.Lock()
 # token -> {"audio": bytes, "exp": float, "created": float, "format": str, "mime": str}
@@ -108,7 +108,7 @@ def _purge_expired() -> None:
         del _store[t]
     for path in _iter_audio_files():
         try:
-            if path.stat().st_mtime + HTML_PREVIEW_TTL_SECONDS <= now:
+            if path.stat().st_mtime + ARTIFACT_TTL_SECONDS <= now:
                 path.unlink(missing_ok=True)
                 _unlink_token_sidecars(path.stem)
         except Exception:
@@ -117,10 +117,10 @@ def _purge_expired() -> None:
 
 def _trim_to_max() -> None:
     order = sorted(_store.keys(), key=lambda t: _store[t]["created"])
-    while len(_store) > HTML_PREVIEW_MAX_ITEMS and order:
+    while len(_store) > ARTIFACT_MAX_ITEMS and order:
         del _store[order.pop(0)]
     files = sorted(_iter_audio_files(), key=lambda p: p.stat().st_mtime)
-    while len(files) > HTML_PREVIEW_MAX_ITEMS:
+    while len(files) > ARTIFACT_MAX_ITEMS:
         path = files.pop(0)
         try:
             path.unlink(missing_ok=True)
@@ -137,7 +137,7 @@ def _mime_for_format(audio_format: str) -> str:
 
 
 def resolve_xiaoai_audio_base_url_for_http_request(request_url_root: str) -> str:
-    return resolve_preview_base_url_for_http_request(request_url_root)
+    return resolve_public_base_url_for_http_request(request_url_root)
 
 
 def xiaoai_audio_url_for_token(
@@ -172,7 +172,7 @@ def create_xiaoai_audio(
     token = _LATEST_TOKEN
     version = secrets.token_urlsafe(12)
     now = time.time()
-    exp = now + HTML_PREVIEW_TTL_SECONDS
+    exp = now + ARTIFACT_TTL_SECONDS
     payload = bytes(audio_bytes)
     path = _audio_path(token, fmt)
 
@@ -212,7 +212,7 @@ def create_xiaoai_audio(
         "url": xiaoai_audio_url_for_token(token, audio_format=fmt, base_override=base, version=version),
         "token": token,
         "version": version,
-        "expires_in": HTML_PREVIEW_TTL_SECONDS,
+        "expires_in": ARTIFACT_TTL_SECONDS,
         "audio_format": fmt,
     }
 
@@ -258,7 +258,7 @@ def get_xiaoai_audio_row(token: str, consume: bool = False, version: str = "") -
                 stat = path.stat()
             except Exception:
                 return None
-            exp = float(meta.get("exp") or (stat.st_mtime + HTML_PREVIEW_TTL_SECONDS))
+            exp = float(meta.get("exp") or (stat.st_mtime + ARTIFACT_TTL_SECONDS))
             if exp <= time.time():
                 try:
                     path.unlink(missing_ok=True)
@@ -303,7 +303,7 @@ def get_xiaoai_audio_row(token: str, consume: bool = False, version: str = "") -
                 continue
             except Exception:
                 continue
-            if stat.st_mtime + HTML_PREVIEW_TTL_SECONDS <= time.time():
+            if stat.st_mtime + ARTIFACT_TTL_SECONDS <= time.time():
                 try:
                     path.unlink(missing_ok=True)
                 except Exception:
@@ -319,7 +319,7 @@ def get_xiaoai_audio_row(token: str, consume: bool = False, version: str = "") -
                 _consume_used_path(used_path)
             return {
                 "audio": audio,
-                "exp": stat.st_mtime + HTML_PREVIEW_TTL_SECONDS,
+                "exp": stat.st_mtime + ARTIFACT_TTL_SECONDS,
                 "created": stat.st_mtime,
                 "format": fmt,
                 "mime": _mime_for_format(fmt),

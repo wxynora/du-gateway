@@ -627,7 +627,7 @@ export function ReasoningTab() {
               {hasReasoning ? (
                 <div className="mt-4 flex justify-end border-t border-gray-50 pt-3">
                   <button
-                    className="flex items-center gap-1 text-[12px] font-bold text-blue-600"
+                    className="flex items-center gap-1 text-[11px] font-bold text-blue-600"
                     onClick={() => translateReasoning(key, String(r.reasoning || ""))}
                     disabled={Boolean(translating[key])}
                   >
@@ -639,7 +639,7 @@ export function ReasoningTab() {
               {hasTranslated && open ? (
                 <div className="mt-3 rounded-lg border border-blue-100/50 bg-blue-50/50 p-3">
                   <div className="mb-1 text-[11px] font-bold uppercase text-blue-700">中文翻译</div>
-                  <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-blue-900">{translated[key]}</p>
+                  <p className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-blue-900">{translated[key]}</p>
                 </div>
               ) : null}
               </div>
