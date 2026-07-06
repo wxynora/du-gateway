@@ -41,25 +41,38 @@ def _private_board_sync_text(
     pending_reviewer = str((pending or {}).get("reviewer") or "").strip()
     pending_current_actor = str((pending or {}).get("current_actor") or "").strip()
     pending_phase = str((pending or {}).get("phase") or "").strip()
+    pending_name = str((pending or {}).get("name") or "").strip()
     pending_choices = [
         str(item.get("label") or item.get("id") or "").strip()
         for item in ((pending or {}).get("choices") or [])
         if isinstance(item, dict) and str(item.get("label") or item.get("id") or "").strip()
     ]
-    description_rule = "如果要补充描述或对小玥说话，必须另起一行写成「【描述：...】」；不要把描述散写在指令外。"
+    long_description_review_tasks = {"反向诱惑", "全部暴露！", "羞耻台词大放送", "自慰陈述"}
+    description_task_list = (
+        "需要写长篇正文的任务只有："
+        "提交类惩罚「反向诱惑」「全部暴露！」「羞耻台词大放送」「自慰陈述」直接用「【描述：...】」；"
+        "真心话「真心话点名」用「【真心话出题：...】」或「【真心话回答：...】」；"
+        "其他掷骰、Pass、出拳、通过/打回、普通聊天都保持原格式，不要额外套描述。"
+    )
     if pending_reviewer == "du" and pending_type == "review" and pending_phase == "questioning":
         rule_lines = [
             "当前有真心话/提问类惩罚需要你先出题。",
-            "如果你要提交题目，回复第一行必须单独写精确指令「【提交】」，第二行必须用「【描述：题目内容】」写题目。",
-            description_rule,
-            "没有第一行「【提交】」时，只算局内聊天，不会触发出题。",
+            "如果你要提交题目，回复第一行必须单独写「【真心话出题：题目内容】」。",
+            description_task_list,
+            "没有第一行「【真心话出题：...】」时，只算局内聊天，不会触发出题。",
         ]
     elif pending_actor == "du" and pending_type == "review" and pending_phase != "submitted":
+        if pending_name == "真心话点名":
+            submit_rule = "如果你要回答真心话，回复第一行必须单独写「【真心话回答：回答内容】」。"
+        elif pending_name in long_description_review_tasks:
+            submit_rule = "如果你要提交这个惩罚任务，回复第一行必须单独写「【描述：提交内容】」。"
+        else:
+            submit_rule = "如果你要提交这个惩罚任务，回复第一行必须单独写「【提交】」，正文写在后面。"
         rule_lines = [
             "当前有惩罚任务需要你提交。",
-            "如果你要提交任务，回复第一行必须单独写精确指令「【提交】」，第二行必须用「【描述：提交内容】」写提交内容。",
-            description_rule,
-            "没有第一行「【提交】」时，只算局内聊天，不会触发提交。",
+            submit_rule,
+            description_task_list,
+            "没有第一行对应格式时，只算局内聊天，不会触发提交。",
         ]
     elif pending_actor == "du" and pending_type == "choice":
         choices_text = " / ".join(pending_choices) if pending_choices else "可选项见棋局文本"
@@ -68,7 +81,8 @@ def _private_board_sync_text(
             f"可选项：{choices_text}。",
             "如果你要选择，回复第一行必须单独写精确指令「【选择：选项名】」，选项名必须和可选项完全一致。",
             "如果你要使用Pass卡，第一行必须单独写「【Pass】」。",
-            description_rule,
+            "选择只需要第一行选择指令，不要额外套「【描述：...】」。",
+            description_task_list,
             "没有第一行精确指令时，只算局内聊天，不会触发选择。",
         ]
     elif pending_type == "duel" and pending_current_actor == "du":
@@ -77,21 +91,21 @@ def _private_board_sync_text(
             "当前正在等待你完成剪刀石头布对抗。",
             f"可选项：{choices_text}。",
             "回复第一行必须单独写精确指令「【剪刀石头布：石头】」「【剪刀石头布：剪刀】」或「【剪刀石头布：布】」。",
-            description_rule,
+            "不需要额外说明时保持原来的单行出拳格式。普通聊天不要用「【描述：...】」。",
             "没有第一行精确指令时，只算局内聊天，不会触发出拳。",
         ]
     elif pending_reviewer == "du" and pending_type == "review" and pending_phase == "submitted":
         rule_lines = [
             "当前有小玥提交的惩罚任务需要你验收。",
-            "如果通过，回复第一行必须单独写「【通过】」；如果打回，回复第一行必须单独写「【不通过】」。",
-            description_rule,
-            "没有这两个精确指令时，只算局内聊天，不会触发验收。",
+            "验收按选项来，第一行只写选项本身：通过就写「【通过】」，打回就写「【打回】」。",
+            "如果可选项以后扩展成别的词，也同样只写「【选项名】」。",
+            "没有第一行精确选项时，只算局内聊天，不会触发验收。",
         ]
     else:
         rule_lines = [
             f"当前行动方：{turn_label}。",
             "如果现在轮到你，并且你决定行动，回复第一行必须单独写精确指令「【掷骰】」。",
-            description_rule,
+            "掷骰保持原来的单行格式即可。普通聊天不要用「【描述：...】」。",
             "普通说「掷骰子」「我来投一下」，或者把「【掷骰】」写在句子中间，都只算聊天，不会触发行动。",
         ]
     if mode == "final_note":
@@ -139,7 +153,8 @@ def _private_board_sync_text(
     parts = [
         "小玥正在和你玩「涩涩走格棋」。这是局内普通交流，不是棋局同步，也不是主聊天正文。",
         "这次只处理小玥刚刚说的话；前后文会由同一个聊天窗口的最近对话提供，不要额外复述整盘棋局。",
-        *rule_lines,
+        "普通聊天直接自然回复，别套「【描述：...】」，也不要为了聊天写棋局精确指令。",
+        "只有当小玥明确让你处理当前棋局任务，或者你确实要处理当前待办任务时，才按对应任务规则使用精确指令：真心话用「【真心话出题：...】」「【真心话回答：...】」，四个长篇提交任务用「【描述：...】」，验收按选项写「【通过】」「【打回】」，选择惩罚用「【选择：...】」。",
     ]
     if message:
         parts.extend(["", f"小玥刚刚在局内说：{message}"])

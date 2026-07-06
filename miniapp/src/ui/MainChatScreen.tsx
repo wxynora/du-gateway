@@ -2945,7 +2945,8 @@ export function MainChatScreen({
   }
 
   function replaceRecalledMessagesWithNotices(currentMessages: ChatDraftMessage[], ids: Set<string>): ChatDraftMessage[] {
-    const replaced = sanitizeHistoryMessages(currentMessages).flatMap((message) => {
+    const list = Array.isArray(currentMessages) ? currentMessages : [];
+    return list.flatMap((message) => {
       const messageId = String(message?.id || "").trim();
       const originalNoticeId = String((message as any)?.recallOriginalMessageId || "").trim();
       if ((message as any)?.recallNotice && originalNoticeId && ids.has(originalNoticeId)) {
@@ -2954,14 +2955,25 @@ export function MainChatScreen({
       if (!messageId || !ids.has(messageId)) return [message];
       return [buildRecallNoticeMessage(message)];
     });
-    return sanitizeHistoryMessages(replaced);
   }
 
   function recalledMessageIdsBottomFirst(currentMessages: ChatDraftMessage[], ids: Set<string>): string[] {
-    const orderedIds = sanitizeHistoryMessages(currentMessages)
+    const list = Array.isArray(currentMessages) ? currentMessages : [];
+    const orderedIds = list
       .map((message) => String(message?.id || "").trim())
       .filter((messageId) => messageId && ids.has(messageId));
     return orderedIds.reverse();
+  }
+
+  function filterHiddenDisplayMessagesPreservingVisible(nextMessages: ChatDraftMessage[]): ChatDraftMessage[] {
+    const list = Array.isArray(nextMessages) ? nextMessages : [];
+    const deletedIds = privateInputAggregateDeletedMessageIdsRef.current;
+    const recallHiddenIds = recallHiddenMessageIdsRef.current;
+    if (!deletedIds.size && !recallHiddenIds.size) return list;
+    return list.filter((message) => {
+      const id = String(message?.id || "").trim();
+      return !deletedIds.has(id) && !recallHiddenIds.has(id);
+    });
   }
 
   async function hideRecalledMessages(messageIds: string[], source: string): Promise<void> {
@@ -2979,7 +2991,7 @@ export function MainChatScreen({
       const replacedMessages = replaceRecalledMessagesWithNotices(messagesRef.current, currentIds);
       nextMessages = localPreview
         ? replacedMessages
-        : filterDeletedDisplayMessages(replacedMessages);
+        : filterHiddenDisplayMessagesPreservingVisible(replacedMessages);
       applyDisplayHistoryMessages(nextMessages);
       requestAnimationFrame(() => {
         const scroller = messagesScrollRef.current;

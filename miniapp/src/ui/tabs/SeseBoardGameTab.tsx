@@ -599,10 +599,16 @@ function parseDuDirective(text: string): DuDirective {
   if (firstIndex < 0) return { kind: "", body: "" };
   const first = lines[firstIndex].trim();
   const body = directiveBody(lines, firstIndex + 1);
+  const descriptionOnlyMatch = first.match(/^【描述[:：](.*)】$/);
+  if (descriptionOnlyMatch) return { kind: "submit", body: descriptionOnlyMatch[1].trim() || body };
+  const truthQuestionMatch = first.match(/^【真心话出题[:：](.*)】$/);
+  if (truthQuestionMatch) return { kind: "submit", body: truthQuestionMatch[1].trim() || body };
+  const truthAnswerMatch = first.match(/^【真心话回答[:：](.*)】$/);
+  if (truthAnswerMatch) return { kind: "submit", body: truthAnswerMatch[1].trim() || body };
   if (first === "【掷骰】") return { kind: "roll", body };
   if (first === "【提交】") return { kind: "submit", body };
   if (first === "【通过】") return { kind: "approve", body };
-  if (first === "【不通过】") return { kind: "reject", body };
+  if (first === "【不通过】" || first === "【打回】" || first === "【驳回】") return { kind: "reject", body };
   if (first === "【Pass】" || first === "【PASS】" || first === "【使用Pass卡】") return { kind: "pass", body };
   const choiceMatch = first.match(/^【选择[:：](.+)】$/);
   if (choiceMatch) return { kind: "choose", choice: choiceMatch[1].trim(), body };
@@ -616,29 +622,37 @@ function firstPendingChoice(pending: PendingEvent | null | undefined, fallback =
   return String(first?.id || first?.label || fallback).trim();
 }
 
+const LONG_DESCRIPTION_REVIEW_TASKS = new Set(["反向诱惑", "全部暴露！", "羞耻台词大放送", "自慰陈述"]);
+
 function localDuReplyForState(mode: PrivateBoardSyncMode, state: PrivateBoardState | undefined): string {
   if (mode === "final_note") {
     return "本地预览：终局小纸条收到了。";
   }
   const pending = state?.pending_event || null;
   if (pending?.type === "duel" && pending.current_actor === "du") {
-    return "【剪刀石头布：石头】\n【描述：本地预览：我出石头。】";
+    return "【剪刀石头布：石头】";
   }
   if (pending?.type === "choice" && pending.actor === "du") {
     const choice = firstPendingChoice(pending, "");
-    if (choice) return `【选择：${choice}】\n【描述：本地预览：我选这个。】`;
+    if (choice) return `【选择：${choice}】`;
   }
   if (pending?.type === "review" && pending.reviewer === "du" && pending.phase === "questioning") {
-    return "【提交】\n【描述：本地预览：渡想问你的真心话问题。】";
+    return "【真心话出题：本地预览：渡想问你的真心话问题。】";
   }
   if (pending?.type === "review" && pending.actor === "du" && pending.phase === "assigned") {
-    return "【提交】\n【描述：本地预览：渡已经完成任务，提交给你验收。】";
+    if (pending.name === "真心话点名") {
+      return "【真心话回答：本地预览：渡已经回答真心话。】";
+    }
+    if (LONG_DESCRIPTION_REVIEW_TASKS.has(String(pending.name || ""))) {
+      return "【描述：本地预览：渡已经完成任务，提交给你验收。】";
+    }
+    return "【提交】\n本地预览：渡已经完成任务，提交给你验收。";
   }
   if (pending?.type === "review" && pending.reviewer === "du" && pending.phase === "submitted") {
-    return "【通过】\n【描述：本地预览：这次算你通过。】";
+    return "【通过】";
   }
   if (isDuTurnState(state)) {
-    return "【掷骰】\n【描述：本地预览：我来掷这一回合。】";
+    return "【掷骰】";
   }
   return "本地预览：我看到了，等你继续行动。";
 }
@@ -725,6 +739,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
   const [chatUnread, setChatUnread] = useState(0);
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
+  const [duSyncing, setDuSyncing] = useState(false);
   const [finalNoteOpen, setFinalNoteOpen] = useState(false);
   const [finalNoteSeenKey, setFinalNoteSeenKey] = useState("");
   const [toyConsoleOpen, setToyConsoleOpen] = useState(false);
@@ -1033,14 +1048,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
   ) => {
     const duPending = isDuPendingState(stateForReply);
     if (!isDuTurnState(stateForReply) || (stateForReply?.pending_event && !duPending)) return;
-    appendChat({
-      id: makeChatId("system"),
-      speaker: "system",
-      text: duPending
-        ? (localPreviewEnabled ? "预览模式：轮到渡处理任务，已继续同步。" : "轮到渡处理任务，已把棋局发给渡。")
-        : (localPreviewEnabled ? "预览模式：轮到渡行动，已继续同步。" : "轮到渡行动，已把棋局发给渡。"),
-    }, true);
-    setChatSending(true);
+    setDuSyncing(true);
     try {
       const next = await syncPrivateBoardWithDu({
         mode: "state_update",
@@ -1061,9 +1069,9 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
       appendChat({ id: makeChatId("system"), speaker: "system", text: `渡行动同步失败：${error}` }, true);
       toast(`渡行动同步失败：${error}`);
     } finally {
-      setChatSending(false);
+      setDuSyncing(false);
     }
-  }, [appendChat, applyPayload, localPreviewEnabled, processDuReply, syncPrivateBoardWithDu, toast]);
+  }, [appendChat, applyPayload, processDuReply, syncPrivateBoardWithDu, toast]);
 
   useEffect(() => {
     continueDuTurnRef.current = continueDuTurn;
@@ -1080,16 +1088,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
 
   const notifyRollResultToDu = useCallback(async (rolled: PrivateBoardPayload, message = "小玥刚掷完骰子。") => {
     const rollText = plainText(rolled.text || rolled.du_text || rolled.player_text || "").trim();
-    appendChat({
-      id: makeChatId("system"),
-      speaker: "system",
-      text: localPreviewEnabled
-        ? "预览模式：已同步这次棋局。"
-        : message.includes("掷")
-          ? "已把这次掷骰结果和当前棋局发给渡。"
-          : "已把棋局变化发给渡。",
-    }, true);
-    setChatSending(true);
+    setDuSyncing(true);
     try {
       const next = await syncPrivateBoardWithDu({
         mode: "roll_result",
@@ -1110,9 +1109,9 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
       appendChat({ id: makeChatId("system"), speaker: "system", text: `自动同步失败：${message}` }, true);
       toast(`自动同步给渡失败：${message}`);
     } finally {
-      setChatSending(false);
+      setDuSyncing(false);
     }
-  }, [appendChat, applyPayload, localPreviewEnabled, processDuReply, syncPrivateBoardWithDu, toast]);
+  }, [appendChat, applyPayload, processDuReply, syncPrivateBoardWithDu, toast]);
 
   const rollOnce = useCallback(async (options: { notifyAfterUserRoll?: boolean } = {}) => {
     if (busy || animating || isGameOver) return;
@@ -1248,7 +1247,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
       success: isDuel ? "已出拳，等待渡出拳。" : "已选择惩罚，棋局继续。",
       notify: true,
       notifyMessage: isDuel
-        ? "小玥已在剪刀石头布对抗中出拳。请第一行单独发送【剪刀石头布：石头】、【剪刀石头布：剪刀】或【剪刀石头布：布】；描述另起一行写成【描述：...】。"
+        ? "小玥已在剪刀石头布对抗中出拳。请第一行单独发送【剪刀石头布：石头】、【剪刀石头布：剪刀】或【剪刀石头布：布】。"
         : "小玥处理完选择惩罚，棋局继续。",
     });
   }, [executePendingCommand, pendingEvent?.actor, pendingEvent?.current_actor, pendingEvent?.type, toast]);
@@ -1263,7 +1262,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
 
   const sendFinalNote = useCallback(async () => {
     const note = payload?.state?.final_note || null;
-    if (chatSending || busy || animating || !payload?.state || !note || note.sent) return;
+    if (chatSending || duSyncing || busy || animating || !payload?.state || !note || note.sent) return;
     setChatSending(true);
     try {
       const next = await syncPrivateBoardWithDu({
@@ -1288,10 +1287,10 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     } finally {
       setChatSending(false);
     }
-  }, [animating, appendChat, applyPayload, busy, chatSending, localPreviewEnabled, payload, syncPrivateBoardWithDu, toast]);
+  }, [animating, appendChat, applyPayload, busy, chatSending, duSyncing, localPreviewEnabled, payload, syncPrivateBoardWithDu, toast]);
 
   const appendFinalStatus = useCallback(async (slot: FinalAppendSlot, value: string, level = 1) => {
-    if (chatSending || busy || animating || !payload?.state) return;
+    if (chatSending || duSyncing || busy || animating || !payload?.state) return;
     const cleanValue = value.replace(/\s+/g, " ").trim();
     if (!cleanValue) {
       toast("先选要追加的内容。");
@@ -1311,10 +1310,10 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     } finally {
       setBusy(false);
     }
-  }, [animating, applyPayload, busy, chatSending, payload?.state, toast]);
+  }, [animating, applyPayload, busy, chatSending, duSyncing, payload?.state, toast]);
 
   const removeFinalStatus = useCallback(async (slot: FinalAppendSlot, value: string) => {
-    if (chatSending || busy || animating || !payload?.state) return;
+    if (chatSending || duSyncing || busy || animating || !payload?.state) return;
     const cleanValue = value.replace(/\s+/g, " ").trim();
     if (!cleanValue) return;
     setBusy(true);
@@ -1328,10 +1327,10 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     } finally {
       setBusy(false);
     }
-  }, [animating, applyPayload, busy, chatSending, payload?.state, toast]);
+  }, [animating, applyPayload, busy, chatSending, duSyncing, payload?.state, toast]);
 
   const sendGameChat = useCallback(async () => {
-    if (chatSending || busy || animating || !payload?.state) return;
+    if (chatSending || duSyncing || busy || animating || !payload?.state) return;
     const message = chatInput.trim();
     if (!message) return;
     const userChatMessage: GameChatMessage = { id: makeChatId("me"), speaker: "xinyue", text: message };
@@ -1359,7 +1358,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     } finally {
       setChatSending(false);
     }
-  }, [animating, appendChat, applyPayload, busy, chatInput, chatSending, payload, processDuReply, syncPrivateBoardWithDu, toast]);
+  }, [animating, appendChat, applyPayload, busy, chatInput, chatSending, duSyncing, payload, processDuReply, syncPrivateBoardWithDu, toast]);
 
   const themeName = displayText(state.theme_profile?.theme || "未触发");
   const directionLabel = displayText(state.theme_profile?.direction_label || "待定");
@@ -1392,8 +1391,9 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     du: actorPaused(state.statuses?.du),
   };
   const canProcessDuPause = isDuTurn && pausedByActor.du && !pendingEvent;
-  const rollDisabled = busy || animating || chatSending || !payload?.state || Boolean(pendingEvent) || (isDuTurn && !canProcessDuPause);
-  const chatDisabled = chatSending || busy || animating || !payload?.state;
+  const rollDisabled = busy || animating || chatSending || duSyncing || !payload?.state || Boolean(pendingEvent) || (isDuTurn && !canProcessDuPause);
+  const chatInputDisabled = !payload?.state;
+  const chatSubmitDisabled = chatSending || duSyncing || busy || animating || !payload?.state;
 
   return (
     <div className="sese-game" ref={gameRef}>
@@ -1476,12 +1476,12 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
             disabled={rollDisabled}
             onClick={isGameOver ? startNewGame : () => void rollOnce({ notifyAfterUserRoll: true })}
           >
-            {isGameOver ? "开新局" : pendingEvent ? "先处理任务" : canProcessDuPause ? "处理停步" : isDuTurn ? "等渡掷骰" : busy || animating ? "移动中" : chatSending ? "等渡回应" : "掷骰子"}
+            {isGameOver ? "开新局" : pendingEvent ? "先处理任务" : canProcessDuPause ? "处理停步" : isDuTurn ? "等渡掷骰" : busy || animating ? "移动中" : chatSending || duSyncing ? "等渡回应" : "掷骰子"}
           </button>
           <button
             className="sese-restart-button"
             type="button"
-            disabled={busy || animating || chatSending}
+            disabled={busy || animating || chatSending || duSyncing}
             onClick={startNewGame}
           >
             重开
@@ -1524,11 +1524,11 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
             }}>
               <input
                 value={chatInput}
-                disabled={chatDisabled}
+                disabled={chatInputDisabled}
                 placeholder="和渡说一句游戏内的话"
                 onChange={(event) => setChatInput(event.target.value)}
               />
-              <button type="submit" disabled={chatDisabled || !chatInput.trim()} aria-label={chatSending ? "发送中" : "发送"}>
+              <button type="submit" disabled={chatSubmitDisabled || !chatInput.trim()} aria-label={chatSending ? "发送中" : "发送"}>
                 <SendIconMini />
               </button>
             </form>
@@ -1579,7 +1579,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
               passCount={myPassCount}
               passSkipsUsed={passSkipsUsed}
               submission={pendingSubmission}
-              disabled={busy}
+              disabled={busy || duSyncing}
               onSubmissionChange={setPendingSubmission}
               onSubmit={submitPending}
               onApprove={approvePending}
@@ -1607,7 +1607,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
             {finalNote.sent ? (
               <em>已发送给渡</em>
             ) : (
-              <button className="sese-final-note-send" type="button" disabled={chatSending || busy || animating} onClick={() => void sendFinalNote()}>
+              <button className="sese-final-note-send" type="button" disabled={chatSending || duSyncing || busy || animating} onClick={() => void sendFinalNote()}>
                 {chatSending ? "发送中" : "发送给渡"}
               </button>
             )}
@@ -1619,7 +1619,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         <ToyConsoleSheet
           level={toyConsoleLevel}
           activeProps={activeFinalProps}
-          disabled={chatSending || busy || animating}
+          disabled={chatSending || duSyncing || busy || animating}
           onClose={() => setToyConsoleOpen(false)}
           onLevelChange={setToyConsoleLevel}
           onToggleProp={(value, active) => {
@@ -3884,7 +3884,6 @@ function PendingEventPanel({
             <p>{questionPrompt}</p>
             <textarea
               value={submission}
-              disabled={disabled}
               placeholder="写下你的问题"
               onChange={(event) => onSubmissionChange(event.target.value)}
             />
@@ -3916,7 +3915,6 @@ function PendingEventPanel({
           {!hasQuestionText && submissionHint ? <div className="sese-pending-tip">提交要求：{submissionHint}</div> : null}
           <textarea
             value={submission}
-            disabled={disabled}
             placeholder={hasQuestionText ? "在这里写回答" : "在这里写提交内容"}
             onChange={(event) => onSubmissionChange(event.target.value)}
           />
