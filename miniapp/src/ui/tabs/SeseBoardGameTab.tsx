@@ -2609,10 +2609,16 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           line-height: 1.45;
           outline: none;
         }
-        .sese-choice-list,
-        .sese-review-actions {
+        .sese-choice-list {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+          margin-top: 9px;
+        }
+        .sese-review-actions {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: center;
           gap: 8px;
           margin-top: 9px;
         }
@@ -2629,6 +2635,10 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           font-weight: 900;
           line-height: 1.25;
           box-shadow: 0 3px 0 #d81b60;
+        }
+        .sese-review-actions button {
+          flex: 1 1 112px;
+          max-width: 180px;
         }
         .sese-choice-list button:disabled,
         .sese-review-actions button:disabled,
