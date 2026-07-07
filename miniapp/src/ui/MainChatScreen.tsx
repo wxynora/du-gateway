@@ -2997,7 +2997,7 @@ export function MainChatScreen({
           source: "private_chat",
         };
       })
-      .filter((item): item is Record<string, any> => Boolean(item))
+      .filter((item): item is { id: string; text: string; createdAt: string; source: string } => Boolean(item))
       .slice(0, 8)
       .map((item, index) => ({ ...item, index: index + 1 }));
   }

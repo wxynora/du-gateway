@@ -959,6 +959,27 @@ export function sortHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMess
   return list;
 }
 
+function recallOriginalMessageIdFromMessage(message: any): string | undefined {
+  return String(message?.recallOriginalMessageId || message?.recall_original_message_id || "").trim() || undefined;
+}
+
+function isRecallReplyMessage(message: any): boolean {
+  const id = String(message?.id || "").trim();
+  return Boolean(message?.recallReply || message?.recall_reply || id.startsWith("recall-reply-"));
+}
+
+function isRecallNoticeMessage(message: any): boolean {
+  const id = String(message?.id || "").trim();
+  return Boolean(
+    message?.recallNotice
+      || message?.recall_notice
+      || isRecallReplyMessage(message)
+      || recallOriginalMessageIdFromMessage(message)
+      || id.startsWith("recall-notice-")
+      || id.startsWith("recall-reply-"),
+  );
+}
+
 export function pickBetterHistory(primary: ChatDraftMessage[], fallback: ChatDraftMessage[], seed: ChatDraftMessage[]): ChatDraftMessage[] {
   const primaryScore = historyRenderableScore(primary);
   const fallbackScore = historyRenderableScore(fallback);
@@ -1004,6 +1025,9 @@ export function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraft
         ? String(cleanedContent || "").trim() && displayParts.length ? stripInlineBase64Images(cleanedContent) : ""
         : stripInlineBase64Images(cleanedContent);
       const attachments = normalizeChatAttachments((msg as any)?.attachments);
+      const recallNotice = isRecallNoticeMessage(msg);
+      const recallReply = isRecallReplyMessage(msg);
+      const recallOriginalMessageId = recallOriginalMessageIdFromMessage(msg);
       let tokenCount: { input?: number; output?: number } | undefined;
       if (msg?.tokenCount && typeof msg.tokenCount === "object") {
         const input = Number(msg.tokenCount.input || 0);
@@ -1028,6 +1052,9 @@ export function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraft
         jobId: String((msg as any)?.jobId || "").trim() || undefined,
         reasoning: reasoning || undefined,
         tokenCount,
+        recallNotice: recallNotice || undefined,
+        recallReply: recallReply || undefined,
+        recallOriginalMessageId,
         ...(attachments.length ? { attachments } : {}),
         ...(displayParts.length ? { displayParts } : {}),
       };
@@ -1060,9 +1087,9 @@ export function groupChatMessages(
     const normalizedContent = String(msg?.content || "").trim();
     const normalizedReasoning = String(msg?.reasoning || "").trim();
     const attachments = normalizeChatAttachments(msg?.attachments);
-    const recallNotice = Boolean((msg as any)?.recallNotice);
-    const recallReply = Boolean((msg as any)?.recallReply);
-    const recallOriginalMessageId = String((msg as any)?.recallOriginalMessageId || "").trim() || undefined;
+    const recallNotice = isRecallNoticeMessage(msg);
+    const recallReply = isRecallReplyMessage(msg);
+    const recallOriginalMessageId = recallOriginalMessageIdFromMessage(msg);
     if (!normalizedContent && !normalizedReasoning && !attachments.length && !displayParts.length) continue;
     if (recallNotice || recallReply) {
       groups.push({
@@ -1153,7 +1180,7 @@ export function groupRoleLabel(role: ChatRole): string {
 export function buildBenbenGroupContext(messages: ChatDraftMessage[], force = false): string {
   const lines = (Array.isArray(messages) ? messages : [])
     .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
-    .filter((msg) => !(msg.recallNotice || msg.recallReply))
+    .filter((msg) => !isRecallNoticeMessage(msg))
     .filter((msg) => String(msg.content || "").trim())
     .slice(-12)
     .map((msg) => `${groupRoleLabel(msg.role)}：${String(msg.content || "").trim()}`);
@@ -1171,7 +1198,7 @@ export function buildGroupTurnUserContent(messages: ChatDraftMessage[], fallback
   let lastAssistantIndex = -1;
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const msg = list[i];
-    if (msg?.role === "assistant" && msg.status !== "pending" && msg.status !== "failed") {
+    if (msg?.role === "assistant" && msg.status !== "pending" && msg.status !== "failed" && !isRecallNoticeMessage(msg)) {
       lastAssistantIndex = i;
       break;
     }
@@ -1180,7 +1207,7 @@ export function buildGroupTurnUserContent(messages: ChatDraftMessage[], fallback
     .slice(lastAssistantIndex + 1)
     .filter((msg) => msg?.role === "user" || msg?.role === "benben")
     .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
-    .filter((msg) => !(msg.recallNotice || msg.recallReply))
+    .filter((msg) => !isRecallNoticeMessage(msg))
     .map((msg) => `${groupRoleLabel(msg.role)}：${String(msg.content || "").trim()}`)
     .filter((line) => !line.endsWith("："));
   const fallback = String(fallbackUserContent || "").trim();
@@ -1194,7 +1221,7 @@ export function buildGroupTurnUserContent(messages: ChatDraftMessage[], fallback
 export function buildCodexGroupRecentMessages(messages: ChatDraftMessage[]): Array<{ role: ChatRole; content: string; createdAt?: string }> {
   return (Array.isArray(messages) ? messages : [])
     .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
-    .filter((msg) => !(msg.recallNotice || msg.recallReply))
+    .filter((msg) => !isRecallNoticeMessage(msg))
     .filter((msg) => String(msg.content || "").trim())
     .slice(-14)
     .map((msg) => ({
