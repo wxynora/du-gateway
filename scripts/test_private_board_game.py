@@ -958,6 +958,44 @@ def test_private_board_state_update_sync_includes_message() -> None:
     _assert(text.index("本次说明：") < text.index("当前棋局："), "sync message should appear before board text")
 
 
+def test_private_board_reply_command_parser() -> None:
+    from routes.miniapp import game_tools
+
+    commands = game_tools._private_board_commands_from_reply("【描述：重写后的具体指令】\n\n这次够具体了。")
+    _assert(commands == ["submit 重写后的具体指令"], f"description reply should become submit, got {commands}")
+
+    commands = game_tools._private_board_commands_from_reply("【通过：可以】\n【掷骰】")
+    _assert(commands == ["approve 可以", "roll"], f"approve + roll should parse in order, got {commands}")
+
+    commands = game_tools._private_board_commands_from_reply("我只是聊一句，不处理棋局。")
+    _assert(commands == [], f"ordinary chat should not produce game commands, got {commands}")
+
+
+def test_private_board_reply_commands_apply_to_game_runtime() -> None:
+    from routes.miniapp import game_tools
+
+    calls: list[tuple[str, str, str]] = []
+    old_execute = game_tools.execute_game_command
+
+    def fake_execute(game_id: str, command: str, save_id: str) -> dict:
+        calls.append((game_id, command, save_id))
+        return {
+            "ok": True,
+            "state": {"pending_event": {"phase": "submitted", "submission_text": "重写后的具体指令"}},
+            "player_text": "渡提交了「反向诱惑」，等待我验收。",
+        }
+
+    try:
+        game_tools.execute_game_command = fake_execute
+        applied, payload = game_tools._apply_private_board_reply_commands("default", "【描述：重写后的具体指令】")
+    finally:
+        game_tools.execute_game_command = old_execute
+
+    _assert(calls == [("private_board", "submit 重写后的具体指令", "default")], f"unexpected calls: {calls}")
+    _assert(applied and applied[0].get("command") == "submit 重写后的具体指令", f"unexpected applied: {applied}")
+    _assert(((payload or {}).get("state") or {}).get("pending_event", {}).get("phase") == "submitted", "payload should reflect submitted state")
+
+
 if __name__ == "__main__":
     test_private_board_views()
     test_private_board_reset_self_cell()
@@ -985,4 +1023,6 @@ if __name__ == "__main__":
     test_private_board_wakeup_uses_dynamic_system()
     test_private_board_sync_marks_global_activity_time()
     test_private_board_state_update_sync_includes_message()
+    test_private_board_reply_command_parser()
+    test_private_board_reply_commands_apply_to_game_runtime()
     print("private_board_game tests ok")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from flask import jsonify, request
 
 from services.game_tool_runtime import execute_game_command, list_game_tools
@@ -27,6 +29,81 @@ def _clean_private_board_text(text: str) -> str:
         line for line in str(text or "").splitlines()
         if not line.strip().startswith("可用命令：")
     ).strip()
+
+
+def _pop_private_board_directive(text: str) -> tuple[str, str, str] | None:
+    raw = str(text or "").strip()
+    if not raw.startswith("【"):
+        return None
+    match = re.match(r"^【\s*([^：:】]+?)\s*(?:[：:]\s*(.*?))?】", raw, flags=re.S)
+    if match:
+        return match.group(1).strip(), str(match.group(2) or "").strip(), raw[match.end():].strip()
+
+    # Be forgiving for long model text if the closing bracket is accidentally missing.
+    fallback = re.match(r"^【\s*([^：:】]+?)\s*[：:]\s*(.*)$", raw, flags=re.S)
+    if fallback:
+        return fallback.group(1).strip(), str(fallback.group(2) or "").strip().rstrip("】").strip(), ""
+    return None
+
+
+def _private_board_commands_from_reply(reply_text: str) -> list[str]:
+    rest = str(reply_text or "").strip()
+    commands: list[str] = []
+    for _ in range(3):
+        parsed = _pop_private_board_directive(rest)
+        if not parsed:
+            break
+        label, value, rest = parsed
+        key = re.sub(r"\s+", "", label).lower()
+        value = _clean_private_board_text(value)
+        if key in {"描述", "真心话回答", "真心话出题"}:
+            if value:
+                commands.append(f"submit {value}")
+            break
+        if key in {"提交", "submit"}:
+            submit_text = value or _clean_private_board_text(rest)
+            if submit_text:
+                commands.append(f"submit {submit_text}")
+            break
+        if key in {"选择", "choose"}:
+            if value:
+                commands.append(f"choose {value}")
+            break
+        if key in {"剪刀石头布", "石头剪刀布"}:
+            if value:
+                commands.append(f"剪刀石头布: {value}")
+            break
+        if key in {"pass", "使用pass", "使用pass卡"}:
+            commands.append("pass")
+            break
+        if key in {"掷骰", "骰子", "roll"}:
+            commands.append("roll")
+            break
+        if key in {"通过", "approve"}:
+            commands.append(f"approve {value}".strip())
+            continue
+        if key in {"打回", "不通过", "reject"}:
+            commands.append(f"reject {value}".strip())
+            break
+        break
+    return commands
+
+
+def _apply_private_board_reply_commands(save_id: str, reply_text: str) -> tuple[list[dict], dict | None]:
+    applied: list[dict] = []
+    last_payload: dict | None = None
+    for command in _private_board_commands_from_reply(reply_text):
+        result = execute_game_command("private_board", command, save_id)
+        last_payload = result
+        applied.append({
+            "command": command,
+            "ok": bool((result or {}).get("ok")),
+            "error": str((result or {}).get("error") or ""),
+            "player_text": str((result or {}).get("player_text") or (result or {}).get("text") or "")[:500],
+        })
+        if not (result or {}).get("ok"):
+            break
+    return applied, last_payload
 
 
 def _private_board_sync_text(
@@ -237,6 +314,12 @@ def register_routes(bp) -> None:
         if ok:
             _mark_private_board_sync_activity(synced_at)
         reply_text = str((wakeup or {}).get("reply_text") or (wakeup or {}).get("reply_preview") or "")
+        applied_reply_commands: list[dict] = []
+        applied_payload: dict | None = None
+        if ok and mode != "final_note":
+            applied_reply_commands, applied_payload = _apply_private_board_reply_commands(save_id, reply_text)
+            if applied_payload:
+                payload = applied_payload
         if ok and mode == "final_note":
             payload = execute_game_command("private_board", "final_note_sent", save_id)
         return jsonify({
@@ -245,6 +328,7 @@ def register_routes(bp) -> None:
             "player_text": payload.get("player_text") or "",
             "reply_text": reply_text,
             "reply_preview": str((wakeup or {}).get("reply_preview") or reply_text[:120]),
+            "applied_reply_commands": applied_reply_commands,
             "channel": str((wakeup or {}).get("channel") or ""),
             "mode": mode,
             "synced_at": synced_at,
