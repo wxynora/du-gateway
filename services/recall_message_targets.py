@@ -285,6 +285,7 @@ def resolve_recall_message_targets(
     candidate_set_id: str = "",
     indexes: Any = None,
     target_text: str = "",
+    select_all_when_unqualified: bool = False,
 ) -> dict:
     candidate_sets = _load_candidate_sets(
         window_id=window_id,
@@ -353,6 +354,18 @@ def resolve_recall_message_targets(
             "error": "需要选择要撤回的具体气泡。" if matches else "没有按文本匹配到唯一气泡。",
             "candidates": _public_candidates(candidate_sets, matches=matches or None),
         }
+
+    if select_all_when_unqualified and len(candidate_sets) == 1:
+        selected_set = candidate_sets[0]
+        selected = [target for target in selected_set.get("targets") or [] if isinstance(target, dict)]
+        message_ids = [str(target.get("id") or "") for target in selected if str(target.get("id") or "")]
+        if message_ids:
+            return {
+                "ok": True,
+                "messageIds": message_ids,
+                "candidateSetId": selected_set.get("candidateSetId") or "",
+                "candidates": _public_candidates(candidate_sets, matches=[(selected_set, target) for target in selected]),
+            }
 
     return {
         "ok": False,

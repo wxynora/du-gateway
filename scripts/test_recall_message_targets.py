@@ -61,6 +61,13 @@ def main() -> None:
     by_text = target_store.resolve_recall_message_targets(window_id="w1", client_request_id="cr1", target_text="第一句")
     assert_eq(by_text.get("messageIds"), ["user-a"], "exact targetText should resolve one user bubble")
 
+    all_current_turn = target_store.resolve_recall_message_targets(
+        window_id="w1",
+        client_request_id="cr1",
+        select_all_when_unqualified=True,
+    )
+    assert_eq(all_current_turn.get("messageIds"), ["user-a", "user-b"], "unqualified current-turn recall should select all user bubbles")
+
     ambiguous = target_store.resolve_recall_message_targets(window_id="w1", client_request_id="cr1", target_text="句")
     assert_true(ambiguous.get("needsSelection") and not ambiguous.get("messageIds"), f"ambiguous targetText must not execute: {ambiguous}")
 
@@ -99,6 +106,24 @@ def main() -> None:
     pending_after_query = app_action_store.poll_app_actions(device_id="device1", surface="chat_ui", window_id="w1")
     assert_eq(len(pending_after_query.get("actions") or []), 0, f"queryOnly should not create app actions: {pending_after_query}")
 
+    default_all = json.loads(execute_recall_message({
+        "replyText": "这轮都先收起来。",
+        "_context": {"window_id": "w1", "client_request_id": "cr1", "reply_target": "device-all"},
+    }))
+    assert_true(default_all.get("ok") and default_all.get("queued"), f"unqualified current-turn recall should enqueue all targets: {default_all}")
+    assert_eq(default_all.get("messageIds"), ["user-a", "user-b"], "unqualified enqueue should use all current-turn message ids")
+    pending_default_all = app_action_store.poll_app_actions(device_id="device-all", surface="chat_ui", window_id="w1")
+    default_payload = (pending_default_all.get("actions") or [{}])[0].get("payload") or {}
+    assert_eq(default_payload.get("messageIds"), ["user-a", "user-b"], "default recall app action should carry all current-turn ids")
+
+    no_current_turn = json.loads(execute_recall_message({
+        "_context": {"window_id": "w-trim", "reply_target": "device-no-turn"},
+    }))
+    assert_true(
+        no_current_turn.get("ok") and not no_current_turn.get("queued") and no_current_turn.get("needsSelection"),
+        f"unqualified recall without current turn must not enqueue recent-turn candidates: {no_current_turn}",
+    )
+
     enqueued = json.loads(execute_recall_message({
         "index": 2,
         "replyText": "这句话我先收起来。",
@@ -122,7 +147,7 @@ def main() -> None:
     assert_true("replyText" in tool_props, "recall_message tool must expose replyText")
     assert_true("non_user_target" in frontend_source, "frontend must fail mixed user/non-user recall targets")
     assert_true("targets.length !== messageIds.length" in frontend_source, "frontend must not partially execute missing recall targets")
-    assert_true("recallReply" in frontend_source, "frontend must render recall reply as Du's replacement message")
+    assert_true("recallReply" in frontend_source and "data-recall-notice" in frontend_source, "frontend must render recall reply as a system notice")
 
     print("recall_message target smoke ok")
 

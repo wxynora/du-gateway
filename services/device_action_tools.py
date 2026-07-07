@@ -117,7 +117,8 @@ TOOL_RECALL_MESSAGE = {
         "description": (
             "在 SumiTalk App 聊天界面撤回辛玥发出的指定消息。"
             "这不是后端物理删除，只会让她当前 App 聊天界面用男鬼弹窗仪式后隐藏这些消息，并在你的后续短程上下文里标为【已撤回】原消息。"
-            "最稳妥是传 messageIds；如果你只知道第几句或大概原文，可以先用 index/targetText/queryOnly 查询候选。"
+            "最稳妥是传 messageIds；如果什么定位字段都不传，会默认撤回当前这一轮里辛玥发出的全部气泡。"
+            "如果你只知道第几句或大概原文，可以先用 index/targetText/queryOnly 查询候选。"
             "系统不会猜最近一条：无法唯一定位时只返回候选，不会执行撤回。"
             "replyText 是撤回后留在聊天界面的你的回应，用来替代固定系统提示；要写成你对那条被撤回气泡说的话。"
             "最终弹窗有倒计时，超时会自动选择 timeoutChoiceId。"
@@ -535,20 +536,27 @@ def execute_recall_message(arguments: dict) -> str:
     resolved_candidates: dict | None = None
     query_only = bool(args.get("queryOnly") or args.get("query_only") or args.get("currentTurnCandidates"))
     if not message_ids:
+        client_request_id = str(
+            args.get("clientRequestId")
+            or args.get("client_request_id")
+            or context.get("client_request_id")
+            or ""
+        ).strip()
+        candidate_set_id = str(args.get("candidateSetId") or args.get("candidate_set_id") or "").strip()
+        indexes_arg = _recall_indexes_arg(args)
+        target_text = _recall_target_text_arg(args)
+        has_target_filter = indexes_arg is not None or bool(target_text)
+        select_current_turn_all = bool(not query_only and not has_target_filter and (client_request_id or candidate_set_id))
         try:
             from services.recall_message_targets import resolve_recall_message_targets
 
             resolved_candidates = resolve_recall_message_targets(
                 window_id=window_id,
-                client_request_id=str(
-                    args.get("clientRequestId")
-                    or args.get("client_request_id")
-                    or context.get("client_request_id")
-                    or ""
-                ).strip(),
-                candidate_set_id=str(args.get("candidateSetId") or args.get("candidate_set_id") or "").strip(),
-                indexes=_recall_indexes_arg(args),
-                target_text=_recall_target_text_arg(args),
+                client_request_id=client_request_id,
+                candidate_set_id=candidate_set_id,
+                indexes=indexes_arg,
+                target_text=target_text,
+                select_all_when_unqualified=select_current_turn_all,
             )
         except Exception as e:
             return json.dumps({"ok": False, "error": f"recall_message 候选查询失败：{e}"}, ensure_ascii=False)
