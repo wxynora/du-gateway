@@ -106,6 +106,46 @@ def _apply_private_board_reply_commands(save_id: str, reply_text: str) -> tuple[
     return applied, last_payload
 
 
+def _private_board_needs_du_followup(payload: dict | None) -> bool:
+    state = (payload or {}).get("state") if isinstance((payload or {}).get("state"), dict) else {}
+    if not state or state.get("game_over"):
+        return False
+    pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else None
+    if pending:
+        pending_type = str(pending.get("type") or "").strip()
+        if pending_type == "duel":
+            return str(pending.get("current_actor") or "").strip() == "du"
+        if pending_type == "choice":
+            return str(pending.get("actor") or "").strip() == "du"
+        if pending_type == "review":
+            phase = str(pending.get("phase") or "").strip()
+            if phase in {"questioning", "submitted"}:
+                return str(pending.get("reviewer") or "").strip() == "du"
+            return str(pending.get("actor") or "").strip() == "du"
+        return False
+    return str(state.get("turn_actor") or "").strip() == "du"
+
+
+def _private_board_du_followup_message(payload: dict | None) -> str:
+    state = (payload or {}).get("state") if isinstance((payload or {}).get("state"), dict) else {}
+    pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else None
+    if not pending:
+        return "现在轮到渡行动。"
+    pending_type = str(pending.get("type") or "").strip()
+    if pending_type == "duel":
+        return "现在轮到渡完成剪刀石头布对抗。"
+    if pending_type == "choice":
+        return "渡刚触发了需要自己选择的惩罚。"
+    if pending_type == "review":
+        phase = str(pending.get("phase") or "").strip()
+        if phase == "questioning":
+            return "现在需要渡给出真心话题目。"
+        if phase == "submitted":
+            return "现在需要渡验收小玥提交的惩罚任务。"
+        return "现在需要渡提交惩罚任务。"
+    return "现在轮到渡处理棋局。"
+
+
 def _private_board_sync_text(
     payload: dict,
     user_message: str = "",
@@ -315,9 +355,52 @@ def register_routes(bp) -> None:
             _mark_private_board_sync_activity(synced_at)
         reply_text = str((wakeup or {}).get("reply_text") or (wakeup or {}).get("reply_preview") or "")
         applied_reply_commands: list[dict] = []
+        followup_wakeups: list[dict] = []
         applied_payload: dict | None = None
         if ok and mode != "final_note":
-            applied_reply_commands, applied_payload = _apply_private_board_reply_commands(save_id, reply_text)
+            for _ in range(3):
+                round_commands, applied_payload = _apply_private_board_reply_commands(save_id, reply_text)
+                applied_reply_commands.extend(round_commands)
+                if applied_payload:
+                    payload = applied_payload
+                if not round_commands or not _private_board_needs_du_followup(payload):
+                    break
+                followup_text = _private_board_sync_text(
+                    payload,
+                    user_message=_private_board_du_followup_message(payload),
+                    mode="state_update",
+                )
+                if not followup_text:
+                    break
+                followup = send_private_board_wakeup(
+                    window_id=window_id,
+                    target=target,
+                    event_text=followup_text,
+                    preferred_channel=channel,
+                    preferred_meta=meta,
+                    return_only=True,
+                )
+                followup_ok = bool((followup or {}).get("ok"))
+                followup_reply = str((followup or {}).get("reply_text") or (followup or {}).get("reply_preview") or "")
+                followup_wakeups.append({
+                    "ok": followup_ok,
+                    "reply_preview": str((followup or {}).get("reply_preview") or followup_reply[:120]),
+                    "error": str((followup or {}).get("error") or ""),
+                })
+                if not followup_ok:
+                    ok = False
+                    wakeup = followup
+                    reply_text = followup_reply
+                    break
+                synced_at = now_beijing_iso()
+                _mark_private_board_sync_activity(synced_at)
+                wakeup = followup
+                reply_text = followup_reply
+            else:
+                if _private_board_needs_du_followup(payload):
+                    ok = False
+                    wakeup = {"ok": False, "error": "渡连续处理未完成，已停止续跑以避免循环。"}
+                    reply_text = ""
             if applied_payload:
                 payload = applied_payload
         if ok and mode == "final_note":
@@ -329,6 +412,7 @@ def register_routes(bp) -> None:
             "reply_text": reply_text,
             "reply_preview": str((wakeup or {}).get("reply_preview") or reply_text[:120]),
             "applied_reply_commands": applied_reply_commands,
+            "followup_wakeups": followup_wakeups,
             "channel": str((wakeup or {}).get("channel") or ""),
             "mode": mode,
             "synced_at": synced_at,

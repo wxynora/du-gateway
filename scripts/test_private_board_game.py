@@ -996,6 +996,42 @@ def test_private_board_reply_commands_apply_to_game_runtime() -> None:
     _assert(((payload or {}).get("state") or {}).get("pending_event", {}).get("phase") == "submitted", "payload should reflect submitted state")
 
 
+def test_private_board_du_followup_after_applied_roll() -> None:
+    from routes.miniapp import game_tools
+
+    payload = {
+        "state": {
+            "turn_actor": "du",
+            "pending_event": {
+                "type": "review",
+                "actor": "du",
+                "reviewer": "xinyue",
+                "phase": "assigned",
+                "name": "自慰陈述",
+            },
+        },
+    }
+    _assert(game_tools._private_board_needs_du_followup(payload), "du pending task after roll should trigger another followup")
+    _assert(
+        game_tools._private_board_du_followup_message(payload) == "现在需要渡提交惩罚任务。",
+        "du review assignment should use task submission followup message",
+    )
+
+    submitted = {
+        "state": {
+            "turn_actor": "xinyue",
+            "pending_event": {
+                "type": "review",
+                "actor": "du",
+                "reviewer": "xinyue",
+                "phase": "submitted",
+                "name": "自慰陈述",
+            },
+        },
+    }
+    _assert(not game_tools._private_board_needs_du_followup(submitted), "du submitted task should stop at xinyue review")
+
+
 if __name__ == "__main__":
     test_private_board_views()
     test_private_board_reset_self_cell()
@@ -1025,4 +1061,5 @@ if __name__ == "__main__":
     test_private_board_state_update_sync_includes_message()
     test_private_board_reply_command_parser()
     test_private_board_reply_commands_apply_to_game_runtime()
+    test_private_board_du_followup_after_applied_roll()
     print("private_board_game tests ok")
