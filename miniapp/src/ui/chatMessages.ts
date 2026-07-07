@@ -1110,7 +1110,8 @@ export function groupChatMessages(
       continue;
     }
     const last = groups[groups.length - 1];
-    if (last && last.role === msg.role && !shouldShowGroupTime(msg.createdAt, last.lastCreatedAt)) {
+    const lastHasRecallNotice = Boolean(last?.parts?.some((part) => part.recallNotice));
+    if (last && !lastHasRecallNotice && last.role === msg.role && !shouldShowGroupTime(msg.createdAt, last.lastCreatedAt)) {
       last.parts.push(...safeParts);
       last.lastCreatedAt = msg.createdAt;
       continue;

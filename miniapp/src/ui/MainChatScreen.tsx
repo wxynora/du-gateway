@@ -498,9 +498,8 @@ function RecallMessageOverlay({
   state: RecallMessageOverlayState | null;
   onResolve: (result: RecallMessagePopupResult) => void;
 }) {
-  const [phase, setPhase] = useState<"storm" | "final">("storm");
+  const [phase, setPhase] = useState<"prelude" | "storm" | "final">("prelude");
   const [remaining, setRemaining] = useState(8);
-  const [alertTotal, setAlertTotal] = useState(0);
   const [flashOn, setFlashOn] = useState(false);
   const resolvedRef = useRef(false);
   const defaultChoiceButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -520,9 +519,8 @@ function RecallMessageOverlay({
   useEffect(() => {
     if (!state) return;
     resolvedRef.current = false;
-    setPhase("storm");
+    setPhase("prelude");
     setRemaining(countdownSeconds);
-    setAlertTotal(0);
     setFlashOn(false);
     alertSequenceTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     alertSequenceTimersRef.current = [];
@@ -530,18 +528,19 @@ function RecallMessageOverlay({
     if (stage) stage.innerHTML = "";
 
     let cancelled = false;
-    let delay = 300;
+    const preludeMs = 900;
+    let delay = 960;
     let alertCount = 0;
     const sourceMessages = [
-      { serif: "Stop Using", sans: "Aesthetics" },
       { serif: "Critical", sans: "Failure" },
       { serif: "Unauthorized", sans: "Access" },
       { serif: "System", sans: "Intrusion" },
-      { serif: "Design", sans: "Violation" },
       { serif: "Illegal", sans: "Protocol" },
       { serif: "Fatal", sans: "Overflow" },
-      { serif: "Warning", sans: "Part 4" },
-      { serif: "Visual", sans: "Trauma" },
+      { serif: "Warning", sans: "Overflow" },
+      { serif: "Error", sans: "Signal" },
+      { serif: "Unknown", sans: "Event" },
+      { serif: "Signal", sans: "Lost" },
     ];
     const pushTimer = (timer: number) => {
       alertSequenceTimersRef.current.push(timer);
@@ -591,7 +590,6 @@ function RecallMessageOverlay({
           </svg>
           <div class="recall-alert-serif">${escapeHtml(picked?.serif || "Critical")}</div>
           <div class="recall-alert-sans recall-glitch-text" data-text="${escapeHtml(text)}">${escapeHtml(text)}</div>
-          ${Math.random() > 0.7 ? '<div class="recall-alert-badge">PART 4</div>' : ""}
           <div class="recall-alert-meta">
             <span>TIMESTAMP: ${escapeHtml(timestamp)}</span>
             <span>0x${Math.random().toString(16).slice(2, 6).toUpperCase()}</span>
@@ -608,21 +606,24 @@ function RecallMessageOverlay({
       if (cancelled) return;
       alertCount += 1;
       createAlert(alertCount);
-      setAlertTotal(alertCount);
       if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
         try {
           navigator.vibrate(20);
         } catch {}
       }
-      delay = Math.max(50, delay * 0.95);
+      delay = Math.max(42, delay * 0.84);
       pushTimer(window.setTimeout(spawn, delay));
     };
-    spawn();
+    pushTimer(window.setTimeout(() => {
+      if (cancelled) return;
+      setPhase("storm");
+      spawn();
+    }, preludeMs));
     pushTimer(window.setTimeout(() => {
       if (cancelled) return;
       cancelled = true;
       setPhase("final");
-    }, 10800));
+    }, preludeMs + 7600));
     const flashTimer = window.setInterval(() => {
       if (Math.random() <= 0.95) return;
       setFlashOn(true);
@@ -673,17 +674,166 @@ function RecallMessageOverlay({
 
   if (!state) return null;
   return (
-    <div className={`recall-ghost-overlay fixed inset-0 z-[90] overflow-hidden text-white ${flashOn ? "recall-ghost-flash" : ""}`} role="dialog" aria-modal="true" aria-labelledby={phase === "final" ? titleId : undefined}>
+    <div className={`recall-ghost-overlay recall-phase-${phase} fixed inset-0 z-[90] overflow-hidden text-white ${flashOn ? "recall-ghost-flash" : ""}`} role="dialog" aria-modal="true" aria-labelledby={phase === "final" ? titleId : undefined}>
       <style>
         {`
           .recall-ghost-overlay {
-            background:
-              radial-gradient(circle at center, rgba(36, 0, 6, 0.94) 0%, #000000 100%);
+            background: transparent;
             font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif;
             perspective: 1000px;
           }
           .recall-ghost-overlay.recall-ghost-flash {
             background: #5f0508;
+          }
+          .recall-glitch-takeover {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
+            opacity: 1;
+            overflow: hidden;
+            background:
+              radial-gradient(circle at 50% 46%, rgba(36, 0, 6, 0.88) 0%, rgba(8, 0, 2, 0.96) 66%, #000000 100%);
+            box-shadow:
+              inset 0 0 160px rgba(214, 24, 34, 0.18),
+              inset 0 -22vh 90px rgba(214, 24, 34, 0.12);
+          }
+          .recall-glitch-takeover::before,
+          .recall-glitch-takeover::after {
+            content: "";
+            position: absolute;
+            inset: -8%;
+            pointer-events: none;
+            opacity: 0;
+            will-change: opacity, transform;
+          }
+          .recall-glitch-takeover::before {
+            background:
+              linear-gradient(90deg, rgba(255, 0, 34, 0.2) 0 8%, transparent 8% 18%, rgba(255, 255, 255, 0.2) 18% 22%, transparent 22% 38%, rgba(0, 255, 255, 0.14) 38% 42%, transparent 42% 100%),
+              linear-gradient(180deg, transparent 0 10%, rgba(255, 0, 34, 0.2) 10% 18%, transparent 18% 24%, rgba(255, 255, 255, 0.16) 24% 28%, transparent 28% 46%, rgba(136, 0, 18, 0.24) 46% 56%, transparent 56% 100%);
+            filter: saturate(1.25) contrast(1.2);
+            mix-blend-mode: screen;
+            transform: translate3d(0, 0, 0);
+          }
+          .recall-glitch-takeover::after {
+            background:
+              linear-gradient(0deg, transparent 0 18%, rgba(255, 255, 255, 0.78) 18% 20%, transparent 20% 37%, rgba(220, 0, 24, 0.56) 37% 41%, transparent 41% 64%, rgba(255, 255, 255, 0.34) 64% 66%, transparent 66% 100%),
+              radial-gradient(circle at 52% 48%, rgba(255, 255, 255, 0.28) 0%, rgba(255, 255, 255, 0) 45%);
+            mix-blend-mode: screen;
+            transform: translate3d(0, 0, 0);
+          }
+          .recall-phase-prelude .recall-glitch-takeover {
+            animation: recall-glitch-field 900ms steps(1, end) both;
+          }
+          .recall-phase-prelude .recall-glitch-takeover::before {
+            animation: recall-glitch-tear 900ms steps(1, end) both;
+          }
+          .recall-phase-prelude .recall-glitch-takeover::after {
+            animation: recall-glitch-flash 900ms steps(1, end) both;
+          }
+          .recall-phase-storm .recall-glitch-takeover,
+          .recall-phase-final .recall-glitch-takeover {
+            animation: none;
+          }
+          @keyframes recall-glitch-field {
+            0% {
+              opacity: 0;
+              background: transparent;
+              transform: translate3d(0, 0, 0);
+              filter: none;
+            }
+            7% {
+              opacity: 0.92;
+              background: rgba(248, 241, 236, 0.92);
+              transform: translate3d(-2px, 0, 0);
+              filter: contrast(1.9);
+            }
+            11% {
+              opacity: 0.2;
+              background: rgba(70, 0, 8, 0.35);
+              transform: translate3d(3px, 0, 0);
+            }
+            19% {
+              opacity: 1;
+              background: rgba(142, 0, 16, 0.8);
+              transform: translate3d(0, -2px, 0);
+            }
+            23% {
+              opacity: 0.08;
+              background: transparent;
+            }
+            34% {
+              opacity: 0.88;
+              background: rgba(0, 0, 0, 0.8);
+              transform: translate3d(4px, 1px, 0);
+            }
+            42% {
+              opacity: 0.98;
+              background: rgba(255, 255, 255, 0.72);
+              transform: translate3d(-5px, 0, 0);
+            }
+            48% {
+              opacity: 0.4;
+              background: rgba(42, 0, 6, 0.58);
+            }
+            66% {
+              opacity: 0.9;
+              background: rgba(120, 0, 14, 0.64);
+              transform: translate3d(2px, -1px, 0);
+            }
+            74% {
+              opacity: 0.18;
+              background: transparent;
+            }
+            100% {
+              opacity: 1;
+              background:
+                radial-gradient(circle at 50% 46%, rgba(36, 0, 6, 0.88) 0%, rgba(8, 0, 2, 0.96) 66%, #000000 100%);
+              transform: translate3d(0, 0, 0);
+              filter: none;
+            }
+          }
+          @keyframes recall-glitch-tear {
+            0%, 6%, 12%, 24%, 44%, 60%, 76%, 100% {
+              opacity: 0;
+            }
+            7% {
+              opacity: 0.82;
+              transform: translate3d(-18px, -2%, 0) scaleX(1.08);
+            }
+            19% {
+              opacity: 0.72;
+              transform: translate3d(16px, 4%, 0) scaleX(1.12);
+            }
+            34% {
+              opacity: 0.6;
+              transform: translate3d(-10px, -8%, 0) scaleX(0.96);
+            }
+            66% {
+              opacity: 0.78;
+              transform: translate3d(12px, 8%, 0) scaleX(1.08);
+            }
+          }
+          @keyframes recall-glitch-flash {
+            0%, 10%, 22%, 39%, 55%, 70%, 100% {
+              opacity: 0;
+            }
+            11% {
+              opacity: 0.94;
+              transform: translate3d(0, -6%, 0);
+            }
+            23% {
+              opacity: 0.42;
+              transform: translate3d(0, 8%, 0);
+            }
+            42% {
+              opacity: 0.86;
+              transform: translate3d(0, -12%, 0);
+            }
+            66% {
+              opacity: 0.5;
+              transform: translate3d(0, 5%, 0);
+            }
           }
           .recall-ghost-scanlines {
             position: absolute;
@@ -691,10 +841,16 @@ function RecallMessageOverlay({
             z-index: 150;
             pointer-events: none;
             background:
-              linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%),
-              linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
-            background-size: 100% 3px, 3px 100%;
+              radial-gradient(ellipse at 18% 82%, rgba(255, 0, 28, 0.1) 0%, rgba(255, 0, 28, 0) 38%),
+              radial-gradient(ellipse at 82% 28%, rgba(255, 255, 255, 0.035) 0%, rgba(255, 255, 255, 0) 42%),
+              radial-gradient(ellipse at 54% 70%, rgba(210, 0, 22, 0.06) 0%, rgba(210, 0, 22, 0) 48%);
             mix-blend-mode: screen;
+            opacity: 0;
+            transition: opacity 260ms cubic-bezier(0.2, 0, 0.2, 1);
+          }
+          .recall-phase-storm .recall-ghost-scanlines,
+          .recall-phase-final .recall-ghost-scanlines {
+            opacity: 0.26;
           }
           .recall-ghost-vignette {
             position: absolute;
@@ -713,8 +869,18 @@ function RecallMessageOverlay({
             100% { opacity: 1; transform: scale(1) translateZ(0); }
           }
           @keyframes recall-final-in {
-            0% { opacity: 0; transform: translate3d(-50%, -46%, 0) scale(0.9); }
-            100% { opacity: 1; transform: translate3d(-50%, -50%, 0) scale(1); }
+            0% {
+              opacity: 0;
+              transform: translate3d(-50%, -47.8%, 0) scale(0.955);
+            }
+            48% {
+              opacity: 0.78;
+              transform: translate3d(-50%, -50.2%, 0) scale(0.99);
+            }
+            100% {
+              opacity: 1;
+              transform: translate3d(-50%, -50%, 0) scale(1);
+            }
           }
           @keyframes recall-glitch {
             0% { transform: translate(0); }
@@ -742,6 +908,12 @@ function RecallMessageOverlay({
             position: absolute;
             overflow: hidden;
             animation: recall-alert-pop-in 150ms cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+            transition: opacity 260ms cubic-bezier(0.2, 0, 0.2, 1), transform 260ms cubic-bezier(0.2, 0, 0.2, 1);
+          }
+          .recall-alert-stage-final .recall-alert-window {
+            animation-play-state: paused !important;
+            opacity: 0.34 !important;
+            transform: scale(0.985) translateZ(0);
           }
           .recall-alert-header {
             display: flex;
@@ -815,17 +987,6 @@ function RecallMessageOverlay({
             font-weight: 700;
             letter-spacing: 0.6px;
           }
-          .recall-alert-badge {
-            display: inline-flex;
-            margin-top: 10px;
-            border: 1px solid rgba(214, 38, 44, 0.82);
-            border-radius: 999px;
-            padding: 2px 8px;
-            color: white;
-            font-size: 10px;
-            font-weight: 950;
-            line-height: 1;
-          }
           .recall-warning-icon {
             position: absolute;
             right: 10px;
@@ -834,18 +995,6 @@ function RecallMessageOverlay({
             height: 52px;
             fill: rgba(214, 38, 44, 0.9);
             opacity: 0.16;
-          }
-          .recall-status-counter {
-            position: absolute;
-            left: max(20px, env(safe-area-inset-left, 0px) + 20px);
-            bottom: max(20px, env(safe-area-inset-bottom, 0px) + 20px);
-            z-index: 170;
-            color: white;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 0;
-            text-shadow: 0 0 12px rgba(214, 38, 44, 0.68);
           }
           .recall-final-body {
             position: relative;
@@ -889,6 +1038,9 @@ function RecallMessageOverlay({
           }
           @media (prefers-reduced-motion: reduce) {
             .recall-ghost-vignette,
+            .recall-glitch-takeover,
+            .recall-glitch-takeover::before,
+            .recall-glitch-takeover::after,
             .recall-alert-window,
             .recall-glitch-text::before,
             .recall-glitch-text::after,
@@ -898,18 +1050,18 @@ function RecallMessageOverlay({
           }
         `}
       </style>
+      <div className="recall-glitch-takeover" />
       <div className="recall-ghost-vignette" />
       <div className="recall-ghost-scanlines" />
-      <div ref={alertStageRef} className="recall-alert-stage" />
-      <div className="recall-status-counter">SYSTEM STATUS: CRITICAL [{phase === "final" ? alertTotal + 1 : alertTotal} ERRORS]</div>
+      <div ref={alertStageRef} className={`recall-alert-stage ${phase === "final" ? "recall-alert-stage-final" : ""}`} />
       {phase === "final" ? (
         <div
           className="recall-final-panel absolute left-1/2 top-1/2 overflow-y-auto overscroll-contain"
           style={{
-            animation: "recall-final-in 180ms ease-out both",
+            animation: "recall-final-in 320ms cubic-bezier(0.16, 1, 0.3, 1) 70ms both",
             maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 32px)",
             width: "min(312px, calc(100vw - 36px))",
-            zIndex: 120,
+            zIndex: 190,
           }}
         >
           <div className="recall-alert-header">
@@ -2830,6 +2982,24 @@ export function MainChatScreen({
     return chatAttachmentPreviewLabel(message?.attachments || []);
   }
 
+  function buildRecallTargetsForRequest(messages: ChatDraftMessage[]): Array<Record<string, any>> {
+    return (Array.isArray(messages) ? messages : [])
+      .filter((message) => message?.role === "user")
+      .map((message) => {
+        const id = String(message?.id || "").trim();
+        if (!id) return null;
+        return {
+          id,
+          text: messageTextForRecall(message),
+          createdAt: message.createdAt || "",
+          source: "private_chat",
+        };
+      })
+      .filter((item): item is Record<string, any> => Boolean(item))
+      .slice(0, 8)
+      .map((item, index) => ({ ...item, index: index + 1 }));
+  }
+
   function recallPayloadMessageIds(payload: Record<string, any>): string[] {
     const rawIds = Array.isArray(payload?.messageIds)
       ? payload.messageIds
@@ -3026,10 +3196,50 @@ export function MainChatScreen({
     ]);
     if (actionWindowId && allowedWindowIds.length && !allowedWindowIds.includes(actionWindowId)) return false;
     const messageIds = recallPayloadMessageIds(payload);
-    const targets = messageIds
-      .map((id) => messagesRef.current.find((message) => String(message.id || "").trim() === id))
+    if (!messageIds.length) {
+      processedRecallActionIdsRef.current.add(actionId);
+      clearRecallActionRetry(actionId);
+      await reportRecallMessageActionResult(action, "failed", {
+        type: "recall_message",
+        windowId: historyWindowId,
+        messageIds,
+        reason: "missing_message_ids",
+      }, "missing_message_ids");
+      logSumiTalkClientEvent("recall_message_missing_message_ids", {
+        source,
+        actionId,
+      }, "warning");
+      return true;
+    }
+    const targetLookups = messageIds.map((id) => ({
+      id,
+      message: messagesRef.current.find((message) => String(message.id || "").trim() === id),
+    }));
+    const nonUserTargetIds = targetLookups
+      .filter(({ message }) => Boolean(message && message.role !== "user"))
+      .map(({ id }) => id);
+    if (nonUserTargetIds.length) {
+      processedRecallActionIdsRef.current.add(actionId);
+      clearRecallActionRetry(actionId);
+      await reportRecallMessageActionResult(action, "failed", {
+        type: "recall_message",
+        windowId: historyWindowId,
+        messageIds,
+        nonUserMessageIds: nonUserTargetIds,
+        reason: "non_user_target",
+      }, "non_user_target");
+      logSumiTalkClientEvent("recall_message_non_user_target", {
+        source,
+        actionId,
+        requested: messageIds.length,
+        nonUser: nonUserTargetIds.length,
+      }, "warning");
+      return true;
+    }
+    const targets = targetLookups
+      .map(({ message }) => message)
       .filter((message): message is ChatDraftMessage => Boolean(message && message.role === "user"));
-    if (!messageIds.length || !targets.length) {
+    if (targets.length !== messageIds.length) {
       const retryCount = recallActionRetryCountsRef.current[actionId] || 0;
       if (retryCount < 8) {
         scheduleRecallActionRetry(action, source);
@@ -3037,6 +3247,7 @@ export function MainChatScreen({
           source,
           actionId,
           requested: messageIds.length,
+          found: targets.length,
           attempt: retryCount + 1,
         }, "warning");
         return true;
@@ -4268,6 +4479,9 @@ export function MainChatScreen({
         }))
       : [userMsg];
     const operationUserMsg = operationUserMessages[operationUserMessages.length - 1] || userMsg;
+    const recallTargets = !groupChatMode && shouldRequestDu
+      ? buildRecallTargetsForRequest(operationUserMessages)
+      : [];
     const assistantId = shouldRequestDu ? `assistant-${baseTimestamp + 1}` : "";
     const assistantCreatedAt = shouldRequestDu ? new Date(baseTimestamp + 1).toISOString() : "";
     const assistantPlaceholder: ChatDraftMessage | null = shouldRequestDu
@@ -4325,6 +4539,7 @@ export function MainChatScreen({
             modelContent: privateModelContent ?? buildPrivateUserContent(content, attachments),
             windowId,
             musicBgmContext,
+            recallTargets,
             replyTarget: resolvedDeviceId,
             clientRequestId,
           })

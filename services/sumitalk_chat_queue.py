@@ -807,6 +807,22 @@ def build_sumitalk_chat_job_payload(
         return "", {"payload": {"ok": False, "error": "缺少 messages"}, "status": 400}, None
     if not window_id:
         return "", {"payload": {"ok": False, "error": "缺少 window_id"}, "status": 400}, None
+    body_for_queue = dict(body or {})
+    try:
+        from services.recall_message_targets import consume_recall_targets_from_body
+
+        consume_recall_targets_from_body(
+            body_for_queue,
+            window_id=window_id,
+            client_request_id=client_request_id,
+        )
+    except Exception:
+        sumitalk_logger.debug(
+            "recall_targets_consume_failed window_id=%s client_request_id=%s",
+            window_id,
+            client_request_id,
+            exc_info=True,
+        )
 
     cleanup_sumitalk_chat_jobs()
     existing = find_sumitalk_chat_job_by_client_request_id(client_request_id, window_id, reply_target)
@@ -827,7 +843,7 @@ def build_sumitalk_chat_job_payload(
             )
             return existing_job_id, None, EnqueueChatJobResult(False, True, existing_job_id, "")
 
-    chat_body = dict(body or {})
+    chat_body = dict(body_for_queue or {})
     chat_body["model"] = model
     chat_body["messages"] = messages
     chat_body["window_id"] = window_id

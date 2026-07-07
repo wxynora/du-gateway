@@ -1854,6 +1854,25 @@ def chat_completions():
         else ""
     )
     sumitalk_client_request_id = str((body or {}).get("client_request_id") or "").strip() if is_sumitalk_request else ""
+    if is_sumitalk_request:
+        try:
+            from services.recall_message_targets import consume_recall_targets_from_body
+
+            consume_recall_targets_from_body(
+                body,
+                window_id=window_id,
+                client_request_id=sumitalk_client_request_id,
+            )
+        except Exception:
+            sumitalk_logger.debug(
+                "recall_targets_consume_failed window_id=%s client_request_id=%s",
+                window_id,
+                sumitalk_client_request_id,
+                exc_info=True,
+            )
+    elif isinstance(body, dict):
+        body.pop("recall_targets", None)
+        body.pop("recallTargets", None)
 
     def _emit_sumitalk_chat_event(kind: str, payload: dict | None = None) -> None:
         if not (is_sumitalk_request and sumitalk_job_id):

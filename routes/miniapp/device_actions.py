@@ -109,6 +109,15 @@ def _recall_message_wakeup_event_text(item: dict) -> str:
         raw_messages = result.get("recalled_messages")
     if not isinstance(raw_messages, list) or not raw_messages:
         return ""
+    payload_window_id = str(payload.get("windowId") or payload.get("window_id") or "").strip()
+    result_window_id = str(result.get("windowId") or result.get("window_id") or "").strip()
+    if payload_window_id and result_window_id and payload_window_id != result_window_id:
+        sumitalk_logger.warning(
+            "recall_message_result_window_mismatch action_id=%s payload_window=%s result_window=%s",
+            str(item.get("id") or ""),
+            payload_window_id,
+            result_window_id,
+        )
     lines = ["你刚刚在 SumiTalk App 里撤回了她的消息。"]
     for raw in raw_messages[:4]:
         if not isinstance(raw, dict):

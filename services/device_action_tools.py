@@ -117,7 +117,8 @@ TOOL_RECALL_MESSAGE = {
         "description": (
             "在 SumiTalk App 聊天界面撤回辛玥发出的指定消息。"
             "这不是后端物理删除，只会让她当前 App 聊天界面用男鬼弹窗仪式后隐藏这些消息，并在你的后续短程上下文里标为【已撤回】原消息。"
-            "必须传 messageIds，不能让系统猜最近一条；只用于你要撤回她刚刚说过的话时。"
+            "最稳妥是传 messageIds；如果你只知道第几句或大概原文，可以先用 index/targetText/queryOnly 查询候选。"
+            "系统不会猜最近一条：无法唯一定位时只返回候选，不会执行撤回。"
             "最终弹窗有倒计时，超时会自动选择 timeoutChoiceId。"
         ),
         "parameters": {
@@ -126,7 +127,32 @@ TOOL_RECALL_MESSAGE = {
                 "messageIds": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "必填：要撤回的 App 消息 id 列表，至少 1 个。",
+                    "description": "要撤回的 App 消息 id 列表；已有精确 id 时传这个。",
+                },
+                "candidateSetId": {
+                    "type": "string",
+                    "description": "可选：候选查询返回的 candidateSetId，用于二次选择。",
+                },
+                "index": {
+                    "type": "integer",
+                    "description": "可选：撤回候选里的单个序号；没有 messageIds 时使用。",
+                },
+                "indexes": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "可选：撤回候选里的多个序号；没有 messageIds 时使用。",
+                },
+                "targetText": {
+                    "type": "string",
+                    "description": "可选：想撤回的那句原文或片段；无法唯一匹配时只返回候选。",
+                },
+                "clientRequestId": {
+                    "type": "string",
+                    "description": "可选：本轮 SumiTalk 请求 id；默认使用当前工具上下文。",
+                },
+                "queryOnly": {
+                    "type": "boolean",
+                    "description": "可选：只查询候选，不执行撤回。",
                 },
                 "texts": {
                     "type": "array",
@@ -150,7 +176,6 @@ TOOL_RECALL_MESSAGE = {
                 "countdownSeconds": {"type": "integer", "description": "可选：最后弹窗倒计时秒数，3-30，默认 8。"},
                 "timeoutChoiceId": {"type": "string", "description": "可选：倒计时结束后自动选择的 choice id。"},
             },
-            "required": ["messageIds"],
         },
     },
 }
@@ -461,15 +486,71 @@ def _normalize_recall_message_ids(args: dict) -> list[str]:
     return ids
 
 
+def _recall_indexes_arg(args: dict):
+    if args.get("indexes") is not None:
+        return args.get("indexes")
+    if args.get("indices") is not None:
+        return args.get("indices")
+    if args.get("index") is not None:
+        return args.get("index")
+    return None
+
+
+def _recall_target_text_arg(args: dict) -> str:
+    return str(
+        args.get("targetText")
+        or args.get("target_text")
+        or args.get("text")
+        or args.get("query")
+        or ""
+    ).strip()
+
+
 def execute_recall_message(arguments: dict) -> str:
     args = arguments if isinstance(arguments, dict) else {}
     context = args.get("_context") if isinstance(args.get("_context"), dict) else {}
-    message_ids = _normalize_recall_message_ids(args)
-    if not message_ids:
-        return json.dumps({"ok": False, "error": "messageIds 必须传，不能猜最近一条"}, ensure_ascii=False)
     window_id = str(args.get("windowId") or args.get("window_id") or context.get("window_id") or "").strip()
     if not window_id:
         return json.dumps({"ok": False, "error": "recall_message 必须在明确的 SumiTalk windowId 内调用"}, ensure_ascii=False)
+    message_ids = _normalize_recall_message_ids(args)
+    resolved_candidates: dict | None = None
+    query_only = bool(args.get("queryOnly") or args.get("query_only") or args.get("currentTurnCandidates"))
+    if not message_ids:
+        try:
+            from services.recall_message_targets import resolve_recall_message_targets
+
+            resolved_candidates = resolve_recall_message_targets(
+                window_id=window_id,
+                client_request_id=str(
+                    args.get("clientRequestId")
+                    or args.get("client_request_id")
+                    or context.get("client_request_id")
+                    or ""
+                ).strip(),
+                candidate_set_id=str(args.get("candidateSetId") or args.get("candidate_set_id") or "").strip(),
+                indexes=_recall_indexes_arg(args),
+                target_text=_recall_target_text_arg(args),
+            )
+        except Exception as e:
+            return json.dumps({"ok": False, "error": f"recall_message 候选查询失败：{e}"}, ensure_ascii=False)
+        resolved_ids = _normalize_recall_message_ids({"messageIds": (resolved_candidates or {}).get("messageIds")})
+        if resolved_ids and not query_only:
+            message_ids = resolved_ids
+        else:
+            return json.dumps(
+                {
+                    "ok": True,
+                    "queued": False,
+                    "type": "recall_message_candidates",
+                    "needsSelection": True,
+                    "windowId": window_id,
+                    "candidateSetId": (resolved_candidates or {}).get("candidateSetId") or "",
+                    "candidates": (resolved_candidates or {}).get("candidates") or [],
+                    "note": "本次没有撤回任何消息。请选择候选的 candidateSetId + index，或直接传 messageIds 再调用 recall_message。",
+                    "error": (resolved_candidates or {}).get("error") or "",
+                },
+                ensure_ascii=False,
+            )
     reply_target = str(context.get("reply_target") or context.get("device_id") or "").strip()
     popup = {
         "texts": args.get("texts") if isinstance(args.get("texts"), list) else None,

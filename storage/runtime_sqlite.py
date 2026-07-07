@@ -29,6 +29,7 @@ _RUNTIME_TABLES = (
     "spring_dream_inspiration",
     "exchange_diary_entries",
     "recall_message_markers",
+    "recall_message_targets",
 )
 
 
@@ -100,6 +101,21 @@ def ensure_schema() -> None:
                     ON recall_message_markers(window_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_recall_message_markers_message
                     ON recall_message_markers(message_id);
+
+                CREATE TABLE IF NOT EXISTS recall_message_targets (
+                    candidate_set_id TEXT PRIMARY KEY,
+                    window_id TEXT NOT NULL DEFAULT '',
+                    client_request_id TEXT NOT NULL DEFAULT '',
+                    targets_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_recall_message_targets_window_created
+                    ON recall_message_targets(window_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_recall_message_targets_client
+                    ON recall_message_targets(window_id, client_request_id);
+                CREATE INDEX IF NOT EXISTS idx_recall_message_targets_expires
+                    ON recall_message_targets(expires_at);
 
                 CREATE TABLE IF NOT EXISTS sense_latest (
                     sense_type TEXT PRIMARY KEY,

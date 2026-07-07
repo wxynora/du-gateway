@@ -28,6 +28,7 @@ export type PrivateChatRequestBody = {
   window_id: string;
   reply_target: string;
   client_request_id: string;
+  recall_targets?: Array<Record<string, any>>;
   music_bgm_context?: any;
 };
 
@@ -51,13 +52,16 @@ export function buildPrivateChatRequestBody(args: {
   replyTarget: string;
   clientRequestId: string;
   musicBgmContext?: any;
+  recallTargets?: Array<Record<string, any>>;
 }): PrivateChatRequestBody {
+  const recallTargets = Array.isArray(args.recallTargets) ? args.recallTargets.filter(Boolean) : [];
   return {
     model: args.model,
     messages: [{ role: "user", content: args.modelContent }],
     stream: false,
     window_id: args.windowId,
     ...(args.musicBgmContext ? { music_bgm_context: args.musicBgmContext } : {}),
+    ...(recallTargets.length ? { recall_targets: recallTargets } : {}),
     reply_target: args.replyTarget,
     client_request_id: args.clientRequestId,
   };

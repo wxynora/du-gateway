@@ -1081,7 +1081,7 @@ rg -n "core-prompt|核心|入口风格|SumiTalk|禁言|silence" routes services 
 - 服务器 Claude 上游配置：`.env` 的 `TARGET_AI_URLS`
 - 网关转发：`routes/chat.py`
 - 上游选择：`storage/upstream_store.py`
-- 当前转发 VPS：`duproxy@45.76.171.91`，proxy 路径 `/home/duproxy/claude-proxy/proxy.js`
+- 当前转发 VPS：`duproxy@45.76.171.91`，Tailscale IP `100.86.248.99`，proxy 路径 `/home/duproxy/claude-proxy/proxy.js`
 - 本机 token 同步脚本：`/Users/doraemon/claude-token-sync.sh`
 - 本机 LaunchAgent：`/Users/doraemon/Library/LaunchAgents/com.doraemon.claude-token-sync.plist`
 
@@ -1091,13 +1091,13 @@ rg -n "core-prompt|核心|入口风格|SumiTalk|禁言|silence" routes services 
 rg -n "claude|anthropic|thinking|cache_control|tool_use|oauth|8317|8082" scripts routes storage .env
 ssh -o ControlMaster=no ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 ssh -o ControlMaster=no ali-du 'sudo systemctl status claude-proxy-tunnel.service --no-pager -l | sed -n "1,80p"'
-ssh -o ControlMaster=no duproxy@45.76.171.91 'systemctl status claude-oauth-proxy.service --no-pager -l | sed -n "1,80p"'
+ssh -o ControlMaster=no duproxy@45.76.171.91 'systemctl --user status claude-oauth-proxy.service --no-pager -l | sed -n "1,80p"'
 ```
 
 注意：
 - Claude OAuth proxy 是 Claude 反代，不是 CPA。CPA 另有一节，按 Codex 反代排查。
 - 旧网关本机 `127.0.0.1:8082` 不是本地 Claude proxy，而是 `claude-proxy-tunnel.service` 经 SSH 隧道转到新 VPS；旧网关上的 `claude-oauth-proxy.service` 应保持停用。
-- 转发 VPS 的 `claude-oauth-proxy.service` 是 system service，运行用户是 `duproxy`，只监听新 VPS 本机 `127.0.0.1:8082`。
+- 转发 VPS 的 `claude-oauth-proxy.service` 是 `duproxy` 的用户级 systemd service，实际 unit 在 `/home/duproxy/.config/systemd/user/claude-oauth-proxy.service`，只监听新 VPS 本机 `127.0.0.1:8082`。
 - 不要擅自改 `/Users/doraemon/claude-token-sync.sh` 的默认重启服务；当前主链路是同步完整 credential 到转发 VPS，由转发 VPS proxy 自刷新。只有用户明确说服务名变了，才改 `CLAUDE_PROXY_SERVICE` 或脚本默认值。
 - Claude OAuth proxy 401 不要先猜模型，先分清是哪层 401：
   - `Invalid proxy key` / `AUTH REJECTED`：网关到代理的 key 不匹配，查旧网关 `/root/du-gateway/.env` 的 `TARGET_AI_API_KEYS` 里 `http://127.0.0.1:8082/v1/chat/completions` 对应项，必须和新 VPS `/home/duproxy/claude-proxy/.env` 的 `PROXY_KEY` 一致。
@@ -1163,15 +1163,15 @@ launchctl kickstart -k gui/$(id -u)/com.doraemon.claude-token-sync
 
 ```bash
 ssh -o ControlMaster=no ali-du 'sudo systemctl show claude-proxy-tunnel.service -p ActiveState -p SubState -p MainPID --no-pager; ss -ltnp 2>/dev/null | grep ":8082" || true'
-ssh -o ControlMaster=no duproxy@45.76.171.91 'systemctl show claude-oauth-proxy.service -p ActiveState -p SubState -p MainPID --no-pager; ss -ltnp 2>/dev/null | grep ":8082" || true'
-ssh -o ControlMaster=no duproxy@45.76.171.91 'journalctl -u claude-oauth-proxy.service -n 120 --no-pager -o cat | grep -Ei "401|refresh|auth file|cloudflare|error|model|Invalid proxy key"'
+ssh -o ControlMaster=no duproxy@45.76.171.91 'systemctl --user show claude-oauth-proxy.service -p ActiveState -p SubState -p MainPID --no-pager; ss -ltnp 2>/dev/null | grep ":8082" || true'
+ssh -o ControlMaster=no duproxy@45.76.171.91 'journalctl --user -u claude-oauth-proxy.service -n 120 --no-pager -o cat | grep -Ei "401|refresh|auth file|cloudflare|error|model|Invalid proxy key"'
 ```
 
 干净重启 Claude OAuth proxy 时，不要手动 `cd /home/duproxy/claude-proxy && node proxy.js`，也不要只按某个旧 PID kill。必须让 systemd 接管；如果 8082 已被脱管 node 占用，按 cwd/cmdline 校验后先清掉脱管进程：
 
 ```bash
 ssh -o ControlMaster=no duproxy@45.76.171.91 'set -e
-systemctl stop --no-block claude-oauth-proxy.service || true
+systemctl --user stop --no-block claude-oauth-proxy.service || true
 for pid in $(pgrep -u duproxy -f "node proxy.js|/home/duproxy/claude-proxy/proxy.js" || true); do
   cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)
   cmd=$(tr "\0" " " <"/proc/$pid/cmdline" 2>/dev/null || true)
@@ -1182,9 +1182,9 @@ for pid in $(pgrep -u duproxy -f "node proxy.js|/home/duproxy/claude-proxy/proxy
   fi
 done
 sleep 1
-systemctl reset-failed claude-oauth-proxy.service || true
-systemctl start claude-oauth-proxy.service
-systemctl status claude-oauth-proxy.service --no-pager -l | sed -n "1,45p"
+systemctl --user reset-failed claude-oauth-proxy.service || true
+systemctl --user start claude-oauth-proxy.service
+systemctl --user status claude-oauth-proxy.service --no-pager -l | sed -n "1,45p"
 ss -ltnp 2>/dev/null | grep ":8082"
 '
 ```
@@ -1217,12 +1217,15 @@ PY
 4. 看远端 `claude-oauth-proxy.service` journal 是否继续 `Refresh failed: HTTP 403 ... Cloudflare`。
 5. 确认脚本走的是 Claude OAuth sync URL，不要把 CPA/Codex 反代服务混进来。
 
-当前状态（2026-07-04）：
-- 主链路：旧网关 `ali-du` 仍把 Claude OAuth upstream 配成 `http://127.0.0.1:8082/v1/chat/completions`；这个本机 8082 由 `claude-proxy-tunnel.service` 转发到新 VPS `duproxy@45.76.171.91:127.0.0.1:8082`。旧网关本地 `claude-oauth-proxy.service` 应保持 `inactive/dead`。
-- 新 VPS：`claude-oauth-proxy.service` 是 system service，运行 `duproxy` 用户，路径 `/home/duproxy/claude-proxy/proxy.js`，只监听 `127.0.0.1:8082`；refresh token 由新 VPS proxy 持有并自刷新。
+当前状态（2026-07-07）：
+- 主链路：旧网关 `ali-du` 仍把 Claude OAuth upstream 配成 `http://127.0.0.1:8082/v1/chat/completions`；这个本机 8082 由 `claude-proxy-tunnel.service` 转发到新 VPS。当前 tunnel 通过 drop-in `/etc/systemd/system/claude-proxy-tunnel.service.d/10-tailscale-target.conf` 覆盖 `ExecStart`，SSH 目标为 Tailscale `duproxy@100.86.248.99`，远端仍是新 VPS 自己视角的 `127.0.0.1:8082`。旧网关本地 `claude-oauth-proxy.service` 应保持 `inactive/dead`。
+- 新 VPS：`claude-oauth-proxy.service` 是 `duproxy` 的用户级 systemd service，unit 在 `/home/duproxy/.config/systemd/user/claude-oauth-proxy.service`，路径 `/home/duproxy/claude-proxy/proxy.js`，只监听 `127.0.0.1:8082`；refresh token 由新 VPS proxy 持有并自刷新。查询和重启优先用 `systemctl --user status|restart claude-oauth-proxy.service`。
 - 已修：旧网关 `/root/du-gateway/.env` 中 `http://127.0.0.1:8082/v1/chat/completions` 对应的 `TARGET_AI_API_KEYS` 已更新为新 VPS 当前 `PROXY_KEY`，旧 key 备份在 `/root/du-gateway/.env.bak-claude-key-20260704-161039`。
 - 已修：旧网关 `/root/du-gateway/.env` 中 `CLAUDE_OAUTH_SYNC_KEY` 已更新为新 VPS 当前 sync key，用于 MiniApp/API 管理查询 `/internal/oauth-status`；旧 key 备份在 `/root/du-gateway/.env.bak-claude-sync-key-20260704-163203`。
-- 已修：旧网关 tunnel 单元已从 `root@45.76.171.91` 改为 `duproxy@45.76.171.91`；转发 VPS 已禁 root SSH，`duproxy` 有免密 sudo。旧网关 tunnel 私钥 `/root/.ssh/du_new_vps_ed25519` 的公钥已加入新 VPS `duproxy`。
+- 已修：旧网关 tunnel 单元已从 `root@45.76.171.91` 改为 `duproxy@45.76.171.91`，随后通过 drop-in 切到 `duproxy@100.86.248.99`；转发 VPS 已禁 root SSH，`duproxy` 有免密 sudo。旧网关 tunnel 私钥 `/root/.ssh/du_new_vps_ed25519` 的公钥已加入新 VPS `duproxy`。
+- 已配置：转发 VPS 已加入 Tailscale，IP 为 `100.86.248.99`；本机可直接 `ssh duproxy@100.86.248.99`。旧网关 `ali-du` 到转发 VPS 的 Tailscale 链路已验证为 direct，切换后 `ss -tnp` 显示 `100.92.76.117 -> 100.86.248.99:22`。这主要改善安全边界和可维护性，不保证比公网更快。回滚生产 tunnel 时删除 drop-in 或把目标改回 `duproxy@45.76.171.91` 后 `daemon-reload && restart claude-proxy-tunnel.service`；切换前备份为 `/root/claude-proxy-tunnel.service.before-tailscale-20260707-084239.txt`。
+- 已配置：转发 VPS 同时作为 `du-proxy-new-us` Trojan 节点，公网入口改为 `us.duxy-home.com:443`，证书由新 VPS `certbot` 管理，Trojan 配置 `/etc/trojan/config.json` 指向 `/etc/letsencrypt/live/us.duxy-home.com/fullchain.pem` 和 `privkey.pem`，SNI 为 `us.duxy-home.com`；旧 `45.76.171.91:8443` 路径已确认公网会卡，UFW 不再放行 8443。订阅源只改新美国节点 `/var/www/proxy-sub/du-proxy-new-us-HTEsRb3ujVT5JXFCEPflhwhnSZmFlJmrRHkqAk5p.yaml` 为 `server: us.duxy-home.com`、`port: 443`、`sni: us.duxy-home.com`；马来西亚订阅 `a9K3mQ8xLp2Rt7Vn4Hs6Yw1Bc5Zd0Ef7.yaml` 仍是 `proxy.duxy-home.com:8443`，不要误改。
+- 已收束：转发 VPS 上遗留的系统级 `/etc/systemd/system/claude-oauth-proxy.service` 会和用户级服务抢 `127.0.0.1:8082` 导致 `EADDRINUSE` 循环重启；已 `disable --now` 系统级服务，保留用户级服务运行，并设置 `loginctl enable-linger duproxy`，避免无人登录时用户级服务无法开机自启。
 - 已验证：旧网关带 `.env` 的 8082 key 请求 `http://127.0.0.1:8082/v1/models` 返回 `200 OK`，模型数 9，包含 `claude-sonnet-5`、`claude-fable-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-sonnet-4-6`；旧网关带 `CLAUDE_OAUTH_SYNC_KEY` 请求 `http://127.0.0.1:8082/internal/oauth-status` 返回 `ok=True`、`canRefresh=True`、`expiresInSeconds` 和 `rateLimitSnapshot`；`du-gateway.service` 和 `du-sumitalk-chat-worker.service` 已重启为 active/running。
 - 排查优先级：MiniApp/API 管理里 `models 401` 且返回 `Invalid proxy key` 时，优先查旧网关 `.env` 的 8082 key 和新 VPS `PROXY_KEY` 是否一致；`状态查询 401` 时优先查旧网关 `CLAUDE_OAUTH_SYNC_KEY` 和新 VPS `CLAUDE_OAUTH_SYNC_KEY` 是否一致，不要先查 Claude OAuth access token。
 
@@ -2121,13 +2124,17 @@ npm -C miniapp run android
 - 未完成 / 下次继续：需要把线上那份大富翁 HTML 作为真实 `du_page` 记录导入；推送部署后需验证 `du_page` 工具保存、`/du-pages/v/<id>` 打开、MiniApp 列表加载与删除。
 
 当前状态（2026-07-06 SumiTalk App `recall_message` 撤回仪式）：
-- 已完成：新增渡可调用工具 `recall_message`，强制要求 `messageIds`，不猜“最近一条”；工具只发 App 聊天界面动作，不物理删除 R2/后端历史。
+- 已完成：新增渡可调用工具 `recall_message`，最终执行必须落到 `messageIds`，不猜“最近一条”；工具只发 App 聊天界面动作，不物理删除 R2/后端历史。
 - 已完成：`app_actions` 队列新增 `surface=chat_ui` 隔离，原生壳默认只轮询 `native`，聊天页通过 `chat_ui_device_actions` 实时事件或 `/miniapp-api/device-actions?surface=chat_ui&window_id=...` 兜底轮询领取，避免未知动作被 Android 壳误消费。
 - 已完成：MiniApp 聊天页收到撤回动作后先展示男鬼弹窗风格仪式，最后弹窗带 `countdownSeconds/timeoutChoiceId`；用户选择或倒计时自动选择后，并行回传结果给后端、执行前端撤回收尾、本地隐藏消息并写入 tombstone。
-- 已完成：`RecallMessageOverlay` 视觉按 `ui合集/男鬼弹窗` 的黑红故障弹窗方向重做：深红黑底、scanline、红色错误标题栏、glitch 文字、原版式 `createAlert()` 逐个 append、`delay = max(50, delay * 0.95)` 先慢后快堆叠、底部 `SYSTEM STATUS` 和同风格最终选择窗；App 窄屏下额外扩展横向随机溢出范围，避免原版坐标公式被 320px 视口压成整齐一列；本轮又下调了弹窗宽度、字号、红色实度、边框和阴影，避免故障窗过大过实。只改前端仪式表现，不改工具入队/回传/隐藏消息边界。
+- 已完成：`RecallMessageOverlay` 视觉按 `ui合集/男鬼弹窗` 的黑红故障弹窗方向重做：深红黑底、红色错误标题栏、glitch 文字、原版式 `createAlert()` 逐个 append、`delay = max(42, delay * 0.84)` 先慢后快堆叠；本轮把 `prelude` 前摇从血雾/水墨晕染撤回，改为 0.9s 闪屏故障：黑红白瞬闪、画面轻错位、块状撕裂，再进入弹窗雨，最终选择窗时间随此前摇顺延；App 窄屏下额外扩展横向随机溢出范围，避免原版坐标公式被 320px 视口压成整齐一列；本轮又下调了弹窗宽度、字号、红色实度、边框和阴影，并缩短弹窗雨前段等待、拉大加速差异；最终选择窗回退为直接挂载的 opacity/轻位移/轻 scale 入场，不再使用 handoff 或 blur，旧弹窗只降透明不虚化；本轮把最终窗入场调成 70ms 延迟 + 320ms ease-out，并让旧弹窗同步轻缩放降暗，减少最后窗硬弹出的突兀感；已移除底部 `SYSTEM STATUS / ERRORS` 计数条和对应前端计数状态；已移除随机 `PART 4` badge 和备用 `Part 4` 文案，并清理偏设计/审美指责的英文标题池，只保留系统错误类短标签，避免男鬼弹窗里出现无意义英文装饰。只改前端仪式表现，不改工具入队/回传/隐藏消息边界。
 - 已完成：新增 dev-only 本地直接测试入口 `http://127.0.0.1:5173/miniapp/?recallPreview=1`；入口绕过面板鉴权、直接进入渡单聊、注入假消息并本地触发 `recall_message`，不依赖真实后端动作队列，也不写真实聊天记录。为避免首屏首页预览误拉 history，预览模式初始 `activeScreen=du`。
 - 已完成：回执唤醒渡时带回最终选择和原消息，语义为“你已撤回她的这条消息：`【已撤回】原消息`”；新增 `recall_message_markers` runtime 表，后续 Last4 注入只在上下文展示层把对应用户消息标成 `【已撤回】原消息`，不改原始归档。
-- 已完成：小工审阅后补边界：前端 `recall_message` 动作改为串行队列，避免并发弹窗覆盖 resolver；目标消息暂未加载时最多重试再失败；最终弹窗支持长内容滚动、默认聚焦、44px 触控按钮、窄屏 clamp 和 reduced-motion 降级；最终弹窗结束后先停顿 2 秒，再把被撤回的原用户消息直接替换为按撤回发生时间插入当前聊天底部的居中灰字提示“渡撤回了你的消息”；一次撤回多条同轮用户气泡时，按当前聊天列表从下往上每 650ms 逐条替换；撤回路径只处理命中的用户 `messageId`，不再走会清默认问候语的通用 sanitize，避免误伤渡的非目标气泡；不显示原文、不冒充用户消息，并自动滚到提示位置。
+- 已完成：小工审阅后补边界：前端 `recall_message` 动作改为串行队列，避免并发弹窗覆盖 resolver；目标消息暂未加载时最多重试再失败；最终弹窗支持长内容滚动、默认聚焦、44px 触控按钮、窄屏 clamp 和 reduced-motion 降级；最终弹窗结束后先停顿 2 秒，再把被撤回的原用户消息直接替换为按撤回发生时间插入当前聊天底部的居中灰字提示“渡撤回了你的消息”；一次撤回多条同轮用户气泡时，按当前聊天列表从下往上每 650ms 逐条替换；撤回路径只处理命中的用户 `messageId`，不再走会清默认问候语的通用 sanitize，避免误伤渡的非目标气泡；撤回提示作为消息分组硬边界，后续渡消息不能合并进去变成普通气泡；不显示原文、不冒充用户消息，并自动滚到提示位置。
 - 已完成：小工审阅后补后端边界：`recall_message` 入队强制非空 `windowId`，`chat_ui` poll 要求请求窗口与动作窗口严格一致；回执/marker 以后端 action payload 的窗口为准，客户端回传窗口不再优先；global Last4 场景按全局 marker 补标，避免新窗口注入漏出已撤回原文。
-- 已验证：`.venv/bin/python -m py_compile storage/runtime_sqlite.py services/recall_message_markers.py storage/app_action_store.py services/realtime_publish.py services/realtime_app.py routes/miniapp/device_actions.py services/device_action_tools.py services/mcp_forum_tools.py services/chat_tools.py routes/chat.py pipeline/pipeline.py`、`git diff --check`、`npm --prefix miniapp run build` 通过；隔离 smoke 覆盖缺 `windowId` 入队失败、native 轮询捞不到 `recall_message`、chat_ui 同窗口能捞到、空/错窗口捞不到、客户端回错窗口时 marker 仍写 payload 窗口、global marker 可补标。黑红故障弹窗版本已用真实 MiniApp 本地页面验证，dev 预览入口在当前 in-app browser 320x701 视口下实测 `t+1.2s=4`、`t+3.7s=20`、`t+6.7s=77`、`t+11.5s=153/进入最终弹窗`，可见窗口上限 40 个；本轮横向范围已散到约 `x=-123..435`，宽高约 `152..298 / 126..189`，点击“我知道了”后假消息消失，且没有 `/miniapp-api` 请求。
+- 已修复（2026-07-07 后端复扫）：`routes/miniapp/device_actions.py` 的 `recall_message` 回执唤醒文本补上 `payload_window_id/result_window_id` 解析，修掉 done 回执时 `NameError`；客户端回传窗口和服务端 payload 窗口不一致时只告警，唤醒文本和 marker 仍以服务端 action payload 窗口为准。
+- 已完成（2026-07-07 撤回候选定位）：聚合输入平时正文保持干净，不加编号/id；MiniApp 私聊发送时用隐藏 `recall_targets` sidecar 带本轮用户气泡 `{id/text/index/createdAt}`，后端写入 `recall_message_targets` runtime 表，每个窗口只保留最近 10 轮、每轮最多 8 个、文本预览最多 300 字、TTL 24 小时。`routes/chat.py` 和 SumiTalk job 入队都会消费并从上游 `body/chat_body` 移除 sidecar，避免普通模型正文泄漏。`recall_message` 没传 `messageIds` 时会按当前 `client_request_id`/`candidateSetId`/`index`/`targetText` 查候选；唯一解析才转成真实 `messageIds` 执行，否则只返回候选让渡二次选择。
+- 已修复（2026-07-07 撤回候选复扫 P2）：前端收到 `recall_message` 动作时不再允许“部分成功”；缺 `messageIds` 直接 `failed/missing_message_ids`，payload 混入已找到但非 `user` 的消息直接 `failed/non_user_target`，目标用户消息未加载齐才继续按原逻辑重试，避免 `assistant-*` 混入后 UI 只撤用户气泡但回执仍 done。新增可复跑脚本 `scripts/test_recall_message_targets.py`，固定覆盖 sidecar pop、窗口绑定、index/targetText/queryOnly、十轮裁剪和前端 guard 静态检查。
+- 已验证：`.venv/bin/python -m py_compile storage/runtime_sqlite.py services/recall_message_markers.py storage/app_action_store.py services/realtime_publish.py services/realtime_app.py routes/miniapp/device_actions.py services/device_action_tools.py services/mcp_forum_tools.py services/chat_tools.py routes/chat.py pipeline/pipeline.py`、`git diff --check`、`npm --prefix miniapp run build` 通过；隔离 smoke 覆盖缺 `windowId` 入队失败、native 轮询捞不到 `recall_message`、chat_ui 同窗口能捞到、空/错窗口捞不到、客户端回错窗口时 marker 仍写 payload 窗口、global marker 可补标。黑红故障弹窗版本已用真实 MiniApp 本地页面验证，dev 预览入口在当前 in-app browser 320x701 视口下实测 `t+1.2s=4`、`t+3.7s=20`、`t+6.7s=77`、`t+11.5s=153/进入最终弹窗`，可见窗口上限 40 个；本轮横向范围已散到约 `x=-123..435`，宽高约 `152..298 / 126..189`，点击“我知道了”后假消息消失，且没有 `/miniapp-api` 请求。本轮清理英文标题池后，源文件已无那几组出戏标题，`git diff --check` 和 `npm --prefix miniapp run build` 通过；当前浏览器控制读取 DOM 超时，未把它计为本轮浏览器实测。
+- 本轮新增验证：临时 `RUNTIME_STATE_DB=/tmp/du-recall-smoke.sqlite3` smoke 覆盖缺 `messageIds`、缺 `windowId`、`native` 隔离、`chat_ui` 同/错窗口领取、错窗口回执按 payload 窗口唤醒与写 marker、同窗口 Last4 标 `【已撤回】`、错窗口不误标；临时 `RUNTIME_STATE_DB=/tmp/du-recall-targets-smoke.sqlite3` 覆盖隐藏 `recall_targets` 消费后从 body 移除、按 `index` 和 `targetText` 解析到 messageId、queryOnly 返回候选；临时 `RUNTIME_STATE_DB=/tmp/du-recall-tool-smoke.sqlite3` 覆盖 `recall_message` 第一次只查候选不入队、第二次 `index=2` 转 `messageIds` 入队；`scripts/test_recall_message_targets.py` 已作为可复跑版本补入；后端相关 `py_compile`、`git diff --check` 和 `npm --prefix miniapp run build` 通过。
 - 未完成 / 下次继续：还没有在真实 App 里点一次端到端效果；推送部署后优先测一条真实用户消息 id 的撤回，确认弹窗、回执唤醒、刷新后不回魂，以及 Last4 给渡的标记措辞。
