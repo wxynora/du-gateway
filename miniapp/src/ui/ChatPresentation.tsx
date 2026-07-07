@@ -374,15 +374,15 @@ export function RichTextBlock({ content }: { content: string }) {
       remarkPlugins={[remarkGfm]}
       components={{
         p: ({ children }) => <p className="m-0 whitespace-pre-wrap">{renderTextWithKaomoji(children, "p")}</p>,
-        h1: ({ children }) => <h1 className="mb-2 text-[20px] font-semibold leading-tight text-gray-900">{children}</h1>,
-        h2: ({ children }) => <h2 className="mb-2 text-[18px] font-semibold leading-tight text-gray-900">{children}</h2>,
-        h3: ({ children }) => <h3 className="mb-1.5 text-[16px] font-semibold leading-tight text-gray-900">{children}</h3>,
+        h1: ({ children }) => <h1 className="mb-2 text-[1.45em] font-semibold leading-tight text-gray-900">{children}</h1>,
+        h2: ({ children }) => <h2 className="mb-2 text-[1.3em] font-semibold leading-tight text-gray-900">{children}</h2>,
+        h3: ({ children }) => <h3 className="mb-1.5 text-[1.16em] font-semibold leading-tight text-gray-900">{children}</h3>,
         ul: ({ children }) => <ul className="my-2 list-disc pl-5">{children}</ul>,
         ol: ({ children }) => <ol className="my-2 list-decimal pl-5">{children}</ol>,
         li: ({ children }) => <li className="my-0.5">{renderTextWithKaomoji(children, "li")}</li>,
         table: ({ children }) => (
           <div className="my-2 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-[12px] leading-6 text-gray-800">{children}</table>
+            <table className="min-w-full border-collapse text-left text-[0.92em] leading-[1.55] text-gray-800">{children}</table>
           </div>
         ),
         thead: ({ children }) => <thead className="bg-black/5">{children}</thead>,
@@ -390,10 +390,10 @@ export function RichTextBlock({ content }: { content: string }) {
         tr: ({ children }) => <tr className="border-b border-black/10 last:border-b-0">{children}</tr>,
         th: ({ children }) => <th className="px-2.5 py-2 font-semibold text-gray-900">{renderTextWithKaomoji(children, "th")}</th>,
         td: ({ children }) => <td className="px-2.5 py-2 align-top">{renderTextWithKaomoji(children, "td")}</td>,
-        pre: ({ children }) => <pre className="my-2 overflow-x-auto rounded-[12px] bg-black/5 p-3 text-[13px]">{children}</pre>,
+        pre: ({ children }) => <pre className="my-2 overflow-x-auto rounded-[12px] bg-black/5 p-3 text-[0.95em]">{children}</pre>,
         code: ({ children, ...props }) => {
           const inline = !String(props.className || "").includes("language-");
-          return inline ? <code className="rounded bg-black/5 px-1.5 py-0.5 text-[13px]">{children}</code> : <code>{children}</code>;
+          return inline ? <code className="rounded bg-black/5 px-1.5 py-0.5 text-[0.95em]">{children}</code> : <code>{children}</code>;
         },
         blockquote: ({ children }) => <blockquote className="my-2 border-l-2 border-black/10 pl-3 opacity-80">{children}</blockquote>,
         a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer" className="underline">{children}</a>,
@@ -488,11 +488,15 @@ function ChatVoiceBar({
   item,
   src,
   align,
+  fontFamily,
+  fontSize,
   onDurationLoaded,
 }: {
   item: ChatAttachment;
   src: string;
   align: "left" | "right";
+  fontFamily?: string;
+  fontSize?: number;
   onDurationLoaded?: (item: ChatAttachment, durationMs: number) => void;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -543,7 +547,11 @@ function ChatVoiceBar({
       <button
         type="button"
         className="flex h-5 max-w-full items-center gap-1.5 text-current transition-opacity active:opacity-70"
-        style={{ width }}
+        style={{
+          width,
+          ...(fontFamily ? { fontFamily } : {}),
+          ...(fontSize ? { fontSize: `${fontSize}px` } : {}),
+        }}
         onClick={() => void togglePlayback()}
         aria-label={playing ? "暂停语音" : "播放语音"}
       >
@@ -568,7 +576,7 @@ function ChatVoiceBar({
             />
           ))}
         </span>
-        <span className="shrink-0 text-[12px] font-semibold leading-none tabular-nums">
+        <span className="shrink-0 text-[0.92em] font-semibold leading-none tabular-nums">
           {durationLabel}
         </span>
       </button>
@@ -592,12 +600,16 @@ export function ChatVoiceTranscriptBlock({
   openTranscriptId,
   onTranscriptToggle,
   showToggle = true,
+  fontFamily,
+  fontSize,
 }: {
   attachments?: ChatAttachment[];
   align?: "left" | "right";
   openTranscriptId?: string;
   onTranscriptToggle: (item: ChatAttachment) => void;
   showToggle?: boolean;
+  fontFamily?: string;
+  fontSize?: number;
 }) {
   const items = Array.isArray(attachments)
     ? attachments.filter((item) => item.kind === "audio" && String(item.transcript || "").trim())
@@ -625,7 +637,13 @@ export function ChatVoiceTranscriptBlock({
               </button>
             ) : null}
             {open ? (
-              <div className="whitespace-pre-wrap text-left text-[12px] font-medium leading-5 text-gray-500">
+              <div
+                className="whitespace-pre-wrap text-left font-medium leading-[1.55] text-gray-500"
+                style={{
+                  ...(fontFamily ? { fontFamily } : {}),
+                  ...(fontSize ? { fontSize: `${fontSize}px` } : {}),
+                }}
+              >
                 {transcript}
               </div>
             ) : null}
@@ -993,11 +1011,15 @@ export function ChatAttachmentBlock({
   attachments,
   align = "left",
   kinds,
+  fontFamily,
+  fontSize,
   onAudioDurationLoaded,
 }: {
   attachments?: ChatAttachment[];
   align?: "left" | "right";
   kinds?: ChatAttachmentKind[];
+  fontFamily?: string;
+  fontSize?: number;
   onAudioDurationLoaded?: (item: ChatAttachment, durationMs: number) => void;
 }) {
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
@@ -1047,13 +1069,17 @@ export function ChatAttachmentBlock({
               className={`flex max-w-[236px] items-center gap-2 rounded-[14px] border border-gray-200/80 bg-white/88 px-3 py-2 text-gray-700 shadow-sm backdrop-blur active:opacity-80 ${
                 align === "right" ? "self-end" : "self-start"
               }`}
+              style={{
+                ...(fontFamily ? { fontFamily } : {}),
+                ...(fontSize ? { fontSize: `${fontSize}px` } : {}),
+              }}
             >
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-gray-100 text-gray-500">
                 <FileTextIcon />
               </span>
               <span className="min-w-0">
-                <span className="block truncate text-[13px] font-semibold leading-4">{name}</span>
-                <span className="block truncate text-[11px] font-medium leading-4 text-gray-400">{size || item.mime || "文本附件"}</span>
+                <span className="block truncate text-[1em] font-semibold leading-[1.25]">{name}</span>
+                <span className="block truncate text-[0.84em] font-medium leading-[1.25] text-gray-400">{size || item.mime || "文本附件"}</span>
               </span>
             </a>
           );
@@ -1064,6 +1090,8 @@ export function ChatAttachmentBlock({
             item={item}
             src={src}
             align={align}
+            fontFamily={fontFamily}
+            fontSize={fontSize}
             onDurationLoaded={onAudioDurationLoaded}
           />
         );

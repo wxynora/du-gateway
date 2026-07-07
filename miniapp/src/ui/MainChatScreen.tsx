@@ -5359,7 +5359,13 @@ export function MainChatScreen({
                             onTouchEnd={handleBubbleTouchEnd}
                             onTouchCancel={handleBubbleTouchEnd}
                           >
-                          <ChatAttachmentBlock attachments={part.attachments} align="right" kinds={["image"]} />
+                          <ChatAttachmentBlock
+                            attachments={part.attachments}
+                            align="right"
+                            kinds={["image"]}
+                            fontFamily={chatFontFamily}
+                            fontSize={chatContentFontSize}
+                          />
                           {showText ? (
                             <ChatBubbleFrame
                               skin={bubbleSkin}
@@ -5385,6 +5391,8 @@ export function MainChatScreen({
                               <ChatAttachmentBlock
                                 attachments={[audioAttachment]}
                                 align="right"
+                                fontFamily={chatFontFamily}
+                                fontSize={chatContentFontSize}
                                 onAudioDurationLoaded={(item, durationMs) => persistAudioAttachmentDuration(part.messageId, item, durationMs)}
                               />
                             </ChatBubbleFrame>
@@ -5395,6 +5403,8 @@ export function MainChatScreen({
                               openTranscriptId={openVoiceTranscriptId}
                               onTranscriptToggle={toggleVoiceTranscript}
                               showToggle={false}
+                              fontFamily={chatFontFamily}
+                              fontSize={chatContentFontSize}
                             />
                         </div>
                       );
@@ -5497,7 +5507,13 @@ export function MainChatScreen({
                               </div>
                             </details>
                           ) : null}
-                          <ChatAttachmentBlock attachments={part.attachments} align="left" kinds={["image"]} />
+                          <ChatAttachmentBlock
+                            attachments={part.attachments}
+                            align="left"
+                            kinds={["image"]}
+                            fontFamily={chatFontFamily}
+                            fontSize={chatContentFontSize}
+                          />
                           {part.systemCard?.type === "system_alarm_created" ? (
                             <SystemAlarmCreatedBubble
                               card={part.systemCard}
@@ -5575,6 +5591,8 @@ export function MainChatScreen({
                                   <ChatAttachmentBlock
                                     attachments={[audioAttachment]}
                                     align="left"
+                                    fontFamily={chatFontFamily}
+                                    fontSize={chatContentFontSize}
                                     onAudioDurationLoaded={(item, durationMs) => persistAudioAttachmentDuration(part.messageId, item, durationMs)}
                                   />
                                 </ChatBubbleFrame>
@@ -5585,6 +5603,8 @@ export function MainChatScreen({
                                   openTranscriptId={openVoiceTranscriptId}
                                   onTranscriptToggle={toggleVoiceTranscript}
                                   showToggle={false}
+                                  fontFamily={chatFontFamily}
+                                  fontSize={chatContentFontSize}
                                 />
                             </>
                           )}
