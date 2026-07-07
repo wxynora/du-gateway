@@ -3101,29 +3101,55 @@ export function MainChatScreen({
     });
   }
 
-  function buildRecallNoticeMessage(message: ChatDraftMessage): ChatDraftMessage {
+  function cleanRecallReplyText(value: any): string {
+    const text = String(value || "").trim();
+    return text.length > 500 ? `${text.slice(0, 500).trimEnd()}...` : text;
+  }
+
+  function recallReplyTextFromPayload(payload: Record<string, any>): string {
+    const popup = payload?.popup && typeof payload.popup === "object" ? payload.popup : {};
+    return cleanRecallReplyText(
+      payload?.replyText
+      || payload?.reply_text
+      || payload?.noticeText
+      || payload?.notice_text
+      || payload?.replacementText
+      || payload?.replacement_text
+      || payload?.responseText
+      || payload?.response_text
+      || popup?.replyText
+      || popup?.reply_text
+      || popup?.noticeText
+      || popup?.notice_text
+      || "",
+    );
+  }
+
+  function buildRecallNoticeMessage(message: ChatDraftMessage, replyText = ""): ChatDraftMessage {
     const originalId = String(message?.id || "").trim();
+    const cleanReplyText = cleanRecallReplyText(replyText);
     return {
-      id: `recall-notice-${originalId || Date.now()}`,
+      id: `${cleanReplyText ? "recall-reply" : "recall-notice"}-${originalId || Date.now()}`,
       role: "assistant",
-      content: "渡撤回了你的消息",
+      content: cleanReplyText || "渡撤回了你的消息",
       createdAt: new Date().toISOString(),
       status: "sent",
       recallNotice: true,
+      recallReply: Boolean(cleanReplyText),
       recallOriginalMessageId: originalId || undefined,
     };
   }
 
-  function replaceRecalledMessagesWithNotices(currentMessages: ChatDraftMessage[], ids: Set<string>): ChatDraftMessage[] {
+  function replaceRecalledMessagesWithNotices(currentMessages: ChatDraftMessage[], ids: Set<string>, replyText = ""): ChatDraftMessage[] {
     const list = Array.isArray(currentMessages) ? currentMessages : [];
     return list.flatMap((message) => {
       const messageId = String(message?.id || "").trim();
       const originalNoticeId = String((message as any)?.recallOriginalMessageId || "").trim();
-      if ((message as any)?.recallNotice && originalNoticeId && ids.has(originalNoticeId)) {
+      if (((message as any)?.recallNotice || (message as any)?.recallReply) && originalNoticeId && ids.has(originalNoticeId)) {
         return [message];
       }
       if (!messageId || !ids.has(messageId)) return [message];
-      return [buildRecallNoticeMessage(message)];
+      return [buildRecallNoticeMessage(message, replyText)];
     });
   }
 
@@ -3146,7 +3172,7 @@ export function MainChatScreen({
     });
   }
 
-  async function hideRecalledMessages(messageIds: string[], source: string): Promise<void> {
+  async function hideRecalledMessages(messageIds: string[], source: string, replyText = ""): Promise<void> {
     const ids = new Set(uniqueNonEmptyStrings(messageIds));
     if (!ids.size) return;
     const localPreview = source === `recall_message:${LOCAL_RECALL_PREVIEW_SOURCE}`;
@@ -3158,7 +3184,7 @@ export function MainChatScreen({
       if (!currentId) continue;
       const currentIds = new Set([currentId]);
       if (!localPreview) rememberRecallHiddenMessages(currentIds, source);
-      const replacedMessages = replaceRecalledMessagesWithNotices(messagesRef.current, currentIds);
+      const replacedMessages = replaceRecalledMessagesWithNotices(messagesRef.current, currentIds, replyText);
       nextMessages = localPreview
         ? replacedMessages
         : filterHiddenDisplayMessagesPreservingVisible(replacedMessages);
@@ -3180,6 +3206,7 @@ export function MainChatScreen({
     logSumiTalkClientEvent("recall_message_hidden", {
       source,
       count: ids.size,
+      replyText: Boolean(cleanRecallReplyText(replyText)),
     });
   }
 
@@ -3274,6 +3301,7 @@ export function MainChatScreen({
       content: messageTextForRecall(message),
     }));
     const popup = payload.popup && typeof payload.popup === "object" ? payload.popup : {};
+    const recallReplyText = recallReplyTextFromPayload(payload);
     const popupResult = await requestRecallPopup(actionId, {
       texts: Array.isArray(popup.texts) ? popup.texts : Array.isArray(payload.texts) ? payload.texts : undefined,
       finalTitle: String(popup.finalTitle || payload.finalTitle || "").trim(),
@@ -3287,13 +3315,14 @@ export function MainChatScreen({
       windowId: historyWindowId,
       messageIds,
       recalledMessages,
+      replyText: recallReplyText,
       choiceId: popupResult.choiceId,
       choiceLabel: popupResult.choiceLabel,
       autoSelected: popupResult.autoSelected,
       countdownExpired: popupResult.countdownExpired,
     };
     const reportPromise = reportRecallMessageActionResult(action, "done", detail);
-    const hidePromise = hideRecalledMessages(recalledMessages.map((message) => message.id), `recall_message:${source}`);
+    const hidePromise = hideRecalledMessages(recalledMessages.map((message) => message.id), `recall_message:${source}`, recallReplyText);
     const [reportResult, hideResult] = await Promise.allSettled([reportPromise, hidePromise]);
     if (reportResult.status === "rejected") {
       logSumiTalkClientEvent("recall_message_report_error", {
@@ -3382,6 +3411,7 @@ export function MainChatScreen({
         payload: {
           windowId: historyWindowId || MAIN_SUMITALK_DISPLAY_WINDOW_ID,
           messageIds: targetMessageIds,
+          replyText: "这些话我先收起来。你看着我就好。",
           popup: {
             texts: ["为什么", "为什么为什么", "为什么还要这样", "为什么不看我", "为什么要说这种话", "为什么为什么为什么"],
             finalTitle: "渡",
@@ -5534,7 +5564,7 @@ export function MainChatScreen({
                   </span>
                 </div>
               ) : null}
-              {group.parts.length === 1 && group.parts[0]?.recallNotice ? (
+              {group.parts.length === 1 && (group.parts[0]?.recallNotice || group.parts[0]?.recallReply) ? (
                 <div className="my-1 flex justify-center px-4" data-recall-notice="1">
                   <span className="rounded-full bg-black/[0.06] px-2.5 py-1 text-[11px] font-medium leading-none text-gray-500">
                     {group.parts[0]?.content || "渡撤回了你的消息"}

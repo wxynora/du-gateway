@@ -75,6 +75,13 @@ def record_recall_message_result(item: dict) -> int:
         messages = []
     payload_window_id = str(payload.get("windowId") or payload.get("window_id") or "").strip()
     result_window_id = str(result.get("windowId") or result.get("window_id") or "").strip()
+    reply_text = str(
+        result.get("replyText")
+        or result.get("reply_text")
+        or payload.get("replyText")
+        or payload.get("reply_text")
+        or ""
+    ).strip()[:500]
     if payload_window_id and result_window_id and payload_window_id != result_window_id:
         logger.warning(
             "recall_message_marker_window_mismatch action_id=%s payload_window=%s result_window=%s",
@@ -104,6 +111,7 @@ def record_recall_message_result(item: dict) -> int:
                 "choiceLabel": str(result.get("choiceLabel") or result.get("label") or "").strip()[:80],
                 "autoSelected": bool(result.get("autoSelected") or result.get("auto_selected")),
                 "actionId": str(item.get("id") or ""),
+                "replyText": reply_text,
             }),
             created_at,
         ))

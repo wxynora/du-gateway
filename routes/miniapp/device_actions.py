@@ -130,6 +130,17 @@ def _recall_message_wakeup_event_text(item: dict) -> str:
         if len(content) > 900:
             content = content[:900].rstrip() + "..."
         lines.append(f"你已撤回她的这条消息：\n{content}")
+    reply_text = str(
+        result.get("replyText")
+        or result.get("reply_text")
+        or payload.get("replyText")
+        or payload.get("reply_text")
+        or ""
+    ).strip()
+    if reply_text:
+        if len(reply_text) > 500:
+            reply_text = reply_text[:500].rstrip() + "..."
+        lines.append(f"撤回后你在聊天界面留下的回应是：\n{reply_text}")
     choice_label = str(result.get("choiceLabel") or result.get("label") or "").strip()
     choice_id = str(result.get("choiceId") or result.get("choice_id") or "").strip()
     auto_selected = bool(result.get("autoSelected") or result.get("auto_selected"))

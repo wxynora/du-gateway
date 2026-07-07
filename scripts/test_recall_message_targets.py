@@ -37,7 +37,7 @@ def assert_eq(actual, expected, message: str) -> None:
 
 def main() -> None:
     from services import recall_message_targets as target_store
-    from services.device_action_tools import execute_recall_message
+    from services.device_action_tools import TOOL_RECALL_MESSAGE, execute_recall_message
     from storage import app_action_store
 
     body = {
@@ -101,12 +101,15 @@ def main() -> None:
 
     enqueued = json.loads(execute_recall_message({
         "index": 2,
+        "replyText": "这句话我先收起来。",
         "_context": {"window_id": "w1", "client_request_id": "cr1", "reply_target": "device1"},
     }))
     assert_true(enqueued.get("ok") and enqueued.get("queued"), f"index should enqueue when unique: {enqueued}")
     assert_eq(enqueued.get("messageIds"), ["user-b"], "index enqueue should use resolved message id")
     pending_after_enqueue = app_action_store.poll_app_actions(device_id="device1", surface="chat_ui", window_id="w1")
     assert_eq(len(pending_after_enqueue.get("actions") or []), 1, f"resolved recall should create one chat_ui action: {pending_after_enqueue}")
+    queued_payload = (pending_after_enqueue.get("actions") or [{}])[0].get("payload") or {}
+    assert_eq(queued_payload.get("replyText"), "这句话我先收起来。", "replyText should survive app action normalization")
 
     missing_index = json.loads(execute_recall_message({
         "index": 9,
@@ -115,8 +118,11 @@ def main() -> None:
     assert_true(missing_index.get("ok") and not missing_index.get("queued") and missing_index.get("needsSelection"), f"missing index must not enqueue: {missing_index}")
 
     frontend_source = (ROOT / "miniapp/src/ui/MainChatScreen.tsx").read_text(encoding="utf-8")
+    tool_props = TOOL_RECALL_MESSAGE["function"]["parameters"]["properties"]
+    assert_true("replyText" in tool_props, "recall_message tool must expose replyText")
     assert_true("non_user_target" in frontend_source, "frontend must fail mixed user/non-user recall targets")
     assert_true("targets.length !== messageIds.length" in frontend_source, "frontend must not partially execute missing recall targets")
+    assert_true("recallReply" in frontend_source, "frontend must render recall reply as Du's replacement message")
 
     print("recall_message target smoke ok")
 

@@ -69,6 +69,7 @@ export type ChatDraftMessage = {
   attachments?: ChatAttachment[];
   displayParts?: ChatDisplayPart[];
   recallNotice?: boolean;
+  recallReply?: boolean;
   recallOriginalMessageId?: string;
 };
 
@@ -741,6 +742,7 @@ export type ChatMessageGroup = {
     attachments?: ChatAttachment[];
     displayPart?: ChatDisplayPart;
     recallNotice?: boolean;
+    recallReply?: boolean;
     recallOriginalMessageId?: string;
   }>;
 };
@@ -1059,6 +1061,7 @@ export function groupChatMessages(
     const normalizedReasoning = String(msg?.reasoning || "").trim();
     const attachments = normalizeChatAttachments(msg?.attachments);
     const recallNotice = Boolean((msg as any)?.recallNotice);
+    const recallReply = Boolean((msg as any)?.recallReply);
     const recallOriginalMessageId = String((msg as any)?.recallOriginalMessageId || "").trim() || undefined;
     if (!normalizedContent && !normalizedReasoning && !attachments.length && !displayParts.length) continue;
     const finalContent = displayParts.length ? stripDisplayedTextPrefixes(normalizedContent, displayParts) : normalizedContent;
@@ -1097,9 +1100,10 @@ export function groupChatMessages(
         displayPart: (segment as any).displayPart,
         attachments: index === 0 ? attachments : undefined,
         recallNotice,
+        recallReply,
         recallOriginalMessageId,
       }));
-    if (recallNotice) {
+    if (recallNotice || recallReply) {
       groups.push({
         id: msg.id,
         role: msg.role,
@@ -1110,8 +1114,8 @@ export function groupChatMessages(
       continue;
     }
     const last = groups[groups.length - 1];
-    const lastHasRecallNotice = Boolean(last?.parts?.some((part) => part.recallNotice));
-    if (last && !lastHasRecallNotice && last.role === msg.role && !shouldShowGroupTime(msg.createdAt, last.lastCreatedAt)) {
+    const lastHasRecallBoundary = Boolean(last?.parts?.some((part) => part.recallNotice || part.recallReply));
+    if (last && !lastHasRecallBoundary && last.role === msg.role && !shouldShowGroupTime(msg.createdAt, last.lastCreatedAt)) {
       last.parts.push(...safeParts);
       last.lastCreatedAt = msg.createdAt;
       continue;

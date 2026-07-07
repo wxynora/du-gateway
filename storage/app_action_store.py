@@ -49,6 +49,9 @@ def _payload_log_summary(payload: Any) -> dict:
         summary["timeoutSeconds"] = payload.get("timeoutSeconds")
     if "choices" in payload and isinstance(payload.get("choices"), list):
         summary["choices"] = len(payload.get("choices") or [])
+    reply_text = str(payload.get("replyText") or payload.get("reply_text") or "").strip()
+    if reply_text:
+        summary["reply_text_len"] = len(reply_text)
     surface = str(payload.get("surface") or "").strip()
     if surface:
         summary["surface"] = surface
@@ -610,6 +613,21 @@ def _normalize_recall_message_payload(payload: dict) -> tuple[Optional[dict], Op
         or src.get("finalMessage")
         or "你刚刚说的话，他想先收走。"
     ).strip()
+    reply_text = str(
+        popup_src.get("replyText")
+        or popup_src.get("reply_text")
+        or popup_src.get("noticeText")
+        or popup_src.get("notice_text")
+        or src.get("replyText")
+        or src.get("reply_text")
+        or src.get("noticeText")
+        or src.get("notice_text")
+        or src.get("replacementText")
+        or src.get("replacement_text")
+        or src.get("responseText")
+        or src.get("response_text")
+        or ""
+    ).strip()
     raw_choices = popup_src.get("choices") or src.get("choices")
     choices: list[dict] = []
     if isinstance(raw_choices, list):
@@ -649,6 +667,7 @@ def _normalize_recall_message_payload(payload: dict) -> tuple[Optional[dict], Op
         "surface": "chat_ui",
         "windowId": window_id[:160],
         "messageIds": message_ids,
+        "replyText": reply_text[:500],
         "popup": {
             "texts": texts,
             "finalTitle": final_title[:60],

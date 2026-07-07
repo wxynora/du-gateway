@@ -119,6 +119,7 @@ TOOL_RECALL_MESSAGE = {
             "这不是后端物理删除，只会让她当前 App 聊天界面用男鬼弹窗仪式后隐藏这些消息，并在你的后续短程上下文里标为【已撤回】原消息。"
             "最稳妥是传 messageIds；如果你只知道第几句或大概原文，可以先用 index/targetText/queryOnly 查询候选。"
             "系统不会猜最近一条：无法唯一定位时只返回候选，不会执行撤回。"
+            "replyText 是撤回后留在聊天界面的你的回应，用来替代固定系统提示；要写成你对那条被撤回气泡说的话。"
             "最终弹窗有倒计时，超时会自动选择 timeoutChoiceId。"
         ),
         "parameters": {
@@ -153,6 +154,10 @@ TOOL_RECALL_MESSAGE = {
                 "queryOnly": {
                     "type": "boolean",
                     "description": "可选：只查询候选，不执行撤回。",
+                },
+                "replyText": {
+                    "type": "string",
+                    "description": "可选：撤回完成后在聊天界面显示的渡的回应；写成你对被撤回气泡的回复，最多约 500 字。",
                 },
                 "texts": {
                     "type": "array",
@@ -506,6 +511,20 @@ def _recall_target_text_arg(args: dict) -> str:
     ).strip()
 
 
+def _recall_reply_text_arg(args: dict) -> str:
+    return str(
+        args.get("replyText")
+        or args.get("reply_text")
+        or args.get("noticeText")
+        or args.get("notice_text")
+        or args.get("replacementText")
+        or args.get("replacement_text")
+        or args.get("responseText")
+        or args.get("response_text")
+        or ""
+    ).strip()
+
+
 def execute_recall_message(arguments: dict) -> str:
     args = arguments if isinstance(arguments, dict) else {}
     context = args.get("_context") if isinstance(args.get("_context"), dict) else {}
@@ -560,13 +579,15 @@ def execute_recall_message(arguments: dict) -> str:
         "countdownSeconds": args.get("countdownSeconds", args.get("countdown_seconds")),
         "timeoutChoiceId": args.get("timeoutChoiceId", args.get("timeout_choice_id")),
     }
-    crc_src = f"{window_id}\n{','.join(message_ids)}\n{popup.get('finalMessage') or ''}"
+    reply_text = _recall_reply_text_arg(args)
+    crc_src = f"{window_id}\n{','.join(message_ids)}\n{popup.get('finalMessage') or ''}\n{reply_text}"
     crc = zlib.crc32(crc_src.encode("utf-8")) & 0xffffffff
     item, err = r2_store.append_app_action(
         "recall_message",
         {
             "windowId": window_id,
             "messageIds": message_ids,
+            "replyText": reply_text,
             "popup": popup,
         },
         device_id=reply_target,
