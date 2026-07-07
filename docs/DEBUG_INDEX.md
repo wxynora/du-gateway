@@ -49,7 +49,14 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | Claude OAuth proxy | `scripts/claude_oauth_proxy.js`、`docs/claude_proxy_new_vps_migration_plan.md` | 自用 Claude 反代、thinking/cache/tool 格式转换；旧 VPS 继续用 `127.0.0.1:8082`，新 VPS 单独承载 Claude Code + OAuth proxy 的迁移手册 |
 | 植物大战僵尸模仿者版原型 | `du_imitator_pvz/`、`scripts/test_imitator_pvz_*.py`、`scripts/sim_imitator_pvz_balance.py`、`docs/植物大战僵尸模仿者版.md` | 纯 Python headless 随机模仿者塔防模拟器：P0/P2 合同、随机池、植物/僵尸行为、玩家回合复盘、v2 小工测试、铲子动作、僵王事件、主动重开、玩家棋盘文本视图 |
 | 随机模仿者网关私有工具 | `services/game_tool_runtime.py`、`services/random_imitator_td_tool.py`、`routes/miniapp/game_tools.py`、`routes/chat.py`、`pipeline/pipeline.py`、`services/chat_tools.py`、`scripts/test_random_imitator_td_tool.py` | du-gateway 私有游戏工具接入：`random_imitator_td` 是首个注册游戏；Prompt 开关只固定注入工具，只有专用游戏标记或工具结果自带 `game_tool_loop` 才跳过动态记忆写入与 BODY delta |
-| MiniApp 游戏大厅 / 涩涩走格棋 | `miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/tabs/SeseBoardGameTab.tsx`、`routes/miniapp/game_tools.py`、`services/private_board_game.py`、`services/private_board_tool.py`、`services/game_tool_runtime.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_private_board_game.py` | 「日常 > 游戏」入口，文游显示为「无限流」；`private_board` 走走格棋后端和前端棋盘。小玥通过前端按钮/输入参与，渡通过自然语言精确首行指令参与；右上角局内聊天只发本次消息，不自带局内历史；局内回复不外发主聊天但压缩归档进同一个 `tg_*` window 的 last4 |
+| MiniApp 游戏大厅 / 涩涩走格棋 | `miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/tabs/SeseBoardGameTab.tsx`、`routes/miniapp/game_tools.py`、`services/private_board_game.py`、`services/private_board_tool.py`、`services/game_tool_runtime.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_private_board_game.py` | 「日常 > 游戏」入口，文游显示为「无限流」；`private_board` 走走格棋后端和前端棋盘。小玥通过前端按钮/输入参与，渡通过自然语言精确首行指令参与；右上角局内聊天只发本次消息，不自带局内历史；局内回复不外发主聊天但压缩归档进同一个 `tg_*` window 的 last4；同步成功后按同步时间刷新全局最近活动时钟 |
+
+当前状态（2026-07-07 涩涩走格棋同步时间与打回说明修正）：
+- 已完成：`/miniapp-api/game-tools/private_board/sync-du` 成功同步后不再按 `window_id/target` 判断“主 TG 窗口”，而是直接用本次 `synced_at` 写入历史命名的 `last_telegram_user_activity_at` 全局活动时钟；该 key 名字偏 TG，但当前主动/防打扰链路把它当全局最近活动时间使用。
+- 已完成：`state_update` 同步现在会把调用方传入的 `message` 拼进正文的“本次说明”，再附上“当前棋局”；小玥打回渡的惩罚任务时，`小玥打回了你的惩罚任务：反馈` 不会再被同步路由丢掉。
+- 已同步：开源版 `game-box/games/sese-board-game/frontend/SeseBoardGame.tsx` 的 `sendToAssistant` payload 会把 `context.message` 拼进 `payload.ai_text` 的“本次说明”，并尽量连带当前棋局文本；`frontend/README.md` 已提醒宿主只发 `payload.ai_text`，不要只发 `state`。
+- 已验证：`.venv/bin/python -m py_compile routes/miniapp/game_tools.py scripts/test_private_board_game.py`、`.venv/bin/python scripts/test_private_board_game.py`、开源版 `python3 -m py_compile sese_board_game/engine.py preview_server.py && python3 tests/test_engine.py`、`SESE_BOARD_NODE_MODULES=/Users/doraemon/Downloads/du-gateway/miniapp/node_modules .../vite build --config vite.config.mjs`、`git diff --check` 均通过。
+- 边界：本轮没有手改线上 R2 时间或棋局存档；线上生效靠正常 push/pull/restart，之后下一次走格棋同步会按新逻辑刷新全局活动时间。
 
 当前状态（2026-07-06 涩涩走格棋同步链路修正）：
 - 已完成：前端同步链路改为按“当前该谁操作”触发。小玥落格后如果生成小玥自己的 choice/review/duel pending，不再立刻同步给渡；等小玥选择、提交、Pass 或出拳后再同步。若落格后本来就是等渡出题/选择/验收/出拳，才立即同步给渡。
@@ -59,7 +66,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已完成：局内聊天输入和惩罚 textarea 不再被后台同步/动画加载态锁死；自动同步不再刷“已同步/正在回复”聊天泡泡。普通局内聊天不套 `【描述】`；真心话用 `【真心话出题：...】` / `【真心话回答：...】`，验收按选项写 `【通过：反馈内容】` / `【打回：反馈内容】`，只有 `反向诱惑` / `全部暴露！` / `羞耻台词大放送` / `自慰陈述` 这四个长篇提交任务直接用 `【描述：...】`；小玥点“通过”只本地结算，不单独同步给渡，通过结果和反馈会等小玥下一次掷骰同步时顺带说明；渡验收小玥任务时，`【通过：反馈内容】` 后必须同条带 `【掷骰】`，前端会一次吃掉通过和掷骰并把反馈显示在任务弹窗。
 - 已修复：渡提交长篇任务时如果回复以 `【描述：` 开头但正文跨多行、闭合 `】` 不在首行，前端现在仍会识别为 `submit`；同套跨行解析也覆盖 `【真心话出题：...】` / `【真心话回答：...】`。
 - 已修复：状态栏语料只保留道具惩罚和限制；移除旧的 `task` 状态槽与“新增任务状态”选择分支，读档时会过滤历史 `slot=task`，不影响 `pending_event.task` 惩罚任务卡池。
-- 已修复：涩涩走格棋同步给渡的每轮棋局内容现在以 `__dynamic__` system 进入动态区，不再把每轮变化的游戏 prompt 写进静态缓存前缀；成功同步主 TG 窗口后也会刷新 `last_telegram_user_activity_at`，避免随机主动消息误判成“几小时前才回复”。
+- 已修复：涩涩走格棋同步给渡的每轮棋局内容现在以 `__dynamic__` system 进入动态区，不再把每轮变化的游戏 prompt 写进静态缓存前缀；同步成功后会刷新作为全局最近活动时钟使用的 `last_telegram_user_activity_at`，避免随机主动消息误判成“几小时前才回复”。
 - 已同步：开源版 `/Users/doraemon/Downloads/game-box/games/sese-board-game/frontend/SeseBoardGame.tsx` 按同一规则更新，使用 `ai/player` 命名，不带私有路由和私有人设。
 - 已验证：`cd miniapp && npx tsc --noEmit --pretty false`、`npm --prefix miniapp run build`、`python3 -m py_compile routes/miniapp/game_tools.py`、开源版 `python3 -m py_compile sese_board_game/engine.py preview_server.py && python3 tests/test_engine.py`、复用 `du-gateway/miniapp/node_modules` 的开源预览 `vite build` 均通过。
 - 未完成 / 下次继续：本轮不会手改线上存档；如果要把当前线上局面从旧 pending 继续下去，部署后让新前端接管，或再明确指定人工选择哪个 pending 选项。

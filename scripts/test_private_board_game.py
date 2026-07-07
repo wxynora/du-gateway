@@ -901,6 +901,63 @@ def test_private_board_wakeup_uses_dynamic_system() -> None:
         cf._choice_dialog_delivery_preference = old_preference
 
 
+def test_private_board_sync_marks_global_activity_time() -> None:
+    import types
+
+    from routes.miniapp import game_tools
+
+    captured: list[str] = []
+    fake_r2_store = types.SimpleNamespace(
+        save_last_telegram_user_activity_at=lambda value: captured.append(str(value)) or True
+    )
+    fake_storage = types.SimpleNamespace(r2_store=fake_r2_store)
+    old_storage = sys.modules.get("storage")
+    old_r2_store = sys.modules.get("storage.r2_store")
+    try:
+        sys.modules["storage"] = fake_storage
+        sys.modules["storage.r2_store"] = fake_r2_store
+        game_tools._mark_private_board_sync_activity("2026-07-07T22:55:00+08:00")
+    finally:
+        if old_storage is None:
+            sys.modules.pop("storage", None)
+        else:
+            sys.modules["storage"] = old_storage
+        if old_r2_store is None:
+            sys.modules.pop("storage.r2_store", None)
+        else:
+            sys.modules["storage.r2_store"] = old_r2_store
+
+    _assert(
+        captured == ["2026-07-07T22:55:00+08:00"],
+        f"private board sync should mark global activity time, got {captured}",
+    )
+
+
+def test_private_board_state_update_sync_includes_message() -> None:
+    from routes.miniapp import game_tools
+
+    text = game_tools._private_board_sync_text(
+        {
+            "text": "【涩涩走格棋】\n当前局面如下。",
+            "state": {
+                "turn_actor": "du",
+                "pending_event": {
+                    "type": "review",
+                    "actor": "du",
+                    "phase": "assigned",
+                    "name": "反向诱惑",
+                },
+            },
+        },
+        user_message="小玥打回了你的惩罚任务：这里重写具体一点。",
+        mode="state_update",
+    )
+
+    _assert("本次说明：" in text, "state_update sync should include the caller message heading")
+    _assert("这里重写具体一点" in text, "state_update sync should include reject feedback")
+    _assert(text.index("本次说明：") < text.index("当前棋局："), "sync message should appear before board text")
+
+
 if __name__ == "__main__":
     test_private_board_views()
     test_private_board_reset_self_cell()
@@ -926,4 +983,6 @@ if __name__ == "__main__":
     test_private_board_migrates_ended_save_without_final_note()
     test_private_board_review_feedback()
     test_private_board_wakeup_uses_dynamic_system()
+    test_private_board_sync_marks_global_activity_time()
+    test_private_board_state_update_sync_includes_message()
     print("private_board_game tests ok")

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from flask import jsonify, request
 
-from config import TELEGRAM_PROACTIVE_TARGET_USER_ID
 from services.game_tool_runtime import execute_game_command, list_game_tools
 from utils.time_aware import now_beijing_iso
 
@@ -12,24 +11,13 @@ def _get_panel_device_id() -> str:
     return str(payload.get("device_id") or "").strip()
 
 
-def _primary_tg_window_id() -> str:
-    try:
-        uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
-    except Exception:
-        uid = 0
-    return f"tg_{uid}" if uid > 0 else ""
-
-
-def _mark_private_board_tg_activity(window_id: str, target: str) -> None:
-    primary = _primary_tg_window_id()
-    target_s = str(target or "").strip()
-    window_s = str(window_id or "").strip()
-    if not primary or (window_s != primary and target_s != primary.removeprefix("tg_")):
-        return
+def _mark_private_board_sync_activity(synced_at: str) -> None:
+    # Historical R2 key name; callers use it as the global "recent user activity" clock.
+    sync_time = str(synced_at or "").strip() or now_beijing_iso()
     try:
         from storage import r2_store
 
-        r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+        r2_store.save_last_telegram_user_activity_at(sync_time)
     except Exception:
         return
 
@@ -171,14 +159,15 @@ def _private_board_sync_text(
         return "\n".join(parts).strip()
 
     if mode == "state_update":
+        note_text = _clean_private_board_text(message)
         parts = [
             "小玥正在和你玩「涩涩走格棋」。这是棋局状态同步，不是主聊天正文。",
             "你会看到当前棋局；请按下面规则决定是否行动或处理待处理任务，不要解释工具、接口或系统流程。",
             *rule_lines,
-            "",
-            "当前棋局：",
-            du_text,
         ]
+        if note_text:
+            parts.extend(["", "本次说明：", note_text])
+        parts.extend(["", "当前棋局：", du_text])
         return "\n".join(parts).strip()
 
     parts = [
@@ -244,8 +233,9 @@ def register_routes(bp) -> None:
             return_only=True,
         )
         ok = bool((wakeup or {}).get("ok"))
+        synced_at = now_beijing_iso()
         if ok:
-            _mark_private_board_tg_activity(window_id, target)
+            _mark_private_board_sync_activity(synced_at)
         reply_text = str((wakeup or {}).get("reply_text") or (wakeup or {}).get("reply_preview") or "")
         if ok and mode == "final_note":
             payload = execute_game_command("private_board", "final_note_sent", save_id)
@@ -257,6 +247,7 @@ def register_routes(bp) -> None:
             "reply_preview": str((wakeup or {}).get("reply_preview") or reply_text[:120]),
             "channel": str((wakeup or {}).get("channel") or ""),
             "mode": mode,
+            "synced_at": synced_at,
             "wakeup": wakeup or {},
         }), 200 if ok else 502
 
