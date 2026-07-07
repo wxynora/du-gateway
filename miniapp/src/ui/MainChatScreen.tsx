@@ -448,7 +448,7 @@ function ChatToolCallBlock({ part }: { part: ChatDisplayPart }) {
 }
 
 function ChatReasoningBlock({ part }: { part: ChatDisplayPart }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   if (part.kind !== "reasoning") return null;
   const text = String(part.text || "").trim();
   if (!text) return null;
@@ -1589,7 +1589,8 @@ export function MainChatScreen({
   chatFontFamily,
   showChatTimestamps,
   chatTimeFormat,
-  expandReasoningByDefault,
+  showChatReasoning,
+  showChatToolCalls,
   chatBackgroundOpacity,
   userBubbleStyle,
   assistantBubbleStyle,
@@ -1616,7 +1617,8 @@ export function MainChatScreen({
   chatFontFamily: string;
   showChatTimestamps: boolean;
   chatTimeFormat: ChatTimeFormat;
-  expandReasoningByDefault: boolean;
+  showChatReasoning: boolean;
+  showChatToolCalls: boolean;
   chatBackgroundOpacity: number;
   userBubbleStyle: BubbleStyleKey;
   assistantBubbleStyle: BubbleStyleKey;
@@ -3152,7 +3154,7 @@ export function MainChatScreen({
       id: `${cleanReplyText ? "recall-reply" : "recall-notice"}-${originalId || Date.now()}`,
       role: "assistant",
       content: cleanReplyText || "渡撤回了你的消息",
-      createdAt: new Date().toISOString(),
+      createdAt: message?.createdAt || new Date().toISOString(),
       status: "sent",
       recallNotice: true,
       recallReply: Boolean(cleanReplyText),
@@ -5713,48 +5715,50 @@ export function MainChatScreen({
                         {group.role === "benben" ? "笨笨" : avatarLabel || "渡"}
                       </div>
                     ) : null}
-	                    {group.parts.map((part, index) => {
-	                      const matchId = getChatSearchMatchId(group.id, index);
-	                      const isActiveSearchPart = activeSearchMatchId === matchId;
-	                      if (part.displayPart?.kind === "reasoning") {
-	                        return (
-	                          <div
-	                            key={`${group.id}-${index}`}
-	                            ref={(el) => {
-	                              searchResultRefs.current[matchId] = el;
-	                            }}
-	                            className={`max-w-full rounded-[20px] px-1 ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
-	                          >
-	                            <ChatReasoningBlock part={part.displayPart} />
-	                          </div>
-	                        );
-	                      }
-	                      if (part.displayPart?.kind === "tool_call") {
-	                        return (
-	                          <div
-	                            key={`${group.id}-${index}`}
-	                            ref={(el) => {
-	                              searchResultRefs.current[matchId] = el;
-	                            }}
-	                            className={`max-w-full rounded-[20px] px-1 ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
-	                          >
-	                            {part.reasoning ? (
-	                              <details className="group max-w-full text-[10px] text-gray-500">
-	                                <summary className="flex cursor-pointer list-none items-center gap-1 text-[10px] font-medium leading-[14px] text-gray-400 [&::-webkit-details-marker]:hidden">
-	                                  <span className="transition-transform group-open:rotate-90">&gt;</span>
-	                                  <span>碎碎念</span>
-	                                </summary>
-	                                <div className="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap break-words pl-4 text-[10px] leading-[15px] text-gray-500">
-	                                  {part.reasoning}
-	                                </div>
-	                              </details>
-	                            ) : null}
-	                            <ChatToolCallBlock part={part.displayPart} />
-	                          </div>
-	                        );
-	                      }
-	                      const bubbleSkin = transparentBubbleEnabled || group.role === "benben" ? undefined : resolveBubbleSkin(assistantBubbleStyle);
-	                      const hasText = Boolean(String(part.content || "").trim());
+                    {group.parts.map((part, index) => {
+                      const matchId = getChatSearchMatchId(group.id, index);
+                      const isActiveSearchPart = activeSearchMatchId === matchId;
+                      if (part.displayPart?.kind === "reasoning") {
+                        if (!showChatReasoning) return null;
+                        return (
+                          <div
+                            key={`${group.id}-${index}`}
+                            ref={(el) => {
+                              searchResultRefs.current[matchId] = el;
+                            }}
+                            className={`max-w-full rounded-[20px] px-1 ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
+                          >
+                            <ChatReasoningBlock part={part.displayPart} />
+                          </div>
+                        );
+                      }
+                      if (part.displayPart?.kind === "tool_call") {
+                        if (!showChatReasoning && !showChatToolCalls) return null;
+                        return (
+                          <div
+                            key={`${group.id}-${index}`}
+                            ref={(el) => {
+                              searchResultRefs.current[matchId] = el;
+                            }}
+                            className={`max-w-full rounded-[20px] px-1 ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
+                          >
+                            {showChatReasoning && part.reasoning ? (
+                              <details className="group max-w-full text-[10px] text-gray-500">
+                                <summary className="flex cursor-pointer list-none items-center gap-1 text-[10px] font-medium leading-[14px] text-gray-400 [&::-webkit-details-marker]:hidden">
+                                  <span className="transition-transform group-open:rotate-90">&gt;</span>
+                                  <span>碎碎念</span>
+                                </summary>
+                                <div className="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap break-words pl-4 text-[10px] leading-[15px] text-gray-500">
+                                  {part.reasoning}
+                                </div>
+                              </details>
+                            ) : null}
+                            {showChatToolCalls ? <ChatToolCallBlock part={part.displayPart} /> : null}
+                          </div>
+                        );
+                      }
+                      const bubbleSkin = transparentBubbleEnabled || group.role === "benben" ? undefined : resolveBubbleSkin(assistantBubbleStyle);
+                      const hasText = Boolean(String(part.content || "").trim());
                         const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
                         const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
                         const hasVoice = audioAttachments.length > 0;
@@ -5780,7 +5784,7 @@ export function MainChatScreen({
                             onTouchEnd={handleBubbleTouchEnd}
                             onTouchCancel={handleBubbleTouchEnd}
                           >
-                          {part.reasoning ? (
+                          {showChatReasoning && part.reasoning ? (
                             <details className="group max-w-full text-[10px] text-gray-500">
                               <summary className="flex cursor-pointer list-none items-center gap-1 px-1 text-[10px] font-medium leading-[14px] text-gray-400 [&::-webkit-details-marker]:hidden">
                                 <span className="transition-transform group-open:rotate-90">&gt;</span>

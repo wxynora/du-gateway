@@ -193,7 +193,8 @@ export function AppShell({
   const [chatTimeFormat, setChatTimeFormat] = useState<ChatTimeFormat>(() =>
     readStoredString("miniapp.ui.timeFormat", "hhmm", ["hhmm", "ampm"] as const),
   );
-  const [expandReasoningByDefault, setExpandReasoningByDefault] = useState(() => readStoredBoolean("miniapp.ui.expandReasoning", false));
+  const [showChatReasoning, setShowChatReasoning] = useState(() => readStoredBoolean("miniapp.ui.showChatReasoning", false));
+  const [showChatToolCalls, setShowChatToolCalls] = useState(() => readStoredBoolean("miniapp.ui.showChatToolCalls", false));
   const [chatBackgroundOpacity, setChatBackgroundOpacity] = useState(() =>
     clampStoredNumber(readStoredNumber("miniapp.ui.chatBackgroundOpacity", 100), 20, 100, 100),
   );
@@ -387,7 +388,8 @@ export function AppShell({
       localStorage.setItem("miniapp.ui.chatFont", chatFontKey);
       localStorage.setItem("miniapp.ui.showTimestamps", showChatTimestamps ? "1" : "0");
       localStorage.setItem("miniapp.ui.timeFormat", chatTimeFormat);
-      localStorage.setItem("miniapp.ui.expandReasoning", expandReasoningByDefault ? "1" : "0");
+      localStorage.setItem("miniapp.ui.showChatReasoning", showChatReasoning ? "1" : "0");
+      localStorage.setItem("miniapp.ui.showChatToolCalls", showChatToolCalls ? "1" : "0");
       localStorage.setItem("miniapp.ui.chatBackgroundOpacity", String(chatBackgroundOpacity));
       localStorage.setItem(APP_BACKGROUND_OPACITY_STORAGE_KEY, String(appBackgroundOpacity));
       localStorage.setItem("miniapp.ui.userBubbleStyle", userBubbleStyle);
@@ -409,7 +411,8 @@ export function AppShell({
     chatFontKey,
     showChatTimestamps,
     chatTimeFormat,
-    expandReasoningByDefault,
+    showChatReasoning,
+    showChatToolCalls,
     chatBackgroundOpacity,
     appBackgroundOpacity,
     userBubbleStyle,
@@ -895,7 +898,8 @@ export function AppShell({
           chatFontFamily={resolveChatFontFamily(chatFontKey)}
           showChatTimestamps={showChatTimestamps}
           chatTimeFormat={chatTimeFormat}
-          expandReasoningByDefault={expandReasoningByDefault}
+          showChatReasoning={showChatReasoning}
+          showChatToolCalls={showChatToolCalls}
           chatBackgroundOpacity={chatBackgroundOpacity}
           userBubbleStyle={userBubbleStyle}
           assistantBubbleStyle={assistantBubbleStyle}
@@ -924,7 +928,8 @@ export function AppShell({
           chatFontFamily={resolveChatFontFamily(chatFontKey)}
           showChatTimestamps={showChatTimestamps}
           chatTimeFormat={chatTimeFormat}
-          expandReasoningByDefault={expandReasoningByDefault}
+          showChatReasoning={showChatReasoning}
+          showChatToolCalls={showChatToolCalls}
           chatBackgroundOpacity={chatBackgroundOpacity}
           userBubbleStyle={userBubbleStyle}
           assistantBubbleStyle={assistantBubbleStyle}
@@ -1077,8 +1082,10 @@ export function AppShell({
             onToggleShowChatTimestamps={setShowChatTimestamps}
             chatTimeFormat={chatTimeFormat}
             onCycleChatTimeFormat={() => setChatTimeFormat((prev) => (prev === "hhmm" ? "ampm" : "hhmm"))}
-            expandReasoningByDefault={expandReasoningByDefault}
-            onToggleExpandReasoningByDefault={setExpandReasoningByDefault}
+            showChatReasoning={showChatReasoning}
+            onToggleShowChatReasoning={setShowChatReasoning}
+            showChatToolCalls={showChatToolCalls}
+            onToggleShowChatToolCalls={setShowChatToolCalls}
             chatBackgroundOpacity={chatBackgroundOpacity}
             onChangeChatBackgroundOpacity={setChatBackgroundOpacity}
             appBackgroundOpacity={appBackgroundOpacity}

@@ -1064,6 +1064,29 @@ export function groupChatMessages(
     const recallReply = Boolean((msg as any)?.recallReply);
     const recallOriginalMessageId = String((msg as any)?.recallOriginalMessageId || "").trim() || undefined;
     if (!normalizedContent && !normalizedReasoning && !attachments.length && !displayParts.length) continue;
+    if (recallNotice || recallReply) {
+      groups.push({
+        id: msg.id,
+        role: msg.role,
+        createdAt: msg.createdAt,
+        lastCreatedAt: msg.createdAt,
+        parts: [{
+          messageId: msg.id,
+          status: msg.status,
+          operationId: msg.operationId,
+          clientRequestId: msg.clientRequestId,
+          jobId: msg.jobId,
+          content: normalizedContent || "渡撤回了你的消息",
+          render: "plain",
+          systemCard: null,
+          attachments: [],
+          recallNotice,
+          recallReply,
+          recallOriginalMessageId,
+        }],
+      });
+      continue;
+    }
     const finalContent = displayParts.length ? stripDisplayedTextPrefixes(normalizedContent, displayParts) : normalizedContent;
     const displaySegments = displayParts.map((part) => ({
       content: part.kind === "text" ? part.text : "",
@@ -1103,16 +1126,6 @@ export function groupChatMessages(
         recallReply,
         recallOriginalMessageId,
       }));
-    if (recallNotice || recallReply) {
-      groups.push({
-        id: msg.id,
-        role: msg.role,
-        createdAt: msg.createdAt,
-        lastCreatedAt: msg.createdAt,
-        parts: [...safeParts],
-      });
-      continue;
-    }
     const last = groups[groups.length - 1];
     const lastHasRecallBoundary = Boolean(last?.parts?.some((part) => part.recallNotice || part.recallReply));
     if (last && !lastHasRecallBoundary && last.role === msg.role && !shouldShowGroupTime(msg.createdAt, last.lastCreatedAt)) {
@@ -1140,6 +1153,7 @@ export function groupRoleLabel(role: ChatRole): string {
 export function buildBenbenGroupContext(messages: ChatDraftMessage[], force = false): string {
   const lines = (Array.isArray(messages) ? messages : [])
     .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
+    .filter((msg) => !(msg.recallNotice || msg.recallReply))
     .filter((msg) => String(msg.content || "").trim())
     .slice(-12)
     .map((msg) => `${groupRoleLabel(msg.role)}：${String(msg.content || "").trim()}`);
@@ -1166,6 +1180,7 @@ export function buildGroupTurnUserContent(messages: ChatDraftMessage[], fallback
     .slice(lastAssistantIndex + 1)
     .filter((msg) => msg?.role === "user" || msg?.role === "benben")
     .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
+    .filter((msg) => !(msg.recallNotice || msg.recallReply))
     .map((msg) => `${groupRoleLabel(msg.role)}：${String(msg.content || "").trim()}`)
     .filter((line) => !line.endsWith("："));
   const fallback = String(fallbackUserContent || "").trim();
@@ -1179,6 +1194,7 @@ export function buildGroupTurnUserContent(messages: ChatDraftMessage[], fallback
 export function buildCodexGroupRecentMessages(messages: ChatDraftMessage[]): Array<{ role: ChatRole; content: string; createdAt?: string }> {
   return (Array.isArray(messages) ? messages : [])
     .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
+    .filter((msg) => !(msg.recallNotice || msg.recallReply))
     .filter((msg) => String(msg.content || "").trim())
     .slice(-14)
     .map((msg) => ({

@@ -248,8 +248,10 @@ export function PersonalizationScreen({
   onToggleShowChatTimestamps,
   chatTimeFormat,
   onCycleChatTimeFormat,
-  expandReasoningByDefault,
-  onToggleExpandReasoningByDefault,
+  showChatReasoning,
+  onToggleShowChatReasoning,
+  showChatToolCalls,
+  onToggleShowChatToolCalls,
   chatBackgroundOpacity,
   onChangeChatBackgroundOpacity,
   appBackgroundOpacity,
@@ -288,8 +290,10 @@ export function PersonalizationScreen({
   onToggleShowChatTimestamps: (next: boolean) => void;
   chatTimeFormat: ChatTimeFormat;
   onCycleChatTimeFormat: () => void;
-  expandReasoningByDefault: boolean;
-  onToggleExpandReasoningByDefault: (next: boolean) => void;
+  showChatReasoning: boolean;
+  onToggleShowChatReasoning: (next: boolean) => void;
+  showChatToolCalls: boolean;
+  onToggleShowChatToolCalls: (next: boolean) => void;
   chatBackgroundOpacity: number;
   onChangeChatBackgroundOpacity: (next: number) => void;
   appBackgroundOpacity: number;
@@ -532,7 +536,8 @@ export function PersonalizationScreen({
           <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
             <PersonalizationSwitchRow title="显示时间戳" enabled={showChatTimestamps} onToggle={onToggleShowChatTimestamps} />
             <PersonalizationRow title="时间格式" value={chatTimeFormat === "hhmm" ? "HH:MM" : "上午/下午 HH:MM"} onClick={onCycleChatTimeFormat} />
-            <PersonalizationSwitchRow title="默认展开思维链" enabled={expandReasoningByDefault} onToggle={onToggleExpandReasoningByDefault} />
+            <PersonalizationSwitchRow title="聊天中显示思维链" enabled={showChatReasoning} onToggle={onToggleShowChatReasoning} />
+            <PersonalizationSwitchRow title="聊天中显示工具调用" enabled={showChatToolCalls} onToggle={onToggleShowChatToolCalls} />
           </div>
         </section>
       </div>
