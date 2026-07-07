@@ -2071,9 +2071,19 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           backdrop-filter: blur(6px);
         }
         .sese-pending-modal {
+          display: flex;
+          max-height: calc(100dvh - max(env(safe-area-inset-top, 0px), 18px) - max(env(safe-area-inset-bottom, 0px), 18px) - 24px);
+          min-height: 0;
           width: min(360px, 100%);
         }
         .sese-pending-modal .sese-pending-card {
+          box-sizing: border-box;
+          display: flex;
+          flex-direction: column;
+          max-height: 100%;
+          min-height: 0;
+          width: 100%;
+          overflow: hidden;
           border-width: 4px;
           border-radius: var(--radius-lg);
           background: rgba(255, 255, 255, 0.97);
@@ -2593,6 +2603,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           box-shadow: var(--shadow-soft);
         }
         .sese-pending-head {
+          flex: 0 0 auto;
           display: flex;
           align-items: center;
           justify-content: space-between;
@@ -2628,6 +2639,17 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           font-weight: 700;
           line-height: 1.45;
         }
+        .sese-pending-card > p,
+        .sese-pending-card > .sese-review-feedback,
+        .sese-pending-card > .sese-pending-tip,
+        .sese-pending-card > .sese-pending-wait {
+          flex: 0 1 auto;
+          min-height: 0;
+          max-height: min(32dvh, 240px);
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          -webkit-overflow-scrolling: touch;
+        }
         .sese-pending-tip,
         .sese-pending-wait {
           margin-top: 6px;
@@ -2649,14 +2671,20 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           word-break: break-word;
         }
         .sese-submission-text {
+          max-height: min(36dvh, 260px);
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          -webkit-overflow-scrolling: touch;
           min-height: 44px;
           white-space: pre-wrap;
           word-break: break-word;
         }
         .sese-pending-card textarea {
+          flex: 0 0 auto;
           display: block;
           width: 100%;
           min-height: 82px;
+          max-height: min(24dvh, 150px);
           margin-top: 8px;
           resize: vertical;
           border: 1px solid rgba(186, 104, 200, 0.24);
@@ -2675,6 +2703,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
           margin-top: 9px;
         }
         .sese-review-actions {
+          flex: 0 0 auto;
           display: flex;
           flex-wrap: wrap;
           justify-content: center;
