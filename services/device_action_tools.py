@@ -120,7 +120,8 @@ TOOL_RECALL_MESSAGE = {
             "最稳妥是传 messageIds；如果什么定位字段都不传，会默认撤回当前这一轮里辛玥发出的全部气泡。"
             "如果你只知道第几句或大概原文，可以先用 index/targetText/queryOnly 查询候选。"
             "系统不会猜最近一条：无法唯一定位时只返回候选，不会执行撤回。"
-            "replyText 是撤回后留在聊天界面的你的回应，用来替代固定系统提示；要写成你对那条被撤回气泡说的话。"
+            "replyText 是撤回后留在聊天界面的你的回应，用来替代固定系统提示；要写成你对被撤回气泡说的话。"
+            "如果一次撤回多条气泡，可以传 replyTexts 数组按 messageIds 顺序逐条写回应；没写够时会用最后一句或 replyText 兜底。"
             "最终弹窗有倒计时，超时会自动选择 timeoutChoiceId。"
         ),
         "parameters": {
@@ -158,7 +159,12 @@ TOOL_RECALL_MESSAGE = {
                 },
                 "replyText": {
                     "type": "string",
-                    "description": "可选：撤回完成后在聊天界面显示的渡的回应；写成你对被撤回气泡的回复，最多约 500 字。",
+                    "description": "可选：撤回完成后在聊天界面显示的渡的回应；多条气泡未传 replyTexts 时共用这一句，最多约 500 字。",
+                },
+                "replyTexts": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "可选：多条气泡逐条对应的撤回后回应，顺序按 messageIds 或当前轮气泡顺序；没写够时用最后一句或 replyText 兜底。",
                 },
                 "texts": {
                     "type": "array",
@@ -526,6 +532,35 @@ def _recall_reply_text_arg(args: dict) -> str:
     ).strip()
 
 
+def _recall_reply_texts_arg(args: dict) -> list[str]:
+    raw = (
+        args.get("replyTexts")
+        if args.get("replyTexts") is not None
+        else args.get("reply_texts")
+        if args.get("reply_texts") is not None
+        else args.get("noticeTexts")
+        if args.get("noticeTexts") is not None
+        else args.get("notice_texts")
+        if args.get("notice_texts") is not None
+        else args.get("replacementTexts")
+        if args.get("replacementTexts") is not None
+        else args.get("replacement_texts")
+        if args.get("replacement_texts") is not None
+        else args.get("responseTexts")
+        if args.get("responseTexts") is not None
+        else args.get("response_texts")
+    )
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw[:8]:
+        text = str(item or "").strip()
+        if len(text) > 500:
+            text = text[:500].rstrip() + "..."
+        out.append(text)
+    return out
+
+
 def execute_recall_message(arguments: dict) -> str:
     args = arguments if isinstance(arguments, dict) else {}
     context = args.get("_context") if isinstance(args.get("_context"), dict) else {}
@@ -588,7 +623,10 @@ def execute_recall_message(arguments: dict) -> str:
         "timeoutChoiceId": args.get("timeoutChoiceId", args.get("timeout_choice_id")),
     }
     reply_text = _recall_reply_text_arg(args)
-    crc_src = f"{window_id}\n{','.join(message_ids)}\n{popup.get('finalMessage') or ''}\n{reply_text}"
+    reply_texts = _recall_reply_texts_arg(args)
+    if len(reply_texts) > len(message_ids):
+        reply_texts = reply_texts[:len(message_ids)]
+    crc_src = f"{window_id}\n{','.join(message_ids)}\n{popup.get('finalMessage') or ''}\n{reply_text}\n{json.dumps(reply_texts, ensure_ascii=False)}"
     crc = zlib.crc32(crc_src.encode("utf-8")) & 0xffffffff
     item, err = r2_store.append_app_action(
         "recall_message",
@@ -596,6 +634,7 @@ def execute_recall_message(arguments: dict) -> str:
             "windowId": window_id,
             "messageIds": message_ids,
             "replyText": reply_text,
+            "replyTexts": reply_texts,
             "popup": popup,
         },
         device_id=reply_target,

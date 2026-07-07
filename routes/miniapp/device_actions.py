@@ -137,7 +137,28 @@ def _recall_message_wakeup_event_text(item: dict) -> str:
         or payload.get("reply_text")
         or ""
     ).strip()
-    if reply_text:
+    raw_reply_texts = result.get("replyTexts")
+    if not isinstance(raw_reply_texts, list):
+        raw_reply_texts = result.get("reply_texts")
+    if not isinstance(raw_reply_texts, list):
+        raw_reply_texts = payload.get("replyTexts")
+    if not isinstance(raw_reply_texts, list):
+        raw_reply_texts = payload.get("reply_texts")
+    reply_texts: list[str] = []
+    if isinstance(raw_reply_texts, list):
+        for item_text in raw_reply_texts[:8]:
+            text = str(item_text or "").strip()
+            if len(text) > 500:
+                text = text[:500].rstrip() + "..."
+            reply_texts.append(text)
+    rendered_reply_texts = "\n".join(
+        f"{index}. {text}"
+        for index, text in enumerate(reply_texts, start=1)
+        if text
+    )
+    if rendered_reply_texts:
+        lines.append(f"撤回后你在聊天界面逐条留下的回应是：\n{rendered_reply_texts}")
+    elif reply_text:
         if len(reply_text) > 500:
             reply_text = reply_text[:500].rstrip() + "..."
         lines.append(f"撤回后你在聊天界面留下的回应是：\n{reply_text}")

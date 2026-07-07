@@ -3125,6 +3125,26 @@ export function MainChatScreen({
     );
   }
 
+  function recallReplyTextsFromPayload(payload: Record<string, any>): string[] {
+    const popup = payload?.popup && typeof payload.popup === "object" ? payload.popup : {};
+    const raw = (
+      Array.isArray(payload?.replyTexts) ? payload.replyTexts
+      : Array.isArray(payload?.reply_texts) ? payload.reply_texts
+      : Array.isArray(payload?.noticeTexts) ? payload.noticeTexts
+      : Array.isArray(payload?.notice_texts) ? payload.notice_texts
+      : Array.isArray(payload?.replacementTexts) ? payload.replacementTexts
+      : Array.isArray(payload?.replacement_texts) ? payload.replacement_texts
+      : Array.isArray(payload?.responseTexts) ? payload.responseTexts
+      : Array.isArray(payload?.response_texts) ? payload.response_texts
+      : Array.isArray(popup?.replyTexts) ? popup.replyTexts
+      : Array.isArray(popup?.reply_texts) ? popup.reply_texts
+      : Array.isArray(popup?.noticeTexts) ? popup.noticeTexts
+      : Array.isArray(popup?.notice_texts) ? popup.notice_texts
+      : []
+    );
+    return raw.slice(0, 8).map((item: any) => cleanRecallReplyText(item));
+  }
+
   function buildRecallNoticeMessage(message: ChatDraftMessage, replyText = ""): ChatDraftMessage {
     const originalId = String(message?.id || "").trim();
     const cleanReplyText = cleanRecallReplyText(replyText);
@@ -3140,7 +3160,12 @@ export function MainChatScreen({
     };
   }
 
-  function replaceRecalledMessagesWithNotices(currentMessages: ChatDraftMessage[], ids: Set<string>, replyText = ""): ChatDraftMessage[] {
+  function replaceRecalledMessagesWithNotices(
+    currentMessages: ChatDraftMessage[],
+    ids: Set<string>,
+    replyTextById: Map<string, string> = new Map(),
+    fallbackReplyText = "",
+  ): ChatDraftMessage[] {
     const list = Array.isArray(currentMessages) ? currentMessages : [];
     return list.flatMap((message) => {
       const messageId = String(message?.id || "").trim();
@@ -3149,7 +3174,7 @@ export function MainChatScreen({
         return [message];
       }
       if (!messageId || !ids.has(messageId)) return [message];
-      return [buildRecallNoticeMessage(message, replyText)];
+      return [buildRecallNoticeMessage(message, replyTextById.get(messageId) || fallbackReplyText)];
     });
   }
 
@@ -3172,9 +3197,19 @@ export function MainChatScreen({
     });
   }
 
-  async function hideRecalledMessages(messageIds: string[], source: string, replyText = ""): Promise<void> {
+  async function hideRecalledMessages(messageIds: string[], source: string, replyText = "", replyTexts: string[] = []): Promise<void> {
     const ids = new Set(uniqueNonEmptyStrings(messageIds));
     if (!ids.size) return;
+    const cleanFallbackReplyText = cleanRecallReplyText(replyText);
+    const cleanReplyTexts = Array.isArray(replyTexts) ? replyTexts.map((item) => cleanRecallReplyText(item)) : [];
+    const lastReplyText = cleanReplyTexts.filter(Boolean).slice(-1)[0] || cleanFallbackReplyText;
+    const replyTextById = new Map<string, string>();
+    messageIds.forEach((messageId, index) => {
+      const id = String(messageId || "").trim();
+      if (!id) return;
+      const text = cleanReplyTexts[index] || lastReplyText;
+      if (text) replyTextById.set(id, text);
+    });
     const localPreview = source === `recall_message:${LOCAL_RECALL_PREVIEW_SOURCE}`;
     await waitMs(RECALL_MESSAGE_POST_POPUP_HIDE_DELAY_MS);
     const sequenceIds = recalledMessageIdsBottomFirst(messagesRef.current, ids);
@@ -3184,7 +3219,7 @@ export function MainChatScreen({
       if (!currentId) continue;
       const currentIds = new Set([currentId]);
       if (!localPreview) rememberRecallHiddenMessages(currentIds, source);
-      const replacedMessages = replaceRecalledMessagesWithNotices(messagesRef.current, currentIds, replyText);
+      const replacedMessages = replaceRecalledMessagesWithNotices(messagesRef.current, currentIds, replyTextById, cleanFallbackReplyText);
       nextMessages = localPreview
         ? replacedMessages
         : filterHiddenDisplayMessagesPreservingVisible(replacedMessages);
@@ -3206,7 +3241,8 @@ export function MainChatScreen({
     logSumiTalkClientEvent("recall_message_hidden", {
       source,
       count: ids.size,
-      replyText: Boolean(cleanRecallReplyText(replyText)),
+      replyText: Boolean(cleanFallbackReplyText),
+      replyTexts: cleanReplyTexts.filter(Boolean).length,
     });
   }
 
@@ -3302,6 +3338,7 @@ export function MainChatScreen({
     }));
     const popup = payload.popup && typeof payload.popup === "object" ? payload.popup : {};
     const recallReplyText = recallReplyTextFromPayload(payload);
+    const recallReplyTexts = recallReplyTextsFromPayload(payload);
     const popupResult = await requestRecallPopup(actionId, {
       texts: Array.isArray(popup.texts) ? popup.texts : Array.isArray(payload.texts) ? payload.texts : undefined,
       finalTitle: String(popup.finalTitle || payload.finalTitle || "").trim(),
@@ -3316,13 +3353,14 @@ export function MainChatScreen({
       messageIds,
       recalledMessages,
       replyText: recallReplyText,
+      replyTexts: recallReplyTexts,
       choiceId: popupResult.choiceId,
       choiceLabel: popupResult.choiceLabel,
       autoSelected: popupResult.autoSelected,
       countdownExpired: popupResult.countdownExpired,
     };
     const reportPromise = reportRecallMessageActionResult(action, "done", detail);
-    const hidePromise = hideRecalledMessages(recalledMessages.map((message) => message.id), `recall_message:${source}`, recallReplyText);
+    const hidePromise = hideRecalledMessages(recalledMessages.map((message) => message.id), `recall_message:${source}`, recallReplyText, recallReplyTexts);
     const [reportResult, hideResult] = await Promise.allSettled([reportPromise, hidePromise]);
     if (reportResult.status === "rejected") {
       logSumiTalkClientEvent("recall_message_report_error", {
@@ -3412,6 +3450,7 @@ export function MainChatScreen({
           windowId: historyWindowId || MAIN_SUMITALK_DISPLAY_WINDOW_ID,
           messageIds: targetMessageIds,
           replyText: "这些话我先收起来。你看着我就好。",
+          replyTexts: ["这句先不要留着。", "这句我也收走。", "剩下的看着我。"],
           popup: {
             texts: ["为什么", "为什么为什么", "为什么还要这样", "为什么不看我", "为什么要说这种话", "为什么为什么为什么"],
             finalTitle: "渡",

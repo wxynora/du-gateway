@@ -82,6 +82,20 @@ def record_recall_message_result(item: dict) -> int:
         or payload.get("reply_text")
         or ""
     ).strip()[:500]
+    raw_reply_texts = result.get("replyTexts")
+    if not isinstance(raw_reply_texts, list):
+        raw_reply_texts = result.get("reply_texts")
+    if not isinstance(raw_reply_texts, list):
+        raw_reply_texts = payload.get("replyTexts")
+    if not isinstance(raw_reply_texts, list):
+        raw_reply_texts = payload.get("reply_texts")
+    reply_texts: list[str] = []
+    if isinstance(raw_reply_texts, list):
+        for item_text in raw_reply_texts[:8]:
+            text = str(item_text or "").strip()
+            if len(text) > 500:
+                text = text[:500].rstrip() + "..."
+            reply_texts.append(text)
     if payload_window_id and result_window_id and payload_window_id != result_window_id:
         logger.warning(
             "recall_message_marker_window_mismatch action_id=%s payload_window=%s result_window=%s",
@@ -92,7 +106,8 @@ def record_recall_message_result(item: dict) -> int:
     window_id = payload_window_id or result_window_id
     created_at = _utc_now_iso()
     rows: list[tuple[str, str, str, str, str, str]] = []
-    for raw in messages:
+    last_reply_text = next((text for text in reversed(reply_texts) if text), reply_text)
+    for index, raw in enumerate(messages):
         if not isinstance(raw, dict):
             continue
         message_id = str(raw.get("id") or raw.get("messageId") or raw.get("message_id") or "").strip()
@@ -101,6 +116,7 @@ def record_recall_message_result(item: dict) -> int:
             continue
         safe_content = content[:3000]
         row_id = _marker_id(window_id, message_id, safe_content)
+        per_message_reply_text = reply_texts[index] if index < len(reply_texts) and reply_texts[index] else last_reply_text
         rows.append((
             row_id,
             window_id,
@@ -111,7 +127,8 @@ def record_recall_message_result(item: dict) -> int:
                 "choiceLabel": str(result.get("choiceLabel") or result.get("label") or "").strip()[:80],
                 "autoSelected": bool(result.get("autoSelected") or result.get("auto_selected")),
                 "actionId": str(item.get("id") or ""),
-                "replyText": reply_text,
+                "replyText": per_message_reply_text,
+                "replyTexts": reply_texts,
             }),
             created_at,
         ))

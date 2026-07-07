@@ -108,6 +108,7 @@ def main() -> None:
 
     default_all = json.loads(execute_recall_message({
         "replyText": "这轮都先收起来。",
+        "replyTexts": ["第一句先收走。", "第二句也不要留。"],
         "_context": {"window_id": "w1", "client_request_id": "cr1", "reply_target": "device-all"},
     }))
     assert_true(default_all.get("ok") and default_all.get("queued"), f"unqualified current-turn recall should enqueue all targets: {default_all}")
@@ -115,6 +116,7 @@ def main() -> None:
     pending_default_all = app_action_store.poll_app_actions(device_id="device-all", surface="chat_ui", window_id="w1")
     default_payload = (pending_default_all.get("actions") or [{}])[0].get("payload") or {}
     assert_eq(default_payload.get("messageIds"), ["user-a", "user-b"], "default recall app action should carry all current-turn ids")
+    assert_eq(default_payload.get("replyTexts"), ["第一句先收走。", "第二句也不要留。"], "replyTexts should survive app action normalization")
 
     no_current_turn = json.loads(execute_recall_message({
         "_context": {"window_id": "w-trim", "reply_target": "device-no-turn"},
@@ -145,9 +147,11 @@ def main() -> None:
     frontend_source = (ROOT / "miniapp/src/ui/MainChatScreen.tsx").read_text(encoding="utf-8")
     tool_props = TOOL_RECALL_MESSAGE["function"]["parameters"]["properties"]
     assert_true("replyText" in tool_props, "recall_message tool must expose replyText")
+    assert_true("replyTexts" in tool_props, "recall_message tool must expose per-bubble replyTexts")
     assert_true("non_user_target" in frontend_source, "frontend must fail mixed user/non-user recall targets")
     assert_true("targets.length !== messageIds.length" in frontend_source, "frontend must not partially execute missing recall targets")
     assert_true("recallReply" in frontend_source and "data-recall-notice" in frontend_source, "frontend must render recall reply as a system notice")
+    assert_true("replyTextById" in frontend_source and "replyTexts" in frontend_source, "frontend must support per-bubble recall replies")
 
     print("recall_message target smoke ok")
 

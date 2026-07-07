@@ -52,6 +52,9 @@ def _payload_log_summary(payload: Any) -> dict:
     reply_text = str(payload.get("replyText") or payload.get("reply_text") or "").strip()
     if reply_text:
         summary["reply_text_len"] = len(reply_text)
+    reply_texts = payload.get("replyTexts") or payload.get("reply_texts")
+    if isinstance(reply_texts, list) and reply_texts:
+        summary["reply_texts"] = len(reply_texts)
     surface = str(payload.get("surface") or "").strip()
     if surface:
         summary["surface"] = surface
@@ -628,6 +631,38 @@ def _normalize_recall_message_payload(payload: dict) -> tuple[Optional[dict], Op
         or src.get("response_text")
         or ""
     ).strip()
+    raw_reply_texts = (
+        popup_src.get("replyTexts")
+        if popup_src.get("replyTexts") is not None
+        else popup_src.get("reply_texts")
+        if popup_src.get("reply_texts") is not None
+        else popup_src.get("noticeTexts")
+        if popup_src.get("noticeTexts") is not None
+        else popup_src.get("notice_texts")
+        if popup_src.get("notice_texts") is not None
+        else src.get("replyTexts")
+        if src.get("replyTexts") is not None
+        else src.get("reply_texts")
+        if src.get("reply_texts") is not None
+        else src.get("noticeTexts")
+        if src.get("noticeTexts") is not None
+        else src.get("notice_texts")
+        if src.get("notice_texts") is not None
+        else src.get("replacementTexts")
+        if src.get("replacementTexts") is not None
+        else src.get("replacement_texts")
+        if src.get("replacement_texts") is not None
+        else src.get("responseTexts")
+        if src.get("responseTexts") is not None
+        else src.get("response_texts")
+    )
+    reply_texts: list[str] = []
+    if isinstance(raw_reply_texts, list):
+        for item in raw_reply_texts[:len(message_ids)]:
+            text = str(item or "").strip()
+            if len(text) > 500:
+                text = text[:500].rstrip() + "..."
+            reply_texts.append(text)
     raw_choices = popup_src.get("choices") or src.get("choices")
     choices: list[dict] = []
     if isinstance(raw_choices, list):
@@ -668,6 +703,7 @@ def _normalize_recall_message_payload(payload: dict) -> tuple[Optional[dict], Op
         "windowId": window_id[:160],
         "messageIds": message_ids,
         "replyText": reply_text[:500],
+        "replyTexts": reply_texts,
         "popup": {
             "texts": texts,
             "finalTitle": final_title[:60],
