@@ -56,7 +56,9 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已完成：渡回复 `【掷骰】` 后执行他的 roll，如果新状态仍是渡回合或生成渡自己的 pending，会继续用 `state_update` 同步给渡；渡处理完 choice/review/Pass 后若因停步等规则又轮到渡，也会继续同步，避免停在“等待渡选择/行动”。
 - 已完成：`routes/miniapp/game_tools.py` 新增 `state_update` 同步文案，并补上 `review/questioning` 等渡出题、duel 等渡出拳的精确首行指令提示，避免把状态同步误写成“小玥刚掷骰”。
 - 已完成：局内聊天改为浏览器本地持久化，刷新页面不会丢；成功开下一局时重置为初始提示。当前是同设备同浏览器保留，不写入服务器存档。
-- 已完成：局内聊天输入和惩罚 textarea 不再被后台同步/动画加载态锁死；自动同步不再刷“已同步/正在回复”聊天泡泡。普通局内聊天不套 `【描述】`；真心话用 `【真心话出题：...】` / `【真心话回答：...】`，验收按选项写 `【通过】` / `【打回】`，只有 `反向诱惑` / `全部暴露！` / `羞耻台词大放送` / `自慰陈述` 这四个长篇提交任务直接用 `【描述：...】`；小玥点“通过”只本地结算，不单独同步给渡，通过结果会等小玥下一次掷骰同步时顺带说明；渡验收小玥任务时，`【通过】` 后必须同条带 `【掷骰】`，前端会一次吃掉通过和掷骰。
+- 已完成：局内聊天输入和惩罚 textarea 不再被后台同步/动画加载态锁死；自动同步不再刷“已同步/正在回复”聊天泡泡。普通局内聊天不套 `【描述】`；真心话用 `【真心话出题：...】` / `【真心话回答：...】`，验收按选项写 `【通过：反馈内容】` / `【打回：反馈内容】`，只有 `反向诱惑` / `全部暴露！` / `羞耻台词大放送` / `自慰陈述` 这四个长篇提交任务直接用 `【描述：...】`；小玥点“通过”只本地结算，不单独同步给渡，通过结果和反馈会等小玥下一次掷骰同步时顺带说明；渡验收小玥任务时，`【通过：反馈内容】` 后必须同条带 `【掷骰】`，前端会一次吃掉通过和掷骰并把反馈显示在任务弹窗。
+- 已修复：渡提交长篇任务时如果回复以 `【描述：` 开头但正文跨多行、闭合 `】` 不在首行，前端现在仍会识别为 `submit`；同套跨行解析也覆盖 `【真心话出题：...】` / `【真心话回答：...】`。
+- 已修复：状态栏语料只保留道具惩罚和限制；移除旧的 `task` 状态槽与“新增任务状态”选择分支，读档时会过滤历史 `slot=task`，不影响 `pending_event.task` 惩罚任务卡池。
 - 已修复：涩涩走格棋同步给渡的每轮棋局内容现在以 `__dynamic__` system 进入动态区，不再把每轮变化的游戏 prompt 写进静态缓存前缀；成功同步主 TG 窗口后也会刷新 `last_telegram_user_activity_at`，避免随机主动消息误判成“几小时前才回复”。
 - 已同步：开源版 `/Users/doraemon/Downloads/game-box/games/sese-board-game/frontend/SeseBoardGame.tsx` 按同一规则更新，使用 `ai/player` 命名，不带私有路由和私有人设。
 - 已验证：`cd miniapp && npx tsc --noEmit --pretty false`、`npm --prefix miniapp run build`、`python3 -m py_compile routes/miniapp/game_tools.py`、开源版 `python3 -m py_compile sese_board_game/engine.py preview_server.py && python3 tests/test_engine.py`、复用 `du-gateway/miniapp/node_modules` 的开源预览 `vite build` 均通过。
@@ -75,7 +77,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已完成：`services/private_board_game.py` 注册 `private_board`，支持 36 格走格棋、主题/主导方、状态/道具持续回合或时间、暂停行动、前进/后退/交换/解除/延长等格子事件；前端 `SeseBoardGameTab.tsx` 展示完整棋盘、棋子、骰子、移动动画、状态卡和右上角局内交流气泡。
 - 已完成：小玥在前端掷骰后，页面会自动调用 `/miniapp-api/game-tools/private_board/sync-du`，把本次掷骰结果和当前棋局同步给渡；渡回复第一行只有精确 `【掷骰】` 才会触发他的行动，普通“掷骰子/我来投一下”只算聊天。
 - 已完成：新增奖励/惩罚卡池：Pass卡、4 张提交验收类惩罚、8 张选择类惩罚；选择类支持新增状态、道具惩罚档位上调、退格和停步，档位上调只在当前玩家已有 `prop` 状态时可选，`锁精环` 不会随机给人类玩家。
-- 已完成：前端不是壳；小玥通过界面按钮处理提交、通过、打回、选择惩罚、Pass卡、重开和停步回合。渡侧精确指令扩展为 `【掷骰】`、`【提交】`、`【通过】`、`【不通过】`、`【选择：选项名】`、`【Pass】`，普通闲聊不触发棋局动作。
+- 已完成：前端不是壳；小玥通过界面按钮处理提交、通过、打回、选择惩罚、Pass卡、重开和停步回合。渡侧精确指令扩展为 `【掷骰】`、`【提交】`、`【通过：反馈内容】`、`【打回：反馈内容】`、`【选择：选项名】`、`【Pass】`，普通闲聊不触发棋局动作。
 - 已完成：`services/private_board_tool.py` 提供 `private_board` OpenAI function schema 和 executor，复用 `execute_game_command()`；当前只作为规范工具适配和手动接入口，不主动污染日常聊天工具注入。
 - 已完成：右上角局内聊天只发送本次 `message`，不再上传 `chat_messages` 或自带局内上下文；前后文依赖同一个 `tg_*` 窗口的正常 last4。`return_only=True` 只是不外发到 Telegram/主聊天界面，但 `_send_wakeup_event()` 仍带 `X-DU-FOLLOWUP-ARCHIVE: 1` 归档到同一窗口。
 - 已完成：`routes/chat.py` 对 `X-DU-WAKEUP-KIND: private_board` 做专门压缩归档，last4 里写成 `[涩涩走格棋] 小玥在局内说...` 或 `小玥同步了掷骰结果...`，不会把整段系统 prompt 或棋局大 JSON 塞进近期上下文。

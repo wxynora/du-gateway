@@ -223,22 +223,9 @@ def test_private_board_theme_direction_filters() -> None:
         profile = _theme_profile_for(theme)
         _assert(profile["direction"] == direction, f"{theme} should be {direction}")
 
-    tasks = [
-        "被小玥命令说想要",
-        "给小玥舔到高潮",
-        "穿裸身围裙伺候小玥",
-    ]
     teacher_state = {"theme_profile": _theme_profile_for("成人师生play")}
-    teacher_tasks = _filter_options_for_theme(teacher_state, "task", tasks)
-    _assert("被小玥命令说想要" not in teacher_tasks, "du-led teacher theme should filter xinyue-control task")
-    _assert("给小玥舔到高潮" in teacher_tasks, "du-led teacher theme should keep du-led task")
-
     butler_state = {"theme_profile": _theme_profile_for("大小姐管家play")}
     _assert(butler_state["theme_profile"]["direction"] == "xinyue_leads", "butler theme should be xinyue-led")
-    butler_tasks = _filter_options_for_theme(butler_state, "task", tasks)
-    _assert("被小玥命令说想要" in butler_tasks, "xinyue-led butler theme should keep xinyue-control task")
-    _assert("穿裸身围裙伺候小玥" in butler_tasks, "xinyue-led butler theme should keep service task")
-    _assert("给小玥舔到高潮" not in butler_tasks, "xinyue-led butler theme should filter du-led task")
 
     teacher_limits = _limit_options_for_theme(teacher_state)
     _assert(THEME_LIMIT_OPTIONS["成人师生play"][0] in teacher_limits, "teacher theme should include teacher-specific limit")
@@ -435,6 +422,7 @@ def test_private_board_final_pose_is_note_material() -> None:
 
 def test_private_board_choice_penalty_cards_filter_unavailable_options() -> None:
     _assert(len(CHOICE_PENALTY_CARDS) == 8, "choice penalty pool should start with 8 cards")
+    _assert(not any(slot.get("key") == "task" for slot in BOARD_SLOTS), "status slots should not include task corpus")
     for card in CHOICE_PENALTY_CARDS:
         _assert(str(card.get("type") or "") == "choice", "choice penalty card type should be choice")
         has_final_material = any(str((choice.get("effect") or {}).get("slot") or "") in {"place", "pose"} for choice in card.get("choices") or () if isinstance(choice, dict))
@@ -445,6 +433,9 @@ def test_private_board_choice_penalty_cards_filter_unavailable_options() -> None
         choices = [choice for choice in card.get("choices") or () if isinstance(choice, dict)]
         _assert(len(choices) >= 2, "choice penalty card should provide at least two choices")
         for choice in choices:
+            _assert(str(choice.get("id") or "") != "add_task", "choice penalty should not add task status")
+            effect = choice.get("effect") if isinstance(choice.get("effect"), dict) else {}
+            _assert(str(effect.get("slot") or "") != "task", "choice penalty should not target task status")
             text = "\n".join(str(choice.get(key) or "") for key in ("label", "id"))
             _assert("分钟" not in text and "一周" not in text, "choice penalty card should not use real time wording")
 
@@ -811,6 +802,53 @@ def test_private_board_migrates_ended_save_without_final_note() -> None:
         _assert("避孕套" not in str(payload.get("player_text") or ""), "invalid prop should not leak into player text")
 
 
+def test_private_board_review_feedback() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_path = Path(tmpdir) / "default.json"
+        run_command("new_game seed=review-feedback-test", save_path=save_path)
+        state = json.loads(save_path.read_text(encoding="utf-8"))
+        state["pending_event"] = {
+            "id": "review-feedback",
+            "type": "review",
+            "name": "真心话点名",
+            "actor": "xinyue",
+            "reviewer": "du",
+            "phase": "submitted",
+            "submission_text": "测试提交",
+            "reject_prompt": "请重新提交。",
+            "reject_count": 0,
+        }
+        state["turn_actor"] = "du"
+        save_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+        approved = run_command("approve 做得不错，过。", save_path=save_path)
+        approved_text = "\n".join(
+            str(approved.get(key) or "")
+            for key in ("text", "du_text", "player_text")
+        )
+        _assert("验收反馈：做得不错，过。" in approved_text, "approve feedback should be rendered in result text")
+
+        state = json.loads(save_path.read_text(encoding="utf-8"))
+        state["pending_event"] = {
+            "id": "review-feedback-reject",
+            "type": "review",
+            "name": "真心话点名",
+            "actor": "xinyue",
+            "reviewer": "du",
+            "phase": "submitted",
+            "submission_text": "测试提交",
+            "reject_prompt": "请重新提交。",
+            "reject_count": 0,
+        }
+        state["turn_actor"] = "du"
+        save_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+        rejected = run_command("reject 这里重写具体一点。", save_path=save_path)
+        pending = (rejected.get("state") or {}).get("pending_event") or {}
+        _assert(pending.get("phase") == "assigned", "reject should reopen the task")
+        _assert(pending.get("last_reject_reason") == "这里重写具体一点。", "reject feedback should be persisted on pending")
+
+
 def test_private_board_wakeup_uses_dynamic_system() -> None:
     from services import conversation_followup as cf
     from storage import upstream_store
@@ -886,5 +924,6 @@ if __name__ == "__main__":
     test_private_board_finish_generates_final_note()
     test_private_board_winner_can_append_final_status()
     test_private_board_migrates_ended_save_without_final_note()
+    test_private_board_review_feedback()
     test_private_board_wakeup_uses_dynamic_system()
     print("private_board_game tests ok")

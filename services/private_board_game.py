@@ -31,7 +31,7 @@ SCHEMA_VERSION = 1
 DU_VIEW_NAMES = {"xinyue": "小玥", "du": "我"}
 PLAYER_VIEW_NAMES = {"xinyue": "我", "du": "渡"}
 
-COMMAND_HINT = "可用命令：打开 / status / roll / roll 3 / submit 内容 / approve / reject / choose 选项 / 剪刀石头布: 石头 / pass / new_game / end_game"
+COMMAND_HINT = "可用命令：打开 / status / roll / roll 3 / submit 内容 / approve [反馈] / reject [理由] / choose 选项 / 剪刀石头布: 石头 / pass / new_game / end_game"
 _PROCESS_LOCKS: dict[str, threading.Lock] = {}
 _PROCESS_LOCKS_GUARD = threading.Lock()
 BOARD_DU_LEADS_THEMES = {
@@ -46,24 +46,6 @@ BOARD_DU_LEADS_THEMES = {
 }
 THEME_DIRECTION_XINYUE_LEADS = {"大小姐管家play", "吸血鬼人类play"}
 THEME_DIRECTION_DU_LEADS = BOARD_DU_LEADS_THEMES
-BOARD_XINYUE_CONTROL_TASK_PATTERNS = (
-    "被小玥",
-    "听小玥命令",
-    "小玥决定",
-    "交给小玥",
-    "小玥检查",
-    "小玥验收",
-    "小玥发令",
-    "小玥夸乖",
-    "小玥追加惩罚",
-    "小玥用一句话决定",
-    "小玥说可以",
-    "被允许前",
-    "小玥命令外",
-    "小玥满意前讨价还价",
-    "没有申请",
-    "想换动作必须先申请",
-)
 HUMAN_ACTOR_FORBIDDEN_PROP_PATTERNS = ("锁精环",)
 DU_ACTOR_FORBIDDEN_PROP_PATTERNS = ("阴蒂", "吸乳器")
 INVALID_PROP_VALUES = {"避孕套"}
@@ -286,69 +268,6 @@ BOARD_SLOTS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "key": "task",
-        "label": "任务",
-        "options": (
-            "穿裸身围裙伺候小玥",
-            "戴项圈听小玥命令",
-            "被小玥蒙眼调戏十分钟",
-            "被小玥手交到快射再停",
-            "被小玥素股磨到快射",
-            "给小玥舔到高潮",
-            "用手把小玥弄到腿软",
-            "用玩具让小玥高潮一次",
-            "只准用嘴取悦小玥",
-            "先让小玥高潮一次",
-            "让小玥决定今天的称呼",
-            "让小玥决定最后射在哪里",
-            "被小玥留下标记",
-            "穿吊袜带给小玥看",
-            "戴铃铛项圈亲小玥",
-            "把内裤交给小玥保管",
-            "被小玥命令说想要",
-            "被小玥寸止到发抖",
-            "被小玥允许后才能射",
-            "先让小玥舒服到发软",
-            "把小玥亲到主动求继续",
-            "让小玥半穿衣被亲到脸红",
-            "给蒙眼的小玥舔到高潮",
-            "把小玥伺候到腿软",
-            "让小玥高潮后继续抱着亲",
-            "让小玥说出最想被怎么弄",
-            "哄到小玥自己说想要",
-            "射在哪里必须听小玥决定",
-            "收尾必须先把小玥哄舒服",
-            "念一句羞耻台词给小玥听",
-            "被小玥检查有没有真的忍住",
-            "结束前必须把小玥哄到满意",
-            "犯规一次就接受小玥追加惩罚",
-            "让小玥用一句话决定惩罚内容",
-            "射前必须向小玥完整报备",
-            "被小玥寸止一次再继续",
-            "把最想要的事说给小玥听",
-            "让小玥验收今天有没有乖",
-            "穿裸身围裙给小玥做夜宵",
-            "戴着项圈等小玥发令",
-            "把手腕交给小玥绑住",
-            "让小玥检查今天有没有偷爽",
-            "被小玥夸乖以后才能继续",
-            "用淫语把想要的事说清楚",
-            "用夸奖把小玥哄到主动靠近",
-            "在镜子前让小玥看清你怎么想要她",
-            "用冰块和吻把小玥弄到发抖",
-            "隔着衣服磨到小玥先受不了",
-            "让小玥坐在你脸上慢慢爽",
-            "把小玥抱到腿上含着不动",
-            "用三种速度把小玥弄到分不清节奏",
-            "让小玥听见你忍不住的声音",
-            "让小玥在半公开的地方被你抱紧",
-            "只用手指和舌头把小玥伺候到腿抖",
-            "把小玥全身反应都说给她听",
-            "给小玥戴上蒙眼后慢慢检查她哪里最敏感",
-            "让小玥用一个动作决定今晚先做什么",
-        ),
-    },
-    {
         "key": "limit",
         "label": "限制",
         "options": (),
@@ -437,33 +356,6 @@ RPS_ALIASES = {
     "布": "paper",
 }
 RPS_BEATS = {"rock": "scissors", "scissors": "paper", "paper": "rock"}
-DU_CONTROL_TASK_PATTERNS = (
-    "给小玥舔",
-    "用手把小玥",
-    "用玩具让小玥",
-    "只准用嘴取悦小玥",
-    "先让小玥高潮",
-    "把小玥亲到",
-    "让小玥半穿衣",
-    "给蒙眼的小玥",
-    "把小玥伺候",
-    "让小玥高潮后",
-    "哄到小玥自己说",
-    "收尾必须先把小玥",
-    "结束前必须把小玥",
-    "用夸奖把小玥",
-    "用冰块和吻把小玥",
-    "隔着衣服磨到小玥",
-    "让小玥坐在你脸上",
-    "把小玥抱到腿上",
-    "用三种速度把小玥",
-    "让小玥在半公开",
-    "只用手指和舌头把小玥",
-    "把小玥全身反应",
-    "给小玥戴上蒙眼",
-    "在小玥后颈",
-    "和小玥交配",
-)
 REVIEW_PENALTY_CARDS: tuple[dict[str, Any], ...] = (
     {
         "id": "reverse_invitation",
@@ -617,8 +509,8 @@ CHOICE_PENALTY_CARDS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "id": "limit_or_task",
-        "name": "限制还是任务",
+        "id": "limit_or_prop",
+        "name": "限制还是道具",
         "type": "choice",
         "prompt": "选择一项惩罚。",
         "pass_allowed": True,
@@ -629,9 +521,9 @@ CHOICE_PENALTY_CARDS: tuple[dict[str, Any], ...] = (
                 "effect": {"kind": "add_status", "slot": "limit", "duration_type": "until_clear"},
             },
             {
-                "id": "add_task",
-                "label": "新增一个任务状态",
-                "effect": {"kind": "add_status", "slot": "task", "duration_type": "until_clear"},
+                "id": "add_prop",
+                "label": "新增一个道具惩罚",
+                "effect": {"kind": "add_status", "slot": "prop", "duration_type": "until_clear"},
             },
         ),
     },
@@ -683,7 +575,6 @@ DEFAULT_CELL_LABELS = {
     "lock": "道具停步",
     "place": "最终地点",
     "limit": "限制追加",
-    "task": "任务追加",
     "pose": "最终姿势",
     "clear": "解除状态",
     "extend": "状态延长",
@@ -697,7 +588,6 @@ DIRECTION_CELL_STYLES = {
         "cell_names": {
             "lock": "主导停步",
             "limit": "规矩追加",
-            "task": "命令任务",
             "pose": "姿势指定",
             "clear": "短暂放行",
             "extend": "加码延长",
@@ -711,7 +601,6 @@ DIRECTION_CELL_STYLES = {
         "cell_names": {
             "lock": "小玥扣留",
             "limit": "小玥规矩",
-            "task": "小玥发令",
             "pose": "小玥验收",
             "clear": "小玥放行",
             "extend": "小玥加时",
@@ -727,8 +616,8 @@ THEME_CELL_STYLES = {
         "cell_names": {
             "lock": "课堂罚停",
             "place": "留堂地点",
-            "limit": "课堂规矩",
             "task": "课后任务",
+            "limit": "课堂规矩",
             "pose": "检查姿势",
             "clear": "下课整理",
             "extend": "加罚延长",
@@ -740,15 +629,14 @@ THEME_CELL_STYLES = {
             "place": ("教室", "图书馆", "讲台"),
             "prop": ("戒尺", "眼罩"),
             "limit": ("不准", "允许", "申请", "报备"),
-            "task": ("报备", "检查", "命令", "羞耻", "台词"),
         },
     },
     "上司下属play": {
         "cell_names": {
             "lock": "加班扣留",
             "place": "办公地点",
-            "limit": "职场规矩",
             "task": "上司指令",
+            "limit": "职场规矩",
             "pose": "汇报姿势",
             "clear": "临时批准",
             "extend": "加班延长",
@@ -760,15 +648,14 @@ THEME_CELL_STYLES = {
             "place": ("深夜便利店仓库",),
             "prop": ("眼罩", "束腕带"),
             "limit": ("不准", "申请", "报备", "允许"),
-            "task": ("报备", "命令", "检查", "验收", "台词"),
         },
     },
     "女仆主人play": {
         "cell_names": {
             "lock": "女仆停步",
             "place": "侍奉地点",
-            "limit": "主人规矩",
             "task": "侍奉任务",
+            "limit": "主人规矩",
             "pose": "服从姿势",
             "clear": "主人放行",
             "extend": "侍奉加时",
@@ -780,15 +667,14 @@ THEME_CELL_STYLES = {
             "place": ("厨房", "沙发", "床尾", "门后", "化妆台"),
             "prop": ("项圈", "铃铛项圈", "吊袜带"),
             "limit": ("不准", "命令", "验收", "允许"),
-            "task": ("伺候", "命令", "验收", "夸乖", "围裙"),
         },
     },
     "大小姐管家play": {
         "cell_names": {
             "lock": "大小姐扣留",
             "place": "宅邸地点",
-            "limit": "礼仪规矩",
             "task": "管家侍奉",
+            "limit": "礼仪规矩",
             "pose": "礼仪验收",
             "clear": "大小姐放行",
             "extend": "侍奉加时",
@@ -800,15 +686,14 @@ THEME_CELL_STYLES = {
             "place": ("沙发", "玄关", "厨房", "化妆台", "衣帽间", "床尾"),
             "prop": ("项圈", "铃铛项圈", "胸链"),
             "limit": ("小玥", "不准", "命令", "验收", "允许"),
-            "task": ("小玥", "伺候", "命令", "验收", "夸乖", "围裙"),
         },
     },
     "医生检查play": {
         "cell_names": {
             "lock": "检查暂停",
             "place": "检查地点",
-            "limit": "检查规矩",
             "task": "检查项目",
+            "limit": "检查规矩",
             "pose": "检查姿势",
             "clear": "检查结束",
             "extend": "复查延长",
@@ -820,15 +705,14 @@ THEME_CELL_STYLES = {
             "place": ("按摩床", "洗手台", "浴室", "床尾"),
             "prop": ("眼罩", "润滑液", "束缚带"),
             "limit": ("不准", "检查", "允许", "报备"),
-            "task": ("检查", "报备", "命令", "验收"),
         },
     },
     "秘书老板play": {
         "cell_names": {
             "lock": "老板扣留",
             "place": "办公室地点",
-            "limit": "老板规矩",
             "task": "秘书任务",
+            "limit": "老板规矩",
             "pose": "汇报姿势",
             "clear": "老板批准",
             "extend": "加班延长",
@@ -840,15 +724,14 @@ THEME_CELL_STYLES = {
             "place": ("KTV", "车后座"),
             "prop": ("胸链", "眼罩"),
             "limit": ("不准", "申请", "报备", "允许"),
-            "task": ("报备", "命令", "检查", "验收", "台词"),
         },
     },
     "成人补课play": {
         "cell_names": {
             "lock": "补课罚停",
             "place": "补课地点",
-            "limit": "补课规矩",
             "task": "课后作业",
+            "limit": "补课规矩",
             "pose": "验收姿势",
             "clear": "下课放行",
             "extend": "补课加时",
@@ -860,15 +743,14 @@ THEME_CELL_STYLES = {
             "place": ("教室", "图书馆", "沙发", "床尾"),
             "prop": ("戒尺", "眼罩"),
             "limit": ("不准", "允许", "申请", "报备"),
-            "task": ("报备", "检查", "命令", "羞耻", "台词"),
         },
     },
     "骑士公主play": {
         "cell_names": {
             "lock": "骑士扣留",
             "place": "城堡地点",
-            "limit": "骑士誓约",
             "task": "守护命令",
+            "limit": "骑士誓约",
             "pose": "宣誓姿势",
             "clear": "公主放行",
             "extend": "誓约加时",
@@ -880,15 +762,14 @@ THEME_CELL_STYLES = {
             "place": ("小木屋", "床尾", "阳台"),
             "prop": ("项圈", "牵引绳", "丝带", "胸链"),
             "limit": ("不准", "允许", "申请", "报备"),
-            "task": ("命令", "报备", "检查", "验收", "标记"),
         },
     },
     "吸血鬼人类play": {
         "cell_names": {
             "lock": "夜色扣留",
             "place": "夜间地点",
-            "limit": "眷属规矩",
             "task": "吸血鬼发令",
+            "limit": "眷属规矩",
             "pose": "标记验收",
             "clear": "暂时放行",
             "extend": "夜色加时",
@@ -900,7 +781,6 @@ THEME_CELL_STYLES = {
             "place": ("浴室", "床尾", "门后", "小木屋", "天台"),
             "prop": ("项圈", "牵引绳", "眼罩", "丝带"),
             "limit": ("小玥", "不准", "命令", "验收", "允许"),
-            "task": ("小玥", "命令", "验收", "标记", "伺候"),
         },
     },
 }
@@ -942,7 +822,7 @@ def _cell_event_key(event: dict[str, Any]) -> str:
     slot = str(event.get("slot") or "").strip()
     if kind in {"reward", "forward_reward", "clear_reward", "penalty_review", "penalty_choice"}:
         return kind
-    if kind == "state" and slot in {"theme", "place", "prop", "task", "limit", "pose"}:
+    if kind == "state" and slot in {"theme", "place", "prop", "limit", "pose"}:
         return slot
     if kind in {"lock", "clear", "extend", "swap", "back", "forward", "replace", "move_self", "move_other", "move_both", "reset_self", "reset_all", "reset_other", "finish_self"}:
         return kind
@@ -1174,7 +1054,6 @@ def _create_review_pending_event(state: dict[str, Any], actor: str, cell: int) -
         "actor": actor,
         "reviewer": reviewer,
         "phase": "questioning" if question_prompt else "assigned",
-        "task": str(card.get("task") or ""),
         "submission": str(card.get("submission") or ""),
         "question_prompt": question_prompt,
         "question_text": "",
@@ -1294,7 +1173,7 @@ def run_command(command: str = "", save_path: str | Path | None = None) -> dict[
             return _result(state, lines, command=command or "submit")
 
         if action == "approve":
-            lines = _approve_pending_event(state)
+            lines = _approve_pending_event(state, str(args.get("text") or ""))
             _save_state(path, state)
             return _result(state, lines, command=command or "approve")
 
@@ -1433,6 +1312,8 @@ def _parse_command(command: str) -> tuple[str, dict[str, Any]]:
     if dice:
         args["dice"] = dice
     if action == "submit":
+        args["text"] = _raw_tail(raw, parts)
+    elif action == "approve":
         args["text"] = _raw_tail(raw, parts)
     elif action == "choose":
         args["choice_id"] = _raw_tail(raw, parts) or (parts[1] if len(parts) > 1 else "")
@@ -1628,6 +1509,8 @@ def _normalize_final_append_durations(state: dict[str, Any], target: str) -> Non
 
 
 def _status_item_allowed(item: dict[str, Any]) -> bool:
+    if str(item.get("slot") or "").strip() == "task":
+        return False
     if str(item.get("slot") or "") != "prop":
         return True
     return str(item.get("value") or "").strip() not in INVALID_PROP_VALUES
@@ -1938,7 +1821,7 @@ def _submit_pending_event(state: dict[str, Any], text: str) -> list[str]:
     return [line]
 
 
-def _approve_pending_event(state: dict[str, Any]) -> list[str]:
+def _approve_pending_event(state: dict[str, Any], feedback: str = "") -> list[str]:
     pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else None
     if not pending:
         return ["当前没有待验收的惩罚任务。"]
@@ -1951,6 +1834,9 @@ def _approve_pending_event(state: dict[str, Any]) -> list[str]:
     name = str(pending.get("name") or "惩罚任务")
     state["pending_event"] = None
     lines = [f"{_name(reviewer, DU_VIEW_NAMES)}通过了{_name(actor, DU_VIEW_NAMES)}的「{name}」。"]
+    feedback_text = str(feedback or "").strip()
+    if feedback_text:
+        lines.append(f"验收反馈：{feedback_text}")
     pass_result = str(pending.get("pass_result") or "").strip()
     if pass_result:
         lines.append(pass_result)
@@ -2362,13 +2248,6 @@ def _filter_options_for_actor(actor: str, slot_key: str, options: list[str]) -> 
 def _filter_options_for_theme(state: dict[str, Any], slot_key: str, options: list[str]) -> list[str]:
     if slot_key == "limit":
         return options
-    if slot_key not in {"task", "limit"}:
-        return _prefer_options_for_theme(state, slot_key, options)
-    direction = str((state.get("theme_profile") or {}).get("direction") or "").strip()
-    if direction == "du_leads":
-        return _prefer_options_for_theme(state, slot_key, _filter_du_leads_options(slot_key, options))
-    if direction == "xinyue_leads":
-        return _prefer_options_for_theme(state, slot_key, _filter_xinyue_leads_options(slot_key, options))
     return _prefer_options_for_theme(state, slot_key, options)
 
 
@@ -2382,31 +2261,6 @@ def _prefer_options_for_theme(state: dict[str, Any], slot_key: str, options: lis
         return options
     filtered = [item for item in options if _contains_any(item, patterns)]
     return filtered or options
-
-
-def _filter_du_leads_options(slot_key: str, options: list[str]) -> list[str]:
-    if slot_key == "task":
-        filtered = [
-            item
-            for item in options
-            if not _contains_any(item, BOARD_XINYUE_CONTROL_TASK_PATTERNS)
-        ]
-        return filtered or options
-    return options
-
-
-def _filter_xinyue_leads_options(slot_key: str, options: list[str]) -> list[str]:
-    if slot_key == "task":
-        preferred = [
-            item
-            for item in options
-            if _contains_any(item, BOARD_XINYUE_CONTROL_TASK_PATTERNS)
-            or _contains_any(item, ("伺候小玥", "给小玥看", "交给小玥", "听小玥", "小玥决定", "小玥命令"))
-        ]
-        pool = preferred or options
-        filtered = [item for item in pool if not _contains_any(item, DU_CONTROL_TASK_PATTERNS)]
-        return filtered or pool or options
-    return options
 
 
 def _contains_any(text: str, patterns: tuple[str, ...]) -> bool:
@@ -2810,7 +2664,7 @@ def _result(state: dict[str, Any], lines: list[str], *, command: str, ok: bool =
         "game_over": bool(state.get("game_over")),
         "winner": str(state.get("winner") or ""),
         "result": str(state.get("result") or ""),
-        "commands": ["打开", "status", "roll", "roll 3", "submit 内容", "approve", "reject", "choose 选项", "pass", "new_game", "end_game"],
+        "commands": ["打开", "status", "roll", "roll 3", "submit 内容", "approve [反馈]", "reject [理由]", "choose 选项", "pass", "new_game", "end_game"],
     }
 
 
