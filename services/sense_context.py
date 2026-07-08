@@ -117,9 +117,12 @@ def _format_duration_minutes(minutes: int) -> str:
 
 
 def _screen_off_duration_minutes(screen: dict) -> tuple[int | None, Any]:
-    if str(screen.get("event") or "").strip().lower() != "screen_off":
+    event = str(screen.get("event") or "").strip().lower()
+    since_raw = str(screen.get("screenOffSince") or "").strip()
+    if not since_raw and event == "screen_off":
+        since_raw = str(screen.get("occurredAt") or "").strip()
+    if not since_raw:
         return None, None
-    since_raw = str(screen.get("screenOffSince") or screen.get("occurredAt") or "").strip()
     since_dt = parse_iso_to_beijing(since_raw)
     now_dt = parse_iso_to_beijing(now_beijing_iso())
     if since_dt and now_dt:

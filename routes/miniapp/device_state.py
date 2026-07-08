@@ -9,6 +9,7 @@ from urllib.parse import quote
 from flask import Response, jsonify, request
 
 from storage import r2_store
+from storage.sense_store import mark_screen_awake_from_foreground
 from utils.time_aware import now_beijing_iso, today_beijing
 
 
@@ -453,9 +454,6 @@ def register_routes(bp) -> None:
                 duration_ms = 0
             if duration_ms >= 0:
                 patch["screenOffDurationMs"] = duration_ms
-        elif event in {"screen_on", "user_present"} or (event == "app_active" and interactive):
-            patch["screenOffSince"] = ""
-            patch["screenOffDurationMs"] = 0
         if _is_duplicate_report_write("screen", device_id, patch):
             return _reporting_deduped_response("screen", device_id)
         ok = r2_store.merge_and_save_sense_bucket("screen", patch)
@@ -564,9 +562,10 @@ def register_routes(bp) -> None:
             return _reporting_deduped_response("foreground", device_id)
         ok = r2_store.merge_and_save_sense_bucket("foreground", patch or {})
         sessions_ok = r2_store.update_app_sessions_from_foreground(patch or {})
-        if ok and sessions_ok:
+        screen_awake_ok = mark_screen_awake_from_foreground(patch or {})
+        if ok and sessions_ok and screen_awake_ok:
             _remember_report_write("foreground", device_id, patch or {})
-        return jsonify({"ok": bool(ok and sessions_ok), "bucket": "foreground", "device_id": device_id})
+        return jsonify({"ok": bool(ok and sessions_ok and screen_awake_ok), "bucket": "foreground", "device_id": device_id})
 
     @bp.route("/device-state/location", methods=["POST"])
     def miniapp_device_location_state():

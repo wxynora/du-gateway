@@ -46,6 +46,14 @@ _SLEEP_INTENT_OTHER_SUBJECT_RE = re.compile(
     r"(你|渡|笨笨|笨笨机|模型|assistant)(?:先|要|准备|打算|去|该|真的|马上)?睡",
     re.IGNORECASE,
 )
+_SLEEP_RETROSPECTIVE_RE = re.compile(
+    r"(睡了[^，。！？\n]*(?:小时|分钟|钟|一会儿?|一觉)|睡醒|睡过|睡够|睡不够|睡得|刚睡|睡眠)",
+    re.IGNORECASE,
+)
+_SLEEP_AWAY_EXACT_RE = re.compile(
+    r"^(?:睡了|睡觉(?:了|啦)?|晚安(?:啦|了|喽|呀)?)[。.!！~～…\s]*$",
+    re.IGNORECASE,
+)
 
 _XHS_PACKAGES = {"com.xingin.xhs"}
 _XHS_NAME_HINTS = ("小红书", "xiaohongshu", "xhs", "rednote")
@@ -53,11 +61,6 @@ _AWAY_INTENT_HINTS = (
     "我去洗澡",
     "去洗澡",
     "洗澡去了",
-    "我去睡",
-    "去睡",
-    "睡觉",
-    "睡了",
-    "晚安",
     "我去吃饭",
     "去吃饭",
     "我去做饭",
@@ -138,7 +141,8 @@ def _event_time(data: dict) -> str:
 
 
 def _is_screen_on(data: dict) -> bool:
-    return str((data or {}).get("event") or "").strip().lower() in {"screen_on", "user_present"}
+    event = str((data or {}).get("event") or "").strip().lower()
+    return event == "app_active" and str((data or {}).get("screenWakeSource") or "").strip() == "foreground_app"
 
 
 def _is_screen_off(data: dict) -> bool:
@@ -148,10 +152,9 @@ def _is_screen_off(data: dict) -> bool:
 def _is_screen_currently_on(doc: dict) -> bool:
     screen = doc.get("screen") if isinstance(doc.get("screen"), dict) else {}
     event = str(screen.get("event") or "").strip().lower()
-    interactive = screen.get("interactive")
-    if event in {"screen_on", "user_present", "app_active"}:
+    if event == "app_active" and str(screen.get("screenWakeSource") or "").strip() == "foreground_app":
         return True
-    return interactive is True or str(interactive).strip().lower() in {"1", "true", "yes", "on"}
+    return False
 
 
 def _device_id(doc: dict) -> str:
@@ -374,7 +377,15 @@ def _user_announced_away(text: str) -> bool:
     s = str(text or "").strip()
     if not s:
         return False
-    return any(h in s for h in _AWAY_INTENT_HINTS)
+    if any(h in s for h in _AWAY_INTENT_HINTS):
+        return True
+    if _SLEEP_RETROSPECTIVE_RE.search(s):
+        return False
+    if _SLEEP_INTENT_META_RE.search(s) or _SLEEP_INTENT_OTHER_SUBJECT_RE.search(s):
+        return False
+    if _SLEEP_INTENT_NEGATION_OR_QUESTION_RE.search(s):
+        return False
+    return bool(_SLEEP_INTENT_RE.search(s) or _SLEEP_AWAY_EXACT_RE.search(s))
 
 
 def _has_user_reply_after(at_dt: datetime) -> bool:

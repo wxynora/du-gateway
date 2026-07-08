@@ -768,7 +768,8 @@ def _recent_awake_signal(screen: dict, now_dt: datetime) -> bool:
         "yes",
         "on",
     }
-    if event not in {"screen_on", "user_present"} and not (event == "app_active" and interactive):
+    explicit_foreground = str((screen or {}).get("screenWakeSource") or "").strip() == "foreground_app"
+    if not (event == "app_active" and interactive and explicit_foreground):
         return False
     minutes = _minutes_since(
         (screen or {}).get("observedAt") or (screen or {}).get("occurredAt") or (screen or {}).get("lastSeen") or (screen or {}).get("updatedAt"),
@@ -778,9 +779,12 @@ def _recent_awake_signal(screen: dict, now_dt: datetime) -> bool:
 
 
 def _screen_off_minutes(screen: dict, now_dt: datetime) -> float | None:
-    if str((screen or {}).get("event") or "").strip().lower() != "screen_off":
+    event = str((screen or {}).get("event") or "").strip().lower()
+    since = (screen or {}).get("screenOffSince")
+    if not since and event == "screen_off":
+        since = (screen or {}).get("lastScreenOffAt") or (screen or {}).get("occurredAt")
+    if not since:
         return None
-    since = (screen or {}).get("screenOffSince") or (screen or {}).get("lastScreenOffAt") or (screen or {}).get("occurredAt")
     minutes = _minutes_since(since, now_dt)
     if minutes is not None:
         return minutes if minutes <= PIXEL_HOME_SCREEN_LOOKBACK_MINUTES else None
@@ -863,7 +867,8 @@ def build_sleep_wakeup_state(now_dt: datetime | None = None) -> dict:
             "yes",
             "on",
         }
-        if screen_event in {"screen_on", "user_present"} or (screen_event == "app_active" and screen_interactive):
+        explicit_foreground = str(screen.get("screenWakeSource") or "").strip() == "foreground_app"
+        if screen_event == "app_active" and screen_interactive and explicit_foreground:
             sleeping = False
             source = "awake_screen_latest"
             screen = {}

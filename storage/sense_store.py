@@ -8,9 +8,11 @@ from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing, today_beijing
 
 R2_KEY_SENSE_LATEST = "sense/latest.json"
+R2_KEY_SLEEP_SUMMARY_LATEST = "sense/sleep_summary/latest.json"
 _SENSE_HISTORY_CAP = 200
 _SENSE_HISTORY_READ_DEFAULT_LIMIT = 200
 _SENSE_HISTORY_TTL_HOURS = 24
+_SLEEP_SUMMARY_TTL_HOURS = 36
 _SENSE_HISTORY_LATEST_ONLY_TYPES = {"usage"}
 _SENSE_HISTORY_MIN_INTERVAL_SECONDS = {
     "battery": 30 * 60,
@@ -23,6 +25,26 @@ _SLEEP_CORE_BLOCK_MIN_MINUTES = 45
 _SLEEP_BLOCK_MERGE_GAP_MINUTES = 180
 _SLEEP_SHORT_EXTENSION_GAP_MINUTES = 30
 _SLEEP_SEGMENT_KEEP = 8
+_AWAKE_FOREGROUND_BLOCKLIST_EXACT = {
+    "android",
+    "com.android.deskclock",
+    "com.android.launcher",
+    "com.android.launcher3",
+    "com.android.systemui",
+    "com.google.android.deskclock",
+    "com.google.android.apps.nexuslauncher",
+    "com.miui.home",
+    "com.miui.systemui",
+    "com.sohu.inputmethod.sogou.xiaomi",
+}
+_AWAKE_FOREGROUND_BLOCKLIST_PARTS = (
+    "alarm",
+    "deskclock",
+    "inputmethod",
+    "keyboard",
+    "launcher",
+    "systemui",
+)
 
 _sense_write_lock = threading.Lock()
 _sense_bootstrap_lock = threading.Lock()
@@ -61,6 +83,15 @@ def _sense_history_expires_at(at: str) -> str:
     if not dt:
         dt = datetime.now(timezone.utc)
     return (dt + timedelta(hours=_SENSE_HISTORY_TTL_HOURS)).isoformat()
+
+
+def _sleep_summary_expires_at(at: str) -> str:
+    dt = parse_iso_to_beijing(str(at or "").strip())
+    if not dt:
+        dt = parse_iso_to_beijing(now_beijing_iso())
+    if not dt:
+        dt = datetime.now(timezone.utc)
+    return (dt + timedelta(hours=_SLEEP_SUMMARY_TTL_HOURS)).isoformat()
 
 
 def _prune_sense_history(conn, day: str = "") -> None:
@@ -304,6 +335,27 @@ def _sleep_summary_from_segments(device_id: str, night_date: str, segments: list
     }
 
 
+def _persist_sleep_summary(summary: dict, updated_at: str = "") -> None:
+    if not isinstance(summary, dict) or not summary.get("nightDate"):
+        return
+    client = _s3_client()
+    if not client:
+        return
+    night_date = str(summary.get("nightDate") or "").strip()
+    clean_updated_at = str(updated_at or now_beijing_iso())
+    payload = {
+        "ok": True,
+        "updatedAt": clean_updated_at,
+        "expiresAt": _sleep_summary_expires_at(clean_updated_at),
+        "summary": summary,
+    }
+    try:
+        _write_json(client, R2_KEY_SLEEP_SUMMARY_LATEST, payload)
+        _write_json(client, f"sense/sleep_summary/{night_date}.json", payload)
+    except Exception as e:
+        logger.warning("sleep summary durable persist failed night=%s error=%s", night_date, e)
+
+
 def _merge_sleep_summary(previous: dict, block: dict) -> tuple[dict | None, str]:
     start_dt = _dt(block.get("startAt"))
     end_dt = _dt(block.get("endAt"))
@@ -360,14 +412,23 @@ def _truthy_value(value: Any) -> bool:
     return value is True or str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _is_explicit_foreground_wake(data: dict) -> bool:
+    if str((data or {}).get("screenWakeSource") or "").strip() != "foreground_app":
+        return False
+    pkg = str((data or {}).get("foregroundPackageName") or (data or {}).get("packageName") or "").strip().lower()
+    if not pkg:
+        return False
+    if pkg in _AWAKE_FOREGROUND_BLOCKLIST_EXACT:
+        return False
+    return not any(part in pkg for part in _AWAKE_FOREGROUND_BLOCKLIST_PARTS)
+
+
 def _screen_logical_state(data: dict) -> str:
     event = str((data or {}).get("event") or "").strip().lower()
-    if event == "screen_off":
+    if event == "app_active" and _truthy_value((data or {}).get("interactive")) and _is_explicit_foreground_wake(data):
+        return "on"
+    if event == "screen_off" or str((data or {}).get("screenOffSince") or "").strip():
         return "off"
-    if event in {"screen_on", "user_present"}:
-        return "on"
-    if event == "app_active" and _truthy_value((data or {}).get("interactive")):
-        return "on"
     return ""
 
 
@@ -589,6 +650,35 @@ def update_app_sessions_from_foreground(foreground_patch: dict) -> bool:
             return False
 
 
+def mark_screen_awake_from_foreground(foreground_patch: dict) -> bool:
+    """End a sleep block only when a real foreground app, not alarm/home/system UI, is observed."""
+    if not isinstance(foreground_patch, dict):
+        return True
+    device_id = str(foreground_patch.get("deviceId") or "").strip()
+    pkg = str(foreground_patch.get("packageName") or "").strip()
+    app_name = str(foreground_patch.get("appName") or pkg).strip() or pkg
+    if not device_id or not pkg:
+        return True
+    screen_patch = {
+        "deviceId": device_id,
+        "event": "app_active",
+        "interactive": True,
+        "occurredAt": str(foreground_patch.get("observedAt") or "").strip() or now_beijing_iso(),
+        "observedAt": str(foreground_patch.get("observedAt") or "").strip() or now_beijing_iso(),
+        "snapshot": False,
+        "screenWakeSource": "foreground_app",
+        "foregroundPackageName": pkg[:160],
+        "foregroundAppName": app_name[:80],
+        "updatedAt": now_beijing_iso(),
+    }
+    class_name = str(foreground_patch.get("className") or "").strip()
+    if class_name:
+        screen_patch["foregroundClassName"] = class_name[:240]
+    if not _is_explicit_foreground_wake(screen_patch):
+        return True
+    return merge_and_save_sense_bucket("screen", screen_patch)
+
+
 def close_app_session_for_device(device_id: str, ended_at: str = "", reason: str = "screen_off") -> bool:
     did = str(device_id or "").strip()
     if not did:
@@ -646,6 +736,8 @@ def merge_and_save_sense_bucket(sense_type: str, patch: dict) -> bool:
     if not key:
         return False
     _ensure_sense_bootstrapped()
+    sleep_summary_to_persist = None
+    sleep_summary_updated_at = ""
     with _sense_write_lock:
         try:
             with runtime_sqlite.connect() as conn:
@@ -655,6 +747,7 @@ def merge_and_save_sense_bucket(sense_type: str, patch: dict) -> bool:
                     bucket = doc.get(key)
                     if not isinstance(bucket, dict):
                         bucket = {}
+                    previous_sleep_summary = bucket.get("sleepSummary") if key == "screen" and isinstance(bucket.get("sleepSummary"), dict) else {}
                     if key == "screen":
                         merged = _prepare_screen_bucket_snapshot(bucket, patch)
                     else:
@@ -664,12 +757,19 @@ def merge_and_save_sense_bucket(sense_type: str, patch: dict) -> bool:
                     if key == "battery":
                         merged.pop("power", None)
                     merged["updatedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    if key == "screen":
+                        next_sleep_summary = merged.get("sleepSummary") if isinstance(merged.get("sleepSummary"), dict) else {}
+                        if next_sleep_summary and next_sleep_summary != previous_sleep_summary:
+                            sleep_summary_to_persist = dict(next_sleep_summary)
+                            sleep_summary_updated_at = str(merged.get("updatedAt") or now_beijing_iso())
                     _save_sense_latest_bucket(conn, key, merged)
                     _append_sense_history_event(conn, key, dict(merged))
                     conn.execute("COMMIT")
                 except Exception:
                     conn.execute("ROLLBACK")
                     raise
+            if sleep_summary_to_persist:
+                _persist_sleep_summary(sleep_summary_to_persist, sleep_summary_updated_at)
             return True
         except Exception as e:
             logger.error("merge_and_save_sense_bucket 失败 type=%s error=%s", key, e, exc_info=True)
@@ -714,7 +814,7 @@ def _sense_history_should_append(existing: list, sense_type: str, bucket_snapsho
 
     if key == "screen":
         event = str(data.get("event") or "").strip().lower()
-        if event == "app_active":
+        if event == "app_active" and not _is_explicit_foreground_wake(data):
             return False
         state = _screen_logical_state(data)
         last_state = _screen_logical_state(last_data)
