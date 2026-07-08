@@ -25,6 +25,18 @@ _SLEEP_CORE_BLOCK_MIN_MINUTES = 45
 _SLEEP_BLOCK_MERGE_GAP_MINUTES = 180
 _SLEEP_SHORT_EXTENSION_GAP_MINUTES = 30
 _SLEEP_SEGMENT_KEEP = 8
+_DAY_SLEEP_MIN_MINUTES = 45
+_DAY_SLEEP_SCORE_PASS = 6
+_DAY_SLEEP_POSITIVE_SIGNAL_PASS = 2
+_DAY_SLEEP_STEPS_LOW_DELTA = 120
+_DAY_SLEEP_STEPS_HIGH_DELTA = 500
+_DAY_SLEEP_RESTING_HEART_RATE = 78
+_DAY_SLEEP_ELEVATED_HEART_RATE = 95
+_DAY_SLEEP_HIGH_HEART_RATE = 110
+_DAY_SLEEP_LOCATION_STABLE_METERS = 150.0
+_DAY_SLEEP_LOCATION_MOVE_VETO_METERS = 800.0
+_DAY_SLEEP_SPEED_VETO_MPS = 2.0
+_DAY_SLEEP_INTERIOR_MARGIN_MINUTES = 3
 _AWAKE_FOREGROUND_BLOCKLIST_EXACT = {
     "android",
     "com.android.deskclock",
@@ -263,6 +275,26 @@ def _sleep_block_minutes(duration_ms: int) -> int:
     return max(0, int(duration_ms or 0) // 60000)
 
 
+def _minute_of_day(dt: datetime) -> int:
+    return dt.hour * 60 + dt.minute
+
+
+def _block_midpoint(start_dt: datetime, end_dt: datetime) -> datetime:
+    return start_dt + (end_dt - start_dt) / 2
+
+
+def _is_day_sleep_candidate_window(start_dt: datetime, end_dt: datetime) -> bool:
+    if start_dt.date() != end_dt.date():
+        return False
+    mid_minute = _minute_of_day(_block_midpoint(start_dt, end_dt))
+    return 11 * 60 <= mid_minute <= 18 * 60 + 30
+
+
+def _is_day_sleep_core_window(start_dt: datetime, end_dt: datetime) -> bool:
+    mid_minute = _minute_of_day(_block_midpoint(start_dt, end_dt))
+    return 12 * 60 <= mid_minute <= 16 * 60 + 30
+
+
 def _is_sleep_window(start_dt: datetime, end_dt: datetime) -> bool:
     return start_dt.hour >= 18 or start_dt.hour < 11 or end_dt.hour < 12
 
@@ -270,6 +302,8 @@ def _is_sleep_window(start_dt: datetime, end_dt: datetime) -> bool:
 def _is_sleep_like_screen_off_block(start_dt: datetime, end_dt: datetime, duration_ms: int) -> bool:
     minutes = _sleep_block_minutes(duration_ms)
     if minutes < _SLEEP_BLOCK_MIN_MINUTES:
+        return False
+    if _is_day_sleep_candidate_window(start_dt, end_dt):
         return False
     if minutes >= 4 * 60:
         return True
@@ -330,6 +364,21 @@ def _sleep_summary_from_segments(device_id: str, night_date: str, segments: list
         "totalMinutes": max(0, total_ms // 60000),
         "awakeGapMs": gap_ms,
         "awakeGapMinutes": max(0, gap_ms // 60000),
+        "segmentCount": len(rows),
+        "segments": rows,
+    }
+
+
+def _day_sleep_summary_from_segments(device_id: str, day_date: str, segments: list[dict]) -> dict:
+    rows = _compact_sleep_segments(segments, device_id)
+    total_ms = sum(max(0, int(item.get("durationMs") or 0)) for item in rows)
+    return {
+        "deviceId": device_id,
+        "dayDate": day_date,
+        "startAt": rows[0].get("startAt") if rows else "",
+        "endAt": rows[-1].get("endAt") if rows else "",
+        "totalDurationMs": total_ms,
+        "totalMinutes": max(0, total_ms // 60000),
         "segmentCount": len(rows),
         "segments": rows,
     }
@@ -398,6 +447,311 @@ def _merge_sleep_summary(previous: dict, block: dict) -> tuple[dict | None, str]
     return _sleep_summary_from_segments(device_id, night_date, segments), "short_extension"
 
 
+def _int_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(str(value).replace(",", "").strip()))
+    except Exception:
+        return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _event_dt_from_data(data: dict, fallback: str = "") -> Optional[datetime]:
+    if not isinstance(data, dict):
+        data = {}
+    for key in ("observedAt", "occurredAt", "capturedAt", "lastSeenAt", "lastActivityAt", "updatedAt"):
+        dt = _dt(data.get(key))
+        if dt:
+            return dt
+    return _dt(fallback)
+
+
+def _history_dt(item: dict) -> Optional[datetime]:
+    data = item.get("data") if isinstance(item.get("data"), dict) else {}
+    return _event_dt_from_data(data, str(item.get("at") or ""))
+
+
+def _latest_bucket_sample(latest_doc: dict, key: str, start_dt: datetime, end_dt: datetime, before_minutes: int = 0) -> tuple[datetime, dict] | None:
+    if not isinstance(latest_doc, dict):
+        return None
+    data = latest_doc.get(key)
+    if not isinstance(data, dict):
+        return None
+    at = _event_dt_from_data(data, "")
+    if not at:
+        return None
+    if start_dt - timedelta(minutes=max(0, before_minutes)) <= at <= end_dt:
+        return at, data
+    return None
+
+
+def _history_samples(history: list[dict], key: str, start_dt: datetime, end_dt: datetime, before_minutes: int = 0) -> list[tuple[datetime, dict]]:
+    out: list[tuple[datetime, dict]] = []
+    since = start_dt - timedelta(minutes=max(0, before_minutes))
+    for item in history or []:
+        if not isinstance(item, dict) or str(item.get("type") or "").strip() != key:
+            continue
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        at = _history_dt(item)
+        if at and since <= at <= end_dt:
+            out.append((at, data))
+    out.sort(key=lambda row: row[0])
+    return out
+
+
+def _dedupe_samples(samples: list[tuple[datetime, dict]]) -> list[tuple[datetime, dict]]:
+    out: list[tuple[datetime, dict]] = []
+    seen: set[tuple[str, str]] = set()
+    for at, data in samples:
+        marker = (at.isoformat(), runtime_sqlite.json_dumps(data if isinstance(data, dict) else {}))
+        if marker in seen:
+            continue
+        seen.add(marker)
+        out.append((at, data))
+    out.sort(key=lambda row: row[0])
+    return out
+
+
+def _health_samples(latest_doc: dict, history: list[dict], start_dt: datetime, end_dt: datetime) -> list[tuple[datetime, dict]]:
+    samples = _history_samples(history, "health", start_dt, end_dt, before_minutes=30)
+    latest = _latest_bucket_sample(latest_doc, "health", start_dt, end_dt, before_minutes=30)
+    if latest:
+        samples.append(latest)
+    return _dedupe_samples(samples)
+
+
+def _location_samples(latest_doc: dict, history: list[dict], start_dt: datetime, end_dt: datetime) -> list[tuple[datetime, dict]]:
+    samples = _history_samples(history, "location", start_dt, end_dt, before_minutes=30)
+    latest = _latest_bucket_sample(latest_doc, "location", start_dt, end_dt, before_minutes=30)
+    if latest:
+        samples.append(latest)
+    return _dedupe_samples(samples)
+
+
+def _distance_meters(a_lat: float, a_lng: float, b_lat: float, b_lng: float) -> float:
+    from math import asin, cos, radians, sin, sqrt
+
+    radius_m = 6371000.0
+    d_lat = radians(b_lat - a_lat)
+    d_lng = radians(b_lng - a_lng)
+    lat1 = radians(a_lat)
+    lat2 = radians(b_lat)
+    h = sin(d_lat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(d_lng / 2) ** 2
+    return 2 * radius_m * asin(min(1.0, sqrt(h)))
+
+
+def _real_foreground_package(data: dict) -> str:
+    pkg = str((data or {}).get("packageName") or (data or {}).get("foregroundPackageName") or "").strip().lower()
+    if not pkg:
+        return ""
+    if pkg in _AWAKE_FOREGROUND_BLOCKLIST_EXACT:
+        return ""
+    if any(part in pkg for part in _AWAKE_FOREGROUND_BLOCKLIST_PARTS):
+        return ""
+    return pkg
+
+
+def _day_sleep_app_activity_vetoes(history: list[dict], start_dt: datetime, end_dt: datetime) -> list[str]:
+    vetoes: list[str] = []
+    inner_start = start_dt + timedelta(minutes=_DAY_SLEEP_INTERIOR_MARGIN_MINUTES)
+    inner_end = end_dt - timedelta(minutes=_DAY_SLEEP_INTERIOR_MARGIN_MINUTES)
+    if inner_end <= inner_start:
+        return vetoes
+
+    for item in history or []:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("type") or "").strip()
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        at = _history_dt(item)
+        if key == "foreground" and at and inner_start <= at <= inner_end:
+            pkg = _real_foreground_package(data)
+            if pkg:
+                vetoes.append(f"foreground_activity:{pkg}")
+        if key == "screen" and at and inner_start <= at <= inner_end:
+            event = str(data.get("event") or "").strip().lower()
+            if event == "app_active" and _is_explicit_foreground_wake(data):
+                pkg = _real_foreground_package(data)
+                vetoes.append(f"screen_app_active:{pkg or 'unknown'}")
+    return list(dict.fromkeys(vetoes))[:5]
+
+
+def _score_day_sleep_block(block: dict, latest_doc: dict, history: list[dict]) -> dict:
+    start_dt = _dt(block.get("startAt"))
+    end_dt = _dt(block.get("endAt"))
+    try:
+        duration_ms = int(block.get("durationMs") or 0)
+    except Exception:
+        duration_ms = 0
+    minutes = _sleep_block_minutes(duration_ms)
+    reasons: list[str] = []
+    vetoes: list[str] = []
+    positive_signals: list[str] = []
+    score = 0
+
+    def reject(summary_reason: str, classification: str = "rejected_day_sleep") -> dict:
+        confidence = 0.0 if vetoes else round(max(0, min(10, score)) / 10.0, 2)
+        return {
+            "classification": classification,
+            "sleepScore": score,
+            "sleepConfidence": confidence,
+            "positiveSignals": positive_signals,
+            "reasons": reasons,
+            "vetoes": vetoes,
+            "summaryReason": summary_reason,
+        }
+
+    if not start_dt or not end_dt or duration_ms <= 0:
+        return reject("invalid_block")
+    if minutes < _DAY_SLEEP_MIN_MINUTES:
+        reasons.append(f"duration_below_day_sleep_min:{minutes}m")
+        return reject("day_sleep_too_short")
+    if not _is_day_sleep_candidate_window(start_dt, end_dt):
+        reasons.append("outside_day_sleep_candidate_window")
+        return reject("outside_day_sleep_window", classification="not_day_sleep_candidate")
+
+    score += 1
+    reasons.append("day_sleep_candidate_window")
+    if _is_day_sleep_core_window(start_dt, end_dt):
+        score += 1
+        reasons.append("core_day_sleep_window")
+    if 60 <= minutes <= 240:
+        score += 2
+        reasons.append(f"duration_preferred:{minutes}m")
+    elif minutes > 360:
+        vetoes.append(f"duration_too_long_for_nap:{minutes}m")
+    else:
+        reasons.append(f"duration_possible:{minutes}m")
+
+    health_samples = _health_samples(latest_doc, history, start_dt, end_dt)
+    step_points = [(at, _int_or_none(data.get("steps"))) for at, data in health_samples]
+    step_points = [(at, steps) for at, steps in step_points if steps is not None]
+    if len(step_points) >= 2:
+        step_delta = max(0, step_points[-1][1] - step_points[0][1])
+        if step_delta <= _DAY_SLEEP_STEPS_LOW_DELTA:
+            score += 2
+            positive_signals.append("low_steps")
+            reasons.append(f"low_steps_delta:{step_delta}")
+        elif step_delta >= _DAY_SLEEP_STEPS_HIGH_DELTA:
+            vetoes.append(f"steps_delta_high:{step_delta}")
+        else:
+            score -= 1
+            reasons.append(f"steps_delta_moderate:{step_delta}")
+    elif step_points:
+        reasons.append("steps_single_sample")
+    else:
+        reasons.append("steps_missing")
+
+    inner_start = start_dt + timedelta(minutes=_DAY_SLEEP_INTERIOR_MARGIN_MINUTES)
+    inner_end = end_dt - timedelta(minutes=_DAY_SLEEP_INTERIOR_MARGIN_MINUTES)
+    hr_values = [
+        hr
+        for at, data in health_samples
+        for hr in [_int_or_none(data.get("heart_rate"))]
+        if hr is not None and (inner_start <= at <= inner_end if inner_end > inner_start else start_dt <= at <= end_dt)
+    ]
+    if hr_values:
+        avg_hr = sum(hr_values) / len(hr_values)
+        max_hr = max(hr_values)
+        min_hr = min(hr_values)
+        if max_hr >= _DAY_SLEEP_HIGH_HEART_RATE:
+            vetoes.append(f"heart_rate_high:{max_hr}")
+        elif min_hr <= _DAY_SLEEP_RESTING_HEART_RATE and avg_hr < _DAY_SLEEP_ELEVATED_HEART_RATE:
+            score += 2
+            positive_signals.append("low_heart_rate")
+            reasons.append(f"low_heart_rate:min{min_hr}_avg{round(avg_hr)}")
+        elif avg_hr >= _DAY_SLEEP_ELEVATED_HEART_RATE:
+            score -= 3
+            reasons.append(f"heart_rate_elevated:avg{round(avg_hr)}")
+        else:
+            reasons.append(f"heart_rate_neutral:avg{round(avg_hr)}")
+    else:
+        reasons.append("heart_rate_missing")
+
+    location_samples = _location_samples(latest_doc, history, start_dt, end_dt)
+    coords: list[tuple[float, float]] = []
+    high_speed = 0.0
+    for at, data in location_samples:
+        lat = _float_or_none(data.get("lat"))
+        lng = _float_or_none(data.get("lng"))
+        if lat is not None and lng is not None and start_dt - timedelta(minutes=30) <= at <= end_dt:
+            coords.append((lat, lng))
+        speed = _float_or_none(data.get("speed"))
+        if speed is not None and start_dt <= at <= end_dt:
+            high_speed = max(high_speed, speed)
+    if high_speed >= _DAY_SLEEP_SPEED_VETO_MPS:
+        vetoes.append(f"speed_high:{round(high_speed, 2)}mps")
+    if len(coords) >= 2:
+        origin_lat, origin_lng = coords[0]
+        max_distance = max(_distance_meters(origin_lat, origin_lng, lat, lng) for lat, lng in coords[1:])
+        if max_distance <= _DAY_SLEEP_LOCATION_STABLE_METERS:
+            score += 2
+            positive_signals.append("location_stable")
+            reasons.append(f"location_stable:{round(max_distance)}m")
+        elif max_distance >= _DAY_SLEEP_LOCATION_MOVE_VETO_METERS:
+            vetoes.append(f"location_moved:{round(max_distance)}m")
+        else:
+            score -= 2
+            reasons.append(f"location_changed:{round(max_distance)}m")
+    elif coords:
+        reasons.append("location_single_sample")
+    else:
+        reasons.append("location_missing")
+
+    app_vetoes = _day_sleep_app_activity_vetoes(history, start_dt, end_dt)
+    if app_vetoes:
+        vetoes.extend(app_vetoes)
+    else:
+        score += 2
+        positive_signals.append("phone_quiet")
+        reasons.append("no_real_app_activity_inside_block")
+
+    positive_signals[:] = list(dict.fromkeys(positive_signals))
+    vetoes[:] = list(dict.fromkeys(vetoes))
+    if vetoes:
+        return reject("day_sleep_vetoed")
+    if len(positive_signals) < _DAY_SLEEP_POSITIVE_SIGNAL_PASS:
+        return reject("day_sleep_insufficient_positive_signals")
+    if score < _DAY_SLEEP_SCORE_PASS:
+        return reject("day_sleep_low_confidence")
+    return {
+        "classification": "day_sleep",
+        "sleepScore": score,
+        "sleepConfidence": round(min(1.0, score / 10.0), 2),
+        "positiveSignals": positive_signals,
+        "reasons": reasons,
+        "vetoes": vetoes,
+        "summaryReason": "day_sleep",
+    }
+
+
+def _merge_day_sleep_summary(previous: dict, block: dict, latest_doc: dict, history: list[dict]) -> tuple[dict | None, dict]:
+    debug = _score_day_sleep_block(block, latest_doc, history)
+    if debug.get("classification") != "day_sleep":
+        return None, debug
+    start_dt = _dt(block.get("startAt"))
+    if not start_dt:
+        return None, debug
+    device_id = str(block.get("deviceId") or previous.get("deviceId") or "").strip()
+    day_date = start_dt.strftime("%Y-%m-%d")
+    current = previous.get("daySleepSummary") if isinstance(previous.get("daySleepSummary"), dict) else {}
+    segments = []
+    if current.get("dayDate") == day_date:
+        prev_segments = current.get("segments") if isinstance(current.get("segments"), list) else []
+        segments = list(prev_segments)
+    segments.append(block)
+    return _day_sleep_summary_from_segments(device_id, day_date, segments), debug
+
+
 def _screen_event_time(data: dict, fallback: str = "") -> str:
     return str(
         (data or {}).get("occurredAt")
@@ -432,7 +786,7 @@ def _screen_logical_state(data: dict) -> str:
     return ""
 
 
-def _prepare_screen_bucket_snapshot(previous: dict, patch: dict) -> dict:
+def _prepare_screen_bucket_snapshot(previous: dict, patch: dict, latest_doc: dict | None = None, history: list[dict] | None = None) -> dict:
     prev = previous if isinstance(previous, dict) else {}
     incoming = patch if isinstance(patch, dict) else {}
     merged = dict(prev)
@@ -471,10 +825,32 @@ def _prepare_screen_bucket_snapshot(previous: dict, patch: dict) -> dict:
             }
             summary, summary_reason = _merge_sleep_summary(prev, block)
             block["summaryIncluded"] = bool(summary)
-            block["summaryReason"] = summary_reason
+            block["mainSummaryReason"] = summary_reason
+            day_summary = None
+            if summary:
+                block["daySummaryIncluded"] = False
+                block["classification"] = "main_sleep"
+                block["sleepScore"] = 10
+                block["sleepConfidence"] = 1.0
+                block["positiveSignals"] = ["main_sleep_window"]
+                block["reasons"] = [f"main_sleep_summary:{summary_reason}"]
+                block["vetoes"] = []
+                block["summaryReason"] = summary_reason
+            else:
+                day_summary, day_debug = _merge_day_sleep_summary(prev, block, latest_doc or {}, history or [])
+                block["daySummaryIncluded"] = bool(day_summary)
+                block["classification"] = str(day_debug.get("classification") or "rejected_day_sleep")
+                block["sleepScore"] = int(day_debug.get("sleepScore") or 0)
+                block["sleepConfidence"] = day_debug.get("sleepConfidence") if day_debug.get("sleepConfidence") is not None else 0.0
+                block["positiveSignals"] = day_debug.get("positiveSignals") if isinstance(day_debug.get("positiveSignals"), list) else []
+                block["reasons"] = day_debug.get("reasons") if isinstance(day_debug.get("reasons"), list) else []
+                block["vetoes"] = day_debug.get("vetoes") if isinstance(day_debug.get("vetoes"), list) else []
+                block["summaryReason"] = str(day_debug.get("summaryReason") or summary_reason)
             merged["lastSleepBlock"] = block
             if summary:
                 merged["sleepSummary"] = summary
+            if day_summary:
+                merged["daySleepSummary"] = day_summary
             merged["lastScreenOffAt"] = prev_since
         merged["lastScreenOnAt"] = event_at
         merged["screenOffSince"] = ""
@@ -749,7 +1125,8 @@ def merge_and_save_sense_bucket(sense_type: str, patch: dict) -> bool:
                         bucket = {}
                     previous_sleep_summary = bucket.get("sleepSummary") if key == "screen" and isinstance(bucket.get("sleepSummary"), dict) else {}
                     if key == "screen":
-                        merged = _prepare_screen_bucket_snapshot(bucket, patch)
+                        history = _sense_history_rows_for_date(conn, today_beijing(), limit=None)
+                        merged = _prepare_screen_bucket_snapshot(bucket, patch, doc, history)
                     else:
                         merged = dict(bucket)
                         merged.update(patch)

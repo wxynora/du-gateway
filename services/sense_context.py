@@ -15,6 +15,7 @@ _MAX_SNAPSHOT_CHARS = 800
 _MAX_USAGE_APPS = 5
 _MAX_APP_SESSION_ITEMS = 5
 _SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES = 60
+_DAY_SLEEP_SUMMARY_DISPLAY_MIN_MINUTES = 45
 
 
 def _as_dict(v: Any) -> dict:
@@ -147,21 +148,35 @@ def _format_sleep_guess_line(screen: dict) -> str | None:
     return f"她可能睡着了：手机已连续熄屏 {duration}，期间没有明显手机操作。"
 
 
-def _format_last_sleep_summary_line(screen: dict) -> str | None:
-    summary = screen.get("sleepSummary")
-    if not isinstance(summary, dict):
-        return None
+def _sleep_summary_minutes(summary: dict) -> int:
     try:
         total_minutes = int(summary.get("totalMinutes") or 0)
     except Exception:
         total_minutes = 0
-    if total_minutes < _SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES:
+    if total_minutes > 0:
+        return total_minutes
+    try:
+        total_ms = int(summary.get("totalDurationMs") or 0)
+    except Exception:
+        total_ms = 0
+    return max(0, total_ms // 60000)
+
+
+def _recent_sleep_summary(summary: dict, min_minutes: int) -> tuple[int, Any, Any] | None:
+    if not isinstance(summary, dict):
+        return None
+    total_minutes = _sleep_summary_minutes(summary)
+    if total_minutes < min_minutes:
         return None
     start_dt = parse_iso_to_beijing(str(summary.get("startAt") or "").strip())
     end_dt = parse_iso_to_beijing(str(summary.get("endAt") or "").strip())
     now_dt = parse_iso_to_beijing(now_beijing_iso())
     if end_dt and now_dt and (now_dt - end_dt).total_seconds() > 24 * 3600:
         return None
+    return total_minutes, start_dt, end_dt
+
+
+def _format_sleep_summary_piece(label: str, summary: dict, total_minutes: int, start_dt: Any, end_dt: Any) -> str:
     duration = _format_duration_minutes(total_minutes)
     try:
         segment_count = int(summary.get("segmentCount") or 0)
@@ -174,12 +189,31 @@ def _format_last_sleep_summary_line(screen: dict) -> str | None:
     time_range = ""
     if start_dt and end_dt:
         time_range = f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')} "
-    parts = [f"最近睡眠推断：{time_range}累计熄屏睡眠 {duration}"]
+    parts = [f"{label} {time_range}累计 {duration}"]
     if segment_count > 1:
         parts.append(f"分 {segment_count} 段")
     if awake_gap_minutes > 0:
         parts.append(f"中间醒着约 {_format_duration_minutes(awake_gap_minutes)}")
-    return "，".join(parts) + "。"
+    return "，".join(parts)
+
+
+def _format_last_sleep_summary_line(screen: dict) -> str | None:
+    main = _recent_sleep_summary(_as_dict(screen.get("sleepSummary")), _SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES)
+    day = _recent_sleep_summary(_as_dict(screen.get("daySleepSummary")), _DAY_SLEEP_SUMMARY_DISPLAY_MIN_MINUTES)
+    if not main and not day:
+        return None
+    pieces: list[str] = []
+    total_24h = 0
+    if main:
+        minutes, start_dt, end_dt = main
+        total_24h += minutes
+        pieces.append(_format_sleep_summary_piece("主睡眠", _as_dict(screen.get("sleepSummary")), minutes, start_dt, end_dt))
+    if day:
+        minutes, start_dt, end_dt = day
+        total_24h += minutes
+        pieces.append(_format_sleep_summary_piece("午睡", _as_dict(screen.get("daySleepSummary")), minutes, start_dt, end_dt))
+    pieces.append(f"24h合计 {_format_duration_minutes(total_24h)}")
+    return "最近睡眠推断：" + "；".join(pieces) + "。"
 
 
 def _format_screen_line(screen: dict) -> str | None:
