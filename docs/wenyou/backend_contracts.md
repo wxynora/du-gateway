@@ -155,7 +155,7 @@ schemas/ability.schema.json
 
 - 核心仓库命名为通用文字副本跑团引擎，不绑定“主神”叙事。
 - `main_god_infinite` 作为默认内容包或示例 preset。
-- 当前项目里的私有角色名、R2、DeepSeek、MiniApp 绑定逻辑不进入核心规则层。
+- 当前项目里的私有角色名、R2、DeepSeek、MiniApp 绑定逻辑不进入核心规则层。运行时主存储优先使用可替换 Store；默认实现可以是 SQLite，R2 只作为旧数据回填或可选备份。
 - 新仓库应优先沉淀 `rulesets/`、`schemas/`、`content/` 和 `core/rules_engine`。
 - 适配层另放 `adapters/`，例如 Flask、Node、SQLite、Supabase、本地 JSON 存档等。
 

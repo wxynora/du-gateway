@@ -35,6 +35,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | MiniApp 小家 | `miniapp/src/ui/tabs/PixelHomeTab.tsx`、`services/pixel_home.py`、`storage/pixel_home_store.py`、`routes/miniapp/dashboard.py`、`miniapp/src/assets/life-home-*.png` | 「小家」生活感页面：按 `ui合集/赛博小家` 的单列布局和字体组织，实际小屋图、点击才出现的小点、赛博小家状态注入与事件唤醒 |
 | 文游规则入口 | `docs/wenyou_rules.md`、`docs/wenyou/*.md` | 开源版文游规则入口与拆分文档：核心循环、运行时状态缓存、副本生成、怪物系统、数值成长、奖励经济、后端契约 |
 | 文游物品/核心能力系统 | `docs/wenyou/item_ability_system.md`、`docs/wenyou/item_catalog_draft_d.md`、`docs/wenyou/item_catalog_draft_c.md`、`docs/wenyou/item_catalog_draft_b.md`、`docs/wenyou/item_catalog_draft_a.md`、`docs/wenyou/item_catalog_draft_s.md`、`content/default/items.json`、`content/default/item_catalog.sql`、`content/default/abilities.json`、`schemas/item.schema.json`、`schemas/ability.schema.json`、`content/default/reward_tables.json` | 通用商店/抽卡/奖励道具目录、用途分类、物品形态、时代标签、耐久/次数、背包使用/出售、商店、抽卡、核心能力原型和奖励表；不再保留独立高阶兑换入口、装备栏、穿戴、锻造、拆解、多能力槽或复杂身体路线；D/C/B/A/S 道具已从 Markdown 审校源表生成结构化内容表和 SQL seed；副本专属可带出物先归内容包/副本奖励表，不默认进通用目录；D 级副本常规产出最多 C 级 |
+| 文游运行时存储 | `storage/wenyou_sqlite_store.py`、`storage/r2_store.py` | 文游当前存档、长期钱包、候选池、连续性卡片和归档列表以 `data/wenyou.sqlite3` 为主；旧 R2 key 只在 SQLite 无记录时回填，`WENYOU_R2_BACKUP_ENABLED=1` 才双写备份 |
 | R2 存储 | `storage/r2_store.py` | 会话、summary、动态记忆、设置、贴纸、设备状态、日程等 R2 key |
 | 上游配置 | `storage/upstream_store.py` | active upstream、model cache、models 探测 |
 | 主动消息 | `services/telegram_proactive.py` | 概率主动、主动决策、通道投递、trigger tick |
@@ -1480,6 +1481,12 @@ npm -C miniapp run android
 - 已完成：AI 玩家上下文拆成 `tool/turn/channel` 三种模式：工具桥保留商店、卡池、钱包、保底和流水；渡局内行动只拿剧情/任务/线索/地点/角色状态/背包/可用道具转交；对讲机只拿局面和频道信息，不再注入商店货架、卡池消耗、最近流水。渡行动 system 文案改为“和玩家一一起玩文游，自己是玩家二”，移除“控制渡”“不是 GM/规则引擎”“后端事实源”这类后台口吻。
 - 已验证：`.venv/bin/python -m py_compile services/wenyou/gm_context.py services/wenyou_service.py routes/miniapp/wenyou.py app.py scripts/wenyou_rules_smoke.py` 通过；`.venv/bin/python scripts/wenyou_rules_smoke.py` 通过，覆盖 Boss 不可硬杀、削弱/封印、强制惩罚队列、NPC 惩罚契约、暴露计数、无怪物生态兜底怪物与逃跑 patch；本地 monkeypatch 烟测覆盖有卡片/无卡片两种 `_build_gm_messages` 窗口行为；`import app` 确认 `/debug/gm-context`、`/ai-player/*` 与 `/mcp/*` 兼容路由存在；工具 manifest/未知工具 smoke 通过；`git diff --check` 通过。
 - 未完成 / 不要碰：这次不改前端 UI、不改存档数据、不把文游卡片混入普通聊天动态召回；卡片更新仍在 GM 返回后同步执行，后续若模型慢再单独改后台队列。
+
+当前状态（2026-07-08 文游 SQLite 主存储）：
+- 已完成：新增 `storage/wenyou_sqlite_store.py` 和 `config.WENYOU_SQLITE_DB`（默认 `data/wenyou.sqlite3`）；`storage/r2_store.py` 的 Wenyou 同名方法改为 SQLite 优先，覆盖 active session、wallet、candidate cache、continuity card、last archive、archive list/detail。旧 R2 Wenyou key 只在 SQLite 无记录时 read-through 回填；`WENYOU_R2_BACKUP_ENABLED=1` 时才继续双写 R2 备份。删除 active session 会在 SQLite 留空记录，避免旧 R2 session 被回读复活；admin `wipe_local_data()` 同步清空 Wenyou SQLite。
+- 已完成：开源分发/数据表/后端契约文档补默认 SQLite 存储边界，完整开源版按 `WenyouStore` 接口替换存储，不要求接入方使用 R2。
+- 已验证：`.venv/bin/python -m py_compile config.py storage/wenyou_sqlite_store.py storage/wipe_local.py storage/r2_store.py services/wenyou_service.py routes/miniapp/wenyou.py` 通过；本地临时 SQLite + monkeypatch R2 smoke 覆盖 session 保存/删除 tombstone、wallet 保存读取、空 game_id 归档为 `unknown`、归档列表按 `endedAt` 倒序、详情读取和清表。
+- 未完成 / 不要碰：本轮不迁移真实线上旧 R2 Wenyou 全量归档，不改前端 UI、不改文游规则、不改 GM/AI 玩家模型链路；如需线上切换前完整导入历史 archive，再单独做只读 R2 backfill 脚本。
 
 当前状态（2026-05-22 文游装备栏移除）：
 - 已完成：按用户决定删除默认装备养成链路，背包物品统一走“使用 / 出售 / 转交”；后端移除穿戴、维修、锻造、拆解入口和装备加成计算，`/wenyou/item/equip`、`/wenyou/item/repair` 不再注册；AI 玩家 `inventory_action` 只保留 `use/sell`；内容表 `item_type` 收敛为 `consumable/tool/material/special`，奖励表 `gear` 分类改为 `tool_item`；前端个人空间背包不再显示装备/维修动作，角色面板不再展示装备摘要；相关 wenyou 文档和本索引已同步到无装备栏版本。

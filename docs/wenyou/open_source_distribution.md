@@ -184,8 +184,27 @@ wenyou/
 - 适配器：
   - OpenAI-compatible Chat Completions。
   - 自定义后端。
+  - SQLite 默认存储。
+  - 自定义存储适配器。
   - 外部 AI 工具桥。
   - 可选 MCP Server。
+
+### 存储边界
+
+完整开源版默认可以用 SQLite 跑起来。SQLite 负责当前存档、长期钱包、已归档副本、候选池、连续性卡片和玩家流水；远程对象存储只作为可选备份，不作为必须依赖。
+
+推荐把存储层收敛为一个可替换适配器：
+
+```text
+WenyouStore
+  get_session / save_session / delete_session
+  get_wallet / save_wallet
+  save_archive / list_archives / get_archive
+  get_candidates / save_candidates
+  get_card / save_card
+```
+
+接入方只要实现这组接口，就可以把默认 SQLite 换成自己的数据库。
 
 ## HTTP 工具桥和 MCP 的定位
 
