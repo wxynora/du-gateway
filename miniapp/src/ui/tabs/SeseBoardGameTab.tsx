@@ -122,6 +122,8 @@ type PrivateBoardSyncPayload = {
   state?: PrivateBoardState;
   reply_text?: string;
   reply_preview?: string;
+  applied_reply_commands?: Array<{ command?: string; ok?: boolean; error?: string }>;
+  followup_wakeups?: Array<{ ok?: boolean; reply_preview?: string; error?: string }>;
   channel?: string;
   wakeup?: {
     error?: string;
@@ -612,7 +614,10 @@ function multilineColonDirectiveBody(lines: string[], firstIndex: number, patter
   const first = lines[firstIndex]?.trim() || "";
   const match = first.match(pattern);
   if (!match) return null;
-  const text = [match[1] || "", ...lines.slice(firstIndex + 1)]
+  const firstBody = match[1] || "";
+  const inlineClose = firstBody.indexOf("】");
+  if (inlineClose >= 0) return firstBody.slice(0, inlineClose).trim();
+  const text = [firstBody, ...lines.slice(firstIndex + 1)]
     .join("\n")
     .trim();
   return text.endsWith("】") ? text.slice(0, -1).trim() : text;
@@ -730,6 +735,17 @@ function isDuPendingState(state: PrivateBoardState | undefined): boolean {
     return pending.actor === "du";
   }
   return false;
+}
+
+function hasAppliedDuCommands(payload: PrivateBoardSyncPayload | undefined): boolean {
+  return Array.isArray(payload?.applied_reply_commands) && payload.applied_reply_commands.length > 0;
+}
+
+function shouldContinueAfterAppliedDuCommands(payload: PrivateBoardSyncPayload | undefined): boolean {
+  if (!hasAppliedDuCommands(payload)) return false;
+  if (Array.isArray(payload?.followup_wakeups) && payload.followup_wakeups.length > 0) return false;
+  const nextState = payload?.state;
+  return isDuTurnState(nextState) && (!nextState?.pending_event || isDuPendingState(nextState));
 }
 
 function duFollowupMessage(state: PrivateBoardState | undefined): string {
@@ -1116,6 +1132,12 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         });
       }
       const reply = plainText(next.reply_text || next.wakeup?.reply_text || next.reply_preview || next.wakeup?.reply_preview || "").trim();
+      if (hasAppliedDuCommands(next)) {
+        if (shouldContinueAfterAppliedDuCommands(next)) {
+          await continueDuTurnRef.current?.(next.state, duFollowupMessage(next.state));
+        }
+        return;
+      }
       await processDuReply(reply, next.state || stateForReply);
     } catch (e: any) {
       const error = String(e?.message || e || "同步失败");
@@ -1162,6 +1184,12 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         });
       }
       const reply = plainText(next.reply_text || next.wakeup?.reply_text || next.reply_preview || next.wakeup?.reply_preview || "").trim();
+      if (hasAppliedDuCommands(next)) {
+        if (shouldContinueAfterAppliedDuCommands(next)) {
+          await continueDuTurnRef.current?.(next.state, duFollowupMessage(next.state));
+        }
+        return;
+      }
       await processDuReply(reply, next.state || rolled.state);
     } catch (e: any) {
       const message = String(e?.message || e || "同步失败");
@@ -1413,6 +1441,12 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
         });
       }
       const reply = plainText(next.reply_text || next.wakeup?.reply_text || next.reply_preview || next.wakeup?.reply_preview || "").trim();
+      if (hasAppliedDuCommands(next)) {
+        if (shouldContinueAfterAppliedDuCommands(next)) {
+          await continueDuTurnRef.current?.(next.state, duFollowupMessage(next.state));
+        }
+        return;
+      }
       await processDuReply(reply, next.state || payload.state);
     } catch (e: any) {
       const message = String(e?.message || e || "同步失败");
