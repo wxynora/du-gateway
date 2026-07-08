@@ -1,3 +1,6 @@
+import os
+import time
+
 from flask import Blueprint, jsonify, request
 
 from config import PC_COMMAND_TOKEN
@@ -6,6 +9,18 @@ from services import codex_group_chat
 from services.pc_command_handler import process_pcmd_in_assistant_text
 
 bp = Blueprint("pc_command", __name__)
+
+
+def _bounded_float(value, default: float, minimum: float, maximum: float) -> float:
+    try:
+        n = float(value if value is not None and value != "" else default)
+    except Exception:
+        n = default
+    if n < minimum:
+        return minimum
+    if n > maximum:
+        return maximum
+    return n
 
 
 def _require_pc_token():
@@ -93,6 +108,8 @@ def claim_codex_group_chat_task():
     if token_err:
         return token_err
     body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
     worker_id = str((body or {}).get("worker_id") or request.headers.get("X-Worker-Id") or "").strip()
     worker_meta = {
         "version": (body or {}).get("worker_version"),
@@ -101,7 +118,22 @@ def claim_codex_group_chat_task():
         "gateway_url": (body or {}).get("gateway_url"),
         "outbox_count": (body or {}).get("outbox_count"),
     }
-    task = codex_group_chat.claim_next(worker_id=worker_id, worker_meta=worker_meta)
+    wait_raw = body.get("wait_seconds")
+    if wait_raw is None:
+        wait_raw = request.args.get("wait_seconds")
+    if wait_raw is None:
+        wait_raw = os.environ.get("CODEX_GROUP_CHAT_SERVER_CLAIM_WAIT_SECONDS", "0")
+    wait_seconds = _bounded_float(wait_raw, 0.0, 0.0, 25.0)
+    poll_seconds = _bounded_float(os.environ.get("CODEX_GROUP_CHAT_SERVER_CLAIM_POLL_SECONDS"), 0.75, 0.2, 2.0)
+    deadline = time.monotonic() + wait_seconds
+    record_worker = True
+    task = None
+    while True:
+        task = codex_group_chat.claim_next(worker_id=worker_id, worker_meta=worker_meta, record_worker=record_worker)
+        if task or wait_seconds <= 0 or time.monotonic() >= deadline:
+            break
+        record_worker = False
+        time.sleep(min(poll_seconds, max(0.0, deadline - time.monotonic())))
     return jsonify({"ok": True, "task": task})
 
 

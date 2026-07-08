@@ -23,13 +23,13 @@ PORT="${GATEWAY_BIND_PORT:-5000}"
 # Keep the default profile conservative: the gateway usually shares a small VPS
 # with NapCat/NTQQ, where extra workers/threads cost real memory headroom.
 WORKERS="${GATEWAY_WORKERS:-1}"
-THREADS="${GATEWAY_THREADS:-4}"
+THREADS="${GATEWAY_THREADS:-6}"
 TIMEOUT="${GATEWAY_TIMEOUT:-960}"
 # Let non-daemon post-archive threads finish during gunicorn worker recycle,
 # but keep restart/recycle delays bounded on the small VPS.
 GRACEFUL_TIMEOUT="${GATEWAY_GRACEFUL_TIMEOUT:-120}"
 KEEP_ALIVE="${GATEWAY_KEEP_ALIVE:-5}"
-MAX_REQUESTS="${GATEWAY_MAX_REQUESTS:-240}"
+MAX_REQUESTS="${GATEWAY_MAX_REQUESTS:-500}"
 MAX_REQUESTS_JITTER="${GATEWAY_MAX_REQUESTS_JITTER:-40}"
 LOG_LEVEL="${GATEWAY_LOG_LEVEL:-info}"
 
@@ -48,7 +48,7 @@ cap_positive_int() {
 if [ "${GATEWAY_DISABLE_SAFETY_CAPS:-0}" != "1" ]; then
   WORKERS="$(cap_positive_int GATEWAY_WORKERS "$WORKERS" "${GATEWAY_WORKERS_MAX:-1}")"
   THREADS="$(cap_positive_int GATEWAY_THREADS "$THREADS" "${GATEWAY_THREADS_MAX:-6}")"
-  MAX_REQUESTS="$(cap_positive_int GATEWAY_MAX_REQUESTS "$MAX_REQUESTS" "${GATEWAY_MAX_REQUESTS_CAP:-300}")"
+  MAX_REQUESTS="$(cap_positive_int GATEWAY_MAX_REQUESTS "$MAX_REQUESTS" "${GATEWAY_MAX_REQUESTS_CAP:-500}")"
 fi
 
 export GATEWAY_EMBEDDED_SCHEDULE_RUNTIME_ENABLED="${GATEWAY_EMBEDDED_SCHEDULE_RUNTIME_ENABLED:-0}"

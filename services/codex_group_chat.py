@@ -387,12 +387,18 @@ def _is_stale_running(task: dict, now_ts: float) -> bool:
     return bool(claimed_ts and now_ts - claimed_ts >= _RUNNING_RECLAIM_SECONDS)
 
 
-def claim_next(worker_id: str = "", worker_meta: dict | None = None) -> dict | None:
+def claim_next(worker_id: str = "", worker_meta: dict | None = None, record_worker: bool = True) -> dict | None:
     now_ts = _now_ts()
     with _LOCK:
         state = _load_state()
-        _record_worker_seen_locked(state, worker_id=worker_id, meta=worker_meta)
-        tasks = _cleanup_tasks(state.get("tasks") or [])
+        changed = False
+        if record_worker:
+            _record_worker_seen_locked(state, worker_id=worker_id, meta=worker_meta)
+            changed = bool(_safe_worker_id(worker_id))
+        raw_tasks = state.get("tasks") or []
+        tasks = _cleanup_tasks(raw_tasks)
+        if tasks != raw_tasks:
+            changed = True
         selected: dict | None = None
         for task in tasks:
             if str(task.get("status") or "") == "queued" or _is_stale_running(task, now_ts):
@@ -400,7 +406,8 @@ def claim_next(worker_id: str = "", worker_meta: dict | None = None) -> dict | N
                 break
         if selected is None:
             state["tasks"] = tasks
-            _save_state(state)
+            if changed:
+                _save_state(state)
             return None
         selected["status"] = "running"
         if selected.get("worker_id"):

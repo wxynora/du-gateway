@@ -13,8 +13,14 @@ const DU_GATEWAY_URL = (env.DU_GATEWAY_URL || "").trim().replace(/\/+$/, "");
 const DU_WINDOW_ID = (env.DU_WINDOW_ID || "").trim();
 
 const HEARTBEAT_MS = positiveInt(env.XIAOAI_HEARTBEAT_MS, 1000, 1000);
-const CONFIG_REFRESH_MS = positiveInt(env.XIAOAI_CONFIG_REFRESH_MS, 15000, 3000);
-const ACTION_POLL_MS = positiveInt(env.XIAOAI_ACTION_POLL_MS, 3000, 1000);
+const CONFIG_REFRESH_MS = positiveInt(env.XIAOAI_CONFIG_REFRESH_MS, 30000, 3000);
+const ACTION_POLL_MS = positiveInt(env.XIAOAI_ACTION_POLL_MS, 5000, 1000);
+const ACTION_CLAIM_WAIT_SECONDS = positiveInt(env.XIAOAI_ACTION_CLAIM_WAIT_SECONDS, 12, 0);
+const ACTION_CLAIM_TIMEOUT_MS = positiveInt(
+  env.XIAOAI_ACTION_CLAIM_TIMEOUT_MS,
+  Math.max(15000, (ACTION_CLAIM_WAIT_SECONDS + 10) * 1000),
+  1000,
+);
 const SESSION_TTL_SECONDS = positiveInt(env.XIAOAI_SESSION_TTL_SECONDS, 60, 0);
 const DEDUP_TTL_MS = positiveInt(env.XIAOAI_DEDUP_TTL_MS, 10000, 1000);
 const MUTE_RESTORE_FALLBACK_VOLUME = volumeInt(env.XIAOAI_MUTE_RESTORE_FALLBACK_VOLUME, 35);
@@ -124,24 +130,33 @@ function authHeaders(extra = {}) {
 }
 
 async function gatewayJson(path, init = {}) {
-  const res = await fetch(`${DU_GATEWAY_URL}${path}`, {
-    ...init,
-    headers: authHeaders(init.headers || {}),
-  });
-  const text = await res.text();
-  let data = {};
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = { raw: text };
+  const { timeoutMs, ...fetchInit } = init || {};
+  const timeout = Number(timeoutMs || 0);
+  const controller = timeout > 0 ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeout) : null;
+  try {
+    const res = await fetch(`${DU_GATEWAY_URL}${path}`, {
+      ...fetchInit,
+      headers: authHeaders(fetchInit.headers || {}),
+      signal: fetchInit.signal || controller?.signal,
+    });
+    const text = await res.text();
+    let data = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { raw: text };
+      }
     }
+    if (!res.ok) {
+      const msg = data?.error?.message || data?.error || data?.message || `HTTP ${res.status}`;
+      throw new Error(String(msg));
+    }
+    return data;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  if (!res.ok) {
-    const msg = data?.error?.message || data?.error || data?.message || `HTTP ${res.status}`;
-    throw new Error(String(msg));
-  }
-  return data;
 }
 
 async function refreshConfig(force = false) {
@@ -633,7 +648,9 @@ async function claimActions() {
     body: JSON.stringify({
       runner: XIAOAI_RUNNER_NAME,
       limit: 3,
+      wait_seconds: ACTION_CLAIM_WAIT_SECONDS,
     }),
+    timeoutMs: ACTION_CLAIM_TIMEOUT_MS,
   });
   return Array.isArray(data?.actions) ? data.actions : [];
 }

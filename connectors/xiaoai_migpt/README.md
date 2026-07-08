@@ -45,7 +45,9 @@ XIAOAI_SPEAKER=卧室小爱
 DU_GATEWAY_URL=https://你的网关域名
 XIAOAI_GATEWAY_TOKEN=
 DU_WINDOW_ID=
-XIAOAI_ACTION_POLL_MS=3000
+XIAOAI_ACTION_POLL_MS=5000
+XIAOAI_ACTION_CLAIM_WAIT_SECONDS=12
+XIAOAI_ACTION_CLAIM_TIMEOUT_MS=22000
 XIAOAI_MUTE_RESTORE_FALLBACK_VOLUME=35
 XIAOAI_MUTE_VOLUME_READ_TIMEOUT_MS=250
 XIAOAI_PLAY_URL_STRATEGY=auto
@@ -96,7 +98,7 @@ docker compose down
 
 ### 小爱作为渡的音箱
 
-du-gateway 会给渡注入 `xiaoai_speak` 工具。渡需要像手机弹窗一样提醒你、而你没看手机时，可以把短句排到小爱播放队列；runner 默认每 3 秒拉一次队列并播放 MiniMax 生成的音频。
+du-gateway 会给渡注入 `xiaoai_speak` 工具。渡需要像手机弹窗一样提醒你、而你没看手机时，可以把短句排到小爱播放队列；runner 默认用短间隔触发长轮询领取队列，避免空闲时频繁刷网关请求。
 
 这条链路不需要你对小爱说入口词，只要求 runner 在线、`DU_GATEWAY_URL` 是公网 HTTPS，且网关配置了可用的 MiniMax TTS。
 

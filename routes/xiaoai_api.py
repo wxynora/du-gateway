@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import os
 import re
+import time
 
 import requests
 from flask import Blueprint, Response, jsonify, request
@@ -36,6 +38,18 @@ logger = get_logger(__name__)
 bp = Blueprint("xiaoai_api", __name__, url_prefix="/api/xiaoai")
 
 _VOICE_TAG_RE = re.compile(r"<voice>([\s\S]*?)</voice>", flags=re.IGNORECASE)
+
+
+def _bounded_float(value, default: float, minimum: float, maximum: float) -> float:
+    try:
+        n = float(value if value is not None and value != "" else default)
+    except Exception:
+        n = default
+    if n < minimum:
+        return minimum
+    if n > maximum:
+        return maximum
+    return n
 
 
 def _extract_bearer() -> str:
@@ -347,7 +361,20 @@ def xiaoai_claim_actions():
         limit = int(body.get("limit") or request.args.get("limit", 3))
     except Exception:
         limit = 3
-    actions = claim_xiaoai_actions(runner=runner, limit=limit)
+    wait_raw = body.get("wait_seconds")
+    if wait_raw is None:
+        wait_raw = request.args.get("wait_seconds")
+    if wait_raw is None:
+        wait_raw = os.environ.get("XIAOAI_ACTION_CLAIM_WAIT_SECONDS", "0")
+    wait_seconds = _bounded_float(wait_raw, 0.0, 0.0, 25.0)
+    poll_seconds = _bounded_float(os.environ.get("XIAOAI_ACTION_CLAIM_POLL_SECONDS"), 0.75, 0.2, 2.0)
+    deadline = time.monotonic() + wait_seconds
+    actions = []
+    while True:
+        actions = claim_xiaoai_actions(runner=runner, limit=limit)
+        if actions or wait_seconds <= 0 or time.monotonic() >= deadline:
+            break
+        time.sleep(min(poll_seconds, max(0.0, deadline - time.monotonic())))
     if actions:
         update_xiaoai_status({"connected": True, "runner": runner, "last_event": "actions_claimed"})
     return jsonify({"ok": True, "actions": actions})

@@ -57,12 +57,17 @@ REPO_ROOT = Path(_env("CODEX_GROUP_CHAT_REPO", str(Path.home() / "Downloads" / "
 BRIDGE_VERSION = "2026-06-26-lease-heartbeat"
 POLL_SECONDS = max(0.5, float(_env("CODEX_GROUP_CHAT_POLL_SECONDS", "0.5") or "0.5"))
 IDLE_POLL_SECONDS = max(POLL_SECONDS, float(_env("CODEX_GROUP_CHAT_IDLE_POLL_SECONDS", "1") or "1"))
+CLAIM_WAIT_SECONDS = max(0.0, float(_env("CODEX_GROUP_CHAT_CLAIM_WAIT_SECONDS", "20") or "20"))
 CODEX_MODEL = _env("CODEX_GROUP_CHAT_MODEL")
 CODEX_BIN = _env("CODEX_BIN", "codex")
 WORKER_ID = _env("CODEX_GROUP_CHAT_WORKER_ID", f"benben-codex-bridge@{socket.gethostname()}")
 CODEX_TIMEOUT_SECONDS = int(float(_env("CODEX_GROUP_CHAT_TIMEOUT_SECONDS", "600") or "600"))
 HEARTBEAT_SECONDS = max(5.0, float(_env("CODEX_GROUP_CHAT_HEARTBEAT_SECONDS", "30") or "30"))
-CLAIM_TIMEOUT_SECONDS = max(1.0, float(_env("CODEX_GROUP_CHAT_CLAIM_TIMEOUT_SECONDS", "3") or "3"))
+CLAIM_TIMEOUT_SECONDS = max(
+    1.0,
+    float(_env("CODEX_GROUP_CHAT_CLAIM_TIMEOUT_SECONDS", "25") or "25"),
+    CLAIM_WAIT_SECONDS + 5.0 if CLAIM_WAIT_SECONDS > 0 else 1.0,
+)
 FINISH_TIMEOUT_SECONDS = max(2.0, float(_env("CODEX_GROUP_CHAT_FINISH_TIMEOUT_SECONDS", "15") or "15"))
 POST_RETRY_ATTEMPTS = max(1, int(float(_env("CODEX_GROUP_CHAT_POST_RETRY_ATTEMPTS", "2") or "2")))
 POST_RETRY_SLEEP_SECONDS = max(0.0, float(_env("CODEX_GROUP_CHAT_POST_RETRY_SLEEP_SECONDS", "0.2") or "0.2"))
@@ -887,7 +892,7 @@ def main() -> int:
     if not isinstance(state, dict) or "created_ts" not in state:
         state = _reset_state("startup")
     _log(
-        "worker=%s version=%s gateway=%s repo=%s resume=%s thread=%s agents_md_chars=%s poll=%.2fs idle=%.2fs claim_timeout=%.1fs finish_timeout=%.1fs retries=%s trust_env=%s outbox=%s"
+        "worker=%s version=%s gateway=%s repo=%s resume=%s thread=%s agents_md_chars=%s poll=%.2fs idle=%.2fs claim_wait=%.1fs claim_timeout=%.1fs finish_timeout=%.1fs retries=%s trust_env=%s outbox=%s"
         % (
             WORKER_ID,
             BRIDGE_VERSION,
@@ -898,6 +903,7 @@ def main() -> int:
             len(PROJECT_RULES),
             POLL_SECONDS,
             IDLE_POLL_SECONDS,
+            CLAIM_WAIT_SECONDS,
             CLAIM_TIMEOUT_SECONDS,
             FINISH_TIMEOUT_SECONDS,
             POST_RETRY_ATTEMPTS,
@@ -917,6 +923,7 @@ def main() -> int:
                 "last_error": last_loop_error,
                 "gateway_url": GATEWAY_URL,
                 "outbox_count": pending_outbox,
+                "wait_seconds": CLAIM_WAIT_SECONDS,
             })
             consecutive_errors = 0
             last_loop_error = ""
