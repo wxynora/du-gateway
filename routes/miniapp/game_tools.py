@@ -29,6 +29,10 @@ def _first_command_token(command: str) -> str:
     return str(command or "").strip().split(maxsplit=1)[0].strip().lower()
 
 
+def _sync_message_counts_as_user_activity(mode: str, message: str) -> bool:
+    return str(mode or "").strip().lower() == "chat" and bool(str(message or "").strip())
+
+
 def _private_board_pending_activity_signature(payload: dict | None) -> str:
     state = (payload or {}).get("state") if isinstance((payload or {}).get("state"), dict) else {}
     if not _private_board_needs_du_followup(payload):
@@ -401,7 +405,7 @@ def register_routes(bp) -> None:
         )
         ok = bool((wakeup or {}).get("ok"))
         synced_at = now_beijing_iso()
-        if ok and user_message:
+        if ok and _sync_message_counts_as_user_activity(mode, user_message):
             _mark_private_board_sync_activity(
                 synced_at,
                 detail={

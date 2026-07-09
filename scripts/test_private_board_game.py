@@ -977,9 +977,17 @@ def test_private_board_sync_activity_marks_only_real_user_message() -> None:
         app.register_blueprint(bp)
         with app.test_client() as client:
             no_message = client.post("/game-tools/private_board/sync-du", json={"save_id": "s1", "mode": "state_update"})
-            with_message = client.post(
+            state_update_message = client.post(
                 "/game-tools/private_board/sync-du",
-                json={"save_id": "s1", "mode": "state_update", "message": "小玥局内说了一句"},
+                json={"save_id": "s1", "mode": "state_update", "message": "自动同步说明"},
+            )
+            final_note_message = client.post(
+                "/game-tools/private_board/sync-du",
+                json={"save_id": "s1", "mode": "final_note", "message": "终局小纸条"},
+            )
+            chat_message = client.post(
+                "/game-tools/private_board/sync-du",
+                json={"save_id": "s1", "mode": "chat", "message": "小玥局内说了一句"},
             )
     finally:
         game_tools.execute_game_command = old_execute
@@ -988,8 +996,10 @@ def test_private_board_sync_activity_marks_only_real_user_message() -> None:
         rcc.resolve_recent_reply_context = old_resolve
 
     _assert(no_message.status_code == 200, f"empty sync should succeed: {no_message.get_data(as_text=True)}")
-    _assert(with_message.status_code == 200, f"user message sync should succeed: {with_message.get_data(as_text=True)}")
-    _assert(captured == [{"game_id": "private_board", "save_id": "s1", "mode": "state_update", "phase": "user_message"}], f"only real message sync should mark activity, got {captured}")
+    _assert(state_update_message.status_code == 200, f"state_update message sync should succeed: {state_update_message.get_data(as_text=True)}")
+    _assert(final_note_message.status_code == 200, f"final_note message sync should succeed: {final_note_message.get_data(as_text=True)}")
+    _assert(chat_message.status_code == 200, f"chat message sync should succeed: {chat_message.get_data(as_text=True)}")
+    _assert(captured == [{"game_id": "private_board", "save_id": "s1", "mode": "chat", "phase": "user_message"}], f"only chat user message sync should mark activity, got {captured}")
 
 
 def test_private_board_pending_creation_activity_is_narrow() -> None:
