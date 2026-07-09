@@ -2162,3 +2162,10 @@ npm -C miniapp run android
 - 已修复：`recall_message` 撤回后留下的居中系统提示继承原用户气泡 `createdAt`，并在 `groupChatMessages()` 中作为单条系统提示硬边界渲染，不再按撤回发生时间跑到后面，也不再被拆行/并入普通渡气泡；群聊最近消息/上下文构造会跳过这些前端留痕提示。
 - 已验证：`git diff --check` 和 `npm --prefix miniapp run build` 通过；本地 `http://127.0.0.1:5173/miniapp/?recallPreview=1` 重新跑完撤回预览，3 条撤回提示停在原用户消息位置，后续渡消息保持在其后，默认未显示 `碎碎念` / `recall_message`；构建产物入口更新到 `miniapp_static/assets/index-BoCSxAGF.js`，只剩 Vite 既有的大 chunk 警告。
 - 已修复（2026-07-07 旧历史撤回提示兼容）：已保存历史里如果 `recallNotice/recallReply` 标记丢失，但消息 id 仍是 `recall-notice-*` / `recall-reply-*` 或带 `recallOriginalMessageId`，`sanitizeHistoryMessages()` 和 `groupChatMessages()` 会重新识别成撤回系统提示，避免它作为普通 assistant 消息进入左侧聊天气泡；群聊上下文和当前轮边界也复用同一识别逻辑跳过这些提示。已验证 `git diff --check`、`npx tsc --noEmit --pretty false`、`npm --prefix miniapp run build` 通过；另用 `/tmp` 临时编译 `chatMessages`，烟测确认旧 `recall-notice-*` 历史消息被拆成单独 `recallNotice` 分组，不会并入前后 assistant 气泡。入口更新到 `miniapp_static/assets/index-D1iSNAiy.js`。
+
+当前状态（2026-07-10 Codex OAuth 专用 Prompt）：
+- 已完成：Prompt 管理新增 `codex_oauth_prompt`，手机端显示为「Codex OAuth 专用 Prompt」，复用现有 R2 保存、版本冲突检查、备份和回滚链路；条目允许留空，留空时不注入。
+- 已完成：主聊天静态区只在当前 active 上游命中 CPA / CLIProxyAPI（本机 `127.0.0.1:8317`）时读取并注入该 Prompt；调用顺序固定在入口静态内容之后、NSFW 规则之前。Claude OAuth Proxy `8082` 和其他上游不注入。
+- 已完成：CPA 的 `gpt-5.6-sol` 增加独立思考强度设置，App 可选 `low/medium/high/xhigh/max/ultra`；档位按稳定 upstream key 保存在当前 Codex OAuth 节点，转发时只对 CPA + `gpt-5.6-sol` 写入对应 `reasoning_effort`，CPA 其他模型继续固定 `high`，其他上游不受影响。
+- 已验证：隔离 smoke 覆盖 8317 命中、8082 不命中、最终顺序为 `BASE -> CODEX_ONLY -> NSFW_RULES`，并确认该条目允许保存为空；后端 `py_compile`、MiniApp `tsc --noEmit` 和 `/tmp` 隔离生产构建通过。
+- 未完成 / 下次继续：实际专用 Prompt 内容仍为空，由小玥在手机 Prompt 管理中填写；部署后用 CPA 上游发一轮并在 Prompt Cache 静态区确认顺序。

@@ -33,6 +33,13 @@ PROMPT_SECTIONS: tuple[PromptSectionDef, ...] = (
     PromptSectionDef("entry_style_wechat", "入口风格：微信", "微信入口的输出格式规则。", 30_000),
     PromptSectionDef("entry_style_xiaoai", "入口风格：小爱音箱", "小爱音箱语音播报入口规则。", 30_000),
     PromptSectionDef("voice_line_rules", "语音台词规范", "生成 <voice> 台词时使用的口语规则。", 30_000),
+    PromptSectionDef(
+        "codex_oauth_prompt",
+        "Codex OAuth 专用 Prompt",
+        "仅当前上游为 Codex OAuth 时注入，位置固定在 NSFW 规则前。",
+        80_000,
+        True,
+    ),
     PromptSectionDef("nsfw_rules", "NSFW 规则", "亲密内容的固定边界和表达风格。", 80_000),
     PromptSectionDef(
         RANDOM_PROACTIVE_DECISION_SECTION_ID,
@@ -114,6 +121,8 @@ def default_prompt_content(section_id: str) -> str:
         return _default_core_prompt()
     if sid == "common_knowledge":
         return _read_text_file("prompts/du_common_knowledge.md")
+    if sid == "codex_oauth_prompt":
+        return ""
     if sid == "nsfw_rules":
         return _read_text_file("prompts/du_nsfw_prompt.txt")
     if sid == "post_spring_dream_wakeup":

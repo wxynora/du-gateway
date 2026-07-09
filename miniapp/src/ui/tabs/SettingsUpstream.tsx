@@ -36,7 +36,15 @@ type UpstreamItem = {
   oauth_status?: OAuthStatus;
   oauth_status_error?: string;
 };
-type UpstreamsResp = { active: number; model?: string; claude_thinking_effort?: string; claude_thinking_efforts?: string[]; items: UpstreamItem[] };
+type UpstreamsResp = {
+  active: number;
+  model?: string;
+  claude_thinking_effort?: string;
+  claude_thinking_efforts?: string[];
+  codex_reasoning_effort?: string;
+  codex_reasoning_efforts?: string[];
+  items: UpstreamItem[];
+};
 type ProbeItem = {
   index: number;
   isActive: boolean;
@@ -50,7 +58,14 @@ type ProbeItem = {
   note?: string;
 };
 type ProbeResp = { ok: boolean; status: "ok" | "degraded" | "fail"; results: ProbeItem[]; count: number };
-type ActivePutResp = { ok?: boolean; error?: string; active?: number; model?: string; claude_thinking_effort?: string };
+type ActivePutResp = {
+  ok?: boolean;
+  error?: string;
+  active?: number;
+  model?: string;
+  claude_thinking_effort?: string;
+  codex_reasoning_effort?: string;
+};
 type ModelsResp = {
   ok?: boolean;
   error?: string;
@@ -59,10 +74,18 @@ type ModelsResp = {
   model?: string;
   models?: string[];
 };
-type ModelPutResp = { ok?: boolean; error?: string; active?: number; model?: string; claude_thinking_effort?: string };
+type ModelPutResp = {
+  ok?: boolean;
+  error?: string;
+  active?: number;
+  model?: string;
+  claude_thinking_effort?: string;
+  codex_reasoning_effort?: string;
+};
 type ThinkingEffortPutResp = { ok?: boolean; error?: string; active?: number; effort?: string };
 
 const DEFAULT_THINKING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+const DEFAULT_CODEX_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
 function hostFromUrl(url: string): string {
   const raw = String(url || "").trim();
@@ -224,6 +247,10 @@ function isClaudeOpus46(model: string): boolean {
   return /claude-opus-4-6(\b|-|$)/i.test(String(model || "").trim());
 }
 
+function isCodexSolModel(model: string): boolean {
+  return String(model || "").trim().toLowerCase() === "gpt-5.6-sol";
+}
+
 function thinkingEffortForModel(effort: string, model: string): string {
   const value = String(effort || "high").trim().toLowerCase() || "high";
   if (value === "xhigh" && isClaudeOpus46(model)) return "high";
@@ -266,6 +293,9 @@ export function SettingsUpstream() {
   const [thinkingEffort, setThinkingEffort] = useState("high");
   const [pendingThinkingEffort, setPendingThinkingEffort] = useState("high");
   const [thinkingEffortOptions, setThinkingEffortOptions] = useState<string[]>(DEFAULT_THINKING_EFFORTS);
+  const [codexReasoningEffort, setCodexReasoningEffort] = useState("high");
+  const [pendingCodexReasoningEffort, setPendingCodexReasoningEffort] = useState("high");
+  const [codexReasoningEffortOptions, setCodexReasoningEffortOptions] = useState<string[]>(DEFAULT_CODEX_REASONING_EFFORTS);
   const [thinkingListOpen, setThinkingListOpen] = useState(false);
   const [thinkingEffortSaving, setThinkingEffortSaving] = useState(false);
   const [nodeCategory, setNodeCategory] = useState<NodeCategory>("openai");
@@ -302,6 +332,7 @@ export function SettingsUpstream() {
       const nextModel = String(j.model || "").trim();
       const nextItems = Array.isArray(j.items) ? j.items : [];
       const nextEffort = String(j.claude_thinking_effort || "high").trim() || "high";
+      const nextCodexEffort = String(j.codex_reasoning_effort || "high").trim() || "high";
       setActive(nextActive);
       setItems(nextItems);
       setNodeCategory((prev) => (nextItems.some((item) => categoryForItem(item) === prev) ? prev : categoryForItem(nextItems[nextActive])));
@@ -310,6 +341,13 @@ export function SettingsUpstream() {
       setThinkingEffort(nextEffort);
       setPendingThinkingEffort(nextEffort);
       setThinkingEffortOptions(Array.isArray(j.claude_thinking_efforts) && j.claude_thinking_efforts.length ? j.claude_thinking_efforts : DEFAULT_THINKING_EFFORTS);
+      setCodexReasoningEffort(nextCodexEffort);
+      setPendingCodexReasoningEffort(nextCodexEffort);
+      setCodexReasoningEffortOptions(
+        Array.isArray(j.codex_reasoning_efforts) && j.codex_reasoning_efforts.length
+          ? j.codex_reasoning_efforts
+          : DEFAULT_CODEX_REASONING_EFFORTS
+      );
       if (nextItems.length) {
         await loadModels(nextActive);
       } else {
@@ -380,8 +418,11 @@ export function SettingsUpstream() {
       setCurrentModel(nextModel);
       setPendingModel(nextModel);
       const nextEffort = String(r.claude_thinking_effort || thinkingEffort).trim() || thinkingEffort;
+      const nextCodexEffort = String(r.codex_reasoning_effort || codexReasoningEffort).trim() || codexReasoningEffort;
       setThinkingEffort(nextEffort);
       setPendingThinkingEffort(nextEffort);
+      setCodexReasoningEffort(nextCodexEffort);
+      setPendingCodexReasoningEffort(nextCodexEffort);
       setPendingIndex(null);
       await load();
       await probeOne(Number(r.active ?? pendingIndex));
@@ -407,8 +448,11 @@ export function SettingsUpstream() {
       setCurrentModel(nextModel);
       setPendingModel(nextModel);
       const nextEffort = String(r.claude_thinking_effort || thinkingEffort).trim() || thinkingEffort;
+      const nextCodexEffort = String(r.codex_reasoning_effort || codexReasoningEffort).trim() || codexReasoningEffort;
       setThinkingEffort(nextEffort);
       setPendingThinkingEffort(nextEffort);
+      setCodexReasoningEffort(nextCodexEffort);
+      setPendingCodexReasoningEffort(nextCodexEffort);
       toast(`已切换模型：${nextModel}`);
     } catch (e: any) {
       toast(`模型保存失败：${e?.message || e}`);
@@ -418,20 +462,33 @@ export function SettingsUpstream() {
   }
 
   async function saveThinkingEffort() {
-    const effort = thinkingEffortForModel(pendingThinkingEffort, pendingModel || currentModel);
-    if (!effort || effort === thinkingEffort) return;
+    const model = pendingModel || currentModel;
+    const codexMode = isCodexSolModel(model) && oauthLabelForItem(items[active] || { name: "", url: "" }) === "Codex";
+    const effort = codexMode
+      ? String(pendingCodexReasoningEffort || "high").trim().toLowerCase()
+      : thinkingEffortForModel(pendingThinkingEffort, model);
+    const currentEffort = codexMode ? codexReasoningEffort : thinkingEffort;
+    if (!effort || effort === currentEffort) return;
     setThinkingEffortSaving(true);
     try {
-      const r = await apiJson<ThinkingEffortPutResp>("/miniapp-api/upstreams/claude-thinking-effort", {
+      const endpoint = codexMode
+        ? "/miniapp-api/upstreams/codex-reasoning-effort"
+        : "/miniapp-api/upstreams/claude-thinking-effort";
+      const r = await apiJson<ThinkingEffortPutResp>(endpoint, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ effort }),
       });
       if (!r?.ok) throw new Error(r?.error || "保存失败");
       const nextEffort = String(r.effort || effort).trim() || effort;
-      setThinkingEffort(nextEffort);
-      setPendingThinkingEffort(nextEffort);
-      toast(`已切换 thinking：${nextEffort}`);
+      if (codexMode) {
+        setCodexReasoningEffort(nextEffort);
+        setPendingCodexReasoningEffort(nextEffort);
+      } else {
+        setThinkingEffort(nextEffort);
+        setPendingThinkingEffort(nextEffort);
+      }
+      toast(`已切换思考强度：${nextEffort}`);
     } catch (e: any) {
       toast(`thinking 保存失败：${e?.message || e}`);
     } finally {
@@ -449,9 +506,23 @@ export function SettingsUpstream() {
   const modelOptionGroups = groupedModelOptions(modelOptions);
   const selectedThinkingModel = pendingModel || currentModel;
   const adaptiveThinkingActive = isClaudeAdaptiveModel(selectedThinkingModel);
+  const codexReasoningActive =
+    !!activeItem && oauthLabelForItem(activeItem) === "Codex" && isCodexSolModel(selectedThinkingModel);
+  const reasoningControlActive = adaptiveThinkingActive || codexReasoningActive;
   const adaptiveThinkingEffortOptions = thinkingEffortOptionsForModel(thinkingEffortOptions, selectedThinkingModel);
   const pendingThinkingEffortForModel = thinkingEffortForModel(pendingThinkingEffort, selectedThinkingModel);
-  const canSaveThinkingEffort = adaptiveThinkingActive && !!pendingThinkingEffortForModel && pendingThinkingEffortForModel !== thinkingEffort && !thinkingEffortSaving;
+  const displayedReasoningEffort = codexReasoningActive
+    ? pendingCodexReasoningEffort
+    : pendingThinkingEffortForModel;
+  const displayedReasoningEffortOptions = codexReasoningActive
+    ? codexReasoningEffortOptions
+    : adaptiveThinkingEffortOptions;
+  const canSaveThinkingEffort =
+    reasoningControlActive &&
+    pendingModel === currentModel &&
+    !!displayedReasoningEffort &&
+    displayedReasoningEffort !== (codexReasoningActive ? codexReasoningEffort : thinkingEffort) &&
+    !thinkingEffortSaving;
   const nodeCategoryTabs: { key: NodeCategory; label: string; count: number }[] = [
     { key: "openai", label: "OpenAI", count: items.filter((item) => categoryForItem(item) === "openai").length },
     { key: "oauth", label: "OAuth", count: items.filter((item) => categoryForItem(item) === "oauth").length },
@@ -646,13 +717,13 @@ export function SettingsUpstream() {
                         type="button"
                         aria-expanded={thinkingListOpen}
                         aria-controls="upstream-thinking-list"
-                        disabled={!adaptiveThinkingActive}
+                        disabled={!reasoningControlActive}
                         onClick={() => setThinkingListOpen((v) => !v)}
                         className="flex min-w-0 flex-1 items-center gap-3 py-1.5 text-left active:opacity-70 disabled:opacity-50"
                       >
                         <span className="w-16 shrink-0 text-[12px] font-semibold text-gray-400">思考强度</span>
                         <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-gray-900">
-                          {adaptiveThinkingActive ? pendingThinkingEffortForModel : "仅 4.8 / 4.7 / 4.6 / Fable 5 生效"}
+                          {reasoningControlActive ? displayedReasoningEffort : "仅 Claude 4.6+ / GPT-5.6 Sol 生效"}
                         </span>
                         <svg
                           className={"h-4 w-4 shrink-0 text-gray-400 transition-transform " + (thinkingListOpen ? "rotate-180" : "")}
@@ -673,17 +744,18 @@ export function SettingsUpstream() {
                         {thinkingEffortSaving ? "保存中" : "保存"}
                       </button>
                     </div>
-                    {thinkingListOpen && adaptiveThinkingActive ? (
+                    {thinkingListOpen && reasoningControlActive ? (
                       <div id="upstream-thinking-list" className="mt-2 overflow-hidden rounded-xl border border-gray-100 bg-white">
-                        {adaptiveThinkingEffortOptions.map((effort) => {
-                          const selected = effort === pendingThinkingEffortForModel;
+                        {displayedReasoningEffortOptions.map((effort) => {
+                          const selected = effort === displayedReasoningEffort;
                           return (
                             <button
                               key={effort}
                               type="button"
                               disabled={thinkingEffortSaving}
                               onClick={() => {
-                                setPendingThinkingEffort(effort);
+                                if (codexReasoningActive) setPendingCodexReasoningEffort(effort);
+                                else setPendingThinkingEffort(effort);
                                 setThinkingListOpen(false);
                               }}
                               className={

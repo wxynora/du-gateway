@@ -65,6 +65,7 @@ const PROMPT_SECTION_CATALOG: Array<Pick<PromptSection, "id" | "label" | "descri
   { id: "entry_style_wechat", label: "入口风格：微信", description: "微信入口的输出格式规则。" },
   { id: "entry_style_xiaoai", label: "入口风格：小爱音箱", description: "小爱音箱语音播报入口规则。" },
   { id: "voice_line_rules", label: "语音台词规范", description: "生成 <voice> 台词时使用的口语规则。" },
+  { id: "codex_oauth_prompt", label: "Codex OAuth 专用 Prompt", description: "仅当前上游为 Codex OAuth 时注入，位置固定在 NSFW 规则前。" },
   { id: "nsfw_rules", label: "NSFW 规则", description: "亲密内容的固定边界和表达风格。" },
   { id: "random_proactive_decision", label: "随机唤醒决策", description: "普通随机唤醒时用于让渡决定发消息、不打扰、写日记、逛论坛或上网冲浪的文案。" },
   { id: "post_spring_dream_wakeup", label: "春梦后唤醒版", description: "上一轮随机唤醒命中春梦后，下一轮睡眠期随机唤醒使用的自定义文案；留空则走原随机唤醒。" },

@@ -21,6 +21,8 @@ UPSTREAMS_FILE = DATA_DIR / "upstreams.json"
 ACTIVE_MODEL_FILE = DATA_DIR / "active_upstream_model.json"
 CLAUDE_THINKING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_CLAUDE_THINKING_EFFORT = "high"
+CODEX_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
+DEFAULT_CODEX_REASONING_EFFORT = "high"
 PIONEER_CLAUDE_MODEL_ORDER = (
     "claude-opus-4-6",
     "claude-opus-4-7",
@@ -158,6 +160,11 @@ def normalize_claude_thinking_effort(value: str) -> str:
     return effort if effort in CLAUDE_THINKING_EFFORTS else DEFAULT_CLAUDE_THINKING_EFFORT
 
 
+def normalize_codex_reasoning_effort(value: str) -> str:
+    effort = str(value or "").strip().lower()
+    return effort if effort in CODEX_REASONING_EFFORTS else DEFAULT_CODEX_REASONING_EFFORT
+
+
 def _normalize_url_for_key(raw_url: str) -> str:
     url = str(raw_url or "").strip().rstrip("/")
     if not url:
@@ -249,6 +256,7 @@ def set_active_claude_thinking_effort(effort: str) -> bool:
             "upstream_key": key,
             "model": str(entry.get("model") or "").strip(),
             "claude_thinking_effort": normalize_claude_thinking_effort(effort),
+            "codex_reasoning_effort": normalize_codex_reasoning_effort(entry.get("codex_reasoning_effort")),
             "checked_at": time.time(),
         }
     )
@@ -261,6 +269,50 @@ def set_active_claude_thinking_effort(effort: str) -> bool:
             "upstream_key": key,
             "model": str(entry.get("model") or "").strip(),
             "claude_thinking_effort": entry["claude_thinking_effort"],
+            "codex_reasoning_effort": entry["codex_reasoning_effort"],
+            "checked_at": time.time(),
+            "models_by_upstream": models_by_upstream,
+        }
+    )
+
+
+def get_active_codex_reasoning_effort() -> str:
+    payload = _load_active_model_payload()
+    active, item, url, key = _current_active_context()
+    entry = _active_model_entry_from_payload(payload, active, item, url, key)
+    if entry:
+        return normalize_codex_reasoning_effort(entry.get("codex_reasoning_effort"))
+    return DEFAULT_CODEX_REASONING_EFFORT
+
+
+def set_active_codex_reasoning_effort(effort: str) -> bool:
+    active, item, url, key = _current_active_context()
+    if not url:
+        return False
+    payload = _load_active_model_payload()
+    models_by_upstream = dict(payload.get("models_by_upstream") or {}) if isinstance(payload.get("models_by_upstream"), dict) else {}
+    entry = dict(_active_model_entry_from_payload(payload, active, item, url, key) or {})
+    entry.update(
+        {
+            "active": active,
+            "url": url,
+            "upstream_key": key,
+            "model": str(entry.get("model") or "").strip(),
+            "claude_thinking_effort": normalize_claude_thinking_effort(entry.get("claude_thinking_effort")),
+            "codex_reasoning_effort": normalize_codex_reasoning_effort(effort),
+            "checked_at": time.time(),
+        }
+    )
+    if key:
+        models_by_upstream[key] = entry
+    return _save_active_model_payload(
+        {
+            "active": active,
+            "url": url,
+            "upstream_key": key,
+            "model": str(entry.get("model") or "").strip(),
+            "claude_thinking_effort": entry["claude_thinking_effort"],
+            "codex_reasoning_effort": entry["codex_reasoning_effort"],
             "checked_at": time.time(),
             "models_by_upstream": models_by_upstream,
         }
@@ -386,6 +438,7 @@ def set_active_model(model: str) -> bool:
     if not url:
         return False
     effort = get_active_claude_thinking_effort()
+    codex_effort = get_active_codex_reasoning_effort()
     payload = _load_active_model_payload()
     models_by_upstream = dict(payload.get("models_by_upstream") or {}) if isinstance(payload.get("models_by_upstream"), dict) else {}
     entry = {
@@ -394,6 +447,7 @@ def set_active_model(model: str) -> bool:
         "upstream_key": key,
         "model": model,
         "claude_thinking_effort": effort,
+        "codex_reasoning_effort": codex_effort,
         "checked_at": time.time(),
     }
     if key:
@@ -405,6 +459,7 @@ def set_active_model(model: str) -> bool:
             "upstream_key": key,
             "model": model,
             "claude_thinking_effort": effort,
+            "codex_reasoning_effort": codex_effort,
             "checked_at": time.time(),
             "models_by_upstream": models_by_upstream,
         }

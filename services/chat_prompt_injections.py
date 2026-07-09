@@ -5,6 +5,7 @@ import json
 
 from services.conversation_followup import build_followup_system_instruction
 from services.entry_style_prompt import entry_style_for_channel
+from services.upstream_policy import is_local_cliproxyapi_url
 from services.voice_line_prompt import build_voice_line_rules
 from storage import silence_mode_store
 from utils.log import get_logger
@@ -189,6 +190,34 @@ def load_nsfw_prompt() -> str:
     _NSFW_PROMPT_CACHE["text"] = text or ""
     _NSFW_PROMPT_CACHE["ts"] = now
     return _NSFW_PROMPT_CACHE["text"] or ""
+
+
+def inject_codex_oauth_prompt_system(body: dict, *, upstream_url: str) -> dict:
+    """仅 Codex OAuth 上游注入可编辑静态 Prompt。"""
+    if not is_local_cliproxyapi_url(upstream_url):
+        return body
+    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
+        return body
+    try:
+        from services.prompt_manager import get_managed_prompt_text
+
+        prompt = get_managed_prompt_text("codex_oauth_prompt", "").strip()
+    except Exception:
+        logger.exception("读取 Codex OAuth 专用 Prompt 失败")
+        return body
+    if not prompt:
+        return body
+    messages = list(body.get("messages") or [])
+    if messages and isinstance(messages[0], dict) and str(messages[0].get("role") or "").strip().lower() == "system":
+        current = str(messages[0].get("content") or "")
+        if prompt in current:
+            return body
+        messages[0] = {**messages[0], "content": (current.rstrip() + "\n\n" + prompt).strip()}
+    else:
+        messages.insert(0, {"role": "system", "content": prompt})
+    body = dict(body)
+    body["messages"] = messages
+    return body
 
 
 def inject_channel_nsfw_system(body: dict, *, reply_channel: str) -> dict:

@@ -329,6 +329,7 @@ def register_routes(bp) -> None:
         data = upstream_store.load_upstreams()
         model = upstream_store.get_cached_active_model(refresh_if_missing=False)
         claude_thinking_effort = upstream_store.get_active_claude_thinking_effort()
+        codex_reasoning_effort = upstream_store.get_active_codex_reasoning_effort()
         items = [_public_upstream_item(it) for it in (data.get("items") or []) if isinstance(it, dict)]
         return jsonify(
             {
@@ -336,6 +337,8 @@ def register_routes(bp) -> None:
                 "model": model,
                 "claude_thinking_effort": claude_thinking_effort,
                 "claude_thinking_efforts": list(upstream_store.CLAUDE_THINKING_EFFORTS),
+                "codex_reasoning_effort": codex_reasoning_effort,
+                "codex_reasoning_efforts": list(upstream_store.CODEX_REASONING_EFFORTS),
                 "items": items,
             }
         )
@@ -353,6 +356,7 @@ def register_routes(bp) -> None:
                 "active": int(saved.get("active") or 0),
                 "model": model,
                 "claude_thinking_effort": upstream_store.get_active_claude_thinking_effort(),
+                "codex_reasoning_effort": upstream_store.get_active_codex_reasoning_effort(),
             }
         )
 
@@ -369,6 +373,7 @@ def register_routes(bp) -> None:
                 "active": int(saved.get("active") or 0),
                 "model": model,
                 "claude_thinking_effort": upstream_store.get_active_claude_thinking_effort(),
+                "codex_reasoning_effort": upstream_store.get_active_codex_reasoning_effort(),
             }
         )
 
@@ -414,6 +419,7 @@ def register_routes(bp) -> None:
                 "active": int(saved.get("active") or 0),
                 "model": saved_model,
                 "claude_thinking_effort": upstream_store.get_active_claude_thinking_effort(),
+                "codex_reasoning_effort": upstream_store.get_active_codex_reasoning_effort(),
                 "error": "" if ok else "model 无效",
             }
         )
@@ -429,6 +435,24 @@ def register_routes(bp) -> None:
                 "ok": ok,
                 "active": int(saved.get("active") or 0),
                 "effort": upstream_store.get_active_claude_thinking_effort(),
+                "error": "" if ok else "active upstream 无效",
+            }
+        )
+
+    @bp.route("/upstreams/codex-reasoning-effort", methods=["PUT"])
+    def miniapp_set_codex_reasoning_effort():
+        data = request.get_json(silent=True) or {}
+        effort = upstream_store.normalize_codex_reasoning_effort(str(data.get("effort") or ""))
+        model = upstream_store.get_cached_active_model(refresh_if_missing=False)
+        if str(model or "").strip().lower() != "gpt-5.6-sol":
+            return jsonify({"ok": False, "error": "仅 gpt-5.6-sol 支持此档位选择"}), 400
+        ok = upstream_store.set_active_codex_reasoning_effort(effort)
+        saved = upstream_store.load_upstreams()
+        return jsonify(
+            {
+                "ok": ok,
+                "active": int(saved.get("active") or 0),
+                "effort": upstream_store.get_active_codex_reasoning_effort(),
                 "error": "" if ok else "active upstream 无效",
             }
         )

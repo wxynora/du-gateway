@@ -429,7 +429,12 @@ def _apply_pioneer_anthropic_thinking(body: dict, model: str, effort: str) -> No
 def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
     body = dict(body or {})
     try:
-        from storage.upstream_store import get_active_claude_thinking_effort, get_active_item, get_cached_active_model
+        from storage.upstream_store import (
+            get_active_claude_thinking_effort,
+            get_active_codex_reasoning_effort,
+            get_active_item,
+            get_cached_active_model,
+        )
 
         active = get_active_item() or {}
         active_url = str(active.get("url") or "").strip()
@@ -439,7 +444,11 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
                 body["model"] = model
             if is_local_cliproxyapi_url(upstream_url):
                 body.pop("reasoning", None)
-                body["reasoning_effort"] = "high"
+                body["reasoning_effort"] = (
+                    get_active_codex_reasoning_effort()
+                    if model.strip().lower() == "gpt-5.6-sol"
+                    else "high"
+                )
             if is_local_claude_oauth_proxy_url(upstream_url) and _is_claude_adaptive_thinking_model(model):
                 body["thinking"] = {"type": "adaptive", "display": "summarized"}
                 output_config = body.get("output_config") if isinstance(body.get("output_config"), dict) else {}

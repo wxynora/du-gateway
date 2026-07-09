@@ -117,6 +117,7 @@ from services.cloudflare_anthropic import (
 )
 from services.chat_prompt_injections import (
     inject_channel_nsfw_system as _inject_channel_nsfw_system,
+    inject_codex_oauth_prompt_system as _inject_codex_oauth_prompt_system,
     inject_entry_style_system as _inject_entry_style_system,
     inject_followup_instruction as _inject_followup_instruction,
     inject_million_plan_player_static_system as _inject_million_plan_player_static_system,
@@ -2043,6 +2044,7 @@ def chat_completions():
         speaker=_xiaoai_speaker_from_request(),
     )
     body = _inject_million_plan_player_prompt_if_enabled(body)
+    body = _inject_codex_oauth_prompt_system(body, upstream_url=_get_active_upstream_url())
     body = _inject_channel_nsfw_system(body, reply_channel=reply_channel)
     if reply_channel != "xiaoai" and not _disable_followup_request():
         body = _inject_followup_instruction(
