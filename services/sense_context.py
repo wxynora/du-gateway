@@ -7,7 +7,7 @@ from typing import Any
 
 from storage import r2_store
 from utils.log import get_logger
-from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
+from utils.time_aware import now_beijing_iso, parse_iso_to_beijing, today_beijing
 
 logger = get_logger(__name__)
 
@@ -162,9 +162,13 @@ def _sleep_summary_minutes(summary: dict) -> int:
     return max(0, total_ms // 60000)
 
 
-def _recent_sleep_summary(summary: dict, min_minutes: int) -> tuple[int, Any, Any] | None:
+def _recent_sleep_summary(summary: dict, min_minutes: int, date_key: str = "") -> tuple[int, Any, Any] | None:
     if not isinstance(summary, dict):
         return None
+    if date_key:
+        summary_date = str(summary.get(date_key) or "").strip()
+        if summary_date and summary_date != today_beijing():
+            return None
     total_minutes = _sleep_summary_minutes(summary)
     if total_minutes < min_minutes:
         return None
@@ -198,8 +202,8 @@ def _format_sleep_summary_piece(label: str, summary: dict, total_minutes: int, s
 
 
 def _format_last_sleep_summary_line(screen: dict) -> str | None:
-    main = _recent_sleep_summary(_as_dict(screen.get("sleepSummary")), _SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES)
-    day = _recent_sleep_summary(_as_dict(screen.get("daySleepSummary")), _DAY_SLEEP_SUMMARY_DISPLAY_MIN_MINUTES)
+    main = _recent_sleep_summary(_as_dict(screen.get("sleepSummary")), _SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES, "nightDate")
+    day = _recent_sleep_summary(_as_dict(screen.get("daySleepSummary")), _DAY_SLEEP_SUMMARY_DISPLAY_MIN_MINUTES, "dayDate")
     if not main and not day:
         return None
     pieces: list[str] = []
@@ -212,7 +216,7 @@ def _format_last_sleep_summary_line(screen: dict) -> str | None:
         minutes, start_dt, end_dt = day
         total_24h += minutes
         pieces.append(_format_sleep_summary_piece("午睡", _as_dict(screen.get("daySleepSummary")), minutes, start_dt, end_dt))
-    pieces.append(f"24h合计 {_format_duration_minutes(total_24h)}")
+    pieces.append(f"今日合计 {_format_duration_minutes(total_24h)}")
     return "最近睡眠推断：" + "；".join(pieces) + "。"
 
 
