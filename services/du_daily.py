@@ -689,7 +689,7 @@ def infer_sleep_rollover_trigger() -> Optional[dict]:
     if candidate_minutes is None or candidate_minutes < _SLEEP_INACTIVITY_MINUTES or not candidate_dt:
         return None
 
-    last_user_iso = r2_store.get_last_telegram_user_activity_at()
+    last_user_iso = r2_store.get_last_user_activity_at()
     inactive_minutes = _minutes_since(last_user_iso or "")
     if inactive_minutes is None or inactive_minutes < _SLEEP_INACTIVITY_MINUTES:
         return None

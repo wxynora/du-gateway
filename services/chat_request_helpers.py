@@ -143,7 +143,14 @@ def maybe_mark_tg_window_user_activity(
     ):
         return
     try:
-        r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+        r2_store.save_last_user_activity_at(
+            now_beijing_iso(),
+            source="cross_platform_tg_window_user_input",
+            detail={
+                "window_id": str(window_id or "").strip(),
+                "reply_channel": str(reply_channel or "").strip().lower(),
+            },
+        )
         logger.info("按 tg 窗口更新最近用户回复时间 window_id=%s reply_channel=%s", window_id, reply_channel)
     except Exception as e:
         logger.warning("按 tg 窗口更新最近用户回复时间失败 window_id=%s error=%s", window_id, e)

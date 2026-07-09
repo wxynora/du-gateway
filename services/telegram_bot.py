@@ -1350,7 +1350,11 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
             from utils.time_aware import now_beijing_iso
 
-            r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+            r2_store.save_last_user_activity_at(
+                now_beijing_iso(),
+                source="telegram_image",
+                detail={"chat_id": str(chat_id), "user_id": str(user_id), "update_id": str(update_id)},
+            )
         logger.info("收到 TG 图片(聚合) user_id=%s chat_id=%s caption_len=%d", user_id, chat_id, len(caption))
         with _BUF_LOCK:
             _append_user_part_locked(chat_id, user_id, {"type": "text", "text": caption or "[图片]"})
@@ -1369,7 +1373,11 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
             from utils.time_aware import now_beijing_iso
 
-            r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+            r2_store.save_last_user_activity_at(
+                now_beijing_iso(),
+                source=f"telegram_{kind}",
+                detail={"chat_id": str(chat_id), "user_id": str(user_id), "update_id": str(update_id)},
+            )
         logger.info("收到 TG 语音(聚合) user_id=%s chat_id=%s kind=%s chars=%s caption_len=%d", user_id, chat_id, kind, len(prompt_text), len(caption))
         with _BUF_LOCK:
             _append_user_part_locked(chat_id, user_id, {"type": "text", "text": prompt_text})
@@ -1426,7 +1434,16 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
             from utils.time_aware import now_beijing_iso
 
-            r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+            r2_store.save_last_user_activity_at(
+                now_beijing_iso(),
+                source="telegram_document",
+                detail={
+                    "chat_id": str(chat_id),
+                    "user_id": str(user_id),
+                    "update_id": str(update_id),
+                    "file_name": file_name[:120],
+                },
+            )
         prompt_text = _decode_text_document_for_prompt(file_name, file_bytes, caption=caption)
         logger.info(
             "收到 TG 文档(聚合) user_id=%s chat_id=%s file_name=%s bytes=%s chars=%s caption_len=%d",
@@ -1458,5 +1475,9 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
     if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
         from utils.time_aware import now_beijing_iso
 
-        r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+        r2_store.save_last_user_activity_at(
+            now_beijing_iso(),
+            source="telegram_text",
+            detail={"chat_id": str(chat_id), "user_id": str(user_id), "update_id": str(update_id)},
+        )
     append_user_input(chat_id=chat_id, user_id=user_id, text=text)

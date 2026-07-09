@@ -76,7 +76,7 @@ def _anchor_dt(window_id: str, now_dt) -> Optional[object]:
     except Exception:
         pass
     try:
-        user_dt = _dt(r2_store.get_last_telegram_user_activity_at())
+        user_dt = _dt(r2_store.get_last_user_activity_at())
         if user_dt and (now_dt - user_dt).total_seconds() > 5 * 60:
             candidates.append(user_dt)
     except Exception:

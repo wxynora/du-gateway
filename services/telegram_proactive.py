@@ -185,11 +185,11 @@ def _get_last_message_activity_iso(uid: int) -> Optional[str]:
     后端闹钟、随机唤醒执行轮、弹窗回执等都会归档成轮次，
     但这些不代表小玥真的回来了，不能拿来计算“她多久没说话”。
 
-    这里只看用户主动发来消息：last_telegram_user_activity_at。
+    这里只看用户主动发来消息：last_user_activity_at。
     渡主动外发成功的 last_proactive_contact_at 只作为历史记录，不参与这里的时间感计算；
     如果他连续醒来都想找她，就让模型自己判断要不要连发，而不是后端先压住。
     """
-    last_user_iso = r2_store.get_last_telegram_user_activity_at()
+    last_user_iso = r2_store.get_last_user_activity_at()
     return _pick_latest_iso([last_user_iso])
 
 
@@ -198,7 +198,7 @@ def _describe_recent_exchange(now_dt: datetime) -> str:
     给主动决策提示词用：
     只描述她最近一次明确回复，避免把系统保存的“上次主动联系时间”暴露给渡。
     """
-    last_user_iso = r2_store.get_last_telegram_user_activity_at()
+    last_user_iso = r2_store.get_last_user_activity_at()
     last_user_dt = parse_iso_to_beijing(last_user_iso)
 
     if last_user_dt:

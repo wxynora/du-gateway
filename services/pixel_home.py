@@ -742,7 +742,7 @@ def _minutes_since(value: Any, now_dt: datetime) -> float | None:
 
 def _user_after(value: Any) -> bool:
     marker_dt = parse_iso_to_beijing(str(value or "").strip())
-    last_user_dt = parse_iso_to_beijing(r2_store.get_last_telegram_user_activity_at() or "")
+    last_user_dt = parse_iso_to_beijing(r2_store.get_last_user_activity_at() or "")
     if not marker_dt or not last_user_dt:
         return False
     return last_user_dt > marker_dt + timedelta(seconds=30)

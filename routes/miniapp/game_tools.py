@@ -19,7 +19,7 @@ def _mark_private_board_sync_activity(synced_at: str) -> None:
     try:
         from storage import r2_store
 
-        r2_store.save_last_telegram_user_activity_at(sync_time)
+        r2_store.save_last_user_activity_at(sync_time, source="private_board_sync_du")
     except Exception:
         return
 

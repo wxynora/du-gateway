@@ -906,9 +906,12 @@ def test_private_board_sync_marks_global_activity_time() -> None:
 
     from routes.miniapp import game_tools
 
-    captured: list[str] = []
+    captured: list[tuple[str, str]] = []
     fake_r2_store = types.SimpleNamespace(
-        save_last_telegram_user_activity_at=lambda value: captured.append(str(value)) or True
+        save_last_user_activity_at=lambda value, **kwargs: captured.append(
+            (str(value), str(kwargs.get("source") or ""))
+        )
+        or True
     )
     fake_storage = types.SimpleNamespace(r2_store=fake_r2_store)
     old_storage = sys.modules.get("storage")
@@ -928,7 +931,7 @@ def test_private_board_sync_marks_global_activity_time() -> None:
             sys.modules["storage.r2_store"] = old_r2_store
 
     _assert(
-        captured == ["2026-07-07T22:55:00+08:00"],
+        captured == [("2026-07-07T22:55:00+08:00", "private_board_sync_du")],
         f"private board sync should mark global activity time, got {captured}",
     )
 

@@ -389,7 +389,7 @@ def _user_announced_away(text: str) -> bool:
 
 
 def _has_user_reply_after(at_dt: datetime) -> bool:
-    last_user_dt = _dt(r2_store.get_last_telegram_user_activity_at())
+    last_user_dt = _dt(r2_store.get_last_user_activity_at())
     if not last_user_dt:
         return False
     return last_user_dt > at_dt + timedelta(seconds=30)

@@ -1,6 +1,7 @@
 # R2 存储（S3 兼容 API）
 # 与需求文档十一「R2 存储结构」对齐：global/、conversations/、dynamic_memory/、core_cache/
 import hashlib
+import inspect
 import json
 import threading
 import time
@@ -144,8 +145,11 @@ R2_KEY_STUDYROOM = "global/studyroom.json"
 R2_KEY_DU_MEMORY_DOC = "docs/du_memory_doc_v1.txt"
 # 主动发消息：上一次成功主动联系的时间（北京时间 ISO）
 R2_KEY_LAST_PROACTIVE_CONTACT_AT = "global/last_proactive_contact_at.txt"
-# 主动发消息：目标用户最近一次在 TG 发消息的时间（北京时间 ISO），用于「正在聊天时不主动发」
-R2_KEY_LAST_TELEGRAM_USER_ACTIVITY_AT = "global/last_telegram_user_activity_at.txt"
+# 主动发消息：目标用户最近一次真实活动时间（北京时间 ISO），用于「正在聊天时不主动发」
+R2_KEY_LAST_USER_ACTIVITY_AT = "global/last_user_activity_at.txt"
+R2_KEY_LAST_USER_ACTIVITY_AUDIT = "global/last_user_activity_audit.json"
+R2_KEY_LAST_USER_ACTIVITY_AT_LEGACY = "global/last_telegram_user_activity_at.txt"
+R2_KEY_LAST_USER_ACTIVITY_AUDIT_LEGACY = "global/last_telegram_user_activity_audit.json"
 # 最近一次真实对话入口：给手机弹窗回执这类后端事件决定回发通道
 R2_KEY_LAST_REPLY_CHANNEL = "global/last_reply_channel.json"
 # 图片描述占位符表：异步图像描述完成后写入，注入 last4 时按 id 正则替换。
@@ -188,6 +192,19 @@ CONVERSATION_COMPACT_SCHEMA_VERSION = 2
 CONVERSATION_RECENT_MAX_ROUNDS = 120
 CONVERSATION_GUARD_BACKUP_DAYS = 3
 IMAGE_DESC_RECENT_LIMIT = 4
+LAST_USER_ACTIVITY_AUDIT_TTL_HOURS = 24
+LAST_USER_ACTIVITY_AUDIT_MAX_ITEMS = 500
+LAST_USER_ACTIVITY_ALLOWED_SOURCES = frozenset(
+    {
+        "telegram_text",
+        "telegram_image",
+        "telegram_voice",
+        "telegram_audio",
+        "telegram_document",
+        "cross_platform_tg_window_user_input",
+        "private_board_sync_du",
+    }
+)
 _conversation_write_lock = threading.Lock()
 
 
@@ -1625,35 +1642,189 @@ def append_conversation_followup(item: dict) -> bool:
             return False
 
 
-def get_last_telegram_user_activity_at() -> Optional[str]:
-    """读取目标用户最近一次在 Telegram 发消息的时间（北京时间 ISO）。未配置 R2 或不存在则返回 None。"""
+def get_last_user_activity_at() -> Optional[str]:
+    """读取目标用户最近一次真实活动时间（北京时间 ISO）。未配置 R2 或不存在则返回 None。"""
     client = _s3_client()
     if not client:
         return None
+    for key in (R2_KEY_LAST_USER_ACTIVITY_AT, R2_KEY_LAST_USER_ACTIVITY_AT_LEGACY):
+        try:
+            resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=key)
+            v = resp["Body"].read().decode("utf-8").strip()
+            if v:
+                return v
+        except Exception:
+            continue
+    return None
+
+
+def _parse_last_user_activity_audit_dt(value: str) -> Optional[datetime]:
+    s = str(value or "").strip()
+    if not s:
+        return None
     try:
-        resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=R2_KEY_LAST_TELEGRAM_USER_ACTIVITY_AT)
-        v = resp["Body"].read().decode("utf-8").strip()
-        return v or None
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BEIJING_TZ)
+        return dt.astimezone(BEIJING_TZ)
     except Exception:
         return None
 
 
-def save_last_telegram_user_activity_at(iso_str: str) -> bool:
-    """保存目标用户最近一次在 Telegram 发消息的时间（覆盖）。Bot 收到该用户消息时调用。"""
+def _prune_last_user_activity_audit_items(items: list, now_dt: datetime) -> list[dict]:
+    cutoff = now_dt - timedelta(hours=LAST_USER_ACTIVITY_AUDIT_TTL_HOURS)
+    kept: list[dict] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        item_dt = _parse_last_user_activity_audit_dt(str(item.get("logged_at") or item.get("activity_at") or ""))
+        if item_dt and item_dt < cutoff:
+            continue
+        kept.append(item)
+        if len(kept) >= LAST_USER_ACTIVITY_AUDIT_MAX_ITEMS:
+            break
+    return kept
+
+
+def get_last_user_activity_audit(limit: int = 100) -> dict:
+    """读取 last_user_activity 最近 24h 写入审计，用于排查是谁更新了全局时间。"""
+    client = _s3_client()
+    if not client:
+        return {"items": [], "updated_at": "", "ttl_hours": LAST_USER_ACTIVITY_AUDIT_TTL_HOURS}
+    data = _read_json(client, R2_KEY_LAST_USER_ACTIVITY_AUDIT)
+    if not isinstance(data, dict):
+        data = _read_json(client, R2_KEY_LAST_USER_ACTIVITY_AUDIT_LEGACY)
+    if not isinstance(data, dict):
+        return {"items": [], "updated_at": "", "ttl_hours": LAST_USER_ACTIVITY_AUDIT_TTL_HOURS}
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    try:
+        n = max(1, min(int(limit or 100), LAST_USER_ACTIVITY_AUDIT_MAX_ITEMS))
+    except Exception:
+        n = 100
+    return {
+        "items": _prune_last_user_activity_audit_items(items, datetime.now(BEIJING_TZ))[:n],
+        "updated_at": str(data.get("updated_at") or ""),
+        "ttl_hours": LAST_USER_ACTIVITY_AUDIT_TTL_HOURS,
+    }
+
+
+def _clean_last_user_activity_source(source: str) -> str:
+    return str(source or "").strip()
+
+
+def _clean_last_user_activity_detail(detail: Optional[dict]) -> dict:
+    if not isinstance(detail, dict):
+        return {}
+    try:
+        return json.loads(json.dumps(detail, ensure_ascii=False, default=str))
+    except Exception:
+        return {"_detail_error": "unserializable"}
+
+
+def _last_user_activity_callsite() -> dict:
+    current = Path(__file__).resolve()
+    for frame in inspect.stack()[2:10]:
+        try:
+            frame_path = Path(frame.filename).resolve()
+        except Exception:
+            frame_path = Path(str(frame.filename or ""))
+        if frame_path == current:
+            continue
+        return {
+            "file": str(frame_path),
+            "line": int(frame.lineno or 0),
+            "function": str(frame.function or ""),
+        }
+    return {}
+
+
+def _append_last_user_activity_audit(client, entry: dict) -> None:
+    now = str(entry.get("logged_at") or now_beijing_iso())
+    data = _read_json(client, R2_KEY_LAST_USER_ACTIVITY_AUDIT)
+    if not isinstance(data, dict):
+        data = {}
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    pruned = _prune_last_user_activity_audit_items([entry] + items, datetime.now(BEIJING_TZ))
+    _write_json(
+        client,
+        R2_KEY_LAST_USER_ACTIVITY_AUDIT,
+        {
+            "items": pruned,
+            "updated_at": now,
+            "ttl_hours": LAST_USER_ACTIVITY_AUDIT_TTL_HOURS,
+            "allowed_sources": sorted(LAST_USER_ACTIVITY_ALLOWED_SOURCES),
+        },
+    )
+
+
+def save_last_user_activity_at(
+    iso_str: str,
+    *,
+    source: str = "",
+    detail: Optional[dict] = None,
+) -> bool:
+    """保存目标用户最近一次活动时间。只有明确白名单来源可以覆盖这个全局 key。"""
     client = _s3_client()
     if not client:
         return False
     s = (iso_str or "").strip()
     if not s:
         return False
+    clean_source = _clean_last_user_activity_source(source)
+    clean_detail = _clean_last_user_activity_detail(detail)
+    if clean_source not in LAST_USER_ACTIVITY_ALLOWED_SOURCES:
+        callsite = _last_user_activity_callsite()
+        if callsite:
+            clean_detail = {**clean_detail, "_caller": callsite}
+        try:
+            _append_last_user_activity_audit(
+                client,
+                {
+                    "id": uuid4().hex,
+                    "logged_at": now_beijing_iso(),
+                    "activity_at": s,
+                    "source": clean_source or "missing",
+                    "accepted": False,
+                    "denied_reason": "source_not_allowed",
+                    "detail": clean_detail,
+                },
+            )
+        except Exception as e:
+            logger.warning("last_user activity reject audit failed source=%s error=%s", clean_source or "missing", e)
+        logger.warning(
+            "last_user activity rejected source=%s activity_at=%s detail=%s caller=%s",
+            clean_source or "missing",
+            s,
+            clean_detail,
+            callsite,
+        )
+        return False
     with _global_write_lock:
         try:
             client.put_object(
                 Bucket=R2_BUCKET_NAME,
-                Key=R2_KEY_LAST_TELEGRAM_USER_ACTIVITY_AT,
+                Key=R2_KEY_LAST_USER_ACTIVITY_AT,
                 Body=s.encode("utf-8"),
                 ContentType="text/plain",
             )
+            try:
+                now = now_beijing_iso()
+                _append_last_user_activity_audit(
+                    client,
+                    {
+                        "id": uuid4().hex,
+                        "logged_at": now,
+                        "activity_at": s,
+                        "source": clean_source,
+                        "accepted": True,
+                        "detail": clean_detail,
+                    },
+                )
+                logger.info("last_user activity saved source=%s activity_at=%s", clean_source, s)
+            except Exception as e:
+                logger.warning("last_user activity audit write failed source=%s error=%s", clean_source, e)
             return True
         except Exception:
             return False
