@@ -901,15 +901,15 @@ def test_private_board_wakeup_uses_dynamic_system() -> None:
         cf._choice_dialog_delivery_preference = old_preference
 
 
-def test_private_board_sync_marks_global_activity_time() -> None:
+def test_private_board_activity_helper_writes_user_activity_source() -> None:
     import types
 
     from routes.miniapp import game_tools
 
-    captured: list[tuple[str, str]] = []
+    captured: list[tuple[str, str, dict]] = []
     fake_r2_store = types.SimpleNamespace(
         save_last_user_activity_at=lambda value, **kwargs: captured.append(
-            (str(value), str(kwargs.get("source") or ""))
+            (str(value), str(kwargs.get("source") or ""), dict(kwargs.get("detail") or {}))
         )
         or True
     )
@@ -931,8 +931,86 @@ def test_private_board_sync_marks_global_activity_time() -> None:
             sys.modules["storage.r2_store"] = old_r2_store
 
     _assert(
-        captured == [("2026-07-07T22:55:00+08:00", "private_board_sync_du")],
-        f"private board sync should mark global activity time, got {captured}",
+        captured == [("2026-07-07T22:55:00+08:00", "private_board_sync_du", {})],
+        f"private board activity helper should write allowed source, got {captured}",
+    )
+
+
+def test_private_board_sync_activity_marks_only_real_user_message() -> None:
+    from flask import Blueprint, Flask
+
+    from routes.miniapp import game_tools
+    from services import conversation_followup as cf
+    from services import reply_channel_context as rcc
+
+    captured: list[dict] = []
+    old_execute = game_tools.execute_game_command
+    old_mark = game_tools._mark_private_board_sync_activity
+    old_send = cf.send_private_board_wakeup
+    old_resolve = rcc.resolve_recent_reply_context
+
+    def fake_execute(game_id: str, command: str, save_id: str) -> dict:
+        return {
+            "ok": True,
+            "text": "【涩涩走格棋】\n当前局面如下。",
+            "state": {
+                "turn_actor": "xinyue",
+                "pending_event": None,
+                "game_over": False,
+            },
+        }
+
+    try:
+        game_tools.execute_game_command = fake_execute
+        game_tools._mark_private_board_sync_activity = lambda synced_at, detail=None: captured.append(dict(detail or {}))
+        cf.send_private_board_wakeup = lambda **kwargs: {"ok": True, "reply_text": "", "reply_preview": ""}
+        rcc.resolve_recent_reply_context = lambda default_target="": {
+            "channel": "tg",
+            "window_id": "tg_test",
+            "target": "123",
+            "meta": {},
+        }
+
+        app = Flask(__name__)
+        bp = Blueprint("miniapp_test", __name__)
+        game_tools.register_routes(bp)
+        app.register_blueprint(bp)
+        with app.test_client() as client:
+            no_message = client.post("/game-tools/private_board/sync-du", json={"save_id": "s1", "mode": "state_update"})
+            with_message = client.post(
+                "/game-tools/private_board/sync-du",
+                json={"save_id": "s1", "mode": "state_update", "message": "小玥局内说了一句"},
+            )
+    finally:
+        game_tools.execute_game_command = old_execute
+        game_tools._mark_private_board_sync_activity = old_mark
+        cf.send_private_board_wakeup = old_send
+        rcc.resolve_recent_reply_context = old_resolve
+
+    _assert(no_message.status_code == 200, f"empty sync should succeed: {no_message.get_data(as_text=True)}")
+    _assert(with_message.status_code == 200, f"user message sync should succeed: {with_message.get_data(as_text=True)}")
+    _assert(captured == [{"game_id": "private_board", "save_id": "s1", "mode": "state_update", "phase": "user_message"}], f"only real message sync should mark activity, got {captured}")
+
+
+def test_private_board_pending_creation_activity_is_narrow() -> None:
+    from routes.miniapp import game_tools
+
+    captured: list[dict] = []
+    old_mark = game_tools._mark_private_board_sync_activity
+    try:
+        game_tools._mark_private_board_sync_activity = lambda synced_at, detail=None: captured.append(dict(detail or {}))
+        before = {"ok": True, "state": {"turn_actor": "xinyue", "pending_event": None, "game_over": False}}
+        after_du_turn = {"ok": True, "state": {"turn_actor": "du", "pending_event": None, "game_over": False}}
+
+        game_tools._mark_private_board_pending_created_activity("s1", "status", before, after_du_turn)
+        game_tools._mark_private_board_pending_created_activity("s1", "roll 1", after_du_turn, after_du_turn)
+        game_tools._mark_private_board_pending_created_activity("s1", "roll 1", before, after_du_turn)
+    finally:
+        game_tools._mark_private_board_sync_activity = old_mark
+
+    _assert(
+        captured == [{"game_id": "private_board", "save_id": "s1", "command": "roll 1", "phase": "pending_created"}],
+        f"only newly-created du pending/turn should mark activity, got {captured}",
     )
 
 
@@ -1060,7 +1138,9 @@ if __name__ == "__main__":
     test_private_board_migrates_ended_save_without_final_note()
     test_private_board_review_feedback()
     test_private_board_wakeup_uses_dynamic_system()
-    test_private_board_sync_marks_global_activity_time()
+    test_private_board_activity_helper_writes_user_activity_source()
+    test_private_board_sync_activity_marks_only_real_user_message()
+    test_private_board_pending_creation_activity_is_narrow()
     test_private_board_state_update_sync_includes_message()
     test_private_board_reply_command_parser()
     test_private_board_reply_commands_apply_to_game_runtime()

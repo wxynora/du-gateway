@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 
 from flask import jsonify, request
@@ -13,15 +14,64 @@ def _get_panel_device_id() -> str:
     return str(payload.get("device_id") or "").strip()
 
 
-def _mark_private_board_sync_activity(synced_at: str) -> None:
-    # Historical R2 key name; callers use it as the global "recent user activity" clock.
+def _mark_private_board_sync_activity(synced_at: str, *, detail: dict | None = None) -> None:
+    # This clock means real user interaction, not generic game sync/storage.
     sync_time = str(synced_at or "").strip() or now_beijing_iso()
     try:
         from storage import r2_store
 
-        r2_store.save_last_user_activity_at(sync_time, source="private_board_sync_du")
+        r2_store.save_last_user_activity_at(sync_time, source="private_board_sync_du", detail=detail or {})
     except Exception:
         return
+
+
+def _first_command_token(command: str) -> str:
+    return str(command or "").strip().split(maxsplit=1)[0].strip().lower()
+
+
+def _private_board_pending_activity_signature(payload: dict | None) -> str:
+    state = (payload or {}).get("state") if isinstance((payload or {}).get("state"), dict) else {}
+    if not _private_board_needs_du_followup(payload):
+        return ""
+    pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else {}
+    return json.dumps(
+        {
+            "pending": pending or None,
+            "turn_actor": state.get("turn_actor"),
+            "game_over": state.get("game_over"),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _mark_private_board_pending_created_activity(
+    save_id: str,
+    command: str,
+    before_payload: dict | None,
+    after_payload: dict | None,
+) -> None:
+    if not (after_payload or {}).get("ok"):
+        return
+    action = _first_command_token(command)
+    if action in {"", "status", "open", "打开", "继续"}:
+        return
+    after_sig = _private_board_pending_activity_signature(after_payload)
+    if not after_sig:
+        return
+    before_sig = _private_board_pending_activity_signature(before_payload)
+    if before_sig == after_sig:
+        return
+    _mark_private_board_sync_activity(
+        now_beijing_iso(),
+        detail={
+            "game_id": "private_board",
+            "save_id": str(save_id or "").strip() or "default",
+            "command": str(command or "").strip()[:120],
+            "phase": "pending_created",
+        },
+    )
 
 
 def _clean_private_board_text(text: str) -> str:
@@ -351,8 +401,16 @@ def register_routes(bp) -> None:
         )
         ok = bool((wakeup or {}).get("ok"))
         synced_at = now_beijing_iso()
-        if ok:
-            _mark_private_board_sync_activity(synced_at)
+        if ok and user_message:
+            _mark_private_board_sync_activity(
+                synced_at,
+                detail={
+                    "game_id": "private_board",
+                    "save_id": save_id,
+                    "mode": mode,
+                    "phase": "user_message",
+                },
+            )
         reply_text = str((wakeup or {}).get("reply_text") or (wakeup or {}).get("reply_preview") or "")
         applied_reply_commands: list[dict] = []
         followup_wakeups: list[dict] = []
@@ -393,7 +451,6 @@ def register_routes(bp) -> None:
                     reply_text = followup_reply
                     break
                 synced_at = now_beijing_iso()
-                _mark_private_board_sync_activity(synced_at)
                 wakeup = followup
                 reply_text = followup_reply
             else:
@@ -424,6 +481,11 @@ def register_routes(bp) -> None:
         body = request.get_json(silent=True) or {}
         command = str(body.get("command") or "").strip() or "打开"
         save_id = str(body.get("save_id") or "default").strip() or "default"
+        before_payload: dict | None = None
+        if str(game_id or "").strip() == "private_board" and _first_command_token(command) not in {"", "status", "open", "打开", "继续"}:
+            before_payload = execute_game_command(game_id, "status", save_id)
         payload = execute_game_command(game_id, command, save_id)
+        if str(game_id or "").strip() == "private_board":
+            _mark_private_board_pending_created_activity(save_id, command, before_payload, payload)
         status = 200 if payload.get("ok") else (404 if payload.get("error") == "UNKNOWN_GAME" else 500)
         return jsonify(payload), status
