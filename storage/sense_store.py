@@ -20,6 +20,8 @@ _SENSE_HISTORY_MIN_INTERVAL_SECONDS = {
     "health": 5 * 60,
     "location": 30 * 60,
 }
+_FOREGROUND_WAKE_SCREEN_GRACE_SECONDS = 3 * 60
+_SCREEN_INTERACTIVE_WAKE_EVENTS = {"screen_on", "user_present", "app_active"}
 _SLEEP_BLOCK_MIN_MINUTES = 20
 _SLEEP_CORE_BLOCK_MIN_MINUTES = 45
 _SLEEP_BLOCK_MERGE_GAP_MINUTES = 180
@@ -777,6 +779,25 @@ def _is_explicit_foreground_wake(data: dict) -> bool:
     return not any(part in pkg for part in _AWAKE_FOREGROUND_BLOCKLIST_PARTS)
 
 
+def _has_recent_interactive_screen_wake(screen_bucket: dict, observed_at: str) -> tuple[bool, str]:
+    screen = screen_bucket if isinstance(screen_bucket, dict) else {}
+    event = str(screen.get("event") or "").strip().lower()
+    if event not in _SCREEN_INTERACTIVE_WAKE_EVENTS:
+        return False, "no_interactive_wake_event"
+    if not _truthy_value(screen.get("interactive")):
+        return False, "screen_not_interactive"
+    observed_dt = parse_iso_to_beijing(str(observed_at or "").strip())
+    wake_dt = parse_iso_to_beijing(
+        str(screen.get("observedAt") or screen.get("occurredAt") or screen.get("updatedAt") or "").strip()
+    )
+    if not observed_dt or not wake_dt:
+        return False, "invalid_wake_time"
+    delta_seconds = abs((observed_dt - wake_dt).total_seconds())
+    if delta_seconds > _FOREGROUND_WAKE_SCREEN_GRACE_SECONDS:
+        return False, f"wake_event_too_old:{int(delta_seconds)}s"
+    return True, "recent_interactive_screen_wake"
+
+
 def _screen_logical_state(data: dict) -> str:
     event = str((data or {}).get("event") or "").strip().lower()
     if event == "app_active" and _truthy_value((data or {}).get("interactive")) and _is_explicit_foreground_wake(data):
@@ -1027,7 +1048,7 @@ def update_app_sessions_from_foreground(foreground_patch: dict) -> bool:
 
 
 def mark_screen_awake_from_foreground(foreground_patch: dict) -> bool:
-    """End a sleep block only when a real foreground app, not alarm/home/system UI, is observed."""
+    """End a sleep block only after a real interactive screen wake plus a real foreground app."""
     if not isinstance(foreground_patch, dict):
         return True
     device_id = str(foreground_patch.get("deviceId") or "").strip()
@@ -1035,12 +1056,13 @@ def mark_screen_awake_from_foreground(foreground_patch: dict) -> bool:
     app_name = str(foreground_patch.get("appName") or pkg).strip() or pkg
     if not device_id or not pkg:
         return True
+    observed_at = str(foreground_patch.get("observedAt") or "").strip() or now_beijing_iso()
     screen_patch = {
         "deviceId": device_id,
         "event": "app_active",
         "interactive": True,
-        "occurredAt": str(foreground_patch.get("observedAt") or "").strip() or now_beijing_iso(),
-        "observedAt": str(foreground_patch.get("observedAt") or "").strip() or now_beijing_iso(),
+        "occurredAt": observed_at,
+        "observedAt": observed_at,
         "snapshot": False,
         "screenWakeSource": "foreground_app",
         "foregroundPackageName": pkg[:160],
@@ -1052,6 +1074,18 @@ def mark_screen_awake_from_foreground(foreground_patch: dict) -> bool:
         screen_patch["foregroundClassName"] = class_name[:240]
     if not _is_explicit_foreground_wake(screen_patch):
         return True
+    latest = get_sense_latest()
+    screen_bucket = latest.get("screen") if isinstance(latest.get("screen"), dict) else {}
+    if str(screen_bucket.get("screenOffSince") or "").strip():
+        ok, reason = _has_recent_interactive_screen_wake(screen_bucket, observed_at)
+        if not ok:
+            logger.info(
+                "foreground wake skipped: no recent interactive screen wake device_id=%s pkg=%s reason=%s",
+                device_id,
+                pkg,
+                reason,
+            )
+            return True
     return merge_and_save_sense_bucket("screen", screen_patch)
 
 

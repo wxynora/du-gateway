@@ -559,7 +559,17 @@ def register_routes(bp) -> None:
         if err:
             return jsonify({"ok": False, "error": err}), 400
         if _is_duplicate_report_write("foreground", device_id, patch or {}):
-            return _reporting_deduped_response("foreground", device_id)
+            screen_awake_ok = mark_screen_awake_from_foreground(patch or {})
+            return jsonify(
+                {
+                    "ok": bool(screen_awake_ok),
+                    "bucket": "foreground",
+                    "device_id": device_id,
+                    "skipped": True,
+                    "reason": "deduped",
+                    "screen_awake_checked": True,
+                }
+            )
         ok = r2_store.merge_and_save_sense_bucket("foreground", patch or {})
         sessions_ok = r2_store.update_app_sessions_from_foreground(patch or {})
         screen_awake_ok = mark_screen_awake_from_foreground(patch or {})
