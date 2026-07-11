@@ -1057,6 +1057,41 @@ function findNewProcessReview(next: CaptivityPayload, previous: CaptivityPayload
   return null;
 }
 
+function processReviewTransition(review: ProcessReview): SceneCopy {
+  const event = review.event;
+  const action = textLine(event.action_label || actionLabel(event.action) || "这一段行动");
+  return {
+    key: `process:${processEventKey(event)}`,
+    kicker: `DAY ${String(event.day || 1).padStart(2, "0")} / PROCESS`,
+    title: "事件经过",
+    body: `${action}的具体经过已经写下。看完并保存以后，这一段才会真正结束。`,
+    tone: "special",
+  };
+}
+
+function nextStageTransition(next: CaptivityPayload): SceneCopy {
+  const view = viewFromPayload(next);
+  const pending = view.pending_event || {};
+  const phase = String(view.phase || "day");
+  const day = Number(view.current_day || 1);
+  const pendingSlot = Number(pending.slot || 0);
+  const slot = pendingSlot > 0 ? pendingSlot : Math.min(Number(view.day_action_count || 0) + 1, 3);
+  const title = phase === "night" ? "晚上" : ({ 1: "早上", 2: "中午", 3: "傍晚" } as Record<number, string>)[slot] || "下一段";
+  const waitingAdvance = String(pending.type || "") === "advance_action";
+  const body = phase === "night"
+    ? "白天的行动已经收进回顾。房间重新安静下来，夜间的安排将从这里开始。"
+    : waitingAdvance
+      ? "上一段已经收进回顾。下一项安排仍停在这里，等你亲手推进。"
+      : "上一段已经收进回顾。短暂的间隔过去，下一项安排即将开始。";
+  return {
+    key: `after-process:${day}:${phase}:${slot}:${String(pending.type || "idle")}`,
+    kicker: `DAY ${String(day).padStart(2, "0")} / NEXT`,
+    title,
+    body,
+    tone: phase === "night" ? "night" : "day",
+  };
+}
+
 function readProcessPreviewRole(): UserRole | "" {
   if (!import.meta.env.DEV || typeof window === "undefined") return "";
   const value = new URLSearchParams(window.location.search).get("captivity_process_preview");
@@ -2331,6 +2366,8 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
   const [sceneTransition, setSceneTransition] = useState<SceneCopy | null>(null);
   const initialLoadStartedRef = useRef(false);
   const lastSceneKeyRef = useRef("");
+  const lastProcessTransitionKeyRef = useRef("");
+  const sceneTransitionTimerRef = useRef<number | null>(null);
   const lastFailedRetryRef = useRef<(() => void) | null>(null);
   const [hasFailedRetry, setHasFailedRetry] = useState(false);
   const processPreviewRole = readProcessPreviewRole();
@@ -2395,6 +2432,31 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
 
   const applyPayload = useCallback((next: CaptivityPayload) => {
     setPayload(next);
+  }, []);
+
+  const dismissSceneTransition = useCallback(() => {
+    if (sceneTransitionTimerRef.current !== null) {
+      window.clearTimeout(sceneTransitionTimerRef.current);
+      sceneTransitionTimerRef.current = null;
+    }
+    setSceneTransition(null);
+  }, []);
+
+  const playSceneTransition = useCallback((scene: SceneCopy) => {
+    if (sceneTransitionTimerRef.current !== null) {
+      window.clearTimeout(sceneTransitionTimerRef.current);
+    }
+    setSceneTransition(scene);
+    sceneTransitionTimerRef.current = window.setTimeout(() => {
+      sceneTransitionTimerRef.current = null;
+      setSceneTransition(null);
+    }, sceneTransitionDuration(scene));
+  }, []);
+
+  useEffect(() => () => {
+    if (sceneTransitionTimerRef.current !== null) {
+      window.clearTimeout(sceneTransitionTimerRef.current);
+    }
   }, []);
 
   const runWithWait = useCallback(async (
@@ -2540,13 +2602,19 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
     const scene = view.scene_copy;
     const sceneKey = String(scene?.key || "");
     const revealPending = pendingType === "bell_voice_reveal" || pendingType === "item_secret_reveal";
-    if (screen !== "game" || processReview || monitorRoomOpen || inventoryRoomOpen || revealPending || !sceneKey) return;
+    if (screen !== "game" || processReview || monitorRoomOpen || inventoryRoomOpen || revealPending || !scene || !sceneKey) return;
     if (lastSceneKeyRef.current === sceneKey) return;
     lastSceneKeyRef.current = sceneKey;
-    setSceneTransition(scene || null);
-    const timer = window.setTimeout(() => setSceneTransition(null), sceneTransitionDuration(scene));
-    return () => window.clearTimeout(timer);
-  }, [inventoryRoomOpen, monitorRoomOpen, pendingType, processReview, screen, view.scene_copy]);
+    playSceneTransition(scene);
+  }, [inventoryRoomOpen, monitorRoomOpen, pendingType, playSceneTransition, processReview, screen, view.scene_copy]);
+
+  useEffect(() => {
+    if (!processReview) return;
+    const processKey = processEventKey(processReview.event);
+    if (!processKey || lastProcessTransitionKeyRef.current === processKey) return;
+    lastProcessTransitionKeyRef.current = processKey;
+    playSceneTransition(processReviewTransition(processReview));
+  }, [playSceneTransition, processReview]);
 
   useEffect(() => {
     const options = activeNightDetailOptions;
@@ -2816,7 +2884,11 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       "正在提交回应...",
       "REASON: WAITING_FOR_SUBJECT_REACTION",
       () => executeCaptivityCommand(`respond_action response=${response} mood=${quoteArg(responseMood)} line=${quoteArg(responseLine.trim())}`),
-    ).then((next) => continueAutomaticSync(next));
+    ).then((next) => {
+      if (!next) return;
+      setResponseLine("");
+      continueAutomaticSync(next);
+    });
   }
 
   function submitMood() {
@@ -2825,7 +2897,11 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       "正在记录此刻心情...",
       "STATUS: ARCHIVING PROCESS_REACTION",
       () => executeCaptivityCommand(`choose_mood mood=${quoteArg(reactionMood)} line=${quoteArg(reactionLine.trim())}`),
-    ).then((next) => continueAutomaticSync(next));
+    ).then((next) => {
+      if (!next) return;
+      setReactionLine("");
+      continueAutomaticSync(next);
+    });
   }
 
   function submitNightAction() {
@@ -2985,6 +3061,12 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
     syncDu(endingNext ? "ending" : "state_update", next, background);
   }
 
+  function playNextStageForPayload(next: CaptivityPayload) {
+    const backendSceneKey = String(viewFromPayload(next).scene_copy?.key || "");
+    if (backendSceneKey) lastSceneKeyRef.current = backendSceneKey;
+    playSceneTransition(nextStageTransition(next));
+  }
+
   function syncDu(
     mode: "chat" | "state_update" | "ending" = "state_update",
     previousPayloadOverride?: CaptivityPayload | null,
@@ -3082,17 +3164,29 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         captor_view: { ...nextView, viewer: "captor" },
         player_text: "本地预览：抓回事件已保存，进入重新立规矩。",
       });
+      setReactionLine("");
       setProcessReview(null);
       setFooterTab("status");
+      playSceneTransition({
+        key: `after-recapture:${String(archivedEvent.id || "event")}`,
+        kicker: "AFTER ESCAPE / RULES",
+        title: "重新立规矩",
+        body: "抓回的经过已经收进回顾。接下来留下的规矩，会继续影响之后的日子。",
+        tone: "special",
+      });
       return;
     }
     if (processPreviewRole) {
-      setPayload(buildProcessPreviewAfterSave(processPreviewRole, reactionMood, reactionLine.trim()));
+      const next = buildProcessPreviewAfterSave(processPreviewRole, reactionMood, reactionLine.trim());
+      setPayload(next);
+      setReactionLine("");
       setProcessReview(null);
       setFooterTab("status");
+      playNextStageForPayload(next);
       return;
     }
     if (!processReview.moodRequired) {
+      setReactionLine("");
       setProcessReview(null);
       setFooterTab("status");
       if (role === "captor" && pendingType === "advance_action" && userIsPendingActor) {
@@ -3100,7 +3194,13 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
           "正在进入今日安排...",
           "STATUS: ADVANCING_ACTION",
           () => executeCaptivityCommand("advance_day_action"),
-        ).then((next) => continueAutomaticSync(next));
+        ).then((next) => {
+          if (!next) return;
+          playNextStageForPayload(next);
+          continueAutomaticSync(next);
+        });
+      } else if (payload) {
+        playNextStageForPayload(payload);
       }
       return;
     }
@@ -3110,8 +3210,10 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       () => executeCaptivityCommand(`choose_mood mood=${quoteArg(reactionMood)} line=${quoteArg(reactionLine.trim())}`),
     ).then((next) => {
       if (!next) return;
+      setReactionLine("");
       setProcessReview(null);
       setFooterTab("status");
+      playNextStageForPayload(next);
       continueAutomaticSync(next);
     });
   }
@@ -3667,7 +3769,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       </section>
 
       {sceneTransition ? (
-        <SceneTransitionOverlay scene={sceneTransition} onDismiss={() => setSceneTransition(null)} />
+        <SceneTransitionOverlay scene={sceneTransition} onDismiss={dismissSceneTransition} />
       ) : null}
 
       <div id="wait-overlay" className={`wait-overlay ${wait.visible ? "active" : ""}`}>
@@ -3712,15 +3814,18 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             --safe-bottom: env(safe-area-inset-bottom, 0px);
             --font-display: "Times New Roman", serif;
             --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-            position: absolute;
+            position: fixed;
             inset: 0;
+            height: 100dvh;
             z-index: 34;
             background-color: var(--black);
             color: var(--white);
             font-family: var(--font-ui);
             font-size: 13px;
             line-height: 1.2;
+            overflow-y: auto;
             overflow-x: hidden;
+            overscroll-behavior-y: contain;
             letter-spacing: -0.02em;
         }
         .captivity-game * {
@@ -3757,8 +3862,12 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             text-align: center;
         }
         .captivity-game .bootstrap-title {
-            font-size: 30px;
-            line-height: 1;
+            font-family: "SumiChatScript", cursive;
+            font-size: 46px;
+            font-style: normal;
+            font-weight: 400;
+            line-height: 1.05;
+            letter-spacing: 0;
         }
         .captivity-game .bootstrap-copy {
             margin-top: 14px;
@@ -5478,7 +5587,10 @@ function RuntimePanel({
     || event.tools?.length
     || (event.feeding && Object.keys(event.feeding).length),
   );
+  const staleDayEventAtNight = String(view.phase || "") === "night" && String(event.phase || "") === "day";
   const showActiveCard = Boolean(pending || hasEventDetail || isEnding)
+    && !isNightSelfChoice
+    && !staleDayEventAtNight
     && !(pendingType === "escape_choice" && userIsPendingActor)
     && !(pendingType === "bell_voice_reveal" && userIsPendingActor)
     && !(pendingType === "item_secret_reveal" && userIsPendingActor)

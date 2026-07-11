@@ -321,6 +321,7 @@ LAST_USER_ACTIVITY_ALLOWED_SOURCES = frozenset(
         "telegram_document",
         "cross_platform_tg_window_user_input",
         "private_board_sync_du",
+        "captivity_simulator_user_interaction",
     }
 )
 

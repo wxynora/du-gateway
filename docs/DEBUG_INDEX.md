@@ -2213,3 +2213,9 @@ npm -C miniapp run android
 - 边界保持：普通行动仍单轮同步；夜间监控 `monitor_gate -> monitor_handle` 和首次物品/语音铃揭示继续保留必要的第二段，不改两种视角的监控封存规则。
 - 已验证：`scripts/test_captivity_simulator_game.py` 覆盖动态藏物、没收、重复书/游戏发现、空日记拒绝、宠物规则素材和监控边界；本轮只使用临时本地假存档，不调用真实 `/sync-du` 或 R2。
 - 已部署：提交 `3fa69fab` 已推送到 `origin/main`；新主网关 `/root/du-gateway` fast-forward 后完成后端 `py_compile` 并重启 `du-gateway.service`。服务器本机 `/health`、`/miniapp/` 与公网 `https://duxy-home.com/health`、`/miniapp/`、新囚禁模拟器静态 chunk 均返回 200，最近服务日志无 traceback/error/exception/failed。
+
+当前状态（2026-07-11 囚禁模拟器事件转场与互动时间补漏）：
+- 已完成：AI 写回具体经过时先播放「事件经过」过场；保存到回顾后按下一 pending 播放早上/中午/傍晚/晚上过场，再回一级状态页。夜间自由行动页不再把白天最后一段行动继续显示成「当前事件」，完整白天内容仍保留在回顾。
+- 已修复：已部署路由使用 `captivity_simulator_user_interaction` 更新全局互动时间，但 R2 source 白名单漏掉该值，导致线上写入被 `source_not_allowed` 拒绝；白名单已补齐，测试增加路由 source 与白名单一致性断言。
+- 边界保持：本轮只展示并核对现有过程提示词，没有修改其成人内容倾向、玩家反应篇幅或开源配置说明；这些仍待确认文案后再改。互动时间验证只使用常量断言和 mock 路由，没有访问真实 R2、`/sync-du` 或线上存档。
+- 已验证：囚禁模拟器全量规则测试、互动时间策略测试、后端 `py_compile` 和 MiniApp `tsc --noEmit` 通过；应用内浏览器用 dev-only 假数据实测进入经过、保存后下一阶段和夜间卡片隐藏。

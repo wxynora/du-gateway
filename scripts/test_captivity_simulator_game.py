@@ -1781,6 +1781,7 @@ def test_captivity_simulator_public_api_returns_only_local_view() -> None:
 
 def test_captivity_simulator_sync_activity_policy() -> None:
     from routes.miniapp import game_tools
+    from storage import r2_store
 
     _assert(game_tools._sync_message_counts_as_user_activity("chat", "小玥说了一句") is True, "explicit in-game chat should count as user activity")
     _assert(game_tools._sync_message_counts_as_user_activity("state_update", "自动同步") is False, "state sync should not count as user activity")
@@ -1789,6 +1790,10 @@ def test_captivity_simulator_sync_activity_policy() -> None:
     _assert(game_tools._captivity_simulator_sync_counts_as_user_activity("chat", "") is False, "empty captivity chat should not count as user activity")
     _assert(game_tools._captivity_simulator_sync_counts_as_user_activity("state_update", "") is True, "successful captivity state sync should count as user activity")
     _assert(game_tools._captivity_simulator_sync_counts_as_user_activity("ending", "") is True, "successful captivity ending sync should count as user activity")
+    _assert(
+        "captivity_simulator_user_interaction" in r2_store.LAST_USER_ACTIVITY_ALLOWED_SOURCES,
+        "captivity sync activity source must be accepted by the global interaction clock",
+    )
 
 
 def test_captivity_simulator_wakeup_uses_dynamic_system_and_skips_body_delta() -> None:
