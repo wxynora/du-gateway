@@ -610,6 +610,7 @@ def _send_wakeup_event(
     dynamic_system_event: bool = False,
     spring_dream_archive_meta: dict | None = None,
     return_only: bool = False,
+    skip_post_archive_body_delta: bool = False,
 ) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。事件唤醒默认归档，避免后续对话断层。"""
     try:
@@ -692,6 +693,8 @@ def _send_wakeup_event(
     }
     if kind:
         headers["X-DU-WAKEUP-KIND"] = kind
+    if skip_post_archive_body_delta:
+        headers["X-Skip-Post-Archive-Body-Delta"] = "1"
     if archive and not archive_after_delivery:
         headers["X-DU-FOLLOWUP-ARCHIVE"] = "1"
     if not allow_followup:
@@ -927,6 +930,41 @@ def send_private_board_wakeup(
         lock_preferred_channel=bool(preferred_channel),
         allow_followup=not return_only,
         return_only=return_only,
+    )
+
+
+def send_captivity_simulator_wakeup(
+    window_id: str,
+    target: str,
+    event_text: str,
+    created_at: str | None = None,
+    preferred_channel: str = "",
+    preferred_meta: dict | None = None,
+    return_only: bool = False,
+) -> dict:
+    """立即让渡看到小玥同步来的囚禁模拟器局面。"""
+    return _send_wakeup_event(
+        window_id=window_id,
+        target=target,
+        event_text=event_text,
+        created_at=created_at,
+        archive=True,
+        extra_instruction=(
+            "这是小玥在囚禁模拟器页面内发给你的游戏交流，不是她在主聊天框里说的话。"
+            "请自然回应；如果你要推进当前事件，第一行必须单独写页面规则里要求的精确指令。"
+            "不要调用工具，不要解释工具、接口、系统流程，不要替小玥说话。"
+        ),
+        wakeup_kind="captivity_simulator",
+        system_event=True,
+        system_event_user_summary="请根据上面的囚禁模拟器游戏内交流回应小玥。",
+        dynamic_system_event=True,
+        preferred_channel_override=preferred_channel,
+        preferred_target_override=target,
+        preferred_meta_override=preferred_meta,
+        lock_preferred_channel=bool(preferred_channel),
+        allow_followup=not return_only,
+        return_only=return_only,
+        skip_post_archive_body_delta=True,
     )
 
 

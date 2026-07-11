@@ -693,20 +693,67 @@ def _compact_private_board_event_text(text: str) -> str:
     return "小玥在涩涩走格棋局内发来一条消息。"
 
 
+def _compact_captivity_simulator_event_text(text: str) -> str:
+    day = _regex_group(r"进度[:：]第\s*(\d+)\s*/\s*30", text)
+    phase = _regex_group(r"进度[:：]第\s*\d+\s*/\s*30\s*天[，,]\s*([^，,\n]+)", text)
+    pending = _regex_group(r"待处理[:：]([^\n]{1,160})", text)
+    message = _regex_group(
+        r"小玥刚刚在局内说[:：]([\s\S]*?)(?:\n\n当前游戏状态[:：]|\n当前游戏状态[:：]|$)",
+        text,
+    )
+    bits = []
+    if day:
+        bits.append(f"第 {day} 天")
+    if phase:
+        bits.append(_compact_archive_line(phase, 40))
+    if pending:
+        bits.append(f"待处理：{_compact_archive_line(pending, 120)}")
+    if message:
+        bits.append(f"局内说明：{_compact_archive_line(message, 120)}")
+    suffix = "，".join(bits)
+    if suffix:
+        return f"小玥在囚禁模拟器中同步了状态：{suffix}。"
+    return "小玥在囚禁模拟器中同步了一次游戏状态。"
+
+
+def _compact_captivity_simulator_assistant_for_archive(assistant_msg: dict) -> dict:
+    raw = _plain_message_text(assistant_msg)
+    parsed = ""
+    if raw.strip().startswith("【"):
+        match = re.match(r"^【\s*([^：:】]+)", raw.strip())
+        if match:
+            parsed = str(match.group(1) or "").strip()
+    if parsed:
+        content = f"渡在囚禁模拟器中回复了「{_compact_archive_line(parsed, 40)}」指令；完整正文只保留在游戏存档。"
+    elif raw.strip():
+        content = "渡在囚禁模拟器局内回复了一段普通聊天；完整正文不写入聊天归档。"
+    else:
+        content = "渡在囚禁模拟器局内回复为空。"
+    compacted = {"role": "assistant", "archive_label": "渡", "content": content}
+    if "cache_debug" in assistant_msg:
+        compacted["cache_debug"] = assistant_msg["cache_debug"]
+    if assistant_msg.get("reasoning_omitted"):
+        compacted["reasoning_omitted"] = True
+    return compacted
+
+
 def _wakeup_kind_for_archive() -> str:
     return str(request.headers.get("X-DU-WAKEUP-KIND") or "").strip().lower()
 
 
 def _gateway_event_source_for_archive(messages: list | None, *, wakeup_kind: str = "") -> Optional[dict]:
     kind = str(wakeup_kind or "").strip().lower()
-    if kind != "private_board":
+    if kind not in {"private_board", "captivity_simulator"}:
         return None
     for msg in messages or []:
         if not isinstance(msg, dict):
             continue
         if str(msg.get("role") or "").strip().lower() != "system":
             continue
-        if "涩涩走格棋" in _plain_message_text(msg):
+        text = _plain_message_text(msg)
+        if kind == "private_board" and "涩涩走格棋" in text:
+            return msg
+        if kind == "captivity_simulator" and "囚禁模拟器" in text:
             return msg
     return None
 
@@ -732,6 +779,9 @@ def _compact_gateway_event_for_archive(user_msg: dict, *, wakeup_kind: str = "")
     elif kind == "private_board":
         label = "涩涩走格棋"
         content = _compact_private_board_event_text(text)
+    elif kind == "captivity_simulator":
+        label = "囚禁模拟器"
+        content = _compact_captivity_simulator_event_text(text)
     elif kind in {"exchange_diary_comment", "diary_comment"}:
         label = "交换日记评论"
         content = _compact_exchange_diary_comment_event_text(text)
@@ -847,6 +897,8 @@ def _build_round_cleaned_for_archive(
         if wakeup_kind:
             event_msg = _gateway_event_source_for_archive(request_messages, wakeup_kind=wakeup_kind)
             archive_user = _compact_gateway_event_for_archive(event_msg or archive_user or user_msg, wakeup_kind=wakeup_kind)
+            if wakeup_kind == "captivity_simulator":
+                archive_assistant = _compact_captivity_simulator_assistant_for_archive(assistant_msg)
     return build_round_cleaned_for_r2(archive_user, archive_assistant)
 
 

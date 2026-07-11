@@ -51,6 +51,13 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 植物大战僵尸模仿者版原型 | `du_imitator_pvz/`、`scripts/test_imitator_pvz_*.py`、`scripts/sim_imitator_pvz_balance.py`、`docs/植物大战僵尸模仿者版.md` | 纯 Python headless 随机模仿者塔防模拟器：P0/P2 合同、随机池、植物/僵尸行为、玩家回合复盘、v2 小工测试、铲子动作、僵王事件、主动重开、玩家棋盘文本视图 |
 | 随机模仿者网关私有工具 | `services/game_tool_runtime.py`、`services/random_imitator_td_tool.py`、`routes/miniapp/game_tools.py`、`routes/chat.py`、`pipeline/pipeline.py`、`services/chat_tools.py`、`scripts/test_random_imitator_td_tool.py` | du-gateway 私有游戏工具接入：`random_imitator_td` 是首个注册游戏；Prompt 开关只固定注入工具，只有专用游戏标记或工具结果自带 `game_tool_loop` 才跳过动态记忆写入与 BODY delta |
 | MiniApp 游戏大厅 / 涩涩走格棋 | `miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/tabs/SeseBoardGameTab.tsx`、`routes/miniapp/game_tools.py`、`services/private_board_game.py`、`services/private_board_tool.py`、`services/game_tool_runtime.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_private_board_game.py` | 「日常 > 游戏」入口，文游显示为「无限流」；`private_board` 走走格棋后端和前端棋盘。小玥通过前端按钮/输入参与，渡通过自然语言精确首行指令参与；右上角局内聊天只发本次消息，不自带局内历史；局内回复不外发主聊天但压缩归档进同一个 `tg_*` window 的 last4；同步成功后按同步时间刷新全局最近活动时钟 |
+| 囚禁模拟器 | `docs/captivity-simulator-plan.md`、`services/captivity_simulator_game.py`、`routes/miniapp/game_tools.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_captivity_simulator_game.py`、`services/game_tool_runtime.py`、`miniapp/src/ui/tabs/CaptivitySimulatorGameTab.tsx`、`miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/AppShell.tsx` | 30 天本地规则模拟器：双路线、三段白天行动、过程/心情、夜间自由行动与监控、逃跑诱导及抓回后规则、物品/道具、事件回顾和固定结局；`/game-tools/captivity_simulator/sync-du` 以 dynamic system 注入当轮上下文，跳过动态记忆和 BODY delta，完整事件正文只留游戏存档 |
+
+当前状态（2026-07-11 囚禁模拟器首个完整部署版）：
+- 已完成：规则引擎、双路线 MiniApp、行动/过程/夜间/监控/逃跑/抓回/物品/结局闭环和事件回顾已整合；开发预览只使用本地假数据。
+- 已完成：用户触发的 `state_update`、局内聊天和首次结局同步只有在 `/sync-du` 首次唤醒成功后才刷新 `last_user_activity_at`；失败同步、状态刷新、本地存档和重复结局通知不刷新。
+- 边界：囚禁模拟器同步使用当轮 dynamic system，跳过动态记忆写入和 post-archive BODY delta；聊天归档只留结构化摘要，完整过程正文只保留在游戏存档。
+- 验证入口：`.venv/bin/python scripts/test_captivity_simulator_game.py`、`.venv/bin/python scripts/test_private_board_game.py`、`cd miniapp && npx tsc --noEmit --pretty false && npm run build`、后端 `py_compile` / `import app` 和 `git diff --check`。
 
 当前状态（2026-07-07 涩涩走格棋同步时间与打回说明修正）：
 - 已完成：`/miniapp-api/game-tools/private_board/sync-du` 成功同步后不再按 `window_id/target` 判断“主 TG 窗口”，而是直接用本次 `synced_at` 写入 `last_user_activity_at` 全局活动时钟；该时钟供主动/防打扰链路判断最近真实活动。

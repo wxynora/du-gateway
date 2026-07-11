@@ -92,6 +92,25 @@ function isLocalRecallPreviewRoute(): boolean {
   }
 }
 
+function isLocalCaptivityPreviewRoute(): boolean {
+  if (!import.meta.env.DEV || typeof window === "undefined") return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return [
+      "captivity_process_preview",
+      "captivity_plan_preview",
+      "captivity_night_preview",
+      "captivity_escape_preview",
+      "captivity_ending_preview",
+    ].some((key) => {
+      const role = params.get(key);
+      return role === "captive" || role === "captor";
+    });
+  } catch {
+    return false;
+  }
+}
+
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
 const SettingsUpstream = lazy(() => import("./tabs/SettingsUpstream").then((m) => ({ default: m.SettingsUpstream })));
 const ReasoningTab = lazy(() => import("./tabs/ReasoningTab").then((m) => ({ default: m.ReasoningTab })));
@@ -108,6 +127,7 @@ const BudgetCheckInTab = lazy(() => import("./tabs/BudgetCheckInTab").then((m) =
 const GamesHubTab = lazy(() => import("./tabs/GamesHubTab").then((m) => ({ default: m.GamesHubTab })));
 const WenyouTab = lazy(() => import("./tabs/WenyouTab").then((m) => ({ default: m.WenyouTab })));
 const SeseBoardGameTab = lazy(() => import("./tabs/SeseBoardGameTab").then((m) => ({ default: m.SeseBoardGameTab })));
+const CaptivitySimulatorGameTab = lazy(() => import("./tabs/CaptivitySimulatorGameTab").then((m) => ({ default: m.CaptivitySimulatorGameTab })));
 const StickersTab = lazy(() => import("./tabs/StickersTab").then((m) => ({ default: m.StickersTab })));
 const CallHubScreen = lazy(() => import("./tabs/CallHubScreen").then((m) => ({ default: m.CallHubScreen })));
 const PixelHomeTab = lazy(() => import("./tabs/PixelHomeTab").then((m) => ({ default: m.PixelHomeTab })));
@@ -123,7 +143,7 @@ const SecretDrawerTab = lazy(() => import("./tabs/SecretDrawerTab").then((m) => 
 
 type PanelId = "logs" | "reasoning" | "memory-debug" | "dream-archive" | "du-notebook" | "du-pages" | "study-room" | "budget-checkin" | "secret-drawer" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
 type AvatarImageKind = "myAvatar" | "duAvatar" | "benbenAvatar";
-type ChatScreenId = "du" | "group" | "games" | "wenyou" | "sese-board" | null;
+type ChatScreenId = "du" | "group" | "games" | "wenyou" | "sese-board" | "captivity-simulator" | null;
 type BackHandler = () => boolean;
 type AppBackgroundTone = "light" | "dark";
 type ModeResponse = {
@@ -145,6 +165,7 @@ export function AppShell({
 }) {
   const toast = useToast();
   const localRecallPreviewRoute = isLocalRecallPreviewRoute();
+  const localCaptivityPreviewRoute = isLocalCaptivityPreviewRoute();
   const [panel, setPanel] = useState<PanelId>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showPromptManager, setShowPromptManager] = useState(false);
@@ -164,7 +185,11 @@ export function AppShell({
   const [incomingVoiceCallInvite, setIncomingVoiceCallInvite] = useState<IncomingVoiceCallInvite | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
-  const [activeScreen, setActiveScreen] = useState<ChatScreenId>(() => (localRecallPreviewRoute ? "du" : null));
+  const [activeScreen, setActiveScreen] = useState<ChatScreenId>(() => {
+    if (localCaptivityPreviewRoute) return "captivity-simulator";
+    if (localRecallPreviewRoute) return "du";
+    return null;
+  });
   const wenyouBackHandlerRef = useRef<(() => boolean) | null>(null);
   const callHubBackHandlerRef = useRef<BackHandler | null>(null);
   const promptManagerBackHandlerRef = useRef<BackHandler | null>(null);
@@ -307,6 +332,12 @@ export function AppShell({
     setCallHubInitialView(initialView);
     setShowCallHub(true);
   }, []);
+
+  useEffect(() => {
+    if (localCaptivityPreviewRoute) {
+      setActiveScreen("captivity-simulator");
+    }
+  }, [localCaptivityPreviewRoute]);
 
   useEffect(() => {
     // 不强制全屏，保持 Telegram 默认的半屏/弹层体验。
@@ -640,7 +671,7 @@ export function AppShell({
       if (activeScreen === "wenyou" && wenyouBackHandlerRef.current?.()) {
         return;
       }
-      if (activeScreen === "wenyou" || activeScreen === "sese-board") {
+      if (activeScreen === "wenyou" || activeScreen === "sese-board" || activeScreen === "captivity-simulator") {
         setActiveScreen("games");
         return;
       }
@@ -954,12 +985,16 @@ export function AppShell({
             <GamesHubTab
               onOpenWenyou={() => setActiveScreen("wenyou")}
               onOpenSeseBoard={() => setActiveScreen("sese-board")}
+              onOpenCaptivitySimulator={() => setActiveScreen("captivity-simulator")}
             />
           </LazyPane>
         </FullScreenPane>
       ) : null}
       {activeScreen === "sese-board" ? (
         <LazyPane><SeseBoardGameTab onBack={() => setActiveScreen("games")} /></LazyPane>
+      ) : null}
+      {activeScreen === "captivity-simulator" ? (
+        <LazyPane><CaptivitySimulatorGameTab onBack={() => setActiveScreen("games")} /></LazyPane>
       ) : null}
       {!activeScreen ? (
         <>
