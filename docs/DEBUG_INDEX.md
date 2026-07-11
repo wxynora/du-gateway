@@ -36,7 +36,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 文游规则入口 | `docs/wenyou_rules.md`、`docs/wenyou/*.md` | 开源版文游规则入口与拆分文档：核心循环、运行时状态缓存、副本生成、怪物系统、数值成长、奖励经济、后端契约 |
 | 文游物品/核心能力系统 | `docs/wenyou/item_ability_system.md`、`docs/wenyou/item_catalog_draft_d.md`、`docs/wenyou/item_catalog_draft_c.md`、`docs/wenyou/item_catalog_draft_b.md`、`docs/wenyou/item_catalog_draft_a.md`、`docs/wenyou/item_catalog_draft_s.md`、`content/default/items.json`、`content/default/item_catalog.sql`、`content/default/abilities.json`、`schemas/item.schema.json`、`schemas/ability.schema.json`、`content/default/reward_tables.json` | 通用商店/抽卡/奖励道具目录、用途分类、物品形态、时代标签、耐久/次数、背包使用/出售、商店、抽卡、核心能力原型和奖励表；不再保留独立高阶兑换入口、装备栏、穿戴、锻造、拆解、多能力槽或复杂身体路线；D/C/B/A/S 道具已从 Markdown 审校源表生成结构化内容表和 SQL seed；副本专属可带出物先归内容包/副本奖励表，不默认进通用目录；D 级副本常规产出最多 C 级 |
 | 文游运行时存储 | `storage/wenyou_sqlite_store.py`、`storage/r2_store.py` | 文游当前存档、长期钱包、候选池、连续性卡片和归档列表以 `data/wenyou.sqlite3` 为主；旧 R2 key 只在 SQLite 无记录时回填，`WENYOU_R2_BACKUP_ENABLED=1` 才双写备份 |
-| R2 存储 | `storage/r2_store.py` | 会话、summary、动态记忆、设置、贴纸、设备状态、日程等 R2 key |
+| R2 存储 | `storage/r2_client.py`、`storage/r2_conversation_store.py`、`storage/r2_context_store.py`、`storage/r2_wenyou_store.py`、`storage/r2_sticker_store.py`、`storage/r2_media_store.py`、`storage/r2_miniapp_store.py`、`storage/r2_device_reporting_store.py`、`storage/r2_studyroom_store.py`、`storage/r2_store.py` | `r2_client.py` 负责 S3 客户端和 JSON 读写；conversation compact/SQLite 热读、summary/latest4/近期图片描述上下文、文游、贴纸、媒体、MiniApp 资产/小组件、设备上报和 StudyRoom 已迁入领域模块，`r2_store.py` 保留兼容导出并继续承载主动联系、动态记忆、Prompt 等 API |
 | 上游配置 | `storage/upstream_store.py` | active upstream、model cache、models 探测 |
 | 主动消息 | `services/telegram_proactive.py` | 概率主动、主动决策、通道投递、trigger tick |
 | 唤醒/续话 | `services/conversation_followup.py`、`services/reply_channel_context.py` | 事件唤醒、弹窗回执、查岗回应、延迟续话、最近真实聊天入口解析 |
@@ -2169,3 +2169,33 @@ npm -C miniapp run android
 - 已完成：CPA 的 `gpt-5.6-sol` 增加独立思考强度设置，App 可选 `low/medium/high/xhigh/max/ultra`；档位按稳定 upstream key 保存在当前 Codex OAuth 节点，转发时只对 CPA + `gpt-5.6-sol` 写入对应 `reasoning_effort`，CPA 其他模型继续固定 `high`，其他上游不受影响。
 - 已验证：隔离 smoke 覆盖 8317 命中、8082 不命中、最终顺序为 `BASE -> CODEX_ONLY -> NSFW_RULES`，并确认该条目允许保存为空；后端 `py_compile`、MiniApp `tsc --noEmit` 和 `/tmp` 隔离生产构建通过。
 - 未完成 / 下次继续：实际专用 Prompt 内容仍为空，由小玥在手机 Prompt 管理中填写；部署后用 CPA 上游发一轮并在 Prompt Cache 静态区确认顺序。
+
+当前状态（2026-07-11 R2 存储拆分第一刀）：
+- 已完成：新增 `storage/r2_client.py`，集中承接 Cloudflare R2 S3 客户端、JSON 读取和带重试的 JSON 写入；`storage/r2_store.py` 继续按原私有函数名兼容导出，现有调用方不需要改。
+- 已完成：新增 `storage/r2_wenyou_store.py`，完整迁出文游 session、钱包、候选池、连续性卡片和归档的 SQLite 主存 / R2 回填与可选备份逻辑；`storage/r2_store.py` 保留全部原文游 API 兼容导出，文件从 4282 行降到 3865 行。
+- 已验证：`scripts/test_r2_wenyou_store.py` 纯内存覆盖旧入口导出、SQLite 主写不触碰 R2、R2 缺失回填、可选备份和 JSON helper；相关 `py_compile`、`import app`、`git diff --check` 通过，未访问真实 R2、VPS 或上游模型。
+- 未完成 / 下次继续：下一刀可迁出 `storage/r2_store.py` 的 stickers / SumiTalk 媒体尾段；不要与当前囚禁模拟器、MiniApp 构建产物和 VPS 迁移文档改动混在同一提交里。
+
+当前状态（2026-07-11 R2 存储拆分第二刀）：
+- 已完成：新增 `storage/r2_sticker_store.py`，迁出 sticker 分类元数据、标签集合、映射扫描/重建、上传和删除；新增 `storage/r2_media_store.py`，迁出通用对象读取、SumiTalk 图片/音频/文档及缩略图、设备截图 token 读写。
+- 已完成：`storage/r2_store.py` 继续兼容导出原函数和 `R2_KEY_STICKERS_MAPPING`、`R2_KEY_STICKERS_META`、`R2_KEY_SUMITALK_CHAT_MEDIA_PREFIX` 常量，现有 Telegram、MiniApp 和 secret drawer 调用方无须修改；总入口从 3865 行降到 3416 行。
+- 已验证：`scripts/test_r2_object_stores.py` 纯内存覆盖兼容出口、默认标签合并、映射扫描、保留 key / 路径穿越拒绝、附件类型、上传元数据和截图 token；第一刀文游存储测试、文游规则 smoke、相关 `py_compile`、`import app` 与 `git diff --check` 一并通过，未访问真实 R2、VPS 或上游模型。
+- 未完成 / 下次继续：R2 总入口下一刀优先迁出 MiniApp 背景/语音/日报/记事本/StudyRoom 配置段；聊天主链和当前游戏半成品仍保持不动。
+
+当前状态（2026-07-11 R2 存储拆分第三刀）：
+- 已完成：新增 `storage/r2_miniapp_store.py`，迁出背景和语音配置/版本化图片、通话记录、每日气泡/报告、心情温度计及渡的记事本；新增 `storage/r2_device_reporting_store.py`，迁出设备上报配置的 SQLite 主读、R2 兼容文档和分类开关；新增 `storage/r2_studyroom_store.py`，迁出 StudyRoom 归类、规范化和增删改存储。
+- 已完成：`storage/r2_store.py` 保留上述原函数、私有 helper、StudyRoom 常量、设备上报常量和全部 R2 key 兼容导出，现有 routes/services/scripts 调用方无须修改；总入口从 3416 行降到 2738 行。
+- 已验证：`scripts/test_r2_miniapp_stores.py` 纯内存覆盖兼容出口、背景版本双写、日报 key、通话删除、记事本排序、设备 SQLite 主读/R2 同步、StudyRoom 归类与规范化；前三刀全部存储测试、文游规则 smoke、相关 `py_compile`、`import app` 和 `git diff --check` 一并通过，未访问真实 R2、VPS 或上游模型。
+- 未完成 / 下次继续：R2 总入口下一刀优先迁出 conversation 存档/compact/轮次管理；这会触及聊天热路径，动手前先补 conversation facade 和 compact 行为特征测试，仍不碰聊天编排本身。
+
+当前状态（2026-07-11 R2 存储拆分第四刀）：
+- 已完成：新增 `storage/r2_conversation_store.py`，原样迁出窗口 id/key、compact meta/recent/round 文件、SQLite 热读和回填、按日 R2 备份、防轮次倒退、meta 读失败熔断、指定轮读取/删除、预览和 pseudo-CoT 状态；`storage/r2_store.py` 保留全部原函数、私有 helper 和 compact 常量兼容导出。
+- 已完成：`storage/r2_store.py` 从 2738 行降到 1985 行；本刀没有修改 `routes/chat.py`、`pipeline/pipeline.py` 或任何调用方行为，旧入口继续供主聊天、主动消息、文游近期记忆和管理页使用。
+- 已验证：`scripts/test_r2_conversation_store.py` 先在迁移前旧实现跑绿 10 条特征测试，再在迁移后同一套测试跑绿并增加兼容出口检查；覆盖 SQLite 主读不访问 R2、recent/backup 合并、旧 meta 修复、防 blind write、四类 append 写入、指定轮优先级、预览、pseudo-CoT 和删除重建。四刀存储测试、文游规则 smoke、相关 `py_compile`、`import app` 与 `git diff --check` 全部通过，未访问真实 R2、VPS 或上游模型。
+- 未完成 / 下次继续：R2 总入口下一刀优先迁出 summary/latest4/image-description 和动态记忆前置小段；完成后再决定是继续拆动态记忆写入，还是转向 `routes/chat.py` 的 stream/nonstream runner。
+
+当前状态（2026-07-11 R2 存储拆分第五刀）：
+- 已完成：新增 `storage/r2_context_store.py`，原样迁出全局 summary 及旧值备份、summary chunks 规范化、global latest4、全局/窗口近期图片描述映射，以及 compact meta/recent/14 天 backup 的窗口历史判断；模块内继续用同一把进程锁串行写这组共享上下文 key。
+- 已完成：`storage/r2_store.py` 继续兼容导出全部原函数、私有图片 helper、R2 key 和 limit 常量，主聊天、文游、Claude thinking carryover、SumiTalk block mode、管理页和 replay 脚本均无须修改；总入口从 1985 行降到 1766 行。本刀没有迁移旧 `save_image_description()` 单消息存档，没有修改主动联系、followup、动态记忆、Prompt 或任何调用方。
+- 已验证：`scripts/test_r2_context_store.py` 在迁移前旧实现和迁移后新模块各跑绿 9 条相同特征测试，覆盖总结读取/备份覆盖、chunks 规范化和时间戳、latest4 截断、图片描述去重限长/全局窗口双写/过滤、窗口历史 meta 优先和 backup 兜底，并校验 `r2_store.py` facade 函数对象与常量兼容。五刀共 44 条存储测试、`scripts/wenyou_rules_smoke.py`、相关调用方 `py_compile`、`import app` 和目标文件 `git diff --check` 全部通过，未访问真实 R2、VPS 或上游模型。
+- 未完成 / 下次继续：下一刀优先给动态记忆 current/debug/audit/maintenance 与 core pending 补行为测试后迁出；主动联系、用户活动、reply channel、Todo、Prompt 和当前游戏/MiniApp 半成品继续不碰。
