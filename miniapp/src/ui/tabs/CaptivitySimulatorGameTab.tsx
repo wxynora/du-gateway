@@ -223,6 +223,7 @@ type CaptivityView = {
     configured_at?: string;
   };
   night_condition?: NightCondition | null;
+  night_detail_options?: Record<string, Record<string, string>>;
   deferred_monitor_materials?: DeferredMonitorMaterial[];
   available_night_actions?: string[];
   status_flags?: StatusFlag[];
@@ -286,7 +287,6 @@ type ProcessReview = {
 };
 
 const SAVE_ID = "default";
-const ROUTE_STORAGE_KEY = "du-gateway:captivity-simulator:route:v1";
 
 const STAT_LABELS: Array<{ key: keyof CaptivityStats; label: string }> = [
   { key: "health", label: "健康" },
@@ -384,6 +384,9 @@ const TRAINING_CONTENT_OPTIONS = [
   { id: "pet_feeding", label: "宠物式喂食" },
   { id: "pet_permission", label: "按铃求许可" },
   { id: "pet_voice_training", label: "叫声与回应" },
+  { id: "pet_owner_address", label: "主人称呼训练" },
+  { id: "pet_begging", label: "宠物式求欢" },
+  { id: "pet_display", label: "宠物展示检查" },
   { id: "toilet_control", label: "如厕控制" },
   { id: "assisted_urination", label: "抱着把尿" },
 ];
@@ -436,16 +439,16 @@ const TOOL_OPTIONS: ToolOption[] = [
   { id: "dildo", label: "假阳具", category: "玩具", contexts: ["training:toy_training", "training:forced_orgasm", "content:toy_reward", "content:toy_discipline", "modifier:sex"] },
   { id: "remote_control", label: "遥控器", category: "玩具", contexts: ["training:toy_training", "training:orgasm_control", "training:forced_orgasm", "training:masturbation_control", "content:toy_reward", "content:toy_discipline"] },
   { id: "lubricant", label: "润滑剂", category: "辅助", contexts: ["training:toy_training", "training:anal_training", "training:forced_orgasm", "modifier:sex"] },
-  { id: "collar", label: "项圈", category: "束缚", contexts: ["training:obedience_commands", "training:position_training", "training:pet_play", "training:pet_position_wait", "training:pet_crawl_training", "training:pet_feeding", "training:pet_permission", "training:pet_voice_training", "training:leash_training", "training:service_training", "content:bondage_discipline", "content:restrained_rest", "modifier:sex"] },
-  { id: "leash", label: "牵引绳", category: "束缚", contexts: ["training:position_training", "training:pet_play", "training:pet_position_wait", "training:pet_crawl_training", "training:leash_training", "training:service_training", "content:bondage_discipline"] },
+  { id: "collar", label: "项圈", category: "束缚", contexts: ["training:obedience_commands", "training:position_training", "training:pet_play", "training:pet_position_wait", "training:pet_crawl_training", "training:pet_feeding", "training:pet_permission", "training:pet_voice_training", "training:pet_owner_address", "training:pet_begging", "training:pet_display", "training:leash_training", "training:service_training", "content:bondage_discipline", "content:restrained_rest", "modifier:sex"] },
+  { id: "leash", label: "牵引绳", category: "束缚", contexts: ["training:position_training", "training:pet_play", "training:pet_position_wait", "training:pet_crawl_training", "training:pet_begging", "training:pet_display", "training:leash_training", "training:service_training", "content:bondage_discipline"] },
   { id: "handcuffs", label: "手铐", category: "束缚", contexts: ["training:bondage_training", "training:position_training", "training:sensory_deprivation", "training:exposure_training", "training:toilet_control", "training:assisted_urination", "content:bondage_discipline", "content:restrained_rest", "modifier:sex"] },
   { id: "ankle_cuffs", label: "脚铐", category: "束缚", contexts: ["training:bondage_training", "training:position_training", "training:exposure_training", "training:toilet_control", "training:assisted_urination", "content:bondage_discipline", "content:restrained_rest", "modifier:sex"] },
   { id: "rope", label: "绳子", category: "束缚", contexts: ["training:bondage_training", "training:position_training", "training:exposure_training", "training:toilet_control", "training:assisted_urination", "content:bondage_discipline", "content:restrained_rest", "modifier:sex"] },
   { id: "bondage_tape", label: "束缚胶带", category: "束缚", contexts: ["training:bondage_training", "training:sensory_deprivation", "training:toilet_control", "training:assisted_urination", "content:bondage_discipline", "content:restrained_rest", "modifier:sex"] },
   { id: "spreader_bar", label: "分腿杆", category: "束缚", contexts: ["training:bondage_training", "training:position_training", "training:exposure_training", "training:toilet_control", "training:assisted_urination", "content:bondage_discipline", "modifier:sex"] },
   { id: "blindfold", label: "眼罩", category: "感官", contexts: ["training:sensory_deprivation", "training:inspection_training", "content:sensitivity_check", "modifier:sex"] },
-  { id: "gag", label: "口球", category: "束缚", contexts: ["training:obedience_commands", "training:sensory_deprivation", "training:humiliation_play", "training:pet_play", "training:pet_voice_training", "modifier:sex"] },
-  { id: "muzzle", label: "口套", category: "束缚", contexts: ["training:obedience_commands", "training:humiliation_play", "training:pet_play", "training:pet_voice_training"] },
+  { id: "gag", label: "口球", category: "束缚", contexts: ["training:obedience_commands", "training:sensory_deprivation", "training:humiliation_play", "training:pet_play", "training:pet_voice_training", "training:pet_begging", "training:pet_display", "modifier:sex"] },
+  { id: "muzzle", label: "口套", category: "束缚", contexts: ["training:obedience_commands", "training:humiliation_play", "training:pet_play", "training:pet_voice_training", "training:pet_owner_address", "training:pet_begging"] },
   { id: "whip", label: "软鞭", category: "训诫", contexts: ["training:impact_play", "content:impact_discipline"] },
   { id: "flogger", label: "多尾鞭", category: "训诫", contexts: ["training:impact_play", "content:impact_discipline"] },
   { id: "paddle", label: "拍板", category: "训诫", contexts: ["training:impact_play", "content:impact_discipline"] },
@@ -514,11 +517,10 @@ const NIGHT_ACTION_LABELS: Record<string, string> = {
   watch_video: "看视频",
   search_exit: "偷偷找出口",
   hide_item: "藏东西",
-  check_key: "检查钥匙",
   diary: "写私密日记",
   blind_spot: "去监控盲区",
   ring_bell: "按铃",
-  pet_wait: "在指定位置等候",
+  pet_wait: "按宠物规矩等候",
 };
 
 const DAY_ACTION_SELECTION_COPY: Record<string, string> = {
@@ -541,12 +543,11 @@ const NIGHT_ACTION_SELECTION_COPY: Record<string, string> = {
   listen_music: "耳机里的声音会暂时盖过门外的动静。",
   watch_video: "平板的光会在黑下来的房间里格外明显。",
   search_exit: "你没有立刻靠近门，只是先重新打量整个房间。",
-  hide_item: "你把选中的东西攥在手里，开始寻找不会被轻易发现的位置。",
-  check_key: "你记得钥匙的位置，今晚可以再确认一次。",
-  diary: "有些话不能说出口，但可以先写进纸页里。",
+  hide_item: "你从已经收到的物品里选了一件，开始寻找不会被轻易发现的位置。",
+  diary: "有些话不能说出口，但这一页会真正留下来，也可能被监控翻到。",
   blind_spot: "你开始留意镜头转开的方向和停留的时间。",
   ring_bell: "手指已经放在按钮上，按下去之后就不能假装没有发生。",
-  pet_wait: "你回到被指定的位置，安静等着门外的动静。",
+  pet_wait: "你戴着项圈回到指定位置，按主人留下的宠物规矩摆好姿势。",
 };
 
 const NIGHT_MONITOR_SCENE_COPY: Record<string, string> = {
@@ -558,26 +559,31 @@ const NIGHT_MONITOR_SCENE_COPY: Record<string, string> = {
   watch_video: "平板的光映在脸上，画面明暗跟着视频不断变化。",
   search_exit: "画面里的人沿着房间边缘慢慢移动，反复检查几个位置。",
   hide_item: "画面里的人背对镜头停留了一会，随后若无其事地回到原处。",
-  check_key: "视线在钥匙和门锁之间来回停留，手伸出去后又收了回来。",
   diary: "画面里的人低头写了很久，写完后立刻把本子合上。",
   blind_spot: "人影从画面边缘消失了一阵，回来时位置已经变了。",
   ring_bell: "呼叫铃亮了一次，按下按钮的人没有立刻把手收回去。",
-  pet_wait: "画面里的人回到指定位置，之后一直没有离开。",
+  pet_wait: "画面里的人戴着项圈回到指定位置，按规矩维持着被要求的姿势。",
 };
 
 const NIGHT_DETAIL_MONITOR_SCENE_COPY: Record<string, string> = {
+  follow_bookmark: "书页沿着原来的书签继续往后翻，停在被特意折过的位置。",
+  inspect_margins: "画面里的人把书凑近灯光，逐页寻找页边留下的笔迹。",
+  reread_marked_page: "同一页被反复读了很久，指尖一直停在被标记的句子旁。",
+  read_aloud: "房间里响起很轻的念书声，断断续续地持续了一阵。",
+  continue_save: "旧存档被重新打开，掌机画面一路推进到新的区域。",
+  inspect_profile: "画面停在用户资料页很久，似乎发现了之前没留意的内容。",
+  challenge_mode: "按键声越来越快，屏幕上的分数不断刷新。",
+  start_new_save: "唯一的空存档位被选中，一个新的记录从今晚开始。",
   door_lock: "画面里的人贴近门锁，手指沿着锁孔和门缝检查了几遍。",
   window: "窗边的人影停了很久，似乎在确认窗扣和外面的高度。",
   room_route: "画面里的人反复走过同一段路线，像是在默记距离。",
   outside_sound: "人影贴在门边没有动作，只是在听外面的脚步声。",
-  paper_note: "一张折过的纸被迅速塞进了镜头不容易看清的位置。",
-  small_item: "一个小东西从手心消失了，之后没有再出现在画面里。",
-  snack: "画面里的人把一点食物藏了起来，动作很快。",
-  improvised_tool: "手里的临时工具被试了几次，最后藏进房间角落。",
-  confirm_location: "视线多次落在钥匙原本的位置，没有伸手。",
-  test_reach: "手臂朝钥匙伸过去，试到最远距离后才收回来。",
-  match_lock: "画面里的人先看钥匙，又逐一观察房间里的锁。",
-  leave_untouched: "钥匙始终没有被碰过，但那道视线停留了很久。",
+  inventory_book: "书被合上后没有放回原位，而是消失在镜头难以看清的角落。",
+  inventory_switch: "掌机屏幕熄灭后，被悄悄藏进了房间里。",
+  inventory_notebook: "日记本被压进一个不容易被翻到的位置。",
+  inventory_music_player: "音乐播放器被攥在手里带离原处，之后没有再出现在画面中。",
+  inventory_tablet: "平板被关屏后藏了起来，原来的位置只剩一块空白。",
+  inventory_call_bell: "呼叫铃被从显眼的位置挪走，藏到了伸手仍能碰到的地方。",
   record_day: "日记本写满了一页，内容从白天一直记到现在。",
   write_feelings: "写字的人几次停笔，最后还是把那一页写完了。",
   record_rules: "几条现有规矩被逐条写下，又重新排列了一遍。",
@@ -586,28 +592,32 @@ const NIGHT_DETAIL_MONITOR_SCENE_COPY: Record<string, string> = {
   stay_hidden: "监控有一段时间只拍到空房间，直到人影重新出现。",
   move_item: "镜头边缘的物品被悄悄换了位置。",
   test_duration: "人影数次进出盲区，每次停留都比上一次更久。",
+  kneel_wait: "画面里的人在指定位置跪坐下来，之后一直没有离开。",
+  prone_wait: "人影按要求伏在指定位置，长时间维持着同一个姿势。",
+  collared_wait: "项圈始终留在画面中央，被要求等候的人没有擅自摘下。",
+  hold_command: "口令结束后，画面里的人仍保持着被指定的姿势。",
 };
 
-const DEFAULT_NIGHT_ACTIONS = ["sleep", "self_touch", "search_exit", "hide_item", "check_key", "blind_spot"];
+const DEFAULT_NIGHT_ACTIONS = ["sleep", "self_touch", "search_exit", "blind_spot"];
 
 const NIGHT_DETAIL_OPTIONS: Record<string, Array<{ id: string; label: string }>> = {
+  read: [
+    { id: "follow_bookmark", label: "沿着书签继续读" },
+    { id: "inspect_margins", label: "找页边批注" },
+    { id: "reread_marked_page", label: "重读被标记的那页" },
+    { id: "read_aloud", label: "小声念出来" },
+  ],
+  game: [
+    { id: "continue_save", label: "继续现有存档" },
+    { id: "inspect_profile", label: "查看用户资料" },
+    { id: "challenge_mode", label: "挑战更高难度" },
+    { id: "start_new_save", label: "新建一个存档" },
+  ],
   search_exit: [
     { id: "door_lock", label: "检查门锁" },
     { id: "window", label: "检查窗户" },
     { id: "room_route", label: "记住房间路线" },
     { id: "outside_sound", label: "听门外动静" },
-  ],
-  hide_item: [
-    { id: "paper_note", label: "藏纸条" },
-    { id: "small_item", label: "藏小物件" },
-    { id: "snack", label: "藏一点零食" },
-    { id: "improvised_tool", label: "藏临时工具" },
-  ],
-  check_key: [
-    { id: "confirm_location", label: "确认钥匙位置" },
-    { id: "test_reach", label: "试着够到钥匙" },
-    { id: "match_lock", label: "观察对应的锁" },
-    { id: "leave_untouched", label: "只看不碰" },
   ],
   diary: [
     { id: "record_day", label: "记录今天发生的事" },
@@ -620,6 +630,12 @@ const NIGHT_DETAIL_OPTIONS: Record<string, Array<{ id: string; label: string }>>
     { id: "stay_hidden", label: "躲一会" },
     { id: "move_item", label: "偷偷移动东西" },
     { id: "test_duration", label: "试探能停留多久" },
+  ],
+  pet_wait: [
+    { id: "kneel_wait", label: "跪坐等候" },
+    { id: "prone_wait", label: "趴伏等候" },
+    { id: "collared_wait", label: "戴着项圈等候" },
+    { id: "hold_command", label: "按口令保持姿势" },
   ],
 };
 
@@ -937,6 +953,8 @@ function feedingValueLabel(key: string, value: unknown): string {
   if (key === "source") return labelOf(FEEDING_SOURCE_OPTIONS, raw);
   if (key === "additive") return labelOf(FEEDING_ADDITIVE_OPTIONS, raw);
   if (key === "water") return labelOf(FEEDING_WATER_OPTIONS, raw);
+  if (key === "method") return raw === "normal" ? "正常喂食" : raw;
+  if (key === "disclosed") return ({ told: "已经告知", hint: "有所暗示", hidden: "没有告知" } as Record<string, string>)[raw] || raw;
   return raw;
 }
 
@@ -1163,7 +1181,19 @@ function buildNightPreview(): CaptivityPayload {
     pending_event: null,
     event_log: [],
     inventory: { notebook: true, book: true, switch: true, call_bell: true },
-    available_night_actions: ["sleep", "self_touch", "read", "game", "search_exit", "hide_item", "check_key", "diary", "blind_spot", "ring_bell", "pet_wait"],
+    available_night_actions: ["sleep", "self_touch", "read", "game", "search_exit", "hide_item", "diary", "blind_spot", "ring_bell", "pet_wait"],
+    night_detail_options: {
+      ...Object.fromEntries(Object.entries(NIGHT_DETAIL_OPTIONS).map(([action, options]) => [
+        action,
+        Object.fromEntries(options.map((option) => [option.id, option.label])),
+      ])),
+      hide_item: {
+        inventory_book: "藏起书",
+        inventory_switch: "藏起Switch",
+        inventory_notebook: "藏起日记本",
+        inventory_call_bell: "藏起呼叫铃",
+      },
+    },
   };
   return {
     ok: true,
@@ -1533,21 +1563,6 @@ function buildProcessPreviewAfterSave(role: UserRole, mood: string, line: string
     };
 }
 
-function readStoredRoute(): RouteKey | "" {
-  try {
-    const raw = window.localStorage.getItem(ROUTE_STORAGE_KEY);
-    return raw === "capture_du" || raw === "captured_by_du" ? raw : "";
-  } catch {
-    return "";
-  }
-}
-
-function writeStoredRoute(route: RouteKey) {
-  try {
-    window.localStorage.setItem(ROUTE_STORAGE_KEY, route);
-  } catch {}
-}
-
 function hasMeaningfulProgress(view: CaptivityView | undefined): boolean {
   if (!view) return false;
   if (Number(view.current_day || 1) > 1) return true;
@@ -1557,13 +1572,10 @@ function hasMeaningfulProgress(view: CaptivityView | undefined): boolean {
   if ((view.event_log || []).length > 0) return true;
   if ((view.day_plan || []).length > 0) return true;
   const pendingType = String(view.pending_event?.type || "");
-  return Boolean(pendingType && pendingType !== "day_plan_choice");
+  return Boolean(pendingType);
 }
 
 function shouldResumeGame(payload: CaptivityPayload): boolean {
-  const route = payloadRoute(payload);
-  const storedRoute = readStoredRoute();
-  if (route && storedRoute === route) return true;
   const view = (payload.captor_view?.route === "capture_du" ? payload.captor_view : payload.captive_view || payload.state) || {};
   return hasMeaningfulProgress(view);
 }
@@ -2277,6 +2289,8 @@ function CaptiveRoomInventory({
 export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
   const [payload, setPayload] = useState<CaptivityPayload | null>(null);
   const [screen, setScreen] = useState<"selector" | "game">("selector");
+  const [bootstrapping, setBootstrapping] = useState(true);
+  const [backgroundSyncing, setBackgroundSyncing] = useState(false);
   const [footerTab, setFooterTab] = useState<"status" | "history" | "special">("status");
   const [wait, setWait] = useState<WaitState>({
     visible: false,
@@ -2315,6 +2329,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
   const [recaptureTools, setRecaptureTools] = useState<string[]>([]);
   const [recaptureLine, setRecaptureLine] = useState("");
   const [sceneTransition, setSceneTransition] = useState<SceneCopy | null>(null);
+  const initialLoadStartedRef = useRef(false);
   const lastSceneKeyRef = useRef("");
   const lastFailedRetryRef = useRef<(() => void) | null>(null);
   const [hasFailedRetry, setHasFailedRetry] = useState(false);
@@ -2335,7 +2350,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
   const phase = String(view.phase || "day");
   const isGameOver = Boolean(view.game_over || payload?.game_over);
   const lastText = commandText(payload);
-  const busy = wait.visible && !wait.error;
+  const busy = (wait.visible && !wait.error) || backgroundSyncing;
   const pendingType = String(pending?.type || "");
   const milestoneCopy = dayMilestoneCopy(Number(view.current_day || 1), role);
 
@@ -2347,6 +2362,14 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
     : pending?.available_actions?.length
       ? pending.available_actions
       : DEFAULT_NIGHT_ACTIONS;
+  const fallbackNightDetailOptions = Object.fromEntries(
+    (NIGHT_DETAIL_OPTIONS[nightAction] || []).map((item) => [item.id, item.label]),
+  );
+  const activeNightDetailOptionMap = view.night_detail_options?.[nightAction]
+    || pending?.detail_options?.[nightAction]
+    || fallbackNightDetailOptions;
+  const activeNightDetailOptions = Object.entries(activeNightDetailOptionMap).map(([id, label]) => ({ id, label }));
+  const activeNightDetailOptionsKey = JSON.stringify(activeNightDetailOptionMap);
   const userIsPendingActor = pending ? String(pending.actor || "") !== "du" : false;
   const waitingForDu = pending ? String(pending.actor || "") === "du" : false;
   const showPlanner = role === "captor"
@@ -2430,6 +2453,9 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
     }
     try {
       const next = await executeCaptivityCommand("status");
+      if (silent) {
+        lastSceneKeyRef.current = String(viewFromPayload(next).scene_copy?.key || "");
+      }
       applyPayload(next);
       if (!silent) {
         lastFailedRetryRef.current = null;
@@ -2437,20 +2463,20 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       }
       if (shouldResumeGame(next)) {
         setScreen("game");
+      } else {
+        setScreen("selector");
       }
     } catch (e: any) {
-      if (!silent) {
-        const message = String(e?.message || e || "刷新失败");
-        const retry = () => void refreshStatus(false);
-        lastFailedRetryRef.current = retry;
-        setHasFailedRetry(true);
-        setWait({
-          visible: true,
-          title: "刷新失败",
-          detail: message,
-          error: message,
-        });
-      }
+      const message = String(e?.message || e || (silent ? "读取存档失败" : "刷新失败"));
+      const retry = () => void refreshStatus(false);
+      lastFailedRetryRef.current = retry;
+      setHasFailedRetry(true);
+      setWait({
+        visible: true,
+        title: silent ? "读取存档失败" : "刷新失败",
+        detail: message,
+        error: message,
+      });
     }
   }, [applyPayload, previewRole]);
 
@@ -2464,6 +2490,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       setProcessReview(null);
       setScreen("game");
       setFooterTab("status");
+      setBootstrapping(false);
       return;
     }
     if (escapePreviewRole) {
@@ -2471,6 +2498,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       setProcessReview(null);
       setScreen("game");
       setFooterTab("status");
+      setBootstrapping(false);
       return;
     }
     if (planPreviewRole) {
@@ -2478,6 +2506,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       setProcessReview(null);
       setScreen("game");
       setFooterTab("status");
+      setBootstrapping(false);
       return;
     }
     if (nightPreviewRole) {
@@ -2485,6 +2514,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       setProcessReview(null);
       setScreen("game");
       setFooterTab("status");
+      setBootstrapping(false);
       return;
     }
     if (processPreviewRole) {
@@ -2493,17 +2523,13 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       setProcessReview(preview.review);
       setScreen("game");
       setFooterTab("status");
+      setBootstrapping(false);
       return;
     }
-    void refreshStatus(true);
+    if (initialLoadStartedRef.current) return;
+    initialLoadStartedRef.current = true;
+    void refreshStatus(true).finally(() => setBootstrapping(false));
   }, [endingPreviewRole, escapePreviewRole, nightPreviewRole, planPreviewRole, processPreviewRole, refreshStatus]);
-
-  useEffect(() => {
-    const currentRoute = payloadRoute(payload);
-    if (!previewRole && screen === "game" && currentRoute) {
-      writeStoredRoute(currentRoute);
-    }
-  }, [payload, previewRole, screen]);
 
   useEffect(() => {
     const first = availableNightActions[0];
@@ -2523,10 +2549,10 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
   }, [inventoryRoomOpen, monitorRoomOpen, pendingType, processReview, screen, view.scene_copy]);
 
   useEffect(() => {
-    const options = NIGHT_DETAIL_OPTIONS[nightAction] || [];
+    const options = activeNightDetailOptions;
     setNightDetail((current) => options.some((item) => item.id === current) ? current : (options[0]?.id || ""));
     if (nightAction !== "diary") setNightNote("");
-  }, [nightAction]);
+  }, [activeNightDetailOptionsKey, nightAction]);
 
   useEffect(() => {
     if (view.intensity_cap !== "medium") return;
@@ -2548,11 +2574,11 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       () => executeCaptivityCommand(`new_game route=${nextRoute}`),
     ).then((next) => {
       if (!next) return;
-      writeStoredRoute(nextRoute);
+      lastSceneKeyRef.current = String(viewFromPayload(next).scene_copy?.key || "");
       setScreen("game");
       setFooterTab("status");
       setPlanSlots(defaultPlanSlots());
-      continueAutomaticSync(next, true);
+      continueAutomaticSync(next, true, true);
     });
   }
 
@@ -2803,6 +2829,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
   }
 
   function submitNightAction() {
+    if (nightAction === "diary" && !nightNote.trim()) return;
     if (nightPreviewRole) {
       if (nightAction === "ring_bell") {
         setPayload((previous) => {
@@ -2947,7 +2974,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
     ).then((next) => continueAutomaticSync(next));
   }
 
-  function continueAutomaticSync(next: CaptivityPayload | null, force = false) {
+  function continueAutomaticSync(next: CaptivityPayload | null, force = false, background = false) {
     if (!next) return;
     const nextView = viewFromPayload(next);
     const nextPendingType = String(nextView.pending_event?.type || "");
@@ -2955,29 +2982,55 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
     const waitingForDuNext = String(nextView.pending_event?.actor || "") === "du";
     const endingNext = String(nextView.phase || "") === "ending" || nextPendingType.startsWith("ending_") || Boolean(nextView.ending_state);
     if (!force && !waitingForDuNext && !endingNext) return;
-    syncDu(endingNext ? "ending" : "state_update", next);
+    syncDu(endingNext ? "ending" : "state_update", next, background);
   }
 
   function syncDu(
     mode: "chat" | "state_update" | "ending" = "state_update",
     previousPayloadOverride?: CaptivityPayload | null,
+    background = false,
   ) {
     if (previewRole) {
       showPreviewSyncFailure();
       return;
     }
     const previousPayload = previousPayloadOverride === undefined ? payload : previousPayloadOverride;
-    void runWithWait(
-      "正在同步渡...",
-      "STATUS: ENCRYPTING DATA",
-      () => syncCaptivityToDu(mode),
-    ).then((next) => {
+    const handleResult = (next: CaptivityPayload | null) => {
       if (!next || mode === "ending") return;
       const review = findNewProcessReview(next, previousPayload);
-      if (!review) return;
-      setProcessReview(review);
-      setFooterTab("status");
-    });
+      if (review) {
+        setProcessReview(review);
+        setFooterTab("status");
+      }
+      const nextView = viewFromPayload(next);
+      if (String(nextView.pending_event?.actor || "") === "du") {
+        lastFailedRetryRef.current = () => syncDu(mode, next, background);
+        setHasFailedRetry(true);
+      }
+    };
+    if (!background) {
+      void runWithWait(
+        "正在同步渡...",
+        "STATUS: ENCRYPTING DATA",
+        () => syncCaptivityToDu(mode),
+      ).then(handleResult);
+      return;
+    }
+    setBackgroundSyncing(true);
+    lastFailedRetryRef.current = null;
+    setHasFailedRetry(false);
+    void syncCaptivityToDu(mode)
+      .then((next) => {
+        applyPayload(next);
+        handleResult(next);
+      })
+      .catch((error: any) => {
+        const message = String(error?.message || error || "同步失败");
+        lastFailedRetryRef.current = () => syncDu(mode, previousPayload, true);
+        setHasFailedRetry(true);
+        setWait({ visible: true, title: "同步失败", detail: message, error: message });
+      })
+      .finally(() => setBackgroundSyncing(false));
   }
 
   function saveProcessReview() {
@@ -3374,7 +3427,12 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       <div className="cross" style={{ top: "20%", left: "10%" }} />
       <div className="cross" style={{ bottom: "20%", right: "15%" }} />
 
-      <section id="selector-screen" className={`screen ${screen === "selector" ? "active" : ""}`}>
+      <section className={`screen bootstrap-screen ${bootstrapping ? "active" : ""}`}>
+        <div className="serif bootstrap-title">Captivity <span className="pink-text">Simulator</span></div>
+        <div className="uppercase bootstrap-copy">正在读取囚禁档案</div>
+      </section>
+
+      <section id="selector-screen" className={`screen ${!bootstrapping && screen === "selector" ? "active" : ""}`}>
         <h1 className="selector-title serif">
           <span>Captivity</span>
           <span>Simulator</span>
@@ -3389,7 +3447,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         </button>
       </section>
 
-      <section id="process-screen" className={`screen process-screen ${screen === "game" && processReview ? "active" : ""}`}>
+      <section id="process-screen" className={`screen process-screen ${!bootstrapping && screen === "game" && processReview ? "active" : ""}`}>
         {processReview ? (
           <ProcessReviewPanel
             review={processReview}
@@ -3403,7 +3461,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         ) : null}
       </section>
 
-      <section id={role === "captor" ? "master-screen" : "captive-screen"} className={`screen ${screen === "game" && !processReview && !monitorRoomOpen && !inventoryRoomOpen ? "active" : ""}`}>
+      <section id={role === "captor" ? "master-screen" : "captive-screen"} className={`screen ${!bootstrapping && screen === "game" && !processReview && !monitorRoomOpen && !inventoryRoomOpen ? "active" : ""}`}>
         <div className="header">
           <div className="day-big">{view.total_days || 30}</div>
           <div className="header-meta">
@@ -3460,6 +3518,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
                 reactionLine={reactionLine}
                 nightAction={nightAction}
                 nightDetail={nightDetail}
+                nightDetailOptions={activeNightDetailOptions}
                 nightNote={nightNote}
                 nightLine={nightLine}
                 monitorNote={monitorNote}
@@ -3564,7 +3623,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         ) : null}
       </section>
 
-      <section id="monitor-room-screen" className={`screen monitor-room-screen ${screen === "game" && !processReview && monitorRoomOpen && role === "captor" ? "active" : ""}`}>
+      <section id="monitor-room-screen" className={`screen monitor-room-screen ${!bootstrapping && screen === "game" && !processReview && monitorRoomOpen && role === "captor" ? "active" : ""}`}>
         <button className="subpage-return" type="button" aria-label="回到特殊页" onClick={closeSubpage}>
           <ChevronLeftIcon />
         </button>
@@ -3589,7 +3648,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         />
       </section>
 
-      <section id="inventory-room-screen" className={`screen inventory-room-screen ${screen === "game" && !processReview && inventoryRoomOpen ? "active" : ""}`}>
+      <section id="inventory-room-screen" className={`screen inventory-room-screen ${!bootstrapping && screen === "game" && !processReview && inventoryRoomOpen ? "active" : ""}`}>
         <button className="subpage-return" type="button" aria-label="回到特殊页" onClick={closeSubpage}>
           <ChevronLeftIcon />
         </button>
@@ -3636,7 +3695,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         </div>
       </div>
 
-      <footer className="footer" id="main-footer" style={{ display: screen === "game" && !processReview && !monitorRoomOpen && !inventoryRoomOpen ? "grid" : "none" }}>
+      <footer className="footer" id="main-footer" style={{ display: !bootstrapping && screen === "game" && !processReview && !monitorRoomOpen && !inventoryRoomOpen ? "grid" : "none" }}>
         <button className={`footer-item ${footerTab === "status" ? "active" : ""}`} type="button" onClick={() => { setMonitorRoomOpen(false); setInventoryRoomOpen(false); setFooterTab("status"); }}>状态</button>
         <button className={`footer-item ${footerTab === "history" ? "active" : ""}`} type="button" onClick={() => { setMonitorRoomOpen(false); setInventoryRoomOpen(false); setFooterTab("history"); setHistoryDetail(null); }}>回顾</button>
         <button className={`footer-item ${footerTab === "special" ? "active" : ""}`} type="button" onClick={() => { setMonitorRoomOpen(false); setInventoryRoomOpen(false); setFooterTab("special"); }}>特殊</button>
@@ -3649,6 +3708,8 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             --black: #121212;
             --white: #FFFFFF;
             --gray: #2A2A2A;
+            --safe-top: env(safe-area-inset-top, 0px);
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
             --font-display: "Times New Roman", serif;
             --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
             position: absolute;
@@ -3685,20 +3746,33 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         .captivity-game .cross::before { content: '+'; color: var(--pink); font-size: 14px; }
         .captivity-game .screen {
             display: none;
-            min-height: 100vh;
-            padding: 20px;
-            padding-bottom: 178px;
+            min-height: 100dvh;
+            padding: calc(var(--safe-top) + 18px) 20px calc(var(--safe-bottom) + 178px);
             flex-direction: column;
         }
         .captivity-game .screen.active { display: flex; }
+        .captivity-game .bootstrap-screen {
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+        .captivity-game .bootstrap-title {
+            font-size: 30px;
+            line-height: 1;
+        }
+        .captivity-game .bootstrap-copy {
+            margin-top: 14px;
+            color: #777;
+            letter-spacing: 0.08em;
+        }
         .captivity-game .process-screen {
-            padding-top: 64px;
-            padding-bottom: 132px;
+            padding-top: calc(var(--safe-top) + 64px);
+            padding-bottom: calc(var(--safe-bottom) + 132px);
         }
         .captivity-game .monitor-room-screen,
         .captivity-game .inventory-room-screen {
-            padding-top: 58px;
-            padding-bottom: 34px;
+            padding-top: calc(var(--safe-top) + 58px);
+            padding-bottom: calc(var(--safe-bottom) + 34px);
         }
         .captivity-game .process-review-head {
             margin-bottom: 22px;
@@ -3840,7 +3914,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         }
         .captivity-game .return-capsule {
             position: fixed;
-            top: 12px;
+            top: calc(var(--safe-top) + 10px);
             left: 12px;
             z-index: 520;
             display: flex;
@@ -3868,7 +3942,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         }
         .captivity-game .subpage-return {
             position: fixed;
-            top: 12px;
+            top: calc(var(--safe-top) + 10px);
             left: 12px;
             z-index: 520;
             display: flex;
@@ -4868,7 +4942,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             background: var(--black);
             z-index: 1000;
             display: none;
-            padding: 40px;
+            padding: calc(var(--safe-top) + 40px) 40px calc(var(--safe-bottom) + 40px);
             flex-direction: column;
             justify-content: center;
         }
@@ -4888,7 +4962,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 22px;
+            padding: calc(var(--safe-top) + 22px) 22px calc(var(--safe-bottom) + 22px);
             background: rgba(0, 0, 0, 0.76);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
@@ -4938,7 +5012,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             inset: 0;
             z-index: 920;
             overflow-y: auto;
-            padding: 72px 22px 40px;
+            padding: calc(var(--safe-top) + 72px) 22px calc(var(--safe-bottom) + 40px);
             background: var(--black);
         }
         .captivity-game .recapture-rules-review {
@@ -4981,10 +5055,16 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             border-top: 1px solid var(--gray);
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            padding: 10px 0;
+            min-height: calc(56px + var(--safe-bottom));
+            padding: 6px 0 calc(6px + var(--safe-bottom));
             z-index: 500;
         }
         .captivity-game .footer-item {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 44px;
+            padding: 0 8px;
             text-align: center;
             font-size: 10px;
             text-transform: uppercase;
@@ -5244,6 +5324,7 @@ function RuntimePanel({
   reactionLine,
   nightAction,
   nightDetail,
+  nightDetailOptions,
   nightNote,
   nightLine,
   monitorNote,
@@ -5313,6 +5394,7 @@ function RuntimePanel({
   reactionLine: string;
   nightAction: string;
   nightDetail: string;
+  nightDetailOptions: Array<{ id: string; label: string }>;
   nightNote: string;
   nightLine: string;
   monitorNote: string;
@@ -5448,7 +5530,7 @@ function RuntimePanel({
             </div>
             <div className="divider" />
             <div className="event-sub">
-              {renderEventSummary(event, pending, view)}
+              {renderEventSummary(event, pending, view, role)}
             </div>
           </div>
         </>
@@ -5488,6 +5570,7 @@ function RuntimePanel({
           petRulePrompt={petRulePrompt}
           value={nightAction}
           detail={nightDetail}
+          detailOptions={nightDetailOptions}
           note={nightNote}
           line={nightLine}
           disabled={disabled}
@@ -5590,13 +5673,22 @@ function RuntimePanel({
   );
 }
 
-function renderEventSummary(event: CaptivityEvent, pending: CaptivityPending | null, view: CaptivityView): string {
+function renderEventSummary(event: CaptivityEvent, pending: CaptivityPending | null, view: CaptivityView, role: UserRole): string {
   if (pending?.sealed) {
     return "夜间行动已经封存。囚禁方尚未打开监控前，不显示具体内容。";
   }
   const intervention = event.intervention || {};
   const modifiers = visibleModifierLabels(event.modifiers);
-  const feedingRows = Object.entries(event.feeding || {})
+  const feeding = event.feeding || {};
+  const visibleFeeding = role === "captor"
+    ? feeding
+    : Object.fromEntries(
+      Object.entries(feeding).filter(([key, value]) => {
+        if (key === "source" || key === "water") return String(value || "") !== "none";
+        return key === "additive" && !["", "none"].includes(String(value || ""));
+      }),
+    );
+  const feedingRows = Object.entries(visibleFeeding)
     .map(([key, value]) => feedingValueLabel(key, value))
     .filter(Boolean);
   const recaptureContext = event.recapture_context || {};
@@ -5787,6 +5879,7 @@ function NightActionPanel({
   petRulePrompt,
   value,
   detail,
+  detailOptions,
   note,
   line,
   disabled,
@@ -5801,6 +5894,7 @@ function NightActionPanel({
   petRulePrompt: string;
   value: string;
   detail: string;
+  detailOptions: Array<{ id: string; label: string }>;
   note: string;
   line: string;
   disabled?: boolean;
@@ -5810,7 +5904,6 @@ function NightActionPanel({
   onLineChange: (value: string) => void;
   onSubmit: () => void;
 }) {
-  const detailOptions = NIGHT_DETAIL_OPTIONS[value] || [];
   return (
     <>
       <div className="panel-title">你的安排 <span className="sub">NIGHT</span></div>
@@ -5843,12 +5936,12 @@ function NightActionPanel({
         </>
       ) : null}
       {value === "diary" ? (
-        <textarea placeholder="可选：写下私密日记正文..." value={note} disabled={disabled} onChange={(event) => onNoteChange(event.target.value)} />
+        <textarea placeholder="写下这一页的私密日记正文..." value={note} disabled={disabled} onChange={(event) => onNoteChange(event.target.value)} />
       ) : null}
       {value !== "ring_bell" ? (
         <textarea placeholder="可选：你想说的一句话..." value={line} disabled={disabled} onChange={(event) => onLineChange(event.target.value)} />
       ) : null}
-      <button className="btn btn-large" type="button" disabled={disabled || (detailOptions.length > 0 && !detail)} onClick={onSubmit}>确认夜间行动</button>
+      <button className="btn btn-large" type="button" disabled={disabled || (detailOptions.length > 0 && !detail) || (value === "diary" && !note.trim())} onClick={onSubmit}>确认夜间行动</button>
     </>
   );
 }

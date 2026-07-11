@@ -100,10 +100,23 @@ _CAPTIVITY_TOOL_RECOMMENDATIONS = "；".join(
     + "/".join(dict.fromkeys(_captivity_tool_context_label(context) for context in sorted(contexts)))
     for tool_id, contexts in TOOL_COMPATIBILITY.items()
 )
-_CAPTIVITY_NIGHT_DETAIL_RULE = "；".join(
-    f"{action}=" + "/".join(options)
-    for action, options in NIGHT_DETAIL_OPTIONS.items()
-)
+def _captivity_night_detail_rule(pending: dict | None) -> str:
+    raw = (pending or {}).get("detail_options") if isinstance((pending or {}).get("detail_options"), dict) else NIGHT_DETAIL_OPTIONS
+    available_actions = {
+        str(item).strip()
+        for item in (pending or {}).get("available_actions") or []
+        if str(item).strip()
+    }
+    return "；".join(
+        f"{action}=" + "/".join(
+            f"{detail_id}({label})"
+            for detail_id, label in options.items()
+        )
+        for action, options in raw.items()
+        if isinstance(options, dict) and options and (not available_actions or action in available_actions)
+    )
+
+
 _CAPTIVITY_FEEDING_LABELS = {
     "source": {"cook": "自己做", "takeout": "点外卖"},
     "method": {"normal": "正常喂食"},
@@ -1171,15 +1184,25 @@ def _captivity_simulator_sync_text(
         condition_caption = str(pending.get("condition_caption") or "").strip()
         pet_rule_prompt = str(pending.get("pet_rule_prompt") or "").strip()
         example_action = available_actions[0] if available_actions else "sleep"
+        detail_rule = _captivity_night_detail_rule(pending)
+        pending_detail_options = pending.get("detail_options") if isinstance(pending.get("detail_options"), dict) else {}
+        example_details = pending_detail_options.get(example_action) if isinstance(pending_detail_options.get(example_action), dict) else {}
+        example_detail = next(iter(example_details), "")
+        example_args = f"action={example_action}"
+        if example_detail:
+            example_args += f" detail={example_detail}"
+        if example_action == "diary":
+            example_args += " note=私密日记正文"
+        example_args += " line=可选台词"
         rule_lines = [
             "当前进入夜间，等待你作为被囚禁方选择夜间自由行动。",
-            "今晚可选行动：" + " / ".join(available_actions or ["sleep", "self_touch", "search_exit", "hide_item", "check_key", "blind_spot"]) + "。",
-            f"这些行动必须补 detail：{_CAPTIVITY_NIGHT_DETAIL_RULE}。其他行动不需要 detail。",
-            "选择 diary 时可以额外用 note=... 写私密日记正文；line=... 仍然只是可选台词。",
+            "今晚可选行动：" + " / ".join(available_actions or ["sleep", "self_touch", "search_exit", "blind_spot"]) + "。",
+            *([f"这些行动必须补 detail：{detail_rule}。其他行动不需要 detail。"] if detail_rule else []),
+            "选择 diary 时必须用 note=... 写这一页的私密日记正文；line=... 仍然只是可选台词。",
             *([f"当前状态提示：{condition_prompt}"] if condition_prompt else []),
             *([condition_caption] if condition_caption else []),
             *(["当前宠物规矩：" + pet_rule_prompt] if pet_rule_prompt else []),
-            f"如果你要推进当前事件，回复第一行必须单独写精确指令「【夜间行动：action={example_action} line=可选台词】」。",
+            f"如果你要推进当前事件，回复第一行必须单独写精确指令「【夜间行动：{example_args}】」。",
             "没有第一行「【夜间行动：...】」时，只算局内聊天，不会触发事件推进。",
         ]
     elif pending_type == "bell_voice_reveal" and pending_actor == "du":
@@ -1550,7 +1573,9 @@ def register_routes(bp) -> None:
         sync_result = "no_reply" if not ok else "no_directive"
 
         if ok:
-            for _ in range(3):
+            initial_pending_type = str(initial_pending.get("type") or "")
+            max_rounds = 2 if initial_pending_type in {"monitor_gate", "night_action_choice"} else 1
+            for round_index in range(max_rounds):
                 round_commands, applied_payload = _apply_captivity_simulator_reply_commands(save_id, reply_text, payload)
                 applied_reply_commands.extend(round_commands)
                 if applied_payload:
@@ -1564,12 +1589,33 @@ def register_routes(bp) -> None:
                     break
                 if not _captivity_simulator_needs_du_followup(payload):
                     break
+                next_pending = _captivity_simulator_pending(payload)
+                allow_required_followup = (
+                    round_index == 0
+                    and (
+                        (initial_pending_type == "monitor_gate" and str(next_pending.get("type") or "") == "monitor_handle")
+                        or (
+                            initial_pending_type == "night_action_choice"
+                            and str(next_pending.get("type") or "") in {"bell_voice_reveal", "item_secret_reveal"}
+                        )
+                    )
+                )
+                if not allow_required_followup:
+                    ok = False
+                    sync_result = "applied_with_warning"
+                    wakeup = {"ok": False, "error": "渡这次没有完成当前选择，请重试。"}
+                    reply_text = ""
+                    break
                 followup_text = _captivity_simulator_sync_text(
                     payload,
                     user_message=_captivity_simulator_du_followup_message(payload),
                     mode="state_update",
                 )
                 if not followup_text:
+                    ok = False
+                    sync_result = "applied_with_warning"
+                    wakeup = {"ok": False, "error": "后续事件没有生成可同步内容，请重试。"}
+                    reply_text = ""
                     break
                 followup = send_captivity_simulator_wakeup(
                     window_id=window_id,
@@ -1595,12 +1641,6 @@ def register_routes(bp) -> None:
                 synced_at = now_beijing_iso()
                 wakeup = followup
                 reply_text = followup_reply
-            else:
-                if _captivity_simulator_needs_du_followup(payload):
-                    ok = False
-                    sync_result = "applied_with_warning" if applied_reply_commands else "no_directive"
-                    wakeup = {"ok": False, "error": "渡连续处理未完成，已停止续跑以避免循环。"}
-                    reply_text = ""
 
         if ok and initial_ending_state == "ending_ready_to_notify":
             notified_payload = execute_game_command("captivity_simulator", "mark_ending_notified", save_id)
@@ -1648,6 +1688,7 @@ def register_routes(bp) -> None:
         normalized_game_id = normalize_game_id(game_id)
         first_command = command.split(maxsplit=1)[0] if command else "open"
         before_payload: dict | None = None
+        current_payload: dict | None = None
         if normalized_game_id == "private_board" and _first_command_token(command) not in {"", "status", "open", "打开", "继续"}:
             before_payload = execute_game_command(game_id, "status", save_id)
         if normalized_game_id == GAME_ID_CAPTIVITY_SIMULATOR and first_command not in {"new", "new_game", "开局", "重开"}:
@@ -1660,7 +1701,10 @@ def register_routes(bp) -> None:
                 blocked_payload["error"] = "当前身份不能执行这个操作。"
                 blocked_payload["message"] = blocked_payload["error"]
                 return jsonify(blocked_payload), 403
-        payload = execute_game_command(game_id, command, save_id)
+        if normalized_game_id == GAME_ID_CAPTIVITY_SIMULATOR and first_command in {"status", "状态", "open", "打开", "继续"} and current_payload is not None:
+            payload = current_payload
+        else:
+            payload = execute_game_command(game_id, command, save_id)
         if normalized_game_id == "private_board":
             _mark_private_board_pending_created_activity(save_id, command, before_payload, payload)
         if str(payload.get("game_id") or "") == "captivity_simulator":

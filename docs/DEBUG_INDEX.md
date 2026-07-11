@@ -2206,3 +2206,10 @@ npm -C miniapp run android
 - 已完成：`storage/r2_store.py` 继续兼容导出全部原函数、私有图片 helper、R2 key 和 limit 常量，主聊天、文游、Claude thinking carryover、SumiTalk block mode、管理页和 replay 脚本均无须修改；总入口从 1985 行降到 1766 行。本刀没有迁移旧 `save_image_description()` 单消息存档，没有修改主动联系、followup、动态记忆、Prompt 或任何调用方。
 - 已验证：`scripts/test_r2_context_store.py` 在迁移前旧实现和迁移后新模块各跑绿 9 条相同特征测试，覆盖总结读取/备份覆盖、chunks 规范化和时间戳、latest4 截断、图片描述去重限长/全局窗口双写/过滤、窗口历史 meta 优先和 backup 兜底，并校验 `r2_store.py` facade 函数对象与常量兼容。五刀共 44 条存储测试、`scripts/wenyou_rules_smoke.py`、相关调用方 `py_compile`、`import app` 和目标文件 `git diff --check` 全部通过，未访问真实 R2、VPS 或上游模型。
 - 未完成 / 下次继续：下一刀优先给动态记忆 current/debug/audit/maintenance 与 core pending 补行为测试后迁出；主动联系、用户活动、reply channel、Todo、Prompt 和当前游戏/MiniApp 半成品继续不碰。
+
+当前状态（2026-07-11 囚禁模拟器夜间互动收束）：
+- 已完成：移除无来源的夜间「检查钥匙」；「藏东西」只在持有可藏礼物时出现，具体选项从当前仓库动态生成，当场没收会同步移出房间仓库。
+- 已完成：看书和 Switch 增加四类具体互动与跨夜进度，同一分支重复使用会继续生成不同发现；私密日记正文改为必填；宠物线新增主人称呼、宠物式求欢、展示检查和四种夜间等候姿势。
+- 边界保持：普通行动仍单轮同步；夜间监控 `monitor_gate -> monitor_handle` 和首次物品/语音铃揭示继续保留必要的第二段，不改两种视角的监控封存规则。
+- 已验证：`scripts/test_captivity_simulator_game.py` 覆盖动态藏物、没收、重复书/游戏发现、空日记拒绝、宠物规则素材和监控边界；本轮只使用临时本地假存档，不调用真实 `/sync-du` 或 R2。
+- 未完成 / 下次继续：等待本轮 MiniApp 构建、干净提交、VPS 拉取重启和公网 `/health`、`/miniapp/` 检查完成后补部署结果。

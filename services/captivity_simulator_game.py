@@ -260,6 +260,9 @@ TRAINING_CONTENTS = {
     "pet_feeding": "宠物式喂食",
     "pet_permission": "按铃求许可",
     "pet_voice_training": "叫声与回应",
+    "pet_owner_address": "主人称呼训练",
+    "pet_begging": "宠物式求欢",
+    "pet_display": "宠物展示检查",
     "toilet_control": "如厕控制",
     "assisted_urination": "抱着把尿",
 }
@@ -271,6 +274,9 @@ PET_RULE_LABELS = {
     "pet_feeding": "按宠物方式进食",
     "permission_bell": "按铃请求许可",
     "pet_response": "使用指定叫声或简短回应",
+    "owner_address": "用指定称呼叫主人",
+    "pet_begging": "用指定姿势和称呼求取性行为",
+    "display_inspection": "按口令接受展示和检查",
     "leash_follow": "被牵引时跟随",
     "service_on_command": "按指令完成服务",
 }
@@ -281,10 +287,23 @@ PET_TRAINING_RULES = {
     "pet_feeding": "pet_feeding",
     "pet_permission": "permission_bell",
     "pet_voice_training": "pet_response",
+    "pet_owner_address": "owner_address",
+    "pet_begging": "pet_begging",
+    "pet_display": "display_inspection",
     "leash_training": "leash_follow",
     "service_training": "service_on_command",
 }
-PET_ACTIVATION_TRAINING = {"pet_play", "pet_position_wait", "pet_crawl_training", "pet_feeding", "pet_permission", "pet_voice_training"}
+PET_ACTIVATION_TRAINING = {
+    "pet_play",
+    "pet_position_wait",
+    "pet_crawl_training",
+    "pet_feeding",
+    "pet_permission",
+    "pet_voice_training",
+    "pet_owner_address",
+    "pet_begging",
+    "pet_display",
+}
 PET_RELATED_TRAINING = set(PET_TRAINING_RULES)
 TOOL_LABELS = {
     "toy": "跳蛋",
@@ -356,16 +375,16 @@ TOOL_COMPATIBILITY = {
     "dildo": {"training:toy_training", "training:forced_orgasm", "content:toy_reward", "content:toy_discipline", "modifier:sex"},
     "remote_control": {"training:toy_training", "training:orgasm_control", "training:forced_orgasm", "training:masturbation_control", "content:toy_reward", "content:toy_discipline"},
     "lubricant": {"training:toy_training", "training:anal_training", "training:forced_orgasm", "modifier:sex"},
-    "collar": {"training:obedience_commands", "training:position_training", "training:pet_play", "training:pet_position_wait", "training:pet_crawl_training", "training:pet_feeding", "training:pet_permission", "training:pet_voice_training", "training:leash_training", "training:service_training", "content:bondage_discipline", "content:restrained_rest", "modifier:sex"},
-    "leash": {"training:position_training", "training:pet_play", "training:pet_position_wait", "training:pet_crawl_training", "training:leash_training", "training:service_training", "content:bondage_discipline"},
+    "collar": {"training:obedience_commands", "training:position_training", "training:pet_play", "training:pet_position_wait", "training:pet_crawl_training", "training:pet_feeding", "training:pet_permission", "training:pet_voice_training", "training:pet_owner_address", "training:pet_begging", "training:pet_display", "training:leash_training", "training:service_training", "content:bondage_discipline", "content:restrained_rest", "modifier:sex"},
+    "leash": {"training:position_training", "training:pet_play", "training:pet_position_wait", "training:pet_crawl_training", "training:pet_begging", "training:pet_display", "training:leash_training", "training:service_training", "content:bondage_discipline"},
     "handcuffs": {"training:bondage_training", "training:position_training", "training:sensory_deprivation", "training:exposure_training", "training:toilet_control", "training:assisted_urination", "content:bondage_discipline", "content:restrained_rest", "modifier:sex"},
     "ankle_cuffs": {"training:bondage_training", "training:position_training", "training:exposure_training", "training:toilet_control", "training:assisted_urination", "content:bondage_discipline", "content:restrained_rest", "modifier:sex"},
     "rope": {"training:bondage_training", "training:position_training", "training:exposure_training", "training:toilet_control", "training:assisted_urination", "content:bondage_discipline", "content:restrained_rest", "modifier:sex"},
     "bondage_tape": {"training:bondage_training", "training:sensory_deprivation", "training:toilet_control", "training:assisted_urination", "content:bondage_discipline", "content:restrained_rest", "modifier:sex"},
     "spreader_bar": {"training:bondage_training", "training:position_training", "training:exposure_training", "training:toilet_control", "training:assisted_urination", "content:bondage_discipline", "modifier:sex"},
     "blindfold": {"training:sensory_deprivation", "training:inspection_training", "content:sensitivity_check", "modifier:sex"},
-    "gag": {"training:obedience_commands", "training:sensory_deprivation", "training:humiliation_play", "training:pet_play", "training:pet_voice_training", "modifier:sex"},
-    "muzzle": {"training:obedience_commands", "training:humiliation_play", "training:pet_play", "training:pet_voice_training"},
+    "gag": {"training:obedience_commands", "training:sensory_deprivation", "training:humiliation_play", "training:pet_play", "training:pet_voice_training", "training:pet_begging", "training:pet_display", "modifier:sex"},
+    "muzzle": {"training:obedience_commands", "training:humiliation_play", "training:pet_play", "training:pet_voice_training", "training:pet_owner_address", "training:pet_begging"},
     "whip": {"training:impact_play", "content:impact_discipline"},
     "flogger": {"training:impact_play", "content:impact_discipline"},
     "paddle": {"training:impact_play", "content:impact_discipline"},
@@ -427,6 +446,9 @@ TRAINING_CONTENT_EFFECTS = {
     "pet_feeding": {"cleanliness": -2, "shame": 4, "intimacy": 1},
     "pet_permission": {"shame": 2, "intimacy": 1},
     "pet_voice_training": {"shame": 3, "intimacy": 1},
+    "pet_owner_address": {"shame": 3, "intimacy": 2},
+    "pet_begging": {"stamina": -2, "cleanliness": -1, "shame": 5, "intimacy": 2},
+    "pet_display": {"stamina": -1, "shame": 4, "intimacy": 1},
     "toilet_control": {"stamina": -2, "shame": 4},
     "assisted_urination": {"stamina": -1, "cleanliness": -3, "shame": 6, "intimacy": 2},
 }
@@ -455,11 +477,10 @@ NIGHT_ACTIONS = {
     "watch_video": "看视频",
     "search_exit": "偷偷找出口",
     "hide_item": "藏东西",
-    "check_key": "检查钥匙",
     "diary": "写私密日记",
     "blind_spot": "去监控盲区",
     "ring_bell": "按铃",
-    "pet_wait": "在指定位置等候",
+    "pet_wait": "按宠物规矩等候",
 }
 NIGHT_ALIASES = {
     "睡觉": "sleep",
@@ -474,7 +495,6 @@ NIGHT_ALIASES = {
     "找出口": "search_exit",
     "偷偷找出口": "search_exit",
     "藏东西": "hide_item",
-    "检查钥匙": "check_key",
     "写日记": "diary",
     "私密日记": "diary",
     "盲区": "blind_spot",
@@ -483,6 +503,7 @@ NIGHT_ALIASES = {
     "呼叫铃": "ring_bell",
     "定点等候": "pet_wait",
     "在指定位置等候": "pet_wait",
+    "按宠物规矩等候": "pet_wait",
 }
 INVENTORY_ITEMS = {
     "book": {"label": "书", "unlocks": "read"},
@@ -539,6 +560,14 @@ NIGHT_ACTION_REQUIREMENTS = {
     for key, item in INVENTORY_ITEMS.items()
     if str(item.get("unlocks") or "")
 }
+HIDEABLE_INVENTORY_ITEMS = (
+    "book",
+    "switch",
+    "notebook",
+    "music_player",
+    "tablet",
+    "call_bell",
+)
 NIGHT_ACTION_ORDER = [
     "sleep",
     "self_touch",
@@ -548,30 +577,29 @@ NIGHT_ACTION_ORDER = [
     "watch_video",
     "search_exit",
     "hide_item",
-    "check_key",
     "diary",
     "blind_spot",
     "ring_bell",
     "pet_wait",
 ]
 NIGHT_DETAIL_OPTIONS = {
+    "read": {
+        "follow_bookmark": "沿着书签继续读",
+        "inspect_margins": "找页边批注",
+        "reread_marked_page": "重读被标记的那页",
+        "read_aloud": "小声念出来",
+    },
+    "game": {
+        "continue_save": "继续现有存档",
+        "inspect_profile": "查看用户资料",
+        "challenge_mode": "挑战更高难度",
+        "start_new_save": "新建一个存档",
+    },
     "search_exit": {
         "door_lock": "检查门锁",
         "window": "检查窗户",
         "room_route": "记住房间路线",
         "outside_sound": "听门外动静",
-    },
-    "hide_item": {
-        "paper_note": "藏纸条",
-        "small_item": "藏小物件",
-        "snack": "藏一点零食",
-        "improvised_tool": "藏临时工具",
-    },
-    "check_key": {
-        "confirm_location": "确认钥匙位置",
-        "test_reach": "试着够到钥匙",
-        "match_lock": "观察对应的锁",
-        "leave_untouched": "只看不碰",
     },
     "diary": {
         "record_day": "记录今天发生的事",
@@ -585,24 +613,68 @@ NIGHT_DETAIL_OPTIONS = {
         "move_item": "偷偷移动东西",
         "test_duration": "试探能停留多久",
     },
+    "pet_wait": {
+        "kneel_wait": "跪坐等候",
+        "prone_wait": "趴伏等候",
+        "collared_wait": "戴着项圈等候",
+        "hold_command": "按口令保持姿势",
+    },
 }
 NIGHT_DETAIL_EFFECTS = {
+    "follow_bookmark": {"stamina": 2, "shame": -1},
+    "inspect_margins": {"stamina": 1, "intimacy": 1},
+    "reread_marked_page": {"stamina": 2, "intimacy": 1},
+    "read_aloud": {"stamina": 1, "shame": 1, "intimacy": 1},
+    "continue_save": {"stamina": -1, "intimacy": 1},
+    "inspect_profile": {"shame": 1, "intimacy": 1},
+    "challenge_mode": {"stamina": -3, "shame": -1},
+    "start_new_save": {"stamina": -2, "intimacy": 1},
     "door_lock": {"stamina": -1},
     "window": {"stamina": -1},
     "room_route": {"stamina": -2},
     "outside_sound": {"stamina": -1},
-    "paper_note": {"shame": 1},
-    "small_item": {"stamina": -1},
-    "snack": {"stamina": 1},
-    "improvised_tool": {"stamina": -2},
-    "test_reach": {"stamina": -2, "shame": 1},
-    "match_lock": {"stamina": -1},
     "escape_plan": {"stamina": -1, "intimacy": -1},
     "stay_hidden": {"stamina": -1},
     "move_item": {"stamina": -2},
     "test_duration": {"stamina": -2},
+    "kneel_wait": {"stamina": 1, "shame": 2, "intimacy": 1},
+    "prone_wait": {"stamina": 1, "cleanliness": -1, "shame": 3, "intimacy": 1},
+    "collared_wait": {"stamina": 1, "shame": 3, "intimacy": 2},
+    "hold_command": {"stamina": -1, "shame": 3, "intimacy": 2},
 }
 NIGHT_DISCOVERIES = {
+    "follow_bookmark": (
+        "书签停在一段被特意折过的章节。",
+        "继续往后翻时，又发现了一处只标给你的页码。",
+        "书签背面多出了一行后来补上的字。",
+    ),
+    "inspect_margins": (
+        "页边有一处很淡的铅笔批注。",
+        "另一章的空白处也留着不同时间写下的短句。",
+        "几处批注连起来，像是一段断断续续留给你的话。",
+    ),
+    "reread_marked_page": (
+        "被标记的那句话和第一次读时有了不同的意味。",
+        "标记页里夹着一张更小的纸条。",
+    ),
+    "continue_save": (
+        "存档推进到了新的区域。",
+        "旧存档里解锁了一个只在这个账号出现的称号。",
+        "完成这一段后，主页多出了一条新的记录。",
+    ),
+    "inspect_profile": (
+        "用户资料里只有一个由囚禁方设置的名字。",
+        "头像备注里藏着另一句没有提前告诉你的话。",
+        "游玩记录的置顶标题被改过了。",
+    ),
+    "challenge_mode": (
+        "第一次挑战留下了新的最高分。",
+        "刷新纪录后，排行榜名称也跟着变了。",
+    ),
+    "start_new_save": (
+        "你在唯一的空位里建立了自己的存档。",
+        "新存档再次打开时，标题已经被改过。",
+    ),
     "door_lock": ("确认了门锁的位置。", "摸清了门锁和锁舌的大致结构。"),
     "window": ("确认了窗户的开合限制。", "记住了窗扣和固定点的位置。"),
     "room_route": ("记住了一段房间路线。", "把玄关和房间之间的路线记得更清楚了。"),
@@ -611,6 +683,28 @@ NIGHT_DISCOVERIES = {
     "stay_hidden": ("试出了一个可以短暂停留的位置。", "更清楚这个位置能藏多久了。"),
     "test_duration": ("记下了盲区能停留的大致时间。", "摸清了盲区暴露前的时间范围。"),
 }
+
+
+def _night_detail_options_for_state(state: dict[str, Any]) -> dict[str, dict[str, str]]:
+    options = deepcopy(NIGHT_DETAIL_OPTIONS)
+    inventory = state.get("inventory") if isinstance(state.get("inventory"), dict) else {}
+    hidden_now = {
+        str(item.get("item") or "")
+        for item in state.get("hidden_items") or []
+        if isinstance(item, dict) and str(item.get("status") or "") == "hidden"
+    }
+    hide_options = {
+        f"inventory_{item_id}": f"藏起{str((INVENTORY_ITEMS.get(item_id) or {}).get('label') or item_id)}"
+        for item_id in HIDEABLE_INVENTORY_ITEMS
+        if bool(inventory.get(item_id)) and item_id not in hidden_now
+    }
+    if hide_options:
+        options["hide_item"] = hide_options
+    else:
+        options.pop("hide_item", None)
+    return options
+
+
 MONITOR_VIEW_STYLES = {"occasional", "full"}
 MONITOR_HANDLES = {"silent", "review_later", "intervene"}
 INTERVENTION_INTENTS = {"catch", "confiscate", "interrupt", "ambush", "question", "command_stop", "reward", "punishment"}
@@ -704,13 +798,16 @@ RECAPTURE_RULE_LABELS = {
 }
 RECAPTURE_RULE_NIGHT_BLOCKS = {
     "double_lock": {"search_exit"},
-    "key_isolation": {"check_key"},
+    "key_isolation": set(),
     "movement_limit": {"search_exit", "blind_spot"},
     "daily_search": {"hide_item"},
     "monitoring_upgrade": {"blind_spot"},
     "item_restriction": {"read", "game", "listen_music", "watch_video", "hide_item", "diary"},
     "permission_required": set(),
-    "restraint_required": {"self_touch", "search_exit", "hide_item", "check_key", "blind_spot"},
+    "restraint_required": {"self_touch", "search_exit", "hide_item", "blind_spot"},
+}
+RECAPTURE_RULE_NIGHT_DETAIL_BLOCKS = {
+    "key_isolation": {"door_lock"},
 }
 RECAPTURE_PERMISSION_ACTIONS = {"sleep", "ring_bell", "pet_wait"}
 RECAPTURE_FOLLOWUP_LABELS = {
@@ -1308,7 +1405,7 @@ def _normalize_state(state: dict[str, Any]) -> None:
     if pending and str(pending.get("type") or "") == "night_action_choice":
         active_condition = _active_night_condition(state)
         pending["available_actions"] = _available_night_actions(state)
-        pending["detail_options"] = deepcopy(NIGHT_DETAIL_OPTIONS)
+        pending["detail_options"] = _night_detail_options_for_state(state)
         pending["condition_prompt"] = str((active_condition or {}).get("prompt") or "")
         pending["condition_caption"] = str((active_condition or {}).get("caption") or "")
         pending["pet_rule_prompt"] = _pet_night_rule_prompt(state)
@@ -2211,14 +2308,22 @@ def _night_action(state: dict[str, Any], args: dict[str, Any]) -> tuple[bool, li
             return False, [f"囚禁方还没有给过{item_label}，不能{NIGHT_ACTIONS[action]}。"]
         return False, [f"今晚不能选择：{NIGHT_ACTIONS[action]}。"]
     detail = str(args.get("detail") or args.get("choice") or "").strip()
-    detail_options = NIGHT_DETAIL_OPTIONS.get(action) or {}
+    detail_options = _night_detail_options_for_state(state).get(action) or {}
     if detail_options and detail not in detail_options:
         available = " / ".join(f"{key}={label}" for key, label in detail_options.items())
         return False, [f"{NIGHT_ACTIONS[action]}需要选择具体动向：{available}"]
     if not detail_options:
         detail = ""
+    active_recapture_rules = set(_normalize_recapture_state(
+        state.get("recapture_state"),
+        int(state.get("current_day") or 1),
+    )["rules"])
+    if any(detail in (RECAPTURE_RULE_NIGHT_DETAIL_BLOCKS.get(rule) or set()) for rule in active_recapture_rules):
+        return False, ["现有规矩不允许接触钥匙或检查门锁。"]
     line = str(args.get("line") or "")
     private_note = str(args.get("note") or args.get("private_note") or "").strip() if action == "diary" else ""
+    if action == "diary" and not private_note:
+        return False, ["写私密日记需要填写这一页的正文。"]
     forbidden = _first_forbidden([action, detail, line, private_note])
     if forbidden:
         return False, [f"包含禁用项：{forbidden}"]
@@ -3225,7 +3330,7 @@ def _maybe_create_night_action_choice_pending(state: dict[str, Any]) -> None:
         "captive": "du",
         "phase": "waiting_night_action",
         "available_actions": _available_night_actions(state),
-        "detail_options": deepcopy(NIGHT_DETAIL_OPTIONS),
+        "detail_options": _night_detail_options_for_state(state),
         "condition_prompt": str((condition or {}).get("prompt") or ""),
         "condition_caption": str((condition or {}).get("caption") or ""),
         "pet_rule_prompt": _pet_night_rule_prompt(state),
@@ -3624,11 +3729,17 @@ def _pet_night_rule_prompt(state: dict[str, Any]) -> str:
     if not pet_state["active"]:
         return ""
     labels = [PET_RULE_LABELS[item] for item in pet_state["rules"]]
-    prefix = "今晚仍处于小狗身份。"
+    prefix = "今晚仍被当作主人的小狗看管。"
     if labels:
         prefix += "当前规矩：" + "、".join(labels) + "。"
     if "designated_spot" in pet_state["rules"]:
         prefix += "若不在指定位置等候且监控被打开，会留下违令记录。"
+    if "owner_address" in pet_state["rules"]:
+        prefix += "开口时要使用主人指定的称呼。"
+    if "pet_begging" in pet_state["rules"]:
+        prefix += "想索取性行为时，只能按宠物规矩摆好姿势再求主人。"
+    if "display_inspection" in pet_state["rules"]:
+        prefix += "听到展示或检查口令时必须配合。"
     return prefix
 
 
@@ -3642,7 +3753,6 @@ def _night_effects(action: str, state: dict[str, Any]) -> dict[str, int]:
         "watch_video": {"health": 0, "stamina": -2, "cleanliness": -1, "shame": -1, "intimacy": 0},
         "search_exit": {"health": -1, "stamina": -8, "cleanliness": -2, "shame": 2, "intimacy": -1},
         "hide_item": {"health": 0, "stamina": -4, "cleanliness": -1, "shame": 2, "intimacy": -1},
-        "check_key": {"health": 0, "stamina": -3, "cleanliness": -1, "shame": 3, "intimacy": -1},
         "diary": {"health": 0, "stamina": -1, "cleanliness": 0, "shame": -1, "intimacy": 0},
         "blind_spot": {"health": 0, "stamina": -5, "cleanliness": -1, "shame": 3, "intimacy": -1},
         "ring_bell": {"health": 0, "stamina": -1, "cleanliness": 0, "shame": 1, "intimacy": 1},
@@ -3936,7 +4046,7 @@ def _result(state: dict[str, Any], lines: list[str], *, command: str, ok: bool =
             "submit_process_reaction response=accept mood=害羞 process=过程正文",
             "choose_mood 心情 [台词]",
             "advance_day_action",
-            "night_action sleep|self_touch|read|game|listen_music|watch_video|search_exit|hide_item|check_key|diary|blind_spot|ring_bell",
+            "night_action sleep|self_touch|read|game|listen_music|watch_video|search_exit|hide_item|diary|blind_spot|ring_bell|pet_wait",
             "ack_bell_voice",
             "ack_item_secret",
             "view_monitor occasional|full",
@@ -3984,7 +4094,8 @@ def _view_state(state: dict[str, Any], view: str) -> dict[str, Any]:
         "previous_ending": deepcopy(state.get("previous_ending") or {}),
         "game_over": bool(state.get("game_over")),
         "result": str(state.get("result") or ""),
-        "night_condition": deepcopy(_active_night_condition(state)),
+        "night_condition": _view_night_condition(_active_night_condition(state), view),
+        "night_detail_options": _night_detail_options_for_state(state),
         "status_flags": deepcopy(status["flags"]),
         "intensity_cap": str(status["intensity_cap"]),
         "shame_stage": str(status["shame_stage"]),
@@ -4079,6 +4190,38 @@ def _view_event(event: dict[str, Any], view: str) -> dict[str, Any]:
         if bell_alert:
             payload["tags"].append("ring_bell_alert")
     if view != "captor":
+        feeding = payload.get("feeding") if isinstance(payload.get("feeding"), dict) else {}
+        if feeding:
+            visible_feeding = {
+                key: deepcopy(feeding[key])
+                for key in ("source", "water")
+                if str(feeding.get(key) or "") and str(feeding.get(key) or "") != "none"
+            }
+            if str(feeding.get("disclosed") or "") == "told" and str(feeding.get("additive") or "") not in {"", "none"}:
+                visible_feeding["additive"] = str(feeding.get("additive") or "")
+            payload["feeding"] = visible_feeding
+        payload.pop("planned_action", None)
+        payload.pop("effects", None)
+        aftereffect = payload.get("feeding_aftereffect") if isinstance(payload.get("feeding_aftereffect"), dict) else None
+        if aftereffect:
+            payload["feeding_aftereffect"] = {
+                key: deepcopy(aftereffect[key])
+                for key in ("label", "prompt", "caption")
+                if str(aftereffect.get(key) or "")
+            }
+        payload["tags"] = [
+            tag
+            for tag in payload.get("tags") or []
+            if not str(tag).startswith((
+                "aftereffect:",
+                "aftereffect_potency:",
+                "aftereffect_exposure:",
+                "feeding:",
+                "feeding_additive:",
+                "feeding_water:",
+                "bladder_pressure:",
+            ))
+        ]
         payload.pop("monitor", None)
         payload.pop("resolved_by", None)
         payload.pop("deferred_materials", None)
@@ -4089,6 +4232,18 @@ def _view_event(event: dict[str, Any], view: str) -> dict[str, Any]:
         if hidden_item:
             hidden_item.pop("observed_by_captor", None)
     return payload
+
+
+def _view_night_condition(condition: dict[str, Any] | None, view: str) -> dict[str, Any] | None:
+    if not condition:
+        return None
+    if view == "captor":
+        return deepcopy(condition)
+    return {
+        key: deepcopy(condition[key])
+        for key in ("label", "day", "prompt", "caption", "forced_actions")
+        if key in condition
+    }
 
 
 def _public_ending_seed(seed: Any) -> dict[str, Any] | None:
@@ -4340,6 +4495,9 @@ def _apply_night_detail_state(state: dict[str, Any], event: dict[str, Any]) -> N
 
     if action != "hide_item":
         return
+    item_id = detail_id.removeprefix("inventory_")
+    if item_id not in HIDEABLE_INVENTORY_ITEMS:
+        return
     monitor = event.get("monitor") if isinstance(event.get("monitor"), dict) else {}
     intervention = event.get("intervention") if isinstance(event.get("intervention"), dict) else {}
     confiscated = str(intervention.get("intent") or "") in {"confiscate", "catch", "interrupt", "ambush"}
@@ -4347,13 +4505,17 @@ def _apply_night_detail_state(state: dict[str, Any], event: dict[str, Any]) -> N
         "id": f"hidden-{secrets.token_hex(4)}",
         "source_event_id": str(event.get("id") or ""),
         "day": int(event.get("day") or state.get("current_day") or 1),
-        "item": detail_id,
+        "item": item_id,
         "label": str(detail.get("label") or detail_id),
         "status": "confiscated" if confiscated else "hidden",
         "observed_by_captor": bool(monitor.get("viewed")),
         "created_at": now_beijing_iso(),
     }
     state.setdefault("hidden_items", []).append(hidden_item)
+    if confiscated:
+        inventory = state.get("inventory") if isinstance(state.get("inventory"), dict) else {}
+        inventory[item_id] = False
+        state["inventory"] = inventory
     event["hidden_item"] = deepcopy(hidden_item)
     event.setdefault("tags", []).append(f"hidden_item:{hidden_item['status']}")
 
@@ -4361,10 +4523,12 @@ def _apply_night_detail_state(state: dict[str, Any], event: dict[str, Any]) -> N
 def _available_night_actions(state: dict[str, Any]) -> list[str]:
     inventory = state.get("inventory") if isinstance(state.get("inventory"), dict) else {}
     pet_state = _normalize_pet_state(state.get("pet_state"), int(state.get("current_day") or 1))
+    detail_options = _night_detail_options_for_state(state)
     actions = [
         action
         for action in NIGHT_ACTION_ORDER
         if (action != "pet_wait" or bool(pet_state["active"]))
+        and (action != "hide_item" or bool(detail_options.get("hide_item")))
         and (not NIGHT_ACTION_REQUIREMENTS.get(action) or inventory.get(NIGHT_ACTION_REQUIREMENTS[action]))
     ]
     condition = _active_night_condition(state)

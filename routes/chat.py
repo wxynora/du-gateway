@@ -724,16 +724,27 @@ def _compact_captivity_simulator_assistant_for_archive(assistant_msg: dict) -> d
         if match:
             parsed = str(match.group(1) or "").strip()
     if parsed:
-        content = f"渡在囚禁模拟器中回复了「{_compact_archive_line(parsed, 40)}」指令；完整正文只保留在游戏存档。"
+        content = (
+            f"渡在囚禁模拟器中回复了「{_compact_archive_line(parsed, 40)}」指令；"
+            "完整行动正文只保留在游戏存档，思维链按原字段归档。"
+        )
     elif raw.strip():
         content = "渡在囚禁模拟器局内回复了一段普通聊天；完整正文不写入聊天归档。"
     else:
         content = "渡在囚禁模拟器局内回复为空。"
     compacted = {"role": "assistant", "archive_label": "渡", "content": content}
-    if "cache_debug" in assistant_msg:
-        compacted["cache_debug"] = assistant_msg["cache_debug"]
-    if assistant_msg.get("reasoning_omitted"):
-        compacted["reasoning_omitted"] = True
+    for key in (
+        "reasoning",
+        "reasoning_content",
+        "thinking",
+        "reasoning_details",
+        "thinking_blocks",
+        "reasoning_omitted",
+        "cache_debug",
+        "du_request_id",
+    ):
+        if key in assistant_msg:
+            compacted[key] = assistant_msg[key]
     return compacted
 
 
