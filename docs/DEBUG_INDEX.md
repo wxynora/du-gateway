@@ -2212,4 +2212,4 @@ npm -C miniapp run android
 - 已完成：看书和 Switch 增加四类具体互动与跨夜进度，同一分支重复使用会继续生成不同发现；私密日记正文改为必填；宠物线新增主人称呼、宠物式求欢、展示检查和四种夜间等候姿势。
 - 边界保持：普通行动仍单轮同步；夜间监控 `monitor_gate -> monitor_handle` 和首次物品/语音铃揭示继续保留必要的第二段，不改两种视角的监控封存规则。
 - 已验证：`scripts/test_captivity_simulator_game.py` 覆盖动态藏物、没收、重复书/游戏发现、空日记拒绝、宠物规则素材和监控边界；本轮只使用临时本地假存档，不调用真实 `/sync-du` 或 R2。
-- 未完成 / 下次继续：等待本轮 MiniApp 构建、干净提交、VPS 拉取重启和公网 `/health`、`/miniapp/` 检查完成后补部署结果。
+- 已部署：提交 `3fa69fab` 已推送到 `origin/main`；新主网关 `/root/du-gateway` fast-forward 后完成后端 `py_compile` 并重启 `du-gateway.service`。服务器本机 `/health`、`/miniapp/` 与公网 `https://duxy-home.com/health`、`/miniapp/`、新囚禁模拟器静态 chunk 均返回 200，最近服务日志无 traceback/error/exception/failed。
