@@ -2236,3 +2236,11 @@ npm -C miniapp run android
 - 已验证：后端 `py_compile`、`import app`、囚禁模拟器全量规则测试、私密棋盘回归与目标文件 `git diff --check` 通过；测试使用临时本地存档，没有调用真实 `/sync-du`、R2、VPS 或上游模型。
 - 已部署：源码提交 `2cdd14a9` 已推送到 `origin/main`；现行主网关 `/root/du-gateway` fast-forward 后通过后端编译、`import app` 和囚禁模拟器全量规则测试，并重启 `du-gateway`、`du-realtime`、SumiTalk worker、Telegram proactive/webhook worker、微信 iLink 和 nginx。7 个服务均为 `active`，服务器本机与公网 `/health` 正常，公网 `/miniapp/` 返回 200，线上源码已确认包含新常驻开头，重启后日志未发现 traceback/exception/failed/error。
 - 未完成 / 下次继续：实际模型代入感仍需在真实 App 中用两条路线各跑一轮对话验收。
+
+当前状态（2026-07-13 囚禁模拟器旧物痕迹与语音铃重复播放）：
+- 已完成：书、Switch、音乐播放器和平板改为囚禁方使用过再送出的旧物；每件必须单独预填 5 至 8 条使用痕迹，前端换行与渡指令中的 `||` 都会解析为有序列表，被囚禁方每次使用只发现下一条。日记本、小夜灯和抱枕仍保留一次性首次文案。
+- 已完成：语音铃每次按下都会播放同一条预录台词并进入确认页；确认后交给渡处理的 pending、动态 system 当前事件和事件上下文每次都保留本次实际 `bell_voice.line`。
+- 已修复：被喂水后的尿意会随后续白天行动自然递增，第三段结束入夜时仍继续推进；明显尿意会形成夜间条件文案。囚禁方路线仍不创建或展示无关尿意状态。
+- 已同步 UI：囚禁方等待渡操作时使用“等待渡……”文案；身份切换增加覆盖存档确认；仓库显示旧物痕迹填写数量和已发现进度；手机底部一级导航保持固定并保留安全区。
+- 已验证：隔离 worktree 基于最新 `origin/main` 通过囚禁模拟器全量测试、私密棋盘回归、Python 编译、`import app`、MiniApp `tsc --noEmit` 与生产构建。测试未调用真实 `/sync-du`、R2 或上游模型。
+- 已部署：提交 `d46a99ef` 已推送到 `origin/main`，新主网关 `/root/du-gateway` fast-forward 后完成服务器端编译与导入检查并重启 `du-gateway.service`；本机和公网 `/health`、`/miniapp/` 及新静态 chunk 均返回 200，重启后日志无 traceback/error。
