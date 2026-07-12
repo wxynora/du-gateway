@@ -4433,31 +4433,34 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         .captivity-game .history-title-row .panel-title {
             margin-bottom: 0;
         }
-        .captivity-game .history-day-select {
-            flex: 0 0 auto;
-            width: 104px;
-            height: 30px;
-            margin: 0;
-            border: 0.5px solid rgba(255, 255, 255, 0.28);
-            background: #1a1a1a;
-            color: var(--white);
-            padding: 0 24px 0 8px;
-            font-size: 10px;
-        }
         .captivity-game .history-day-group {
             margin-bottom: 20px;
         }
         .captivity-game .history-day-heading {
             display: flex;
+            width: 100%;
             align-items: center;
             justify-content: space-between;
             margin-bottom: 8px;
+            border: 0;
             border-bottom: 0.5px solid rgba(235, 121, 176, 0.5);
+            background: transparent;
             color: var(--pink);
-            padding-bottom: 5px;
+            padding: 0 0 5px;
             font-family: var(--font-display);
             font-size: 11px;
             font-style: italic;
+            text-align: left;
+            cursor: pointer;
+        }
+        .captivity-game .history-day-heading-meta {
+            display: inline-flex;
+            align-items: center;
+            gap: 9px;
+            color: #918b8f;
+            font-family: var(--font-body);
+            font-size: 10px;
+            font-style: normal;
         }
         .captivity-game .history-list-item:active {
             background: var(--gray);
@@ -7023,27 +7026,35 @@ function HistoryPanel({
   onOpenDetail: (event: CaptivityEvent) => void;
   onCloseDetail: () => void;
 }) {
-  const availableDays = useMemo(
-    () => Array.from(new Set(events.map((event) => Number(event.day || 1)))).sort((a, b) => b - a),
+  const processEvents = useMemo(
+    () => events.filter((event) => Boolean(textLine(event.process_text))),
     [events],
   );
-  const [selectedDay, setSelectedDay] = useState("all");
+  const availableDays = useMemo(
+    () => Array.from(new Set(processEvents.map((event) => Number(event.day || 1)))).sort((a, b) => b - a),
+    [processEvents],
+  );
+  const availableDaysKey = availableDays.join(",");
+  const [expandedDays, setExpandedDays] = useState<Set<number>>(
+    () => new Set(availableDays.length ? [availableDays[0]] : []),
+  );
   useEffect(() => {
-    if (selectedDay !== "all" && !availableDays.includes(Number(selectedDay))) setSelectedDay("all");
-  }, [availableDays, selectedDay]);
+    setExpandedDays((current) => {
+      const next = new Set(Array.from(current).filter((day) => availableDays.includes(day)));
+      if (next.size === 0 && availableDays.length) next.add(availableDays[0]);
+      return next;
+    });
+  }, [availableDaysKey]);
   const groupedEvents = useMemo(() => {
-    const visibleEvents = selectedDay === "all"
-      ? events
-      : events.filter((event) => Number(event.day || 1) === Number(selectedDay));
     const groups = new Map<number, CaptivityEvent[]>();
-    visibleEvents.slice().reverse().forEach((event) => {
+    processEvents.slice().reverse().forEach((event) => {
       const day = Number(event.day || 1);
       const group = groups.get(day) || [];
       group.push(event);
       groups.set(day, group);
     });
     return Array.from(groups.entries()).sort(([dayA], [dayB]) => dayB - dayA);
-  }, [events, selectedDay]);
+  }, [processEvents]);
 
   if (detail) {
     return (
@@ -7061,20 +7072,27 @@ function HistoryPanel({
     <>
       <div className="history-title-row">
         <div className="panel-title">事件回顾 <span className="sub">ARCHIVE</span></div>
-        {availableDays.length ? (
-          <select className="history-day-select" aria-label="按日期筛选事件" value={selectedDay} onChange={(event) => setSelectedDay(event.target.value)}>
-            <option value="all">全部日期</option>
-            {availableDays.map((day) => <option value={String(day)} key={day}>第 {day} 天</option>)}
-          </select>
-        ) : null}
       </div>
       {groupedEvents.length ? groupedEvents.map(([day, dayEvents]) => (
         <section className="history-day-group" key={day}>
-          <div className="history-day-heading">
+          <button
+            className="history-day-heading"
+            type="button"
+            aria-expanded={expandedDays.has(day)}
+            onClick={() => setExpandedDays((current) => {
+              const next = new Set(current);
+              if (next.has(day)) next.delete(day);
+              else next.add(day);
+              return next;
+            })}
+          >
             <span>第 {day} 天</span>
-            <span>{dayEvents.length} 条</span>
-          </div>
-          {dayEvents.map((event) => {
+            <span className="history-day-heading-meta">
+              <span>{dayEvents.length} 篇</span>
+              <span aria-hidden="true">{expandedDays.has(day) ? "−" : "+"}</span>
+            </span>
+          </button>
+          {expandedDays.has(day) ? dayEvents.map((event) => {
             const segment = event.tags?.includes("out_of_band")
               ? "随时"
               : event.phase === "ending" || event.action === "ending"
@@ -7088,12 +7106,12 @@ function HistoryPanel({
                 <div className="event-main">{event.action_label || actionLabel(event.action) || "事件"}</div>
               </button>
             );
-          })}
+          }) : null}
         </section>
       )) : (
           <div className="action-card faded">
             <div className="uppercase pink-text" style={{ marginBottom: 5 }}>暂无回顾</div>
-            <div className="event-sub">{lastText || "还没有归档事件。"}</div>
+            <div className="event-sub">{lastText || "还没有保存具体经过。"}</div>
           </div>
       )}
     </>

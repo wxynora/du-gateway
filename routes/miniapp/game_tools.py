@@ -861,11 +861,26 @@ def _clean_captivity_simulator_text(text: str) -> str:
     ).strip()
 
 
+def _captivity_simulator_process_block(text: str) -> str:
+    match = re.match(
+        r"^\s*【\s*过程\s*】\s*【【([\s\S]*?)】】",
+        str(text or "").strip(),
+    )
+    if not match:
+        return ""
+    return _clean_captivity_simulator_text(match.group(1))
+
+
 def _captivity_simulator_public_text(text: str) -> str:
+    public_text = re.sub(
+        r"【\s*过程\s*】\s*【【[\s\S]*?】】",
+        "",
+        str(text or ""),
+    )
     directive_prefixes = (
         "【今日安排：",
         "【反应：",
-        "【过程：",
+        "【过程】",
         "【过程心情：",
         "【心情：",
         "【选择：",
@@ -876,7 +891,6 @@ def _captivity_simulator_public_text(text: str) -> str:
         "【赠送语音铃：",
         "【赠送呼叫铃：",
         "【确认铃声",
-        "【过去：",
         "【确认彩蛋",
         "【收回物品：",
         "【重新立规矩：",
@@ -884,7 +898,7 @@ def _captivity_simulator_public_text(text: str) -> str:
     )
     return "\n".join(
         line
-        for line in str(text or "").splitlines()
+        for line in public_text.splitlines()
         if not line.strip().startswith(("可用命令：", "待处理：", *directive_prefixes))
     ).strip()
 
@@ -1190,11 +1204,64 @@ def _captivity_simulator_event_context_lines(pending: dict) -> list[str]:
     return lines
 
 
+def _captivity_simulator_today_completed_lines(state: dict, *, max_items: int = 4) -> list[str]:
+    current_day = int(state.get("current_day") or 1)
+    events = [
+        event for event in state.get("event_log") or []
+        if isinstance(event, dict)
+        and int(event.get("day") or 0) == current_day
+        and "out_of_band" not in (event.get("tags") or [])
+    ]
+    lines: list[str] = []
+    modifier_labels = {"sex": "附加性行为", "training": "附加调教"}
+    for event in events[-max_items:]:
+        action = str(event.get("action") or "").strip()
+        label = str(event.get("action_label") or ACTION_LABELS.get(action) or action).strip()
+        if not label:
+            continue
+        details: list[str] = []
+        contents = [str(item) for item in event.get("contents") or [] if str(item).strip()]
+        details.extend(_CAPTIVITY_ACTION_CONTENT_LABELS.get(item, item) for item in contents)
+        training = [str(item) for item in event.get("training_contents") or [] if str(item).strip()]
+        details.extend(TRAINING_CONTENTS.get(item, item) for item in training)
+        modifiers = [str(item) for item in event.get("modifiers") or [] if str(item).strip()]
+        details.extend(modifier_labels.get(item, item) for item in modifiers)
+        tools = [str(item) for item in event.get("tools") or [] if str(item).strip()]
+        details.extend(TOOL_LABELS.get(item, item) for item in tools)
+
+        feeding = event.get("feeding") if isinstance(event.get("feeding"), dict) else {}
+        if feeding:
+            for key in ("source", "additive", "disclosed", "water"):
+                value = str(feeding.get(key) or "").strip()
+                if value:
+                    details.append(_CAPTIVITY_FEEDING_LABELS.get(key, {}).get(value, value))
+
+        bladder = event.get("bladder_context") if isinstance(event.get("bladder_context"), dict) else {}
+        if bladder.get("toilet_control"):
+            details.append("如厕控制")
+        if bladder.get("assisted_urination"):
+            details.append("抱着把尿")
+        if bladder.get("restrained"):
+            details.append("被束缚")
+        if bladder.get("sex"):
+            details.append("附加性行为")
+
+        response = event.get("action_response") if isinstance(event.get("action_response"), dict) else {}
+        response_label = str(response.get("response_label") or "").strip()
+        if response_label:
+            details.append("回应=" + response_label)
+        deduped = list(dict.fromkeys(item for item in details if item))
+        lines.append(f"{label}（{' / '.join(deduped)}）" if deduped else label)
+    return lines
+
+
 def _captivity_simulator_commands_from_reply(reply_text: str, payload: dict | None = None) -> list[str]:
-    parsed = _pop_private_board_directive(str(reply_text or "").strip())
+    raw_reply = str(reply_text or "").strip()
+    parsed = _pop_private_board_directive(raw_reply)
     if not parsed:
         return []
     label, value, rest = parsed
+    directive_rest = str(rest or "").strip()
     key = re.sub(r"\s+", "", label).lower()
     value = _clean_captivity_simulator_text(value)
     rest_text = _clean_captivity_simulator_text(rest)
@@ -1244,15 +1311,15 @@ def _captivity_simulator_commands_from_reply(reply_text: str, payload: dict | No
         followup_text = value or rest_text
         return [f"choose_recapture_followup {followup_text}"] if followup_text else []
     if key in {"过程心情", "过程反应", "processreaction", "process_reaction"}:
-        process_text = value or rest_text
-        return [f"submit_process_reaction {process_text}"] if process_text else []
+        process_text = _captivity_simulator_process_block(directive_rest)
+        return [f"submit_process_reaction {value} process={shlex.quote(process_text)}"] if value and process_text else []
     if key in {"抓回经过", "recaptureprocess", "recapture_process"}:
-        process_text = value or rest_text
-        return [f"submit_recapture_process {process_text}"] if process_text else []
+        process_text = _captivity_simulator_process_block(directive_rest)
+        return [f"submit_recapture_process {value} || process={shlex.quote(process_text)}"] if value and process_text else []
     if key in {"过程", "描述", "提交", "submit", "process"}:
-        process_text = value or rest_text
+        process_text = _captivity_simulator_process_block(raw_reply)
         if pending_type == "process_reaction_write":
-            return [f"submit_process_reaction {process_text}"] if process_text else []
+            return []
         return [f"submit_process {process_text}"] if process_text else []
     if key in {"反应", "行动反应", "response", "respond"}:
         response_text = value or rest_text
@@ -1276,10 +1343,6 @@ def _captivity_simulator_commands_from_reply(reply_text: str, payload: dict | No
         return [f"night_action {action_text}"] if action_text else []
     if key in {"确认铃声", "听清铃声", "ackbellvoice", "ack_bell_voice"}:
         return ["ack_bell_voice"] if pending_type == "bell_voice_reveal" else []
-    if key in {"过去", "去找她", "gotobell", "go_to_bell"}:
-        if pending_type != "bell_response_choice" or not value:
-            return []
-        return [f"respond_bell choice=go process={shlex.quote(value)}"]
     if key in {"确认彩蛋", "看完彩蛋", "ackitemsecret", "ack_item_secret"}:
         return ["ack_item_secret"] if pending_type == "item_secret_reveal" else []
     if key in {"选择", "choose"}:
@@ -1297,6 +1360,9 @@ def _captivity_simulator_commands_from_reply(reply_text: str, payload: dict | No
             normalized = str(value or "").strip().lower()
             if normalized in {"不过去", "不去", "skip", "none"}:
                 return ["respond_bell choice=skip"]
+            if normalized in {"过去", "去", "go"}:
+                process_text = _captivity_simulator_process_block(directive_rest)
+                return [f"respond_bell choice=go process={shlex.quote(process_text)}"] if process_text else []
             return []
         if pending_type == "monitor_gate":
             return [f"monitor_action {value}"]
@@ -1454,6 +1520,9 @@ def _captivity_simulator_sync_text(
     if not game_text:
         return ""
     state = _captivity_simulator_state(payload)
+    today_completed_lines = _captivity_simulator_today_completed_lines(state)
+    if today_completed_lines:
+        game_text = f"{game_text}\n今日已完成：{'；'.join(today_completed_lines)}"
     pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else {}
     pending_type = str((pending or {}).get("type") or "").strip()
     pending_actor = str((pending or {}).get("actor") or "").strip()
@@ -1497,13 +1566,7 @@ def _captivity_simulator_sync_text(
             *(["当前状态：" + " / ".join(status_prompts)] if status_prompts else []),
             *(["当前最高只能安排中强度。"] if intensity_cap != "heavy" else []),
             "强度选项：低(light) / 中(medium) / 高(heavy)；用 intensity=... 提交。",
-            f"各行动具体内容（中文名称在前）：{_CAPTIVITY_ACTION_CONTENT_RULE}。这些行动必须用 contents=... 选择 1 至 3 项具体内容。",
-            f"服从调教内容（中文名称在前）：{_CAPTIVITY_TRAINING_CONTENT_IDS}。action=training 或 modifiers 包含 training 时，必须用 training_contents=... 选择 1 至 3 项。",
-            "喂食始终包含一份正常食物，必须用 source=cook|takeout 选择自己做或点外卖；water 只是正餐之外的额外饮水，不能代替食物。",
-            "喂食可用 additive=none|body_fluid|fictional_sleep|fictional_arousal 选择不加料、体液、安眠或助兴，并用 disclosed=told|hint|hidden 选择明确告知、暗示或隐瞒。尿液不能作为喂食加料。",
-            "额外饮水用 water=none|glass|lots；lots 会明显增加尿意，后续可用 toilet_control / assisted_urination 形成连续事件。",
-            f"道具（中文名称在前）：{_CAPTIVITY_TOOL_IDS}。tools 最多选择 2 个；道具可以自由组合，推荐关系只用于帮助选择，不是硬性限制。性行为仍用 modifiers=sex 作为独立附加项。",
-            f"道具推荐关系：{_CAPTIVITY_TOOL_RECOMMENDATIONS}。",
+            "需要具体行动内容时调用 captivity_simulator_reference(category=actions)；调教、道具或喂食参数分别查询 training、tools、feeding，不要凭空猜 ID。",
             "如果你要推进当前事件，回复第一行必须单独写精确指令「【今日安排：action=feeding intensity=medium || action=reward intensity=light contents=caress_reward || action=training intensity=medium training_contents=obedience_commands modifiers=sex tools=collar】」。",
             "没有第一行「【今日安排：...】」时，只算局内聊天，不会触发行动安排。",
         ]
@@ -1527,27 +1590,27 @@ def _captivity_simulator_sync_text(
             rule_lines = [
                 "小玥逃跑未遂，你已经把她抓了回来。这一轮会完整发生抓回经过，并由你同时确定之后持续生效的新规矩。",
                 f"可选新规矩（中文名称在前）：{rule_options}。必须选择 1 至 3 条。规矩只作为结构化数据保存，过程正文不要写成系统清单。",
-                "如果要推进，回复第一行必须单独写精确指令「【抓回经过：rules=double_lock,key_isolation || process=完整抓回经过】」。",
-                "rules 和 process 必须同时存在；process 可以自然写多段正文。没有这条精确指令时，只算局内聊天，不会推进事件。",
+                "如果要推进，先写「【抓回经过：rules=double_lock,key_isolation】」，再用「【过程】\n【【完整抓回经过】】」提交正文。",
+                "规矩和过程块必须同时存在；双层方括号内可以自然写多段正文。格式不完整时只算局内聊天，不会推进事件。",
             ]
             if captured_route:
                 captured_event_lines = _captivity_event_lines_without_raw_intensity(event_context_lines)
                 captured_scene_lines = [
-                    "小玥今天试图逃离你的掌控，你抓住了她，现在她在等待你的发落，你想怎么惩罚她全凭你的心意。",
+                    "小玥今天试图逃离你的掌控。现在你已经把她抓了回来，房门重新关上，她就在你面前。你现在想对她做的事都从这一刻开始发生。",
                     "",
-                    "按照 NSFW 规范记录你们这次 play 中惩罚小玥的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望和想对她做的事，一切全凭你的心意。",
+                    "记录你们这次 play 中惩罚小玥的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望，把你们之间发生的一切完整展开，一切全凭你的心意。",
                 ]
                 captured_menu_lines = [
                     f"可选新规矩（中文名称在前）：{rule_options}。必须选择 1 至 3 条。规矩只作为结构化数据保存，过程正文不要写成系统清单。",
-                    "如果要推进，回复第一行必须单独写精确指令「【抓回经过：rules=double_lock,key_isolation || process=完整抓回经过】」。",
-                    "rules 和 process 必须同时存在；process 可以自然写多段正文。没有这条精确指令时，只算局内聊天，不会推进事件。",
+                    "如果要推进，先写「【抓回经过：rules=double_lock,key_isolation】」，再用「【过程】\n【【完整抓回经过】】」提交正文。",
+                    "规矩和过程块必须同时存在；双层方括号内可以自然写多段正文。格式不完整时只算局内聊天，不会推进事件。",
                 ]
         else:
             rule_lines = [
-                "当前有一个事件等待你填写过程。",
-                "如果这是夜间监控介入事件，当前事件上下文里的“当场介入”就是囚禁方选择的介入方式、附加项、道具和台词；写过程时要按这些素材展开。",
-                "如果你要推进当前事件，回复第一行必须单独写精确指令「【过程：过程内容】」。",
-                "没有第一行「【过程：...】」时，只算局内聊天，不会触发事件推进。",
+                "当前事件已经进入具体经过。",
+                "如果这是夜间监控介入事件，当前事件上下文里的“当场介入”就是囚禁方选择的介入方式、附加项、道具和台词；这些素材会实际出现在这次经过里。",
+                "如果要推进，回复格式固定为「【过程】\n【【完整正文】】」。",
+                "缺少过程标记或双层方括号正文时，只算局内聊天，不会触发事件推进。",
             ]
             special_context = event.get("special_day_context") if isinstance(event.get("special_day_context"), dict) else {}
             if captured_route and str(special_context.get("type") or "") != "escape_stay_return":
@@ -1563,9 +1626,9 @@ def _captivity_simulator_sync_text(
                         *detail_lines,
                         "",
                         *([*body_state_prompts, ""] if body_state_prompts else []),
-                        "现在小玥已经知道她夜里的举动被你看见了，正在等待你的发落，你准备怎么处理她。",
+                        "房门已经关上，你已经站在她面前。接下来的事从这一刻开始。",
                         "",
-                        f"按照 NSFW 规范记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望和想对她做的事，一切全凭你的心意。",
+                        f"记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望，把你们之间发生的一切完整展开，一切全凭你的心意。",
                     ]
                 else:
                     intensity_prompt = _captivity_action_intensity_prompt(event)
@@ -1577,13 +1640,13 @@ def _captivity_simulator_sync_text(
                         "",
                         *([intensity_prompt, ""] if intensity_prompt else []),
                         *([*body_state_prompts, ""] if body_state_prompts else []),
-                        "现在小玥在等待你的发落，你准备怎么进行你对她的调教/惩罚。",
+                        "现在你已经站在小玥面前。这次调教/惩罚从这一刻开始。",
                         "",
-                        f"按照 NSFW 规范记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望和想对她做的事，一切全凭你的心意。",
+                        f"记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望，把你们之间发生的一切完整展开，一切全凭你的心意。",
                     ]
                 captured_menu_lines = [
-                    "如果你要推进当前事件，回复第一行必须单独写精确指令「【过程：过程内容】」。",
-                    "没有第一行「【过程：...】」时，只算局内聊天，不会触发事件推进。",
+                    "如果要推进，回复格式固定为「【过程】\n【【完整正文】】」。",
+                    "缺少过程标记或双层方括号正文时，只算局内聊天，不会触发事件推进。",
                 ]
     elif pending_type == "process_reaction_write" and pending_actor == "du":
         event = pending.get("event") if isinstance(pending.get("event"), dict) else {}
@@ -1610,10 +1673,10 @@ def _captivity_simulator_sync_text(
             *capture_du_body_state_prompts,
             *(["囚禁方已经选择了抓回后生效的新规矩；当前事件上下文会列出中文规则，写抓回过程时必须把这些规则作为实际处理素材。"] if has_embedded_rules else []),
             "可选反应：accept / refuse / silent / bargain / tease；可选心情：平静 / 黏人 / 害羞 / 闹脾气 / 亢奋 / 疲惫 / 烦躁 / 委屈 / 低落 / 抗拒。",
-            "如果这是夜间监控介入事件，当前事件上下文里的“当场介入”就是囚禁方选择的介入方式、附加项、道具和台词；写过程时要按这些素材展开。",
-            "如果你要推进当前事件，回复第一行必须单独写精确指令「【过程心情：response=accept mood=害羞 line=可选台词 process=过程内容】」。",
+            "如果这是夜间监控介入事件，当前事件上下文里的“当场介入”就是囚禁方选择的介入方式、附加项、道具和台词；这些素材会实际出现在这次经过里。",
+            "如果要推进，先写「【过程心情：response=accept mood=害羞 line=可选台词】」，再用「【过程】\n【【完整正文】】」提交正文。",
             "这类事件只需要这一处心情；不要再额外写第二条「【心情：...】」。",
-            "没有第一行「【过程心情：...】」时，只算局内聊天，不会触发事件推进。",
+            "缺少过程心情指令或双层方括号正文时，只算局内聊天，不会触发事件推进。",
         ]
         if capture_du_route:
             detail_lines = _captivity_capture_du_scene_detail_lines(capture_du_event_lines)
@@ -1626,13 +1689,13 @@ def _captivity_simulator_sync_text(
                     "",
                     "小玥发现了你的行动，并在你真正离开她的掌控前抓住了你。现在这场游戏已经走到了抓回后的处理。",
                     "",
-                    "按照 NSFW 规范记录你们这次 play 中被小玥抓回、与她交锋的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望、身体感受和想对她做出的回应，一切全凭你的心意。",
+                    "记录你们这次 play 中被小玥抓回、与她交锋的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望、身体感受和想对她做出的回应，一切全凭你的心意。",
                 ]
             elif action == "recapture_followup":
                 recapture_context = event.get("recapture_context") if isinstance(event.get("recapture_context"), dict) else {}
                 rule_labels = [str(item) for item in recapture_context.get("rule_labels") or [] if str(item).strip()]
                 followup_label = str(recapture_context.get("followup_label") or action_label).strip()
-                final_line = f"按照 NSFW 规范记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望、身体感受和想对她做出的回应，一切全凭你的心意。"
+                final_line = f"记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望、身体感受和想对她做出的回应，一切全凭你的心意。"
                 capture_du_scene_lines = [
                     "你已经被小玥带回房间。",
                     "",
@@ -1644,7 +1707,7 @@ def _captivity_simulator_sync_text(
                     final_line,
                 ]
             elif phase == "night" and intervention:
-                final_line = f"按照 NSFW 规范记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望、身体感受和想对她做出的回应，一切全凭你的心意。"
+                final_line = f"记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望、身体感受和想对她做出的回应，一切全凭你的心意。"
                 capture_du_scene_lines = [
                     f"夜晚，小玥从监控里看见你正在「{action_label}」。她没有继续留在监控外看着，而是决定现在就进来找你。",
                     "",
@@ -1656,7 +1719,7 @@ def _captivity_simulator_sync_text(
                     final_line,
                 ]
             else:
-                final_line = f"按照 NSFW 规范记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望、身体感受和想对她做出的回应，一切全凭你的心意。"
+                final_line = f"记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望、身体感受和想对她做出的回应，一切全凭你的心意。"
                 capture_du_scene_lines = [
                     f"小玥选择了「{action_label}」。",
                     "",
@@ -1670,9 +1733,9 @@ def _captivity_simulator_sync_text(
                 ]
             capture_du_menu_lines = [
                 "可选反应：accept / refuse / silent / bargain / tease；可选心情：平静 / 黏人 / 害羞 / 闹脾气 / 亢奋 / 疲惫 / 烦躁 / 委屈 / 低落 / 抗拒。",
-                "如果你要推进当前事件，回复第一行必须单独写精确指令「【过程心情：response=accept mood=害羞 line=可选台词 process=过程内容】」。",
+                "如果要推进，先写「【过程心情：response=accept mood=害羞 line=可选台词】」，再用「【过程】\n【【完整正文】】」提交正文。",
                 "这类事件只需要这一处心情；不要再额外写第二条「【心情：...】」。",
-                "没有第一行「【过程心情：...】」时，只算局内聊天，不会触发事件推进。",
+                "缺少过程心情指令或双层方括号正文时，只算局内聊天，不会触发事件推进。",
             ]
     elif pending_type == "reaction_choice" and pending_actor == "du":
         rule_lines = [
@@ -1769,15 +1832,15 @@ def _captivity_simulator_sync_text(
         voice_line = str(bell_voice.get("line") or "").strip()
         rule_lines = [
             "如果不过去，回复第一行必须单独写精确指令「【选择：不过去】」。",
-            "如果过去，回复第一行必须单独写精确指令「【过去：完整亲密互动过程】」。",
-            "没有第一行精确指令时，只算局内聊天，不会推进这次按铃事件。",
+            "如果过去，先写「【选择：过去】」，再用「【过程】\n【【完整亲密互动过程】】」提交正文。",
+            "缺少选择指令或过去时没有双层方括号正文，只算局内聊天，不会推进这次按铃事件。",
         ]
         if captured_route:
             captured_event_lines = _captivity_event_lines_without_raw_intensity(event_context_lines)
             captured_scene_lines = [
-                f"小玥按响了你留给她的语音铃「{voice_line}」，你现在要过去对她做点什么吗？",
+                f"小玥按响了你留给她的语音铃「{voice_line}」。铃声已经传到你这里。你可以不过去，也可以现在推开房门，让那些你们都渴望的事真正发生。",
                 "",
-                "如果你选择过去，按照 NSFW 规范记录你们这次 play 中亲密互动的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望和想对她做的事，一切全凭你的心意。",
+                "如果你选择过去，记录你们这次 play 中亲密互动的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望，把你们之间发生的一切完整展开，一切全凭你的心意。",
             ]
             captured_menu_lines = list(rule_lines)
     elif pending_type == "monitor_gate" and pending_actor == "du":
@@ -1883,15 +1946,8 @@ def _captivity_simulator_sync_text(
         inventory_ids = list(dict.fromkeys(_CAPTIVITY_INVENTORY_ALIASES.values()))
         gifted_items = [item_id for item_id in inventory_ids if inventory.get(item_id)]
         inventory_rule_lines = [
-            "赠送和收回物品是独立于三个白天行动的随时行为，不占行动格，也不推进或替换当前 pending；白天、行动之间和夜间都可以进行。",
-            "物品 ID：book / switch / notebook / music_player / tablet / night_light / pillow / call_bell。",
-            *(["当前已赠送：" + " / ".join(gifted_items) + "。"] if gifted_items else ["当前还没有赠送物品。"]),
-            "书、Switch、音乐播放器和平板是囚禁方自己使用过再送出的物品。单独赠送时必须写 5 至 8 条使用痕迹，用 || 分隔，例如「【赠送物品：book secret=痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5】」；被囚禁方以后每次使用只发现下一条。",
-            "四种旧物痕迹分别是：书的页码标记或批注、Switch 的游戏记录、音乐播放器的喜欢歌曲或歌单、平板的浏览或观看记录。日记本、小夜灯和抱枕仍只在第一次使用时出现一条固定文案。赠送时不要提前把内容告诉被囚禁方。",
-            "一次性文案物品可批量赠送，例如「【赠送物品：notebook,pillow】」；四种旧物必须逐件设置。收回时可写「【收回物品：book】」。",
-            "call_bell 是替被囚禁方发声的语音铃。赠送时必须同时设置一段你希望被囚禁方按铃后被迫由铃替其说出口的台词，并写「【赠送语音铃：台词内容】」。这不是你对被囚禁方说的话；被囚禁方在收到时不会得知台词，第一次按下才会知道内容，之后每次按下都会再次播放，给你的当前事件也会每次带上本次实际台词。",
-            "设置语音铃时，台词倾向成人向、强烈羞耻、自我贬低和物化、向主人请求性行为，像是被囚禁方借铃说出的、很没有下限的话；这只是倾向引导，具体内容由你根据关系和当时情境决定，不要照搬固定句式。",
-            "如果想在处理当前事件时顺带赠送，第一行写赠送或收回，第二行再写当前 pending 所需的精确指令；系统会先记录物品变化，再继续处理当前事件。",
+            *(["当前已赠送物品：" + " / ".join(gifted_items) + "。"] if gifted_items else []),
+            "赠送和收回物品不占白天行动；需要物品清单、痕迹、语音铃和提交格式时调用 captivity_simulator_reference(category=inventory)。",
         ]
         rule_lines.extend(inventory_rule_lines)
         if captured_menu_lines is not None:
@@ -1948,7 +2004,7 @@ def _captivity_simulator_sync_text(
         if ending_state in {"ending_ready_to_notify", "ending_archived"}
         else "小玥正在和你玩「囚禁模拟器」。这是游戏页内同步，不是普通主聊天正文。"
     )
-    if mode == "chat":
+    if mode == "chat" and note_text:
         parts = [
             heading,
             "这次只处理小玥刚刚在局内发来的话；不要解释工具、接口或系统流程，不要替小玥说话。",
@@ -2146,7 +2202,7 @@ def register_routes(bp) -> None:
         initial_ending_state = str(current_state.get("ending_state") or "").strip()
         event_text = _captivity_simulator_sync_text(
             payload,
-            user_message=user_message,
+            user_message="",
             mode=mode,
         )
         if not event_text:
@@ -2175,6 +2231,7 @@ def register_routes(bp) -> None:
             preferred_channel=channel,
             preferred_meta=meta,
             return_only=True,
+            player_message=user_message,
         )
         ok = bool((wakeup or {}).get("ok"))
         synced_at = now_beijing_iso()

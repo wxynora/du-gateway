@@ -813,6 +813,10 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
         execute_private_board_tool = None
     if name in PRIVATE_BOARD_TOOL_NAMES and execute_private_board_tool:
         return execute_private_board_tool(arguments if isinstance(arguments, dict) else {})
+    if name == "captivity_simulator_reference":
+        from services.captivity_simulator_reference import get_reference
+
+        return json.dumps(get_reference(str((arguments or {}).get("category") or "")), ensure_ascii=False)
     if str(name or "").strip().startswith("maps_"):
         from services.amap_mcp_tools import execute_amap_mcp_tool
         return execute_amap_mcp_tool(name, arguments if isinstance(arguments, dict) else {})

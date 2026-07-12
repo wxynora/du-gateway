@@ -611,6 +611,7 @@ def _send_wakeup_event(
     spring_dream_archive_meta: dict | None = None,
     return_only: bool = False,
     skip_post_archive_body_delta: bool = False,
+    tools: list[dict] | None = None,
 ) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。事件唤醒默认归档，避免后续对话断层。"""
     try:
@@ -662,6 +663,9 @@ def _send_wakeup_event(
         "stream": False,
         "messages": [],
     }
+    if tools:
+        body["tools"] = list(tools)
+        body["tool_choice"] = "auto"
     if generation_channel == "tg":
         body["messages"].insert(0, {"role": "system", "content": build_telegram_style_system(include_channel_hint=False)})
     if system_event and not image:
@@ -942,8 +946,16 @@ def send_captivity_simulator_wakeup(
     preferred_channel: str = "",
     preferred_meta: dict | None = None,
     return_only: bool = False,
+    player_message: str = "",
 ) -> dict:
     """立即让渡看到小玥同步来的囚禁模拟器局面。"""
+    from services.captivity_simulator_reference import get_reference_tool_schema
+
+    game_channel_message = (
+        f"（囚禁模拟器频道）\n小玥：{str(player_message or '').strip()}"
+        if str(player_message or "").strip()
+        else "（囚禁模拟器频道系统提示）小玥没有发文字消息给你"
+    )
     return _send_wakeup_event(
         window_id=window_id,
         target=target,
@@ -953,11 +965,11 @@ def send_captivity_simulator_wakeup(
         extra_instruction=(
             "这是小玥在囚禁模拟器页面内发给你的游戏交流，不是她在主聊天框里说的话。"
             "请自然回应；如果你要推进当前事件，第一行必须单独写页面规则里要求的精确指令。"
-            "不要调用工具，不要解释工具、接口、系统流程，不要替小玥说话。"
+            "通用选项需要时只调用 captivity_simulator_reference 查询；不要调用其他工具，不要解释工具、接口、系统流程，不要替小玥说话。"
         ),
         wakeup_kind="captivity_simulator",
         system_event=True,
-        system_event_user_summary="请根据上面的囚禁模拟器游戏内交流回应小玥。",
+        system_event_user_summary=game_channel_message,
         dynamic_system_event=True,
         preferred_channel_override=preferred_channel,
         preferred_target_override=target,
@@ -966,6 +978,7 @@ def send_captivity_simulator_wakeup(
         allow_followup=not return_only,
         return_only=return_only,
         skip_post_archive_body_delta=True,
+        tools=[get_reference_tool_schema()],
     )
 
 

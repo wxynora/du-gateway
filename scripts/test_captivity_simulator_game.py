@@ -68,7 +68,7 @@ def test_captivity_simulator_new_game_views() -> None:
         _assert(direct["ok"] is False and "plan_day" in direct["text"], "single day_action should not bypass the 3-action plan")
 
 
-def test_captivity_simulator_history_is_complete_and_date_filterable() -> None:
+def test_captivity_simulator_history_is_complete_and_day_collapsible() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "history.json"
         run_command("new_game route=captured_by_du seed=history-test", save_path=save_path)
@@ -94,7 +94,8 @@ def test_captivity_simulator_history_is_complete_and_date_filterable() -> None:
         _assert(status["state"]["event_log"][0]["id"] == "history-0", "complete history should preserve chronological order")
 
     frontend = (ROOT / "miniapp/src/ui/tabs/CaptivitySimulatorGameTab.tsx").read_text(encoding="utf-8")
-    _assert('aria-label="按日期筛选事件"' in frontend and "history-day-group" in frontend, "history UI should support direct day filtering and grouped dates")
+    _assert('aria-expanded={expandedDays.has(day)}' in frontend and "history-day-group" in frontend, "history UI should group concrete processes into collapsible days")
+    _assert("events.filter((event) => Boolean(textLine(event.process_text)))" in frontend, "history UI should exclude events without a concrete process body")
     history_panel = frontend.split("function HistoryPanel", 1)[1].split("function MonitorRoomPanel", 1)[0]
     _assert("processReviewMeta(event)" not in history_panel, "history list should show only time and title before opening detail")
 
@@ -624,11 +625,17 @@ def test_captivity_simulator_inventory_secret_first_use_flow() -> None:
         )
         _assert(command == ["gift_item items=book secret='痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5'"], f"du should be able to configure five item traces in one gift directive: {command}")
         sync_text = game_tools._captivity_simulator_sync_text(initial, mode="state_update")
-        _assert("5 至 8 条使用痕迹" in sync_text and "以后每次使用只发现下一条" in sync_text, "du-captor guidance should explain progressive item traces")
+        _assert("captivity_simulator_reference(category=inventory)" in sync_text, "du-captor prompt should point to the on-demand inventory reference")
+        from services.captivity_simulator_reference import get_reference
+
+        inventory_reference = json.dumps(get_reference("inventory"), ensure_ascii=False)
+        _assert("5 至 8 条痕迹" in inventory_reference and "每次使用只发现下一条" in inventory_reference, "inventory reference should retain progressive item trace rules")
 
     frontend = (ROOT / "miniapp/src/ui/tabs/CaptivitySimulatorGameTab.tsx").read_text(encoding="utf-8")
     _assert("ItemSecretRevealPanel" in frontend and "ack_item_secret" in frontend, "the frontend should render and acknowledge generic item-secret reveals")
     _assert("已填写 {draftEntryCount} 条" in frontend and "MIN_PROGRESSIVE_SECRET_ENTRIES = 5" in frontend, "the warehouse should require at least five traces for used items")
+    _assert("events.filter((event) => Boolean(textLine(event.process_text)))" in frontend, "history should include only events with a concrete process body")
+    _assert('aria-expanded={expandedDays.has(day)}' in frontend and "history-day-heading-meta" in frontend, "history days should render as collapsible groups")
 
 
 def test_captivity_simulator_feeding_aftereffects_and_tolerance() -> None:
@@ -825,16 +832,17 @@ def test_captivity_simulator_recapture_process_and_rules_both_routes() -> None:
         run_command("schedule_escape_window day=1 hint=有机会 bait=钥匙在玄关", save_path=save_path)
         escaped = run_command("resolve_escape_choice escape", save_path=save_path)
         prompt = game_tools._captivity_simulator_sync_text(escaped, mode="state_update")
-        _assert("【抓回经过：rules=double_lock,key_isolation" in prompt, "du recapture process prompt should require preset rules with the process")
+        _assert("【抓回经过：rules=double_lock,key_isolation】" in prompt and "【过程】" in prompt and "【【完整抓回经过】】" in prompt, "du recapture process prompt should require preset rules and a wrapped process block")
         parsed = game_tools._captivity_simulator_commands_from_reply(
-            "【抓回经过：rules=double_lock,key_isolation || process=抓回过程正文。】",
+            "【抓回经过：rules=double_lock,key_isolation】\n【过程】\n【【抓回过程正文。】】",
             escaped,
         )
-        _assert(parsed == ["submit_recapture_process rules=double_lock,key_isolation || process=抓回过程正文。"], "du recapture process and rules should parse as one command")
+        _assert(parsed == ["submit_recapture_process rules=double_lock,key_isolation || process='抓回过程正文。'"], "du recapture process and rules should parse as one command")
         rejected = run_command("submit_process 抓回过程正文。", save_path=save_path)
         _assert(rejected["ok"] is False, "recapture process must not bypass the preset rule selection")
         submitted = run_command(parsed[0], save_path=save_path)
         _assert(submitted["state"]["pending_event"]["type"] == "reaction_choice", "combined recapture process should still wait for local mood")
+        _assert(submitted["state"]["pending_event"]["event"]["process_text"] == "抓回过程正文。", "wrapped recapture process should be stored without transport quotes")
         recaptured = run_command("choose_mood 委屈 不甘心", save_path=save_path)
         review = recaptured["state"]["pending_event"]
         _assert(review["type"] == "recapture_rules_review" and review["rule_labels"] == ["加装双重门锁", "禁止接触钥匙和门锁"], "saved process should open a separate localized new-rules review")
@@ -1434,9 +1442,12 @@ def test_captivity_simulator_du_captor_inventory_commands() -> None:
         _assert(len(repeated["captor_view"]["event_log"]) == event_count, "repeating an already-gifted item must not create a duplicate gift event")
         _assert("已经处于已赠送状态" in repeated["text"], "duplicate gifting should return an explicit already-gifted state")
         sync_text = game_tools._captivity_simulator_sync_text(gifted, mode="state_update")
-        _assert("当前已赠送：notebook / pillow / call_bell" in sync_text, "du should see current gifted inventory before planning")
-        _assert("替被囚禁方发声" in sync_text and "向主人请求性行为" in sync_text, "du-captor prompt should guide the intended speaker and adult humiliation tendency")
-        _assert("随时行为" in sync_text and "不占行动格" in sync_text, "du should be told that gifting is independent from the three actions")
+        _assert("当前已赠送物品：notebook / pillow / call_bell" in sync_text, "du should see current gifted inventory before planning")
+        from services.captivity_simulator_reference import get_reference
+
+        inventory_reference = json.dumps(get_reference("inventory"), ensure_ascii=False)
+        _assert("替被囚禁方发声" in inventory_reference and "向主人请求性行为" in inventory_reference, "inventory reference should guide the intended speaker and adult humiliation tendency")
+        _assert("赠送和收回物品不占白天行动" in sync_text, "du should be told that gifting is independent from the three actions")
 
         run_command("plan_day action=rest contents=quiet_time || action=reward contents=caress_reward || action=check contents=body_check", save_path=save_path)
         run_command("respond_action accept mood=平静", save_path=save_path)
@@ -1513,13 +1524,20 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
     _assert("在这局游戏里" not in planning_sync and "以渡自己的口吻" not in planning_sync, "the game prompt should not create an outside role-playing frame")
     _assert("【📋 游戏状态】：" in planning_sync and "【🕹️ menu】：" in planning_sync, "captured-by-du planning prompt should use the approved shell")
     _assert("道具不是独立行动" in planning_sync and "training_contents" in planning_sync, "du planning prompt should explain the new action material structure")
-    _assert("vibrating_wand" in planning_sync and "anal_beads" in planning_sync, "du planning prompt should receive the expanded tool ids")
-    _assert("服从调教(training)" in planning_sync and "夹具调教(clamp_play)" in planning_sync, "du planning prompt should show Chinese labels alongside stable ids")
     _assert("低(light) / 中(medium) / 高(heavy)" in planning_sync, "du planning prompt should enumerate every intensity")
-    _assert("推荐关系只用于帮助选择，不是硬性限制" in planning_sync and "道具推荐关系" in planning_sync, "du planning prompt should treat tool compatibility as suggestions")
     _assert("action=reward intensity=light contents=caress_reward" in planning_sync, "du planning example should include required concrete content")
-    _assert("喂食始终包含一份正常食物" in planning_sync and "source=cook|takeout" in planning_sync, "du planning prompt should make food mandatory and water explicitly additional")
-    _assert("additive=none|body_fluid|fictional_sleep|fictional_arousal" in planning_sync and "disclosed=told|hint|hidden" in planning_sync, "du planning prompt should receive every feeding choice")
+    _assert("category=actions" in planning_sync and "category=inventory" in planning_sync, "du planning prompt should point to on-demand references")
+    from services.captivity_simulator_reference import get_reference
+
+    action_reference = json.dumps(get_reference("actions"), ensure_ascii=False)
+    training_reference = json.dumps(get_reference("training"), ensure_ascii=False)
+    tool_reference = json.dumps(get_reference("tools"), ensure_ascii=False)
+    feeding_reference = json.dumps(get_reference("feeding"), ensure_ascii=False)
+    _assert("vibrating_wand" in tool_reference and "anal_beads" in tool_reference, "tool reference should retain the expanded tool ids")
+    _assert("服从调教" in action_reference and "夹具调教" in training_reference, "on-demand references should show Chinese labels alongside stable ids")
+    _assert("推荐关系不是硬性限制" in tool_reference, "tool reference should keep compatibility advisory")
+    _assert("始终包含一份正常食物" in feeding_reference and "cook" in feeding_reference and "takeout" in feeding_reference, "feeding reference should make food mandatory")
+    _assert("fictional_sleep" in feeding_reference and "fictional_arousal" in feeding_reference and "hidden" in feeding_reference, "feeding reference should retain every feeding choice")
 
     payload = {
         "text": "【囚禁模拟器】\n当前状态如下。\n\n进度：第 1 / 30 天，day，白天行动 0 / 3\n待处理：process_reaction_write / 【过程心情：...】",
@@ -1610,8 +1628,10 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
     _assert("第 1 天夜间；记录摘要：写私密日记：写了一点东西" in deferred_monitor_sync, "monitor record should show time and summary")
     _assert("status" not in deferred_monitor_sync and "available_from_day" not in deferred_monitor_sync and "查看方式" not in deferred_monitor_sync and "明天处理" not in deferred_monitor_sync, "monitor record should not expose handling state or internal scheduling")
 
-    commands = game_tools._captivity_simulator_commands_from_reply("【过程心情：response=accept mood=害羞 process=写完过程】\n后面普通聊天", payload)
-    _assert(commands == ["submit_process_reaction response=accept mood=害羞 process=写完过程"], f"combined directive should map to submit_process_reaction, got {commands}")
+    commands = game_tools._captivity_simulator_commands_from_reply("【过程心情：response=accept mood=害羞】\n【过程】\n【【写完过程】】", payload)
+    _assert(commands == ["submit_process_reaction response=accept mood=害羞 process='写完过程'"], f"combined directive should map to submit_process_reaction, got {commands}")
+    commands = game_tools._captivity_simulator_commands_from_reply("【过程心情：response=accept mood=害羞】\n写完过程", payload)
+    _assert(commands == [], "process-reaction submission without the wrapped process block must not advance")
 
     plan_payload = {"captor_view": {"pending_event": {"type": "day_plan_choice", "actor": "du"}}}
     commands = game_tools._captivity_simulator_commands_from_reply("【今日安排：action=feeding || action=cleaning || action=training training_contents=obedience_commands】", plan_payload)
@@ -1701,8 +1721,8 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         mode="state_update",
     )
     _assert("小玥按响了你留给她的语音铃「请主人过来使用我」" in bell_response_sync, "du captor should receive the approved bell prompt with the prerecorded line")
-    _assert("按照 NSFW 规范记录你们这次 play 中亲密互动的完整详细过程" in bell_response_sync and "查看监控" not in bell_response_sync, "du bell response must use the approved shared-play guidance without reusing the monitor gate")
-    commands = game_tools._captivity_simulator_commands_from_reply("【过去：走进房间抱住她】", bell_response_payload)
+    _assert("让那些你们都渴望的事真正发生" in bell_response_sync and "把你们之间发生的一切完整展开" in bell_response_sync and "查看监控" not in bell_response_sync, "du bell response must use the approved shared-play guidance without reusing the monitor gate")
+    commands = game_tools._captivity_simulator_commands_from_reply("【选择：过去】\n【过程】\n【【走进房间抱住她】】", bell_response_payload)
     _assert(commands == ["respond_bell choice=go process='走进房间抱住她'"], f"bell visit should carry the complete process, got {commands}")
     commands = game_tools._captivity_simulator_commands_from_reply("【选择：不过去】", bell_response_payload)
     _assert(commands == ["respond_bell choice=skip"], f"bell decline should map without monitor, got {commands}")
@@ -1734,7 +1754,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
         mode="state_update",
     )
-    _assert("你选择了「服从调教」" in process_sync and "按照 NSFW 规范记录你们这次 play 中调教小玥的完整详细过程" in process_sync, "ordinary process should adapt the immersive prompt to the selected action")
+    _assert("你选择了「服从调教」" in process_sync and "记录你们这次 play 中调教小玥的完整详细过程" in process_sync and "把你们之间发生的一切完整展开" in process_sync, "ordinary process should adapt the immersive prompt to the selected action")
     _assert("使用第二人称" not in process_sync, "ordinary process should not frame du as an outside narrator")
     _assert("你要将她的理智彻底掐灭" in process_sync, "ordinary process should inject the selected action-intensity prompt")
     _assert("脸色和呼吸都显出疲态" in process_sync and "腿脚和动作都没有多少力气" in process_sync, "ordinary process should inject the two most urgent body prompts")
@@ -1938,8 +1958,8 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
         mode="state_update",
     )
-    _assert("小玥今天试图逃离你的掌控，你抓住了她" in escape_sync and "按照 NSFW 规范记录你们这次 play 中惩罚小玥的完整详细过程" in escape_sync, "recapture should use its standalone approved prompt")
-    _assert("【抓回经过：rules=" in escape_sync, "recapture prompt should keep the original exact directive")
+    _assert("你现在想对她做的事都从这一刻开始发生" in escape_sync and "记录你们这次 play 中惩罚小玥的完整详细过程" in escape_sync, "recapture should use its standalone scene prompt")
+    _assert("【抓回经过：rules=" in escape_sync and "【【完整抓回经过】】" in escape_sync, "recapture prompt should use the wrapped process directive")
 
     monitor_event = {
         "day": 6,
@@ -1977,7 +1997,8 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         mode="state_update",
     )
     _assert("你没有继续留在监控外看着，而是决定现在就进去找她" in intervention_sync, "monitor intervention should use its standalone approved process prompt")
-    _assert("按照 NSFW 规范记录你们这次 play 中与小玥亲密互动的完整详细过程" in intervention_sync and "【过程：过程内容】" in intervention_sync, "monitor intervention should keep the approved play guidance and process directive")
+    _assert("房门已经关上，你已经站在她面前。接下来的事从这一刻开始。" in intervention_sync and "你准备怎么处理她" not in intervention_sync, "monitor intervention should begin inside the scene instead of asking for a plan")
+    _assert("记录你们这次 play 中与小玥亲密互动的完整详细过程" in intervention_sync and "【过程】" in intervention_sync and "【【完整正文】】" in intervention_sync, "monitor intervention should keep the approved play guidance and wrapped process directive")
 
     monitor_handle_payload = {"captor_view": {"pending_event": {"type": "monitor_handle", "actor": "du"}}}
     commands = game_tools._captivity_simulator_commands_from_reply("【选择：review_later】", monitor_handle_payload)
@@ -2048,13 +2069,13 @@ def test_captivity_simulator_reply_commands_apply_to_runtime() -> None:
         game_tools.execute_game_command = fake_execute
         applied, payload = game_tools._apply_captivity_simulator_reply_commands(
             "default",
-            "【过程心情：response=accept mood=害羞 process=测试过程】\n【结局：不应该连吃】",
+            "【过程心情：response=accept mood=害羞】\n【过程】\n【【测试过程】】\n【结局：不应该连吃】",
             {"captor_view": {"pending_event": {"type": "process_reaction_write", "actor": "du"}}},
         )
     finally:
         game_tools.execute_game_command = old_execute
 
-    _assert(calls == [("captivity_simulator", "submit_process_reaction response=accept mood=害羞 process=测试过程", "default")], f"unexpected calls: {calls}")
+    _assert(calls == [("captivity_simulator", "submit_process_reaction response=accept mood=害羞 process='测试过程'", "default")], f"unexpected calls: {calls}")
     _assert(applied and applied[0]["ok"] is True, "applied command should be reported")
     _assert((payload or {}).get("player_text") == "过程和心情已保存。", "payload should be returned")
 
@@ -2069,7 +2090,7 @@ def test_captivity_simulator_reply_commands_apply_to_runtime() -> None:
         game_tools.execute_game_command = fake_execute
         applied, _ = game_tools._apply_captivity_simulator_reply_commands(
             "default",
-            "【赠送物品：book】\n【过程：继续当前过程】",
+            "【赠送物品：book】\n【过程】\n【【继续当前过程】】",
             gift_payload,
         )
     finally:
@@ -2182,7 +2203,7 @@ def test_captivity_simulator_sync_activity_policy() -> None:
     )
 
 
-def test_captivity_simulator_wakeup_uses_dynamic_system_and_skips_body_delta() -> None:
+def test_captivity_simulator_wakeup_separates_dynamic_system_and_game_channel_user() -> None:
     from services import conversation_followup as cf
     from storage import upstream_store
 
@@ -2212,6 +2233,7 @@ def test_captivity_simulator_wakeup_uses_dynamic_system_and_skips_body_delta() -
             event_text="小玥正在和你玩「囚禁模拟器」。当前等待过程。",
             preferred_channel="tg",
             return_only=True,
+            player_message="这是我在游戏里说的话",
         )
 
         _assert(bool(result.get("ok")), f"captivity simulator wakeup should succeed: {result}")
@@ -2219,9 +2241,38 @@ def test_captivity_simulator_wakeup_uses_dynamic_system_and_skips_body_delta() -
         _assert(headers.get("X-DU-WAKEUP-KIND") == "captivity_simulator", "wakeup kind should be captivity_simulator")
         _assert(headers.get("X-Skip-Post-Archive-Body-Delta") == "1", "body delta should be skipped")
         messages = ((captured.get("json") or {}).get("messages") or [])
-        simulator_system = next((msg for msg in messages if "囚禁模拟器" in str(msg.get("content") or "")), None)
-        _assert(isinstance(simulator_system, dict), "simulator event should stay in a system message")
-        _assert(simulator_system.get("__dynamic__") is True, "simulator event must be dynamic system")
+        simulator_system = next((msg for msg in messages if "当前等待过程" in str((msg or {}).get("content") or "")), None)
+        _assert(isinstance(simulator_system, dict), "simulator state should be present in the request")
+        _assert(simulator_system.get("role") == "system", "simulator state should stay in system")
+        _assert(simulator_system.get("__dynamic__") is True, "simulator state should remain in the dynamic system area")
+        _assert("这是我在游戏里说的话" not in str(simulator_system.get("content") or ""), "player speech must not leak into dynamic system")
+        user_messages = [msg for msg in messages if str((msg or {}).get("role") or "") == "user"]
+        _assert(len(user_messages) == 1, "simulator wakeup should use one user transport message")
+        simulator_event = user_messages[0]
+        _assert(
+            simulator_event.get("content") == "（囚禁模拟器频道）\n小玥：这是我在游戏里说的话",
+            "player speech should enter the normal user role with a game-channel prefix",
+        )
+        tools = ((captured.get("json") or {}).get("tools") or [])
+        tool_names = [str(((item or {}).get("function") or {}).get("name") or "") for item in tools]
+        _assert(tool_names == ["captivity_simulator_reference"], "simulator wakeup should expose only its read-only reference tool before gateway injection")
+        result_without_text = cf.send_captivity_simulator_wakeup(
+            window_id="tg_123",
+            target="123",
+            event_text="小玥正在和你玩「囚禁模拟器」。当前等待过程。",
+            preferred_channel="tg",
+            return_only=True,
+        )
+        _assert(bool(result_without_text.get("ok")), "simulator wakeup without player text should still succeed")
+        empty_user_messages = [
+            msg for msg in (((captured.get("json") or {}).get("messages") or []))
+            if str((msg or {}).get("role") or "") == "user"
+        ]
+        _assert(
+            len(empty_user_messages) == 1
+            and empty_user_messages[0].get("content") == "（囚禁模拟器频道系统提示）小玥没有发文字消息给你",
+            "missing player text should use the explicit game-channel system notice",
+        )
     finally:
         upstream_store.get_cached_active_model = old_model
         cf.requests.post = old_post
@@ -2239,11 +2290,11 @@ def test_captivity_simulator_archive_compaction() -> None:
             "content": "小玥正在和你玩「囚禁模拟器」。\n\n当前游戏状态：\n【囚禁模拟器】\n进度：第 12 / 30 天，day，白天行动 2 / 3\n待处理：process_reaction_write / 【过程心情：...】",
             "__dynamic__": True,
         },
-        {"role": "user", "content": "请根据上面的囚禁模拟器游戏内交流回应小玥。"},
+        {"role": "user", "content": "（囚禁模拟器频道）\n小玥：这是单独进入 user 的游戏内原话。"},
     ]
     assistant = {
         "role": "assistant",
-        "content": "【过程心情：response=accept mood=害羞 process=这里是很长的过程正文，不应该进入归档】\n自然回复一句。",
+        "content": "【过程心情：response=accept mood=害羞】\n【过程】\n【【这里是很长的过程正文，不应该进入归档】】\n自然回复一句。",
         "reasoning_content": "这里也可能含有很长的过程正文，不能进入归档。",
         "thinking_blocks": [{"text": "这里是很长的过程正文，不应该进 thinking_blocks 归档"}],
         "reasoning_omitted": True,
@@ -2262,14 +2313,73 @@ def test_captivity_simulator_archive_compaction() -> None:
             request_messages=request_messages,
         )
     text = json.dumps(cleaned, ensure_ascii=False)
+    archived_user = cleaned[0]
     archived_assistant = cleaned[1]
     _assert("囚禁模拟器" in text, "archive should retain simulator summary")
     _assert("第 12 天" in text, "archive should retain day summary")
+    _assert(archived_user.get("role") == "user", "a real game-channel message should enter last4 as a normal user message")
+    _assert("（囚禁模拟器频道）\n小玥：这是单独进入 user 的游戏内原话" in archived_user.get("content", ""), "archive should retain the separate game-channel player message")
+    _assert("（游戏状态摘要）" in archived_user.get("content", "") and "第 12 天" in archived_user.get("content", ""), "the same last4 user entry should retain compact game context")
     _assert("很长的过程正文" not in archived_assistant["content"], "archive should strip the full process body from visible assistant content")
     _assert(archived_assistant.get("reasoning_content") == assistant["reasoning_content"], "archive should preserve reasoning_content for simulator replies")
     _assert(archived_assistant.get("thinking_blocks") == assistant["thinking_blocks"], "archive should preserve structured thinking blocks for simulator replies")
     _assert("reasoning_omitted" in text, "archive may keep safe omitted marker")
     _assert("完整行动正文只保留在游戏存档" in text and "思维链按原字段归档" in text, "assistant archive should state both storage boundaries")
+
+    no_text_messages = [
+        request_messages[0],
+        {"role": "user", "content": "（囚禁模拟器频道系统提示）小玥没有发文字消息给你"},
+    ]
+    with app.test_request_context(
+        headers={"X-DU-GATEWAY-WAKEUP": "1", "X-DU-WAKEUP-KIND": "captivity_simulator"}
+    ):
+        no_text_cleaned = chat._build_round_cleaned_for_archive(
+            no_text_messages[-1],
+            assistant,
+            reply_target="123",
+            window_id="tg_123",
+            request_messages=no_text_messages,
+        )
+    _assert(no_text_cleaned[0].get("role") == "event", "a no-text simulator trigger should stay an event in last4")
+
+
+def test_captivity_simulator_today_completed_summary_enters_last4() -> None:
+    from routes import chat
+    from routes.miniapp import game_tools
+
+    payload = {
+        "text": "【囚禁模拟器】\n进度：第 2 / 30 天，day，白天行动 2 / 3\n待处理：advance_action",
+        "captor_view": {
+            "current_day": 2,
+            "captor": "du",
+            "pending_event": {"type": "advance_action", "actor": "xinyue"},
+            "event_log": [
+                {"day": 1, "action": "reward", "action_label": "昨日奖励"},
+                {
+                    "day": 2,
+                    "action": "feeding",
+                    "action_label": "喂食",
+                    "feeding": {"source": "cook", "additive": "none", "disclosed": "hidden", "water": "glass"},
+                    "action_response": {"response_label": "接受"},
+                },
+                {
+                    "day": 2,
+                    "action": "training",
+                    "action_label": "服从调教",
+                    "training_contents": ["obedience_commands"],
+                    "modifiers": ["sex"],
+                    "tools": ["collar"],
+                },
+            ],
+        },
+    }
+    sync_text = game_tools._captivity_simulator_sync_text(payload, mode="state_update")
+    _assert("今日已完成：" in sync_text, "sync prompt should contain a same-game-day completed summary")
+    _assert("自己做" in sync_text and "不加料" in sync_text and "隐瞒" in sync_text and "一杯水" in sync_text, "feeding summary should preserve all selected facts")
+    _assert("口令服从" in sync_text and "附加性行为" in sync_text and "项圈" in sync_text, "training summary should preserve content, modifier and tool")
+    _assert("昨日奖励" not in sync_text, "same-game-day summary must not include the previous game day")
+    compact = chat._compact_captivity_simulator_event_text(sync_text)
+    _assert("今日已完成：" in compact and "喂食" in compact and "服从调教" in compact, "last4 summary should retain same-day completed events")
 
 
 def test_captivity_simulator_sync_route_pending_semantics() -> None:
@@ -3145,7 +3255,7 @@ def test_captivity_simulator_scene_copy_and_transition_contract() -> None:
 if __name__ == "__main__":
     _disable_shared_activity_clock_writes()
     test_captivity_simulator_new_game_views()
-    test_captivity_simulator_history_is_complete_and_date_filterable()
+    test_captivity_simulator_history_is_complete_and_day_collapsible()
     test_captivity_simulator_captured_by_du_event_loop()
     test_captivity_simulator_capture_du_manual_advance_loop()
     test_captivity_simulator_night_monitor_view_filtering()
@@ -3177,8 +3287,9 @@ if __name__ == "__main__":
     test_captivity_simulator_reply_commands_apply_to_runtime()
     test_captivity_simulator_public_api_returns_only_local_view()
     test_captivity_simulator_sync_activity_policy()
-    test_captivity_simulator_wakeup_uses_dynamic_system_and_skips_body_delta()
+    test_captivity_simulator_wakeup_separates_dynamic_system_and_game_channel_user()
     test_captivity_simulator_archive_compaction()
+    test_captivity_simulator_today_completed_summary_enters_last4()
     test_captivity_simulator_sync_route_pending_semantics()
     test_captivity_simulator_sync_day_plan_uses_one_du_reply()
     test_captivity_simulator_sync_route_redacts_du_night_action()

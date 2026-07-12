@@ -697,6 +697,7 @@ def _compact_captivity_simulator_event_text(text: str) -> str:
     day = _regex_group(r"进度[:：]第\s*(\d+)\s*/\s*30", text)
     phase = _regex_group(r"进度[:：]第\s*\d+\s*/\s*30\s*天[，,]\s*([^，,\n]+)", text)
     pending = _regex_group(r"待处理[:：]([^\n]{1,160})", text)
+    today_completed = _regex_group(r"今日已完成[:：]([^\n]{1,500})", text)
     message = _regex_group(
         r"小玥刚刚在局内说[:：]([\s\S]*?)(?:\n\n当前游戏状态[:：]|\n当前游戏状态[:：]|$)",
         text,
@@ -708,6 +709,8 @@ def _compact_captivity_simulator_event_text(text: str) -> str:
         bits.append(_compact_archive_line(phase, 40))
     if pending:
         bits.append(f"待处理：{_compact_archive_line(pending, 120)}")
+    if today_completed:
+        bits.append(f"今日已完成：{_compact_archive_line(today_completed, 220)}")
     if message:
         bits.append(f"局内说明：{_compact_archive_line(message, 120)}")
     suffix = "，".join(bits)
@@ -746,6 +749,19 @@ def _compact_captivity_simulator_assistant_for_archive(assistant_msg: dict) -> d
         if key in assistant_msg:
             compacted[key] = assistant_msg[key]
     return compacted
+
+
+def _captivity_simulator_channel_player_text(user_msg: dict | None) -> str:
+    text = _plain_message_text(user_msg)
+    prefix = "（囚禁模拟器频道）"
+    if not text.startswith(prefix):
+        return ""
+    content = text[len(prefix):].strip()
+    if not content or content.startswith("系统正在推进当前事件"):
+        return ""
+    if content.startswith("小玥："):
+        content = content[len("小玥："):].strip()
+    return _clip_archive_text(content, 220)
 
 
 def _wakeup_kind_for_archive() -> str:
@@ -909,6 +925,22 @@ def _build_round_cleaned_for_archive(
             event_msg = _gateway_event_source_for_archive(request_messages, wakeup_kind=wakeup_kind)
             archive_user = _compact_gateway_event_for_archive(event_msg or archive_user or user_msg, wakeup_kind=wakeup_kind)
             if wakeup_kind == "captivity_simulator":
+                game_summary = str(archive_user.get("content") or "").strip()
+                player_text = _captivity_simulator_channel_player_text(user_msg)
+                if not player_text:
+                    for request_msg in reversed(request_messages or []):
+                        if isinstance(request_msg, dict) and str(request_msg.get("role") or "").strip().lower() == "user":
+                            player_text = _captivity_simulator_channel_player_text(request_msg)
+                            if player_text:
+                                break
+                if player_text:
+                    archive_user = {
+                        "role": "user",
+                        "content": (
+                            f"（囚禁模拟器频道）\n小玥：{player_text}\n\n"
+                            f"（游戏状态摘要）\n{game_summary}"
+                        ),
+                    }
                 archive_assistant = _compact_captivity_simulator_assistant_for_archive(assistant_msg)
     return build_round_cleaned_for_r2(archive_user, archive_assistant)
 
