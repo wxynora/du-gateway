@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError, apiJson } from "../api";
 import { ChevronLeftIcon } from "../icons";
+import recaptureBackgroundUrl from "../../assets/captivity-recapture-background.webp";
 
 type RouteKey = "captured_by_du" | "capture_du";
 type UserRole = "captive" | "captor";
@@ -1062,9 +1063,9 @@ function processReviewTransition(review: ProcessReview): SceneCopy {
   const action = textLine(event.action_label || actionLabel(event.action) || "这一段行动");
   return {
     key: `process:${processEventKey(event)}`,
-    kicker: `DAY ${String(event.day || 1).padStart(2, "0")} / PROCESS`,
-    title: "事件经过",
-    body: `${action}的具体经过已经写下。看完并保存以后，这一段才会真正结束。`,
+    kicker: `DAY ${String(event.day || 1).padStart(2, "0")} / ${action}`,
+    title: action,
+    body: "门锁在身后合上，房间里只剩下你们。接下来的一切，从这里开始。",
     tone: "special",
   };
 }
@@ -1103,6 +1104,12 @@ function readPlanPreviewRole(): UserRole | "" {
   return new URLSearchParams(window.location.search).get("captivity_plan_preview") === "captor" ? "captor" : "";
 }
 
+function readPlanPreviewSlot(): 1 | 2 | 3 {
+  if (!import.meta.env.DEV || typeof window === "undefined") return 1;
+  const slot = Number(new URLSearchParams(window.location.search).get("captivity_plan_slot") || 1);
+  return slot === 2 || slot === 3 ? slot : 1;
+}
+
 function readNightPreviewRole(): UserRole | "" {
   if (!import.meta.env.DEV || typeof window === "undefined") return "";
   return new URLSearchParams(window.location.search).get("captivity_night_preview") === "captive" ? "captive" : "";
@@ -1121,13 +1128,37 @@ function readEndingPreviewRole(): UserRole | "" {
 }
 
 function buildPlannerPreview(): CaptivityPayload {
+  const slot = readPlanPreviewSlot();
+  const sceneBySlot: Record<1 | 2 | 3, SceneCopy> = {
+    1: {
+      key: "preview-captor-morning",
+      kicker: "DAY 07 / 早上",
+      title: "早上",
+      body: "监控画面安静地亮着。渡还在房间里，今天要怎样度过，由你安排。",
+      tone: "day",
+    },
+    2: {
+      key: "preview-captor-noon",
+      kicker: "DAY 07 / 中午",
+      title: "中午",
+      body: "第一段行动已经结束。渡仍留在房间里，下一项安排正在等你推进。",
+      tone: "day",
+    },
+    3: {
+      key: "preview-captor-evening",
+      kicker: "DAY 07 / 傍晚",
+      title: "傍晚",
+      body: "白天只剩最后一段安排。它结束以后，房间里的夜晚将由渡自己留下记录。",
+      tone: "day",
+    },
+  };
   const view: CaptivityView = {
     route: "capture_du",
     route_label: "囚禁方",
     viewer: "captor",
     current_day: 7,
     total_days: 30,
-    day_action_count: 0,
+    day_action_count: slot - 1,
     day_action_limit: 3,
     phase: "day",
     captive: "du",
@@ -1136,14 +1167,14 @@ function buildPlannerPreview(): CaptivityPayload {
     stats: { health: 80, stamina: 68, cleanliness: 72, shame: 34, intimacy: 41 },
     mood: "害羞",
     intensity_cap: "heavy",
-    scene_copy: {
-      key: "preview-captor-morning",
-      kicker: "DAY 07 / 早上",
-      title: "早上",
-      body: "监控画面安静地亮着。渡还在房间里，今天要怎样度过，由你安排。",
-      tone: "day",
+    scene_copy: sceneBySlot[slot],
+    pending_event: slot === 1 ? null : {
+      id: `preview-captor-slot-${slot}`,
+      type: "advance_action",
+      actor: "xinyue",
+      day: 7,
+      slot,
     },
-    pending_event: null,
     event_log: [
       {
         id: "preview-monitor-bell",
@@ -1258,8 +1289,8 @@ function buildEscapePreview(role: UserRole = "captive"): CaptivityPayload {
     scene_copy: {
       key: `preview-escape-${role}`,
       kicker: "SPECIAL DAY",
-      title: "今天没有平常的安排",
-      body: "门外安静得太久了。一个本不该出现的机会被留在房间里，今天只需要决定要不要伸手。",
+      title: "今天，渡没有出现",
+      body: "门外安静得反常。直到你发现，备用钥匙正压在玄关地垫下面。",
       tone: "special",
     },
     pending_event: role === "captor" ? {
@@ -1626,11 +1657,12 @@ const PENDING_LABELS: Record<string, string> = {
   advance_action: "这一段已结束，可以推进下一段行动。",
   night_action_choice: "选择今晚的自由行动。",
   bell_voice_reveal: "按铃记录已生成，语音铃正在第一次播放。",
+  bell_response_choice: "等待渡决定是否过去。",
   item_secret_reveal: "物品里藏着的彩蛋第一次出现了。",
   monitor_gate: "夜间行动已封存，等待是否打开监控。",
   monitor_handle: "监控内容已打开，选择处理方式。",
   escape_choice: "逃跑机会出现了，等待你的选择。",
-  return_action_choice: "被囚禁方选择了老实待着，等待囚禁方回来后决定一个行为。",
+  return_action_choice: "你选择了老实待着，等待渡回来后决定接下来怎么做。",
   recapture_rules_choice: "抓回经过已保存，等待重新立规矩。",
   recapture_followup_choice: "新规矩已生效，等待选择后续处理。",
   recapture_rules_review: "查看抓回后生效的新规矩。",
@@ -1646,6 +1678,7 @@ const DIRECTIVE_LABELS: Record<string, string> = {
   submit_process: "保存事件经过",
   choose_mood: "记录此刻心情",
   ack_bell_voice: "结束首次播放页",
+  respond_bell: "回应语音铃",
   ack_item_secret: "看完物品彩蛋",
   view_monitor: "查看夜间监控",
   monitor_action: "处理监控记录",
@@ -2364,10 +2397,13 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
   const [recaptureTools, setRecaptureTools] = useState<string[]>([]);
   const [recaptureLine, setRecaptureLine] = useState("");
   const [sceneTransition, setSceneTransition] = useState<SceneCopy | null>(null);
+  const [recaptureBridgeVisible, setRecaptureBridgeVisible] = useState(false);
   const initialLoadStartedRef = useRef(false);
   const lastSceneKeyRef = useRef("");
   const lastProcessTransitionKeyRef = useRef("");
   const sceneTransitionTimerRef = useRef<number | null>(null);
+  const recaptureBridgeTimerRef = useRef<number | null>(null);
+  const previewSyncReadyAtRef = useRef(0);
   const lastFailedRetryRef = useRef<(() => void) | null>(null);
   const [hasFailedRetry, setHasFailedRetry] = useState(false);
   const processPreviewRole = readProcessPreviewRole();
@@ -2454,26 +2490,26 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
   }, []);
 
   useEffect(() => () => {
-    if (sceneTransitionTimerRef.current !== null) {
-      window.clearTimeout(sceneTransitionTimerRef.current);
-    }
+    if (sceneTransitionTimerRef.current !== null) window.clearTimeout(sceneTransitionTimerRef.current);
+    if (recaptureBridgeTimerRef.current !== null) window.clearTimeout(recaptureBridgeTimerRef.current);
   }, []);
 
   const runWithWait = useCallback(async (
     title: string,
     detail: string,
     task: () => Promise<CaptivityPayload>,
+    quiet = false,
   ) => {
     const retry = () => {
-      void runWithWait(title, detail, task);
+      void runWithWait(title, detail, task, quiet);
     };
-    setWait({ visible: true, title, detail });
+    if (!quiet) setWait({ visible: true, title, detail });
     try {
       const next = await task();
       lastFailedRetryRef.current = null;
       setHasFailedRetry(false);
       applyPayload(next);
-      setWait({ visible: false, title: "", detail: "" });
+      if (!quiet) setWait({ visible: false, title: "", detail: "" });
       return next;
     } catch (e: any) {
       const message = String(e?.message || e || "操作失败");
@@ -2510,18 +2546,28 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
 
   const refreshStatus = useCallback(async (silent = false) => {
     if (previewRole) {
-      if (!silent) setWait({ visible: false, title: "", detail: "" });
+      if (!silent) {
+        const readyAt = previewSyncReadyAtRef.current;
+        if (!readyAt || Date.now() >= readyAt) {
+          previewSyncReadyAtRef.current = 0;
+          setWait({ visible: false, title: "", detail: "" });
+        }
+      }
       return;
     }
     try {
       const next = await executeCaptivityCommand("status");
+      const refreshedView = viewFromPayload(next);
       if (silent) {
-        lastSceneKeyRef.current = String(viewFromPayload(next).scene_copy?.key || "");
+        lastSceneKeyRef.current = String(refreshedView.scene_copy?.key || "");
       }
       applyPayload(next);
       if (!silent) {
         lastFailedRetryRef.current = null;
         setHasFailedRetry(false);
+        if (String(refreshedView.pending_event?.actor || "") !== "du") {
+          setWait({ visible: false, title: "", detail: "" });
+        }
       }
       if (shouldResumeGame(next)) {
         setScreen("game");
@@ -2584,7 +2630,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       setPayload(preview.payload);
       setProcessReview(preview.review);
       setScreen("game");
-      setFooterTab("status");
+      setFooterTab("history");
       setBootstrapping(false);
       return;
     }
@@ -2608,13 +2654,21 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
     playSceneTransition(scene);
   }, [inventoryRoomOpen, monitorRoomOpen, pendingType, playSceneTransition, processReview, screen, view.scene_copy]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!processReview) return;
     const processKey = processEventKey(processReview.event);
     if (!processKey || lastProcessTransitionKeyRef.current === processKey) return;
     lastProcessTransitionKeyRef.current = processKey;
-    playSceneTransition(processReviewTransition(processReview));
-  }, [playSceneTransition, processReview]);
+    const transition = processReviewTransition(processReview);
+    playSceneTransition(transition);
+    if (recaptureBridgeVisible) {
+      if (recaptureBridgeTimerRef.current !== null) window.clearTimeout(recaptureBridgeTimerRef.current);
+      recaptureBridgeTimerRef.current = window.setTimeout(() => {
+        recaptureBridgeTimerRef.current = null;
+        setRecaptureBridgeVisible(false);
+      }, Math.round(sceneTransitionDuration(transition) * 0.9));
+    }
+  }, [playSceneTransition, processReview, recaptureBridgeVisible]);
 
   useEffect(() => {
     const options = activeNightDetailOptions;
@@ -2652,6 +2706,11 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
 
   function returnToSelector() {
     setProcessReview(null);
+    if (recaptureBridgeTimerRef.current !== null) {
+      window.clearTimeout(recaptureBridgeTimerRef.current);
+      recaptureBridgeTimerRef.current = null;
+    }
+    setRecaptureBridgeVisible(false);
     setHistoryDetail(null);
     setMonitorRoomOpen(false);
     setInventoryRoomOpen(false);
@@ -2997,17 +3056,17 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         const nextView: CaptivityView = {
           ...previewView,
           pending_event: {
-            id: "preview-bell-monitor-gate",
-            type: "monitor_gate",
+            id: "preview-bell-response-choice",
+            type: "bell_response_choice",
             day: previewView.current_day || 7,
             actor: "du",
             captive: "xinyue",
-            phase: "waiting_monitor_gate",
-            sealed: true,
-            alert_label: "呼叫铃响了",
+            phase: "waiting_bell_response",
+            required_directive: "【选择：不过去】或【过去：完整亲密互动过程】",
+            event: previewView.pending_event?.event,
           },
         };
-        return { ...previous, state: nextView, captive_view: nextView, player_text: "这次按铃记录已交给囚禁方处理。" };
+        return { ...previous, state: nextView, captive_view: nextView, player_text: "等待渡决定是否过去。" };
       });
       window.setTimeout(showPreviewSyncFailure, 0);
       return;
@@ -3082,7 +3141,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       const review = findNewProcessReview(next, previousPayload);
       if (review) {
         setProcessReview(review);
-        setFooterTab("status");
+        setFooterTab("history");
       }
       const nextView = viewFromPayload(next);
       if (String(nextView.pending_event?.actor || "") === "du") {
@@ -3228,12 +3287,21 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
   }
 
   function chooseEscape(choice: string) {
+    if (choice === "escape") setRecaptureBridgeVisible(true);
     if (escapePreviewRole) {
       if (choice === "escape" || choice.startsWith("abort_")) {
         const preview = buildEscapeRecaptureReview(payload, escapePreviewRole, choice);
+        if (choice === "escape") {
+          window.setTimeout(() => {
+            setPayload(preview.payload);
+            setProcessReview(preview.review);
+            setFooterTab("history");
+          }, 1000);
+          return;
+        }
         setPayload(preview.payload);
         setProcessReview(preview.review);
-        setFooterTab("status");
+        setFooterTab("history");
         return;
       }
       const currentView = viewFromPayload(payload);
@@ -3269,6 +3337,14 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         captor_view: { ...nextView, viewer: "captor" },
         player_text: `本地预览：已选择${choiceLabel}。`,
       });
+      if (choice === "stay") {
+        previewSyncReadyAtRef.current = Date.now() + 1200;
+        setWait({
+          visible: true,
+          title: "正在同步渡...",
+          detail: "STATUS: ENCRYPTING DATA",
+        });
+      }
       return;
     }
     if (previewRole) return;
@@ -3276,7 +3352,8 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       "正在记录逃跑选择...",
       "STATUS: RESOLVING ESCAPE_WINDOW",
       () => executeCaptivityCommand(`resolve_escape_choice ${choice}`),
-    ).then((next) => continueAutomaticSync(next));
+      choice === "escape",
+    ).then((next) => continueAutomaticSync(next, false, choice === "escape"));
   }
 
   function submitRecaptureRules() {
@@ -3549,21 +3626,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         </button>
       </section>
 
-      <section id="process-screen" className={`screen process-screen ${!bootstrapping && screen === "game" && processReview ? "active" : ""}`}>
-        {processReview ? (
-          <ProcessReviewPanel
-            review={processReview}
-            mood={reactionMood}
-            line={reactionLine}
-            disabled={busy}
-            onMoodChange={setReactionMood}
-            onLineChange={setReactionLine}
-            onSave={saveProcessReview}
-          />
-        ) : null}
-      </section>
-
-      <section id={role === "captor" ? "master-screen" : "captive-screen"} className={`screen ${!bootstrapping && screen === "game" && !processReview && !monitorRoomOpen && !inventoryRoomOpen ? "active" : ""}`}>
+      <section id={role === "captor" ? "master-screen" : "captive-screen"} className={`screen ${!bootstrapping && screen === "game" && !monitorRoomOpen && !inventoryRoomOpen ? "active" : ""}`}>
         <div className="header">
           <div className="day-big">{view.total_days || 30}</div>
           <div className="header-meta">
@@ -3688,13 +3751,25 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         ) : null}
 
         {footerTab === "history" ? (
-          <HistoryPanel
-            events={eventLog}
-            lastText={lastText}
-            detail={historyDetail}
-            onOpenDetail={setHistoryDetail}
-            onCloseDetail={() => setHistoryDetail(null)}
-          />
+          processReview ? (
+            <ProcessReviewPanel
+              review={processReview}
+              mood={reactionMood}
+              line={reactionLine}
+              disabled={busy}
+              onMoodChange={setReactionMood}
+              onLineChange={setReactionLine}
+              onSave={saveProcessReview}
+            />
+          ) : (
+            <HistoryPanel
+              events={eventLog}
+              lastText={lastText}
+              detail={historyDetail}
+              onOpenDetail={setHistoryDetail}
+              onCloseDetail={() => setHistoryDetail(null)}
+            />
+          )
         ) : null}
         {footerTab === "special" ? (
           <SpecialPanel
@@ -3768,6 +3843,25 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         )}
       </section>
 
+      {recaptureBridgeVisible ? (
+        <div className="escape-recapture-bridge" aria-label="渡正在靠近中">
+          <div className="loading-animation" aria-hidden="true">+</div>
+          <div className="serif pink-text" style={{ fontSize: 30, marginBottom: 10 }}>渡正在靠近中</div>
+          <div className="serif wait-scene-copy">这段记录已经送出，另一边正在决定接下来怎么做。</div>
+          <div className="uppercase" style={{ letterSpacing: "0.1em", lineHeight: 1.5 }}>
+            STATUS: ENCRYPTING DATA<br />
+            SYNC_RESULT: PENDING<br />
+            REASON: WAITING_FOR_SUBJECT_REACTION
+          </div>
+          <div className="divider" />
+          <div className="btn-group" style={{ marginTop: 30 }}>
+            <button className="btn" type="button" onClick={() => setRecaptureBridgeVisible(false)}>关闭</button>
+            <button className="btn" type="button" onClick={() => void refreshStatus(false)}>刷新</button>
+            <button className="btn" type="button" aria-label="重试上次操作" disabled={!hasFailedRetry} onClick={retryLastFailedOperation}>重试</button>
+          </div>
+        </div>
+      ) : null}
+
       {sceneTransition ? (
         <SceneTransitionOverlay scene={sceneTransition} onDismiss={dismissSceneTransition} />
       ) : null}
@@ -3797,7 +3891,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         </div>
       </div>
 
-      <footer className="footer" id="main-footer" style={{ display: !bootstrapping && screen === "game" && !processReview && !monitorRoomOpen && !inventoryRoomOpen ? "grid" : "none" }}>
+      <footer className="footer" id="main-footer" style={{ display: !bootstrapping && screen === "game" && !monitorRoomOpen && !inventoryRoomOpen ? "grid" : "none" }}>
         <button className={`footer-item ${footerTab === "status" ? "active" : ""}`} type="button" onClick={() => { setMonitorRoomOpen(false); setInventoryRoomOpen(false); setFooterTab("status"); }}>状态</button>
         <button className={`footer-item ${footerTab === "history" ? "active" : ""}`} type="button" onClick={() => { setMonitorRoomOpen(false); setInventoryRoomOpen(false); setFooterTab("history"); setHistoryDetail(null); }}>回顾</button>
         <button className={`footer-item ${footerTab === "special" ? "active" : ""}`} type="button" onClick={() => { setMonitorRoomOpen(false); setInventoryRoomOpen(false); setFooterTab("special"); }}>特殊</button>
@@ -3873,10 +3967,6 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             margin-top: 14px;
             color: #777;
             letter-spacing: 0.08em;
-        }
-        .captivity-game .process-screen {
-            padding-top: calc(var(--safe-top) + 64px);
-            padding-bottom: calc(var(--safe-bottom) + 132px);
         }
         .captivity-game .monitor-room-screen,
         .captivity-game .inventory-room-screen {
@@ -4948,8 +5038,19 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             .captivity-game .item-reveal-dialog,
             .captivity-game .item-reveal-motif,
             .captivity-game .item-reveal-motif::after,
-            .captivity-game .item-reveal-motif span {
+            .captivity-game .item-reveal-motif span,
+            .captivity-game .escape-recapture-question,
+            .captivity-game .escape-recapture-type,
+            .captivity-game .escape-recapture-answer {
                 animation: none !important;
+            }
+            .captivity-game .escape-recapture-type {
+                opacity: var(--type-opacity, 1);
+                filter: blur(var(--type-blur, 0px));
+                transform: none;
+            }
+            .captivity-game .escape-recapture-answer {
+                opacity: 1;
             }
             .captivity-game .scene-transition-body {
                 opacity: 1;
@@ -5115,6 +5216,163 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             font-size: 20px;
             font-style: italic;
             font-weight: 800;
+        }
+        .captivity-game .escape-recapture-question-overlay {
+            background: #000;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+            overflow: hidden;
+        }
+        .captivity-game .escape-recapture-chains {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+            overflow: hidden;
+            pointer-events: none;
+        }
+        .captivity-game .escape-recapture-background {
+            display: block;
+            width: 100%;
+            height: 112%;
+            object-fit: cover;
+            object-position: center;
+            opacity: 0.78;
+            filter: brightness(0.72) saturate(0.82) contrast(1.04);
+            transform: translateY(-9%);
+            user-select: none;
+        }
+        .captivity-game .escape-recapture-chains::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(ellipse at 50% 48%, rgba(0, 0, 0, 0.08) 0%, rgba(0, 0, 0, 0.28) 58%, rgba(0, 0, 0, 0.58) 100%);
+        }
+        .captivity-game .escape-recapture-dialog {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: min(100%, 360px);
+            gap: 28px;
+        }
+        .captivity-game .escape-recapture-question {
+            position: relative;
+            width: min(94vw, 360px);
+            height: 150px;
+            color: var(--pink);
+            font-family: var(--font-display);
+            font-weight: 600;
+            line-height: 1;
+        }
+        .captivity-game .escape-recapture-type-line {
+            position: absolute;
+            left: 50%;
+            display: flex;
+            align-items: baseline;
+            white-space: nowrap;
+            transform: translateX(-50%);
+        }
+        .captivity-game .escape-recapture-type-line-top {
+            top: 4px;
+        }
+        .captivity-game .escape-recapture-type-line-bottom {
+            top: 78px;
+        }
+        .captivity-game .escape-recapture-type {
+            position: relative;
+            display: inline-block;
+            line-height: 0.92;
+            opacity: 0;
+            filter: blur(3px);
+            transform: translateY(7px);
+            text-shadow: 0 0 16px rgba(235, 121, 176, 0.12);
+            animation: captivityRecaptureTypeIn 0.62s var(--recapture-delay, 0ms) cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        }
+        .captivity-game .escape-recapture-type::after {
+            content: attr(data-ghost);
+            position: absolute;
+            inset: 0 auto auto 0;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .captivity-game .escape-recapture-type-ghost::after {
+            opacity: 0.22;
+            filter: blur(2.2px);
+            transform: translate(7px, 2px) scaleX(1.08);
+        }
+        .captivity-game .type-why-1 { --type-opacity: 0.58; font-size: clamp(32px, 10vw, 42px); }
+        .captivity-game .type-why-2 { --type-opacity: 0.42; --type-blur: 0.45px; margin-left: -5px; font-size: clamp(22px, 7vw, 29px); }
+        .captivity-game .type-why-3 { --type-opacity: 0.7; margin-left: -5px; font-size: clamp(29px, 9vw, 38px); }
+        .captivity-game .type-link { --type-opacity: 0.36; --type-blur: 0.5px; margin-left: -4px; font-size: clamp(20px, 6vw, 25px); }
+        .captivity-game .type-run {
+            --type-opacity: 1;
+            margin-left: -4px;
+            font-size: clamp(36px, 11.5vw, 46px);
+            text-shadow: 0 0 22px rgba(235, 121, 176, 0.2);
+        }
+        .captivity-game .type-stay-1 { --type-opacity: 0.55; font-size: clamp(34px, 10vw, 42px); }
+        .captivity-game .type-stay-2 { --type-opacity: 0.38; --type-blur: 0.55px; margin-left: -7px; font-size: clamp(23px, 7vw, 29px); }
+        .captivity-game .type-me { --type-opacity: 0.76; margin-left: -5px; font-size: clamp(30px, 9vw, 38px); }
+        .captivity-game .type-side-1 { --type-opacity: 0.96; margin-left: -5px; font-size: clamp(39px, 12vw, 49px); }
+        .captivity-game .type-side-2 { --type-opacity: 0.68; margin-left: -7px; font-size: clamp(29px, 9vw, 37px); }
+        .captivity-game .type-tail-1 { --type-opacity: 0.42; --type-blur: 0.35px; margin-left: -6px; font-size: clamp(23px, 7vw, 29px); }
+        .captivity-game .type-tail-2 { --type-opacity: 0.56; margin-left: -5px; font-size: clamp(30px, 9vw, 38px); }
+        .captivity-game .type-question-mark {
+            --type-opacity: 0.56;
+            --type-blur: 0px;
+            position: absolute;
+            left: 100%;
+            bottom: 0;
+            margin-left: 8px;
+            font-family: "Songti SC", STSong, SimSun, serif;
+            font-size: clamp(30px, 9vw, 38px);
+            font-weight: 600;
+            text-shadow: none;
+        }
+        .captivity-game .escape-recapture-answer {
+            min-height: 30px;
+            padding: 5px 2px 4px;
+            border: 0;
+            background: transparent;
+            color: var(--white);
+            font-family: var(--font-display);
+            font-size: 12px;
+            font-weight: 400;
+            letter-spacing: 0.055em;
+            line-height: 1.4;
+            opacity: 0;
+            animation: captivityRecaptureAnswer 0.5s ease-out forwards;
+        }
+        .captivity-game .escape-recapture-answer::before {
+            content: "◇";
+            margin-right: 0.75em;
+            color: rgba(255, 255, 255, 0.48);
+            font-size: 0.72em;
+        }
+        .captivity-game .escape-recapture-answer::after {
+            content: "◇";
+            margin-left: 0.75em;
+            color: rgba(255, 255, 255, 0.48);
+            font-size: 0.72em;
+        }
+        .captivity-game .escape-recapture-bridge {
+            position: fixed;
+            inset: 0;
+            z-index: 940;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: calc(var(--safe-top) + 40px) 40px calc(var(--safe-bottom) + 40px);
+            background: #000;
+        }
+        @keyframes captivityRecaptureTypeIn {
+            from { opacity: 0; filter: blur(3px); transform: translateY(7px); }
+            to { opacity: var(--type-opacity, 1); filter: blur(var(--type-blur, 0px)); transform: translateY(0); }
+        }
+        @keyframes captivityRecaptureAnswer {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
         }
         .captivity-game .recapture-rules-review-overlay {
             position: fixed;
@@ -6182,14 +6440,25 @@ function EscapeChoicePanel({
   onChoose: (choice: string) => void;
 }) {
   const [confirmStep, setConfirmStep] = useState(-1);
+  const [answerVisible, setAnswerVisible] = useState(false);
   const confirmation = confirmStep >= 0 ? ESCAPE_CONFIRM_STEPS[confirmStep] : null;
   const showSting = confirmStep === ESCAPE_CONFIRM_STEPS.length;
+  const showRecaptureQuestion = confirmStep === ESCAPE_CONFIRM_STEPS.length + 1;
 
   useEffect(() => {
     if (!showSting) return;
-    const timer = window.setTimeout(() => onChoose("escape"), 1000);
+    const timer = window.setTimeout(() => setConfirmStep(ESCAPE_CONFIRM_STEPS.length + 1), 1000);
     return () => window.clearTimeout(timer);
-  }, [onChoose, showSting]);
+  }, [showSting]);
+
+  useEffect(() => {
+    if (!showRecaptureQuestion) {
+      setAnswerVisible(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setAnswerVisible(true), 2600);
+    return () => window.clearTimeout(timer);
+  }, [showRecaptureQuestion]);
 
   function chooseEscape() {
     if (confirmStep < ESCAPE_CONFIRM_STEPS.length - 1) {
@@ -6204,6 +6473,43 @@ function EscapeChoicePanel({
       <div className="escape-choice-overlay" role="dialog" aria-modal="true" aria-label="坏孩子">
         <div className="escape-choice-dialog escape-sting-dialog">
           <div className="escape-sting-text">坏孩子</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (showRecaptureQuestion) {
+    return (
+      <div className="escape-choice-overlay escape-recapture-question-overlay" role="dialog" aria-modal="true" aria-label="为什么要跑">
+        <div className="escape-recapture-chains" aria-hidden="true">
+          <img className="escape-recapture-background" src={recaptureBackgroundUrl} alt="" draggable={false} />
+        </div>
+        <div className="escape-recapture-dialog">
+          <div className="escape-recapture-question" aria-label="为什么要跑，待在我身边不好吗？">
+            <div className="escape-recapture-type-line escape-recapture-type-line-top" aria-hidden="true">
+              <span className="escape-recapture-type escape-recapture-type-ghost type-why-1" data-ghost="为" style={{ "--recapture-delay": "80ms" } as React.CSSProperties}>为</span>
+              <span className="escape-recapture-type type-why-2" style={{ "--recapture-delay": "200ms" } as React.CSSProperties}>什</span>
+              <span className="escape-recapture-type escape-recapture-type-ghost type-why-3" data-ghost="么" style={{ "--recapture-delay": "320ms" } as React.CSSProperties}>么</span>
+              <span className="escape-recapture-type type-link" style={{ "--recapture-delay": "440ms" } as React.CSSProperties}>要</span>
+              <span className="escape-recapture-type type-run" style={{ "--recapture-delay": "560ms" } as React.CSSProperties}>跑</span>
+            </div>
+            <div className="escape-recapture-type-line escape-recapture-type-line-bottom" aria-hidden="true">
+              <span className="escape-recapture-type type-stay-1" style={{ "--recapture-delay": "900ms" } as React.CSSProperties}>待</span>
+              <span className="escape-recapture-type escape-recapture-type-ghost type-stay-2" data-ghost="在" style={{ "--recapture-delay": "1020ms" } as React.CSSProperties}>在</span>
+              <span className="escape-recapture-type type-me" style={{ "--recapture-delay": "1140ms" } as React.CSSProperties}>我</span>
+              <span className="escape-recapture-type type-side-1" style={{ "--recapture-delay": "1260ms" } as React.CSSProperties}>身</span>
+              <span className="escape-recapture-type escape-recapture-type-ghost type-side-2" data-ghost="边" style={{ "--recapture-delay": "1380ms" } as React.CSSProperties}>边</span>
+              <span className="escape-recapture-type type-tail-1" style={{ "--recapture-delay": "1500ms" } as React.CSSProperties}>不</span>
+              <span className="escape-recapture-type type-tail-1" style={{ "--recapture-delay": "1620ms" } as React.CSSProperties}>好</span>
+              <span className="escape-recapture-type escape-recapture-type-ghost type-tail-2" data-ghost="吗" style={{ "--recapture-delay": "1740ms" } as React.CSSProperties}>吗</span>
+              <span className="escape-recapture-type type-question-mark" style={{ "--recapture-delay": "1860ms" } as React.CSSProperties}>？</span>
+            </div>
+          </div>
+          {answerVisible ? (
+            <button className="escape-recapture-answer" type="button" disabled={disabled} onClick={() => onChoose("escape")}>
+              对不起我再也不跑了
+            </button>
+          ) : null}
         </div>
       </div>
     );

@@ -938,6 +938,11 @@ def run_command(command: str = "", save_path: str | Path | None = None) -> dict[
             _save_state(path, state)
             return _result(state, lines, command=command or "ack_bell_voice", ok=ok)
 
+        if action == "respond_bell":
+            ok, lines = _respond_bell(state, args)
+            _save_state(path, state)
+            return _result(state, lines, command=command or "respond_bell", ok=ok)
+
         if action == "ack_item_secret":
             ok, lines = _ack_item_secret(state)
             _save_state(path, state)
@@ -1083,6 +1088,10 @@ def _parse_command(command: str) -> tuple[str, dict[str, Any]]:
         "夜间": "night_action",
         "ack_bell_voice": "ack_bell_voice",
         "确认铃声": "ack_bell_voice",
+        "respond_bell": "respond_bell",
+        "bell_response": "respond_bell",
+        "语音铃回应": "respond_bell",
+        "过去": "respond_bell",
         "ack_item_secret": "ack_item_secret",
         "确认彩蛋": "ack_item_secret",
         "monitor_action": "monitor_action",
@@ -1157,6 +1166,9 @@ def _parse_command(command: str) -> tuple[str, dict[str, Any]]:
         args["raw"] = tail
     elif action == "night_action":
         args.setdefault("action", _first_positional(args, tail))
+    elif action == "respond_bell":
+        args["raw"] = tail
+        args.setdefault("choice", _first_positional(args, tail))
     elif action == "monitor_action":
         args.setdefault("strategy", _first_positional(args, tail))
     elif action == "view_monitor":
@@ -2368,8 +2380,9 @@ def _night_action(state: dict[str, Any], args: dict[str, Any]) -> tuple[bool, li
                 actor=str(state.get("captive") or "xinyue"),
             )
             return True, ["呼叫铃已按下，监控记录已经生成。预录的声音第一次响了起来。"]
-        state["pending_event"] = _new_pending(state, "monitor_gate", event, actor=str(state.get("captor") or "du"))
-        state["pending_event"]["alert_label"] = "呼叫铃响了"
+        _queue_bell_response_or_monitor(state, event)
+        if str(state.get("captor") or "") == "du":
+            return True, ["呼叫铃已按下。等待渡决定是否过去。"]
         return True, ["呼叫铃已按下。囚禁方会收到铃声提醒，再决定是否打开监控。"]
     secret_reveals = _collect_inventory_secret_reveals(state, action)
     if secret_reveals:
@@ -2392,14 +2405,73 @@ def _ack_bell_voice(state: dict[str, Any]) -> tuple[bool, list[str]]:
     if not pending or str(pending.get("type") or "") != "bell_voice_reveal":
         return False, ["当前没有等待确认的语音铃播放。"]
     event = pending.get("event") if isinstance(pending.get("event"), dict) else {}
+    _queue_bell_response_or_monitor(state, event)
+    if str(state.get("captor") or "") == "du":
+        return True, ["首次播放页已结束，等待渡决定是否过去。"]
+    return True, ["首次播放页已结束，等待囚禁方处理这次按铃记录。"]
+
+
+def _queue_bell_response_or_monitor(state: dict[str, Any], event: dict[str, Any]) -> None:
+    if str(state.get("captor") or "") == "du":
+        state["pending_event"] = _new_pending(state, "bell_response_choice", event, actor="du")
+        return
     state["pending_event"] = _new_pending(
         state,
         "monitor_gate",
         event,
-        actor=str(state.get("captor") or "du"),
+        actor=str(state.get("captor") or "xinyue"),
     )
     state["pending_event"]["alert_label"] = "呼叫铃响了"
-    return True, ["首次播放页已结束，等待囚禁方处理这次按铃记录。"]
+
+
+def _respond_bell(state: dict[str, Any], args: dict[str, Any]) -> tuple[bool, list[str]]:
+    pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else None
+    if not pending or str(pending.get("type") or "") != "bell_response_choice":
+        return False, ["当前没有等待回应的语音铃。"]
+    raw = str(args.get("raw") or "").strip()
+    choice = str(args.get("choice") or "").strip().lower()
+    choice_aliases = {
+        "go": "go",
+        "过去": "go",
+        "去": "go",
+        "不过去": "skip",
+        "不去": "skip",
+        "skip": "skip",
+        "none": "skip",
+    }
+    normalized = choice_aliases.get(choice, "")
+    process_text = str(args.get("process") or args.get("text") or "").strip()
+    if raw:
+        choice_match = re.search(r"\bchoice=([^\s|｜]+)", raw)
+        process_match = re.search(r"\bprocess=(.*)", raw, flags=re.S)
+        if choice_match:
+            normalized = choice_aliases.get(choice_match.group(1).strip().lower(), normalized)
+        if process_match and not process_text:
+            process_text = process_match.group(1).strip()
+    if normalized not in {"go", "skip"}:
+        return False, ["语音铃回应只能选择过去或不过去。"]
+    if normalized == "go" and not process_text:
+        return False, ["选择过去时必须完整记录这次亲密互动。"]
+    forbidden = _first_forbidden([process_text])
+    if forbidden:
+        return False, [f"包含禁用项：{forbidden}"]
+    event = pending.get("event") if isinstance(pending.get("event"), dict) else {}
+    event["bell_response"] = {
+        "choice": normalized,
+        "responded_by": "du",
+        "responded_at": now_beijing_iso(),
+    }
+    event.setdefault("tags", []).append(f"bell_response:{normalized}")
+    if normalized == "skip":
+        _resolve_event(state, event)
+        state["pending_event"] = None
+        _finish_night(state)
+        return True, ["渡选择不过去，这次按铃记录已归档。"]
+    event["process_text"] = process_text
+    event["resolved_by"] = "du"
+    event["process_saved_at"] = now_beijing_iso()
+    state["pending_event"] = _new_pending(state, "reaction_choice", event, actor=str(state.get("captive") or "xinyue"))
+    return True, ["渡已经过去并写下完整过程，等待小玥选择过程后的心情。"]
 
 
 def _ack_item_secret(state: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -3212,6 +3284,7 @@ def _new_pending(state: dict[str, Any], pending_type: str, event: dict[str, Any]
         "process_reaction_write": "【过程心情：response=accept mood=害羞 line=可选台词 process=过程内容】",
         "reaction_choice": "【心情：害羞 可选台词】",
         "bell_voice_reveal": "【确认铃声】",
+        "bell_response_choice": "【选择：不过去】或【过去：完整亲密互动过程】",
         "item_secret_reveal": "【确认彩蛋】",
         "monitor_gate": "【选择：none】 或 【查看监控：full】",
         "monitor_handle": "【选择：silent|review_later|intervene intent=catch modifiers=training,sex training_contents=obedience_commands tools=collar line=可选台词】",
@@ -3222,6 +3295,7 @@ def _new_pending(state: dict[str, Any], pending_type: str, event: dict[str, Any]
         "process_reaction_write": "waiting_process_reaction",
         "reaction_choice": "waiting_reaction",
         "bell_voice_reveal": "waiting_bell_voice_reveal",
+        "bell_response_choice": "waiting_bell_response",
         "item_secret_reveal": "waiting_item_secret_reveal",
         "monitor_gate": "waiting_monitor_gate",
         "monitor_handle": "waiting_monitor_handle",
@@ -4338,8 +4412,8 @@ def _scene_copy(state: dict[str, Any], status: dict[str, Any]) -> dict[str, str]
     special_copy = {
         "escape_choice": (
             "SPECIAL DAY",
-            "今天没有平常的安排",
-            "门外安静得太久了。一个本不该出现的机会被留在房间里，今天只需要决定要不要伸手。",
+            "今天，渡没有出现",
+            "门外安静得反常。直到你发现，备用钥匙正压在玄关地垫下面。",
         ),
         "return_action_choice": (
             "RETURN",
@@ -4733,6 +4807,6 @@ def _event_summary(event: dict[str, Any]) -> dict[str, Any]:
 def _command_hint() -> str:
     return (
         "可用命令：new_game / status / plan_day / respond_action / submit_process / "
-        "submit_process_reaction / choose_mood / advance_day_action / night_action / view_monitor / monitor_action / schedule_escape_window / resolve_escape_choice / set_recapture_rules / choose_recapture_followup / "
+        "submit_process_reaction / choose_mood / advance_day_action / night_action / respond_bell / view_monitor / monitor_action / schedule_escape_window / resolve_escape_choice / set_recapture_rules / choose_recapture_followup / "
         "gift_item / revoke_item / build_ending_seed / end_game"
     )

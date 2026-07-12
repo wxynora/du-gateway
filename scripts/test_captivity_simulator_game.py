@@ -437,11 +437,11 @@ def test_captivity_simulator_inventory_night_actions_and_call_bell() -> None:
         _assert(rang["state"]["pending_event"]["type"] == "bell_voice_reveal", "the configured bell should reveal its line on first use")
         acknowledged = run_command("ack_bell_voice", save_path=save_path)
         pending = acknowledged["captor_view"]["pending_event"]
-        _assert(pending["type"] == "monitor_gate", "ringing the bell should enter the night captor handling flow")
-        _assert(pending["alert_label"] == "呼叫铃响了", "captor should be told that the bell rang before opening monitor")
-        _assert("event" not in pending, "bell alert should not leak the captive's optional line before monitor view")
+        _assert(pending["type"] == "monitor_gate", "local captor route should keep the existing night handling flow")
+        _assert(pending["alert_label"] == "呼叫铃响了", "local captor should still receive the bell alert")
+        _assert("event" not in pending, "local captor bell alert should stay sealed before monitor view")
         viewed = run_command("view_monitor full", save_path=save_path)
-        _assert(viewed["captor_view"]["pending_event"]["event"]["action"] == "ring_bell", "opening monitor should reveal the bell event")
+        _assert(viewed["captor_view"]["pending_event"]["event"]["action"] == "ring_bell", "local captor should still open monitor to reveal the bell event")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "sleep-items.json"
@@ -512,9 +512,13 @@ def test_captivity_simulator_voice_bell_first_use_privacy() -> None:
         _assert(first_ring["captor_view"]["call_bell_voice"]["revealed"] is True, "first playback should mark the captor configuration as revealed")
 
         acknowledged = run_command("ack_bell_voice", save_path=save_path)
-        _assert(acknowledged["state"]["pending_event"]["type"] == "monitor_gate", "playback confirmation should return to the existing monitor gate")
-        _assert("event" not in acknowledged["captor_view"]["pending_event"], "monitor gate should keep the ringing event sealed")
-        run_command("monitor_action none", save_path=save_path)
+        _assert(acknowledged["state"]["pending_event"]["type"] == "bell_response_choice", "playback confirmation should ask du whether to come over")
+        missing_process = run_command("respond_bell choice=go", save_path=save_path)
+        _assert(missing_process["ok"] is False and "完整记录" in missing_process["text"], "coming over should require the complete interaction process")
+        visited = run_command("respond_bell choice=go process='渡过去后的完整互动'", save_path=save_path)
+        _assert(visited["state"]["pending_event"]["type"] == "reaction_choice", "a recorded visit should wait for xinyue's mood")
+        _assert(visited["state"]["pending_event"]["event"]["process_text"] == "渡过去后的完整互动", "bell visit process should stay in the event")
+        run_command("choose_mood mood=害羞", save_path=save_path)
 
         state = _read(save_path)
         state["phase"] = "night"
@@ -522,7 +526,9 @@ def test_captivity_simulator_voice_bell_first_use_privacy() -> None:
         state["pending_event"] = None
         save_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         later_ring = run_command("night_action ring_bell", save_path=save_path)
-        _assert(later_ring["state"]["pending_event"]["type"] == "monitor_gate", "later rings should skip the first-use reveal and go straight to monitoring")
+        _assert(later_ring["state"]["pending_event"]["type"] == "bell_response_choice", "later rings should go straight to du's visit choice")
+        ignored = run_command("respond_bell choice=skip", save_path=save_path)
+        _assert(ignored["ok"] is True, "du should be able to decline a later bell without opening monitor")
 
 
 def test_captivity_simulator_inventory_secret_first_use_flow() -> None:
@@ -638,11 +644,11 @@ def test_captivity_simulator_feeding_aftereffects_and_tolerance() -> None:
         rang = run_command("night_action ring_bell", save_path=save_path)
         _assert(rang["state"]["pending_event"]["type"] == "bell_voice_reveal", "tolerance branch should play the configured line on first use")
         rang = run_command("ack_bell_voice", save_path=save_path)
-        _assert(rang["captor_view"]["pending_event"]["alert_label"] == "呼叫铃响了", "tolerance branch should close through the bell flow")
-        ignored_bell = run_command("monitor_action none", save_path=save_path)
+        _assert(rang["captor_view"]["pending_event"]["type"] == "bell_response_choice", "tolerance branch should close through du's bell response flow")
+        ignored_bell = run_command("respond_bell choice=skip", save_path=save_path)
         bell_record = ignored_bell["captor_view"]["event_log"][-1]
-        _assert(bell_record["action_label"] == "呼叫铃响了", "audible bell alert should remain in captor history even when monitor stays closed")
-        _assert(bell_record["line"] == "" and bell_record["effects"] == {}, "closed monitor must still hide the bell line and event effects")
+        _assert(bell_record["action"] == "ring_bell" and "bell_response:skip" in bell_record["tags"], "declined bell should remain in history as a direct bell response")
+        _assert(bell_record["line"] == "", "declined bell should not invent a captive line")
 
         third_arousal = finish_additive_day(save_path, "fictional_arousal")
         third_arousal_effect = latest_feeding_aftereffect(third_arousal)
@@ -978,6 +984,7 @@ def test_captivity_simulator_escape_lure_non_escape_choices_notify_captor() -> N
     _assert(escape_options.count("id:") == 2 and 'label: "尝试逃跑"' in escape_options and 'label: "老实待着"' in escape_options, "escape UI should expose only the two meaningful choices")
     _assert(frontend.count('abortChoice: "abort_') == 3 and "onChoose(confirmation.abortChoice)" in frontend, "every mid-escape retreat should enter a staged failed-escape route")
     _assert("选择逃跑会触发抓回事件" not in frontend, "escape dialog must not spoil the recapture result")
+    _assert('aria-label="为什么要跑"' in frontend and "对不起我再也不跑了" in frontend, "successful escape should show the single-choice recapture question after the bad-child sting")
 
 
 def test_captivity_simulator_fixed_ending_titles() -> None:
@@ -1416,14 +1423,46 @@ def test_captivity_simulator_du_captor_inventory_commands() -> None:
 
 def test_captivity_simulator_sync_text_and_command_parser() -> None:
     from routes.miniapp import game_tools
+    from services.captivity_simulator_game import ACTION_LABELS
+
+    intensity_prompts = game_tools._CAPTIVITY_ACTION_INTENSITY_PROMPTS
+    _assert(set(intensity_prompts) == set(ACTION_LABELS), "every daytime action should have an intensity prompt map")
+    _assert(all(set(options) == {"light", "medium", "heavy"} for options in intensity_prompts.values()), "every action should have exactly three intensity prompts")
+    _assert("视线与指尖" in intensity_prompts["cleaning"]["medium"] and "视线与直觉" not in intensity_prompts["cleaning"]["medium"], "cleaning medium should use the approved 指尖 wording")
+    _assert("那些红痕和你的变化" in intensity_prompts["check"]["light"], "private check light should preserve the approved wording unchanged")
+    capture_du_intensity_prompts = game_tools._CAPTIVITY_CAPTURE_DU_ACTION_INTENSITY_PROMPTS
+    _assert(set(capture_du_intensity_prompts) == set(ACTION_LABELS), "capture-du route should have a separate prompt map for every daytime action")
+    _assert(all(set(options) == {"light", "medium", "heavy"} for options in capture_du_intensity_prompts.values()), "capture-du route should have exactly three prompts per action")
+    _assert("近距离的视线审视" in capture_du_intensity_prompts["cleaning"]["light"], "capture-du cleaning light should keep the approved watched-cleaning scene")
+    _assert("这一一段" not in capture_du_intensity_prompts["rest"]["heavy"] and "这一段时间" in capture_du_intensity_prompts["rest"]["heavy"], "capture-du rest heavy should fix only the approved repeated-character typo")
+    critical_body_prompts = game_tools._captivity_body_state_prompts({
+        "stats": {"health": 20, "stamina": 10, "cleanliness": 10, "shame": 80, "intimacy": 80}
+    })
+    _assert(len(critical_body_prompts) == 2 and "脸色和呼吸" in critical_body_prompts[0] and "腿脚和动作" in critical_body_prompts[1], "body prompt should keep only the two most urgent states")
+    noncritical_body_prompts = game_tools._captivity_body_state_prompts({
+        "stats": {"health": 80, "stamina": 70, "cleanliness": 10, "shame": 80, "intimacy": 80}
+    })
+    _assert(len(noncritical_body_prompts) == 2 and "不再对这些要求感到陌生" in noncritical_body_prompts[0] and "没有被好好收拾干净" in noncritical_body_prompts[1], "body prompt should prioritize accustomed shame and low cleanliness before dependence")
+    _assert(game_tools._captivity_body_state_prompts({"stats": {"health": 80, "stamina": 70, "cleanliness": 70, "shame": 20, "intimacy": 30}}) == [], "normal body state should not add filler text")
+    capture_du_critical_body_prompts = game_tools._captivity_body_state_prompts({
+        "stats": {"health": 20, "stamina": 10, "cleanliness": 10, "shame": 80, "intimacy": 80}
+    }, route="capture_du")
+    _assert(len(capture_du_critical_body_prompts) == 2 and "明显的消耗" in capture_du_critical_body_prompts[0] and "高大的骨架" in capture_du_critical_body_prompts[1], "capture-du body prompt should keep its two most urgent approved states")
+    capture_du_noncritical_body_prompts = game_tools._captivity_body_state_prompts({
+        "stats": {"health": 80, "stamina": 70, "cleanliness": 10, "shame": 80, "intimacy": 80}
+    }, route="capture_du")
+    _assert(len(capture_du_noncritical_body_prompts) == 2 and "身体却已经熟悉" in capture_du_noncritical_body_prompts[0] and "没有被重新清理" in capture_du_noncritical_body_prompts[1], "capture-du body prompt should prioritize accustomed shame and low cleanliness")
+    _assert(game_tools._captivity_body_state_prompts({"stats": {"health": 80, "stamina": 70, "cleanliness": 70, "shame": 20, "intimacy": 30}}, route="capture_du") == [], "normal capture-du body state should not add filler text")
 
     planning_sync = game_tools._captivity_simulator_sync_text(
         {
             "text": "【囚禁模拟器】\n等待今日安排。",
-            "captor_view": {"captor": "du", "inventory": {}, "pending_event": {"type": "day_plan_choice", "actor": "du"}, "ending_state": ""},
+            "captor_view": {"route": "captured_by_du", "captor": "du", "inventory": {}, "pending_event": {"type": "day_plan_choice", "actor": "du"}, "ending_state": ""},
         },
         mode="state_update",
     )
+    _assert("你正在和小玥玩一场私密博弈游戏" in planning_sync, "captured-by-du prompt should use the approved shared-game premise")
+    _assert("【📋 游戏状态】：" in planning_sync and "【🕹️ menu】：" in planning_sync, "captured-by-du planning prompt should use the approved shell")
     _assert("道具不是独立行动" in planning_sync and "training_contents" in planning_sync, "du planning prompt should explain the new action material structure")
     _assert("vibrating_wand" in planning_sync and "anal_beads" in planning_sync, "du planning prompt should receive the expanded tool ids")
     _assert("服从调教(training)" in planning_sync and "夹具调教(clamp_play)" in planning_sync, "du planning prompt should show Chinese labels alongside stable ids")
@@ -1580,26 +1619,313 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
     gate_sync = game_tools._captivity_simulator_sync_text(
         {
             "text": "【囚禁模拟器】\n待处理：monitor_gate / 【选择：none】 或 【查看监控：full】",
-            "captor_view": {"pending_event": {"type": "monitor_gate", "actor": "du"}, "ending_state": ""},
+            "captor_view": {"route": "captured_by_du", "captor": "du", "pending_event": {"type": "monitor_gate", "actor": "du"}, "ending_state": ""},
         },
         mode="state_update",
     )
-    _assert("还没有打开监控" in gate_sync and "夜间行动内容" in gate_sync, "monitor gate sync should not expose sealed monitor content")
-    bell_gate_sync = game_tools._captivity_simulator_sync_text(
+    _assert("夜晚，小玥独自在房间里有点动静，你如果好奇她在做什么，可以查看监控。" in gate_sync, "monitor gate should use the approved night prompt")
+    _assert("夜间监控记录已封存" in gate_sync and "夜间具体动向" not in gate_sync, "monitor gate sync should not expose sealed monitor content")
+    bell_event = {
+        "day": 3,
+        "phase": "night",
+        "action": "ring_bell",
+        "action_label": "按响语音铃",
+        "bell_voice": {"line": "请主人过来使用我", "first_reveal": False},
+    }
+    bell_response_payload = {
+        "captor_view": {
+            "route": "captured_by_du",
+            "captor": "du",
+            "pending_event": {"type": "bell_response_choice", "actor": "du", "event": bell_event},
+        }
+    }
+    bell_response_sync = game_tools._captivity_simulator_sync_text(
         {
-            "text": "【囚禁模拟器】\n待处理：monitor_gate / 【选择：none】 或 【查看监控：full】",
+            "text": "【囚禁模拟器】\n等待渡回应语音铃。",
             "captor_view": {
-                "pending_event": {"type": "monitor_gate", "actor": "du", "alert_label": "呼叫铃响了"},
+                "route": "captured_by_du",
+                "captor": "du",
+                "pending_event": {"type": "bell_response_choice", "actor": "du", "event": bell_event},
                 "ending_state": "",
             },
         },
         mode="state_update",
     )
-    _assert("呼叫铃响了" in bell_gate_sync and "具体夜间动向仍需打开监控" in bell_gate_sync, "du captor should receive the bell alert without unsealing the event")
+    _assert("小玥按响了你留给她的语音铃「请主人过来使用我」" in bell_response_sync, "du captor should receive the approved bell prompt with the prerecorded line")
+    _assert("完整记录这次亲密互动" in bell_response_sync and "查看监控" not in bell_response_sync, "du bell response must not reuse the monitor gate")
+    commands = game_tools._captivity_simulator_commands_from_reply("【过去：走进房间抱住她】", bell_response_payload)
+    _assert(commands == ["respond_bell choice=go process='走进房间抱住她'"], f"bell visit should carry the complete process, got {commands}")
+    commands = game_tools._captivity_simulator_commands_from_reply("【选择：不过去】", bell_response_payload)
+    _assert(commands == ["respond_bell choice=skip"], f"bell decline should map without monitor, got {commands}")
     commands = game_tools._captivity_simulator_commands_from_reply("【查看监控：full】", monitor_gate_payload)
     _assert(commands == ["view_monitor full"], f"monitor gate tool directive should map to view_monitor, got {commands}")
     commands = game_tools._captivity_simulator_commands_from_reply("【选择：none】", monitor_gate_payload)
     _assert(commands == ["monitor_action none"], f"monitor gate none should map to monitor_action none, got {commands}")
+
+    process_event = {
+        "day": 4,
+        "slot": 1,
+        "phase": "day",
+        "action": "training",
+        "action_label": "服从调教",
+        "intensity": "heavy",
+        "training_contents": ["obedience_commands"],
+        "tools": ["collar"],
+        "action_response": {"response_label": "嘴硬", "mood": "害羞", "line": "才不要"},
+    }
+    process_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n等待渡填写过程。",
+            "captor_view": {
+                "route": "captured_by_du",
+                "captor": "du",
+                "stats": {"health": 20, "stamina": 10, "cleanliness": 10, "shame": 80, "intimacy": 80},
+                "pending_event": {"type": "process_write", "actor": "du", "event": process_event},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("你选择了「服从调教」" in process_sync and "完整记录这次调教/惩罚" in process_sync, "ordinary process should use the approved immersive prompt")
+    _assert("你要将她的理智彻底掐灭" in process_sync, "ordinary process should inject the selected action-intensity prompt")
+    _assert("脸色和呼吸都显出疲态" in process_sync and "腿脚和动作都没有多少力气" in process_sync, "ordinary process should inject the two most urgent body prompts")
+    _assert("没有被好好收拾干净" not in process_sync and "心情映射" not in process_sync, "ordinary process should cap body prompts and avoid mood mapping")
+    _assert("强度：heavy" not in process_sync and "附加玩法：" not in process_sync, "process prompt must not leak raw intensity or modifier labels")
+    _assert("调教内容：口令服从" in process_sync and "道具：项圈" in process_sync and "已记录行动反应：嘴硬" in process_sync, "ordinary process should retain concrete scene facts")
+
+    capture_du_process_event = {
+        "day": 4,
+        "slot": 1,
+        "phase": "day",
+        "action": "training",
+        "action_label": "服从调教",
+        "intensity": "heavy",
+        "training_contents": ["obedience_commands"],
+        "tools": ["collar"],
+    }
+    capture_du_process_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n等待渡填写过程和反应。",
+            "captor_view": {
+                "route": "capture_du",
+                "captor": "xinyue",
+                "stats": {"health": 20, "stamina": 10, "cleanliness": 10, "shame": 80, "intimacy": 80},
+                "pending_event": {"type": "process_reaction_write", "actor": "du", "event": capture_du_process_event},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("逼着你这一具充满破坏力的肉体在最严苛的限制下低头" in capture_du_process_sync, "capture-du process should inject its selected action-intensity prompt")
+    _assert("明显的消耗" in capture_du_process_sync and "高大的骨架" in capture_du_process_sync, "capture-du process should inject its two most urgent body-state prompts")
+    _assert("没有被重新清理" not in capture_du_process_sync, "capture-du process should cap body-state prompts at two")
+    _assert("你要将她的理智彻底掐灭" not in capture_du_process_sync, "capture-du process must not reuse the captured-by-du action-intensity prompt")
+    _assert("强度：heavy" not in capture_du_process_sync, "capture-du process should not leak the raw intensity level")
+    _assert("你正在和小玥玩一场私密博弈游戏。在这局游戏里，你是被她囚禁的人" in capture_du_process_sync, "capture-du process should use its shared-game opening")
+    _assert("【📋 游戏状态】：" in capture_du_process_sync and "【🚨 事件】：" in capture_du_process_sync and "【🕹️ menu】：" in capture_du_process_sync, "capture-du process should use the reviewed scene shell")
+
+    capture_du_sex_event = dict(capture_du_process_event)
+    capture_du_sex_event["modifiers"] = ["sex"]
+    capture_du_sex_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n等待渡填写过程和反应。",
+            "captor_view": {
+                "route": "capture_du",
+                "captor": "xinyue",
+                "stats": {"health": 80, "stamina": 70, "cleanliness": 70, "shame": 20, "intimacy": 30},
+                "pending_event": {"type": "process_reaction_write", "actor": "du", "event": capture_du_sex_event},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("你们之间的性爱" in capture_du_sex_sync, "capture-du sex modifier should appear only through the reviewed final process sentence")
+    _assert("附加玩法：" not in capture_du_sex_sync and "强度：heavy" not in capture_du_sex_sync, "capture-du process should hide raw modifier and intensity labels")
+
+    capture_du_response_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n等待渡回应。",
+            "captor_view": {
+                "route": "capture_du",
+                "captor": "xinyue",
+                "pending_event": {"type": "action_response", "actor": "du", "event": {"day": 4, "slot": 2, "phase": "day", "action": "feeding", "action_label": "喂食", "intensity": "light"}},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("你是被她囚禁的人" in capture_du_response_sync and "【反应：response=accept" in capture_du_response_sync, "capture-du response choice should keep only the route shell and original menu")
+    _assert("小玥选择了「喂食」" not in capture_du_response_sync and "强度：light" not in capture_du_response_sync, "capture-du response choice should not add process prose or raw intensity")
+
+    capture_du_escape_choice_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n出现逃跑机会。",
+            "captor_view": {
+                "route": "capture_du",
+                "captor": "xinyue",
+                "pending_event": {"type": "escape_choice", "actor": "du", "hint": "小玥临时出门", "bait": "备用钥匙留在桌边"},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("今天小玥暂时离开了房间" in capture_du_escape_choice_sync and "备用钥匙留在桌边" in capture_du_escape_choice_sync, "capture-du escape choice should use the reviewed opportunity scene")
+    _assert("【选择：escape】" in capture_du_escape_choice_sync and "【选择：stay】" in capture_du_escape_choice_sync, "capture-du escape scene should preserve both original choices")
+
+    capture_du_escape_event = {
+        "day": 5,
+        "phase": "day",
+        "action": "escape_choice",
+        "action_label": "逃跑诱导：尝试逃跑",
+        "intensity": "medium",
+        "tags": ["escape", "recapture"],
+    }
+    capture_du_escape_process_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n等待渡填写抓回过程。",
+            "captor_view": {
+                "route": "capture_du",
+                "captor": "xinyue",
+                "pending_event": {"type": "process_reaction_write", "actor": "du", "event": capture_du_escape_event},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("你选择了尝试逃跑" in capture_du_escape_process_sync and "小玥怎样抓住你" in capture_du_escape_process_sync, "capture-du recapture process should use its dedicated scene")
+
+    capture_du_followup_event = {
+        "day": 5,
+        "phase": "day",
+        "action": "recapture_followup",
+        "action_label": "抓回后处理：追加惩罚",
+        "intensity": "medium",
+        "modifiers": ["training", "sex"],
+        "training_contents": ["impact_play"],
+        "tools": ["whip"],
+        "recapture_context": {
+            "followup": "punishment",
+            "followup_label": "追加惩罚",
+            "rule_labels": ["双重门锁", "钥匙隔离"],
+        },
+    }
+    capture_du_followup_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n等待渡填写抓回后处理。",
+            "captor_view": {
+                "route": "capture_du",
+                "captor": "xinyue",
+                "pending_event": {"type": "process_reaction_write", "actor": "du", "event": capture_du_followup_event},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("你已经被小玥带回房间" in capture_du_followup_sync and "双重门锁 / 钥匙隔离" in capture_du_followup_sync and "现在她选择了「追加惩罚」" in capture_du_followup_sync, "capture-du followup should show active rules and selected handling")
+    _assert("你们之间的性爱" in capture_du_followup_sync and "附加玩法：" not in capture_du_followup_sync, "capture-du followup sex should be internalized in its final sentence")
+
+    capture_du_night_event = {
+        "day": 6,
+        "phase": "night",
+        "action": "self_touch",
+        "action_label": "自慰",
+        "intensity": "medium",
+        "intervention": {"intent": "catch", "intent_label": "当场抓住", "modifiers": ["sex"], "tools": ["collar"], "line": "被我看见了"},
+    }
+    capture_du_night_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n等待渡填写夜间介入过程。",
+            "captor_view": {
+                "route": "capture_du",
+                "captor": "xinyue",
+                "stats": {"health": 20, "stamina": 10, "cleanliness": 10, "shame": 80, "intimacy": 80},
+                "pending_event": {"type": "process_reaction_write", "actor": "du", "event": capture_du_night_event},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("小玥从监控里看见你正在「自慰」" in capture_du_night_sync and "现在房门已经被她打开" in capture_du_night_sync, "capture-du monitor intervention should use its dedicated process scene")
+    _assert("明显的消耗" in capture_du_night_sync and "高大的骨架" in capture_du_night_sync and "你们之间的性爱" in capture_du_night_sync, "capture-du monitor intervention should include body state and conditional sex wording")
+    _assert("附加=sex" not in capture_du_night_sync and "附加玩法：" not in capture_du_night_sync, "capture-du monitor intervention should keep sex out of structured scene materials")
+
+    capture_du_bell_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n语音铃首次播放。",
+            "captor_view": {
+                "route": "capture_du",
+                "captor": "xinyue",
+                "pending_event": {"type": "bell_voice_reveal", "actor": "du", "event": {"phase": "night", "action": "ring_bell", "action_label": "按响呼叫铃", "bell_voice": {"line": "过来看看我"}}},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("你按响了小玥留给你的语音铃" in capture_du_bell_sync and "「过来看看我」" in capture_du_bell_sync and "【确认铃声】" in capture_du_bell_sync, "capture-du bell reveal should use its dedicated scene and original directive")
+
+    capture_du_secret_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n物品彩蛋首次揭晓。",
+            "captor_view": {
+                "route": "capture_du",
+                "captor": "xinyue",
+                "pending_event": {"type": "item_secret_reveal", "actor": "du", "item_secret": {"item_label": "书", "text": "夹页里藏着一句话"}},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("你今晚使用了小玥留给你的「书」" in capture_du_secret_sync and "「夹页里藏着一句话」" in capture_du_secret_sync and "【确认彩蛋】" in capture_du_secret_sync, "capture-du item secret should use its dedicated reveal scene")
+
+    escape_event = {
+        "day": 5,
+        "phase": "day",
+        "action": "escape_choice",
+        "action_label": "逃跑诱导：尝试逃跑",
+        "intensity": "medium",
+        "tags": ["escape", "recapture"],
+    }
+    escape_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n等待抓回经过。",
+            "captor_view": {
+                "route": "captured_by_du",
+                "captor": "du",
+                "pending_event": {"type": "process_write", "actor": "du", "event": escape_event},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("小玥今天试图逃离你的掌控，你抓住了她" in escape_sync and "请完整记录你是怎么恶劣地惩罚她" in escape_sync, "recapture should use its standalone approved prompt")
+    _assert("【抓回经过：rules=" in escape_sync, "recapture prompt should keep the original exact directive")
+
+    monitor_event = {
+        "day": 6,
+        "phase": "night",
+        "action": "diary",
+        "action_label": "写私密日记",
+        "night_detail": {"id": "record_day", "label": "记录今天"},
+        "private_note": "今天差点找到钥匙。",
+    }
+    monitor_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n监控已经打开。",
+            "captor_view": {
+                "route": "captured_by_du",
+                "captor": "du",
+                "pending_event": {"type": "monitor_handle", "actor": "du", "event": monitor_event},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("你打开了监控，看见小玥正在「写私密日记」" in monitor_sync, "opened monitor should use the approved reveal prompt")
+    _assert("私密日记：今天差点找到钥匙。" in monitor_sync and "全凭你的心意" in monitor_sync, "opened monitor should expose the revealed scene and handling choice")
+
+    monitor_event["intervention"] = {"intent": "catch", "intent_label": "抓现行", "tools": ["collar"], "line": "被我看见了"}
+    monitor_event["action_response"] = {"response_label": "沉默", "mood": "害羞"}
+    intervention_sync = game_tools._captivity_simulator_sync_text(
+        {
+            "text": "【囚禁模拟器】\n等待介入过程。",
+            "captor_view": {
+                "route": "captured_by_du",
+                "captor": "du",
+                "pending_event": {"type": "process_write", "actor": "du", "event": monitor_event},
+            },
+        },
+        mode="state_update",
+    )
+    _assert("你没有继续留在监控外看着，而是决定现在就进去找她" in intervention_sync, "monitor intervention should use its standalone approved process prompt")
+    _assert("完整记录这次互动" in intervention_sync and "【过程：过程内容】" in intervention_sync, "monitor intervention should keep the approved writing line and process directive")
 
     monitor_handle_payload = {"captor_view": {"pending_event": {"type": "monitor_handle", "actor": "du"}}}
     commands = game_tools._captivity_simulator_commands_from_reply("【选择：review_later】", monitor_handle_payload)
@@ -2708,7 +3034,7 @@ def test_captivity_simulator_scene_copy_and_transition_contract() -> None:
         state["pending_event"] = {"type": "escape_choice", "actor": "xinyue", "day": 4, "slot": 0}
         captive_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         special = run_command("status", save_path=captive_path)["state"]["scene_copy"]
-        _assert(special["tone"] == "special" and special["title"] == "今天没有平常的安排", "escape day should override ordinary time copy")
+        _assert(special["tone"] == "special" and special["title"] == "今天，渡没有出现", "escape day should override ordinary time copy")
 
         captor_path = Path(tmpdir) / "captor-scenes.json"
         captor = run_command("new_game route=capture_du seed=captor-scenes", save_path=captor_path)
