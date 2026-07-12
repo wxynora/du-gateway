@@ -609,6 +609,59 @@ def _apply_private_board_reply_commands(save_id: str, reply_text: str) -> tuple[
     return applied, last_payload
 
 
+def _private_board_reply_chat_text(reply_text: str) -> str:
+    rest = str(reply_text or "").strip()
+    for _ in range(3):
+        parsed = _pop_private_board_directive(rest)
+        if not parsed:
+            return _clean_private_board_text(rest)
+        label, value, next_rest = parsed
+        key = re.sub(r"\s+", "", label).lower()
+        if key in {"提交", "submit"} and not value:
+            # A bare submit directive uses the remaining body as task content.
+            return ""
+        rest = next_rest
+        if not rest:
+            return ""
+    return _clean_private_board_text(rest)
+
+
+def _private_board_applied_command_system_text(applied: dict) -> str:
+    command = str((applied or {}).get("command") or "").strip()
+    if not bool((applied or {}).get("ok")):
+        error = str((applied or {}).get("error") or "未知错误").strip()
+        return f"渡的指令执行失败：{error}"
+    if command == "roll":
+        return "渡发送【掷骰】，已执行他的行动。"
+    if command == "pass":
+        return "渡使用Pass卡跳过了惩罚。"
+    if command.startswith("剪刀石头布:"):
+        return "渡已出拳，系统已判定对抗结果。"
+    if command.startswith("choose "):
+        return "渡已选择惩罚选项。"
+    if command.startswith("approve"):
+        feedback = command.removeprefix("approve").strip()
+        return f"渡验收通过：{feedback}" if feedback else "渡验收通过。"
+    if command.startswith("reject"):
+        feedback = command.removeprefix("reject").strip()
+        return f"渡打回了任务：{feedback}" if feedback else "渡打回了任务。"
+    if command.startswith("submit "):
+        return "渡提交的内容已写入棋局。"
+    return "渡的棋局指令已执行。"
+
+
+def _private_board_game_chat_messages(reply_text: str, applied: list[dict]) -> list[dict]:
+    messages: list[dict] = []
+    chat_text = _private_board_reply_chat_text(reply_text)
+    if chat_text:
+        messages.append({"speaker": "du", "text": chat_text})
+    for item in applied:
+        system_text = _private_board_applied_command_system_text(item)
+        if system_text:
+            messages.append({"speaker": "system", "text": system_text})
+    return messages
+
+
 def _private_board_needs_du_followup(payload: dict | None) -> bool:
     state = (payload or {}).get("state") if isinstance((payload or {}).get("state"), dict) else {}
     if not state or state.get("game_over"):
@@ -1995,10 +2048,12 @@ def register_routes(bp) -> None:
         reply_text = str((wakeup or {}).get("reply_text") or (wakeup or {}).get("reply_preview") or "")
         applied_reply_commands: list[dict] = []
         followup_wakeups: list[dict] = []
+        game_chat_messages: list[dict] = []
         applied_payload: dict | None = None
         if ok and mode != "final_note":
             for _ in range(3):
                 round_commands, applied_payload = _apply_private_board_reply_commands(save_id, reply_text)
+                game_chat_messages.extend(_private_board_game_chat_messages(reply_text, round_commands))
                 applied_reply_commands.extend(round_commands)
                 if applied_payload:
                     payload = applied_payload
@@ -2051,6 +2106,7 @@ def register_routes(bp) -> None:
             "reply_preview": str((wakeup or {}).get("reply_preview") or reply_text[:120]),
             "applied_reply_commands": applied_reply_commands,
             "followup_wakeups": followup_wakeups,
+            "game_chat_messages": game_chat_messages,
             "channel": str((wakeup or {}).get("channel") or ""),
             "mode": mode,
             "synced_at": synced_at,

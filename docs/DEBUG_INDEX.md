@@ -2244,3 +2244,9 @@ npm -C miniapp run android
 - 已同步 UI：囚禁方等待渡操作时使用“等待渡……”文案；身份切换增加覆盖存档确认；仓库显示旧物痕迹填写数量和已发现进度；手机底部一级导航保持固定并保留安全区。
 - 已验证：隔离 worktree 基于最新 `origin/main` 通过囚禁模拟器全量测试、私密棋盘回归、Python 编译、`import app`、MiniApp `tsc --noEmit` 与生产构建。测试未调用真实 `/sync-du`、R2 或上游模型。
 - 已部署：提交 `d46a99ef` 已推送到 `origin/main`，新主网关 `/root/du-gateway` fast-forward 后完成服务器端编译与导入检查并重启 `du-gateway.service`；本机和公网 `/health`、`/miniapp/` 及新静态 chunk 均返回 200，重启后日志无 traceback/error。
+
+当前状态（2026-07-13 涩涩走格棋交流消息闭环）：
+- 已修复：后端代执行渡的棋局指令后，会把每轮指令之外的普通回复和对应系统执行消息完整返回；前端即使检测到 `applied_reply_commands` 也会追加这些消息，不再直接 `return` 丢掉游戏内交流。
+- 已调整：走格棋唤醒提示词移除“请以渡自己的口吻自然回应一两句”，改为“小玥指定文案：你可以说几句你想对小玥说的话”。
+- 边界确认：`send_private_board_wakeup()` 仍发送 `X-Force-Last4: 1` 与 `X-DU-FOLLOWUP-ARCHIVE: 1`；线上只读核对确认最近走格棋轮次已进入当前 latest4。修复不改游戏存档、last4 注入或归档逻辑。
+- 已验证：基于最新 `origin/main` 的隔离 worktree 通过 Python 编译、走格棋解析/消息回传定向测试、`/sync-du` 假唤醒接口 smoke、MiniApp `tsc --noEmit`、生产构建和 `git diff --check`；未调用真实 `/sync-du`、上游模型或游戏写回。

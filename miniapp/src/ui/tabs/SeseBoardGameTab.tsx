@@ -124,6 +124,7 @@ type PrivateBoardSyncPayload = {
   reply_preview?: string;
   applied_reply_commands?: Array<{ command?: string; ok?: boolean; error?: string }>;
   followup_wakeups?: Array<{ ok?: boolean; reply_preview?: string; error?: string }>;
+  game_chat_messages?: Array<{ speaker?: Actor | "system"; text?: string }>;
   channel?: string;
   wakeup?: {
     error?: string;
@@ -844,6 +845,15 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     }
   }, []);
 
+  const appendSyncedGameChatMessages = useCallback((next: PrivateBoardSyncPayload) => {
+    for (const item of next.game_chat_messages || []) {
+      const text = plainText(item?.text || "").trim();
+      const speaker = item?.speaker;
+      if (!text || (speaker !== "du" && speaker !== "system")) continue;
+      appendChat({ id: makeChatId(speaker), speaker, text }, true);
+    }
+  }, [appendChat]);
+
   const eventMap = useMemo(() => {
     const map = new Map<number, CellEvent>();
     for (const item of state.cell_events || []) {
@@ -1133,6 +1143,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
       }
       const reply = plainText(next.reply_text || next.wakeup?.reply_text || next.reply_preview || next.wakeup?.reply_preview || "").trim();
       if (hasAppliedDuCommands(next)) {
+        appendSyncedGameChatMessages(next);
         if (shouldContinueAfterAppliedDuCommands(next)) {
           await continueDuTurnRef.current?.(next.state, duFollowupMessage(next.state));
         }
@@ -1146,7 +1157,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     } finally {
       setDuSyncing(false);
     }
-  }, [appendChat, applyPayload, processDuReply, syncPrivateBoardWithDu, toast]);
+  }, [appendChat, appendSyncedGameChatMessages, applyPayload, processDuReply, syncPrivateBoardWithDu, toast]);
 
   useEffect(() => {
     continueDuTurnRef.current = continueDuTurn;
@@ -1185,6 +1196,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
       }
       const reply = plainText(next.reply_text || next.wakeup?.reply_text || next.reply_preview || next.wakeup?.reply_preview || "").trim();
       if (hasAppliedDuCommands(next)) {
+        appendSyncedGameChatMessages(next);
         if (shouldContinueAfterAppliedDuCommands(next)) {
           await continueDuTurnRef.current?.(next.state, duFollowupMessage(next.state));
         }
@@ -1198,7 +1210,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     } finally {
       setDuSyncing(false);
     }
-  }, [appendChat, applyPayload, processDuReply, syncPrivateBoardWithDu, toast]);
+  }, [appendChat, appendSyncedGameChatMessages, applyPayload, processDuReply, syncPrivateBoardWithDu, toast]);
 
   const rollOnce = useCallback(async (options: { notifyAfterUserRoll?: boolean } = {}) => {
     if (busy || animating || isGameOver) return;
@@ -1442,6 +1454,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
       }
       const reply = plainText(next.reply_text || next.wakeup?.reply_text || next.reply_preview || next.wakeup?.reply_preview || "").trim();
       if (hasAppliedDuCommands(next)) {
+        appendSyncedGameChatMessages(next);
         if (shouldContinueAfterAppliedDuCommands(next)) {
           await continueDuTurnRef.current?.(next.state, duFollowupMessage(next.state));
         }
@@ -1455,7 +1468,7 @@ export function SeseBoardGameTab({ onBack }: { onBack: () => void }) {
     } finally {
       setChatSending(false);
     }
-  }, [animating, appendChat, applyPayload, busy, chatInput, chatSending, duSyncing, payload, processDuReply, syncPrivateBoardWithDu, toast]);
+  }, [animating, appendChat, appendSyncedGameChatMessages, applyPayload, busy, chatInput, chatSending, duSyncing, payload, processDuReply, syncPrivateBoardWithDu, toast]);
 
   const themeName = displayText(state.theme_profile?.theme || "未触发");
   const directionLabel = displayText(state.theme_profile?.direction_label || "待定");

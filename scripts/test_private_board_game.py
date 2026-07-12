@@ -887,6 +887,9 @@ def test_private_board_wakeup_uses_dynamic_system() -> None:
         _assert(isinstance(board_system, dict), "private board event should stay in a system message")
         _assert(board_system.get("role") == "system", "private board event should be a system event")
         _assert(board_system.get("__dynamic__") is True, "private board event must be dynamic system, not static prefix")
+        board_prompt = str(board_system.get("content") or "")
+        _assert("你可以说几句你想对小玥说的话。" in board_prompt, "private board prompt should use the requested wording")
+        _assert("请以渡自己的口吻自然回应一两句" not in board_prompt, "removed Du-response wording must not return")
         _assert(
             all(
                 msg.get("__dynamic__") or "涩涩走格棋" not in str(msg.get("content") or "")
@@ -1062,6 +1065,100 @@ def test_private_board_reply_command_parser() -> None:
     _assert(commands == [], f"ordinary chat should not produce game commands, got {commands}")
 
 
+def test_private_board_applied_commands_keep_chat_and_system_messages() -> None:
+    from routes.miniapp import game_tools
+
+    applied = [
+        {"command": "approve 可以", "ok": True, "error": ""},
+        {"command": "roll", "ok": True, "error": ""},
+    ]
+    messages = game_tools._private_board_game_chat_messages(
+        "【通过：可以】\n【掷骰】\n那我继续往前走，等你追上来。",
+        applied,
+    )
+
+    _assert(
+        messages
+        == [
+            {"speaker": "du", "text": "那我继续往前走，等你追上来。"},
+            {"speaker": "system", "text": "渡验收通过：可以"},
+            {"speaker": "system", "text": "渡发送【掷骰】，已执行他的行动。"},
+        ],
+        f"applied command messages should keep Du chat and system notices, got {messages}",
+    )
+    _assert(
+        game_tools._private_board_reply_chat_text("【提交】\n这是任务提交正文。") == "",
+        "bare submit body is task content and must not leak into game chat",
+    )
+
+
+def test_private_board_sync_returns_applied_chat_and_system_messages() -> None:
+    from flask import Blueprint, Flask
+
+    from routes.miniapp import game_tools
+    from services import conversation_followup
+    from services import reply_channel_context
+
+    old_execute = game_tools.execute_game_command
+    old_wakeup = conversation_followup.send_private_board_wakeup
+    old_context = reply_channel_context.resolve_recent_reply_context
+
+    def fake_execute(game_id: str, command: str, save_id: str) -> dict:
+        if command == "status":
+            return {
+                "ok": True,
+                "text": "【涩涩走格棋】\n现在轮到渡。",
+                "state": {"turn_actor": "du", "pending_event": None, "game_over": False},
+            }
+        _assert(command == "roll", f"unexpected private board command: {command}")
+        return {
+            "ok": True,
+            "player_text": "渡掷出 3 点。",
+            "state": {"turn_actor": "xinyue", "pending_event": None, "game_over": False},
+        }
+
+    try:
+        game_tools.execute_game_command = fake_execute
+        conversation_followup.send_private_board_wakeup = lambda **kwargs: {
+            "ok": True,
+            "reply_text": "【掷骰】\n我先往前走，等你来追。",
+            "reply_preview": "【掷骰】\n我先往前走，等你来追。",
+        }
+        reply_channel_context.resolve_recent_reply_context = lambda default_target="": {
+            "channel": "tg",
+            "window_id": "tg_test",
+            "target": "123",
+            "meta": {},
+        }
+
+        app = Flask(__name__)
+        bp = Blueprint("private_board_chat_test", __name__)
+        game_tools.register_routes(bp)
+        app.register_blueprint(bp)
+        with app.test_client() as client:
+            response = client.post(
+                "/game-tools/private_board/sync-du",
+                json={"save_id": "s1", "mode": "state_update", "message": "现在轮到渡。"},
+            )
+    finally:
+        game_tools.execute_game_command = old_execute
+        conversation_followup.send_private_board_wakeup = old_wakeup
+        reply_channel_context.resolve_recent_reply_context = old_context
+
+    _assert(response.status_code == 200, f"private board sync should succeed: {response.get_data(as_text=True)}")
+    data = response.get_json() or {}
+    _assert(data.get("applied_reply_commands") == [{
+        "command": "roll",
+        "ok": True,
+        "error": "",
+        "player_text": "渡掷出 3 点。",
+    }], f"roll command should be applied exactly once, got {data.get('applied_reply_commands')}")
+    _assert(data.get("game_chat_messages") == [
+        {"speaker": "du", "text": "我先往前走，等你来追。"},
+        {"speaker": "system", "text": "渡发送【掷骰】，已执行他的行动。"},
+    ], f"sync response should preserve Du and system messages, got {data.get('game_chat_messages')}")
+
+
 def test_private_board_reply_commands_apply_to_game_runtime() -> None:
     from routes.miniapp import game_tools
 
@@ -1153,6 +1250,8 @@ if __name__ == "__main__":
     test_private_board_pending_creation_activity_is_narrow()
     test_private_board_state_update_sync_includes_message()
     test_private_board_reply_command_parser()
+    test_private_board_applied_commands_keep_chat_and_system_messages()
+    test_private_board_sync_returns_applied_chat_and_system_messages()
     test_private_board_reply_commands_apply_to_game_runtime()
     test_private_board_du_followup_after_applied_roll()
     print("private_board_game tests ok")
