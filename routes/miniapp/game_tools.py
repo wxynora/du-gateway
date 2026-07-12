@@ -1279,11 +1279,16 @@ def _captivity_simulator_commands_from_reply(reply_text: str, payload: dict | No
             return []
         enabled = key not in {"收回物品", "收回", "revoke"}
         secret_text = ""
+        book_title = ""
         item_text = value
         secret_match = re.search(r"(?:^|\s)(?:secret|easter_egg|彩蛋)=(.+)$", value, flags=re.I)
         if secret_match:
             secret_text = str(secret_match.group(1) or "").strip()
             item_text = value[:secret_match.start()].strip()
+        title_match = re.search(r"(?:^|\s)(?:book_title|书名)=(.+)$", item_text, flags=re.I)
+        if title_match:
+            book_title = str(title_match.group(1) or "").strip()
+            item_text = item_text[:title_match.start()].strip()
         raw_items = [item.strip() for item in re.split(r"[,，/|\s]+", item_text) if item.strip()]
         item_ids: list[str] = []
         for item in raw_items:
@@ -1293,6 +1298,8 @@ def _captivity_simulator_commands_from_reply(reply_text: str, payload: dict | No
         if not item_ids:
             return []
         command = f"{'gift_item' if enabled else 'revoke_item'} items={','.join(item_ids)}"
+        if enabled and book_title:
+            command += f" book_title={shlex.quote(book_title)}"
         if enabled and secret_text:
             command += f" secret={shlex.quote(secret_text)}"
         commands = [command]

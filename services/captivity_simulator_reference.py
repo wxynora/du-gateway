@@ -80,7 +80,7 @@ def get_reference(category: str) -> dict[str, Any]:
         return {
             "items": INVENTORY_ITEMS,
             "rule": "赠送和收回不占白天行动；已赠送物品不能重复赠送",
-            "used_item_traces": "book、switch、music_player、tablet 赠送时各设置 5 至 8 条痕迹，之后每次使用只发现下一条",
+            "used_item_traces": "book 赠送时另填 book_title；book、switch、music_player、tablet 各设置 5 至 8 条痕迹，之后每次使用只发现下一条",
             "voice_bell": "call_bell 是替被囚禁方发声的语音铃；赠送时设置囚禁方希望对方被迫说出口的成人向、强烈羞耻、自我贬低和物化、向主人请求性行为的预录台词。被囚禁方收到时不知道内容，每次按铃都会播放同一句",
         }
     if category == "night":

@@ -557,13 +557,20 @@ def test_captivity_simulator_inventory_secret_first_use_flow() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "book-secret.json"
         run_command("new_game route=captured_by_du seed=book-secret", save_path=save_path)
-        rejected = run_command("gift_item items=book secret='只有一条'", save_path=save_path)
+        missing_title = run_command(
+            "gift_item items=book secret='第一条 || 第二条 || 第三条 || 第四条 || 第五条'",
+            save_path=save_path,
+        )
+        _assert(missing_title["ok"] is False and "书名" in missing_title["text"], "gifting a book should require its title")
+        rejected = run_command("gift_item items=book book_title='夜航船' secret='只有一条'", save_path=save_path)
         _assert(rejected["ok"] is False and "至少 5 条" in rejected["text"], "used items should require at least five traces")
         gifted = run_command(
-            "gift_item items=book secret='第一页折角 || 第十二页批注 || 书签停在中段 || 封底写过日期 || 扉页留着签名'",
+            "gift_item items=book book_title='夜航船' secret='第一页折角 || 第十二页批注 || 书签停在中段 || 封底写过日期 || 扉页留着签名'",
             save_path=save_path,
         )
         _assert(gifted["ok"] is True and gifted["state"]["inventory"]["book"] is True, "a used item should accept five configured traces")
+        _assert(gifted["state"]["inventory_secrets"]["book"]["title"] == "夜航船", "the captive should see the gifted book title")
+        _assert(gifted["captor_view"]["inventory_secrets"]["book"]["title"] == "夜航船", "the captor should retain the configured book title")
         _assert("content" not in gifted["state"]["inventory_secrets"]["book"], "the captive view must not expose an unrevealed item secret")
         _assert(len(gifted["captor_view"]["inventory_secrets"]["book"]["entries"]) == 5, "the captor should retain all configured traces")
         _assert("第一页折角" not in json.dumps(gifted["state"]["event_log"], ensure_ascii=False), "gift history must not leak hidden item traces")
@@ -576,6 +583,9 @@ def test_captivity_simulator_inventory_secret_first_use_flow() -> None:
         first_read = run_command("night_action read detail=inspect_margins", save_path=save_path)
         pending = first_read["state"]["pending_event"]
         _assert(pending["type"] == "item_secret_reveal", "first use should pause on the item-secret reveal")
+        _assert(pending["item_secret"]["item_label"] == "《夜航船》", "the reveal should identify the gifted book by title")
+        _assert(pending["event"]["action_label"] == "看《夜航船》", "the night event should carry the book title")
+        _assert("翻开《夜航船》" in pending["item_secret"]["text"], "the reveal copy should include the book title")
         _assert(pending["item_secret"]["item_id"] == "book" and "第一页折角" in pending["item_secret"]["text"], "the reveal should use the first book trace")
         _assert((pending["item_secret"]["sequence"], pending["item_secret"]["total"]) == (1, 5), "the first use should expose only trace 1 of 5")
         _assert("item_secret_queue" not in pending, "the captive view should expose only the current reveal, not later queued secrets")
@@ -620,10 +630,10 @@ def test_captivity_simulator_inventory_secret_first_use_flow() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         initial = run_command("new_game route=captured_by_du seed=du-secret-command", save_path=Path(tmpdir) / "default.json")
         command = game_tools._captivity_simulator_commands_from_reply(
-            "【赠送物品：book secret=痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5】",
+            "【赠送物品：book book_title=夜航 船 secret=痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5】",
             {"captor_view": initial["captor_view"]},
         )
-        _assert(command == ["gift_item items=book secret='痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5'"], f"du should be able to configure five item traces in one gift directive: {command}")
+        _assert(command == ["gift_item items=book book_title='夜航 船' secret='痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5'"], f"du should be able to configure a book title and five item traces in one gift directive: {command}")
         sync_text = game_tools._captivity_simulator_sync_text(initial, mode="state_update")
         _assert("captivity_simulator_reference(category=inventory)" in sync_text, "du-captor prompt should point to the on-demand inventory reference")
         from services.captivity_simulator_reference import get_reference
@@ -2090,7 +2100,7 @@ def test_captivity_simulator_reply_commands_apply_to_runtime() -> None:
         game_tools.execute_game_command = fake_execute
         applied, _ = game_tools._apply_captivity_simulator_reply_commands(
             "default",
-            "【赠送物品：book】\n【过程】\n【【继续当前过程】】",
+            "【赠送物品：book book_title=夜航船 secret=痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5】\n【过程】\n【【继续当前过程】】",
             gift_payload,
         )
     finally:
@@ -2098,7 +2108,7 @@ def test_captivity_simulator_reply_commands_apply_to_runtime() -> None:
 
     _assert(
         calls == [
-            ("captivity_simulator", "gift_item items=book", "default"),
+            ("captivity_simulator", "gift_item items=book book_title='夜航船' secret='痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5'", "default"),
             ("captivity_simulator", "submit_process 继续当前过程", "default"),
         ],
         f"gift plus pending directive should execute sequentially: {calls}",

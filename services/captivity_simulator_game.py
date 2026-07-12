@@ -539,6 +539,7 @@ MAX_INVENTORY_SECRET_ENTRIES = 8
 
 def _empty_inventory_secret() -> dict[str, Any]:
     return {
+        "title": "",
         "content": "",
         "entries": [],
         "revealed_count": 0,
@@ -548,10 +549,17 @@ def _empty_inventory_secret() -> dict[str, Any]:
     }
 
 
-def _inventory_secret_reveal(item_id: str, content: str, sequence: int = 1, total: int = 1) -> dict[str, Any]:
-    label = str((INVENTORY_ITEMS.get(item_id) or {}).get("label") or item_id)
+def _inventory_secret_reveal(
+    item_id: str,
+    content: str,
+    sequence: int = 1,
+    total: int = 1,
+    *,
+    title: str = "",
+) -> dict[str, Any]:
+    label = f"《{title}》" if item_id == "book" and title else str((INVENTORY_ITEMS.get(item_id) or {}).get("label") or item_id)
     reveal_texts = {
-        "book": f"你翻开书，在被反复标记的一页看见：「{content}」",
+        "book": f"你翻开{label}，在被反复标记的一页看见：「{content}」",
         "switch": f"屏幕亮起，你在游戏记录里发现：「{content}」",
         "notebook": f"你翻开日记本，第一页写着：「{content}」",
         "music_player": f"你打开喜欢列表，里面留着：「{content}」",
@@ -1374,6 +1382,7 @@ def _normalize_state(state: dict[str, Any]) -> None:
     normalized_secrets: dict[str, dict[str, Any]] = {}
     for item_id in INVENTORY_ITEMS:
         raw_secret = raw_inventory_secrets.get(item_id) if isinstance(raw_inventory_secrets.get(item_id), dict) else {}
+        title = str(raw_secret.get("title") or "").strip()[:100] if item_id == "book" else ""
         content = str(raw_secret.get("content") or "").strip()[:500]
         raw_entries = raw_secret.get("entries") if isinstance(raw_secret.get("entries"), list) else []
         entries = [
@@ -1399,6 +1408,7 @@ def _normalize_state(state: dict[str, Any]) -> None:
         revealed_count = max(0, min(len(entries), revealed_count))
         content = entries[0] if entries else ""
         normalized_secrets[item_id] = {
+            "title": title,
             "content": content,
             "entries": entries,
             "revealed_count": revealed_count,
@@ -2338,7 +2348,13 @@ def _collect_inventory_secret_reveals(state: dict[str, Any], action: str) -> lis
         secret["revealed_count"] = revealed_count
         secret["revealed"] = revealed_count >= len(entries)
         secrets_state[item_id] = secret
-        reveals.append(_inventory_secret_reveal(item_id, content, revealed_count, len(entries)))
+        reveals.append(_inventory_secret_reveal(
+            item_id,
+            content,
+            revealed_count,
+            len(entries),
+            title=str(secret.get("title") or "").strip(),
+        ))
     state["inventory_secrets"] = secrets_state
     return reveals
 
@@ -2397,6 +2413,12 @@ def _night_action(state: dict[str, Any], args: dict[str, Any]) -> tuple[bool, li
         effects=effects,
         feeding={},
     )
+    if action == "read":
+        book_secret = (state.get("inventory_secrets") or {}).get("book") or {}
+        book_title = str(book_secret.get("title") or "").strip()
+        if book_title:
+            event["action_label"] = f"看《{book_title}》"
+            event["inventory_item"] = {"id": "book", "label": f"《{book_title}》", "title": book_title}
     if detail:
         event["night_detail"] = {"id": detail, "label": detail_options[detail]}
         event.setdefault("tags", []).append(f"night_detail:{detail}")
@@ -3184,6 +3206,7 @@ def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enab
     inventory_secrets = state.get("inventory_secrets") if isinstance(state.get("inventory_secrets"), dict) else {}
     voice_line = str(args.get("voice_line") or args.get("voice") or "").strip()
     secret_content = str(args.get("secret") or args.get("easter_egg") or args.get("彩蛋") or "").strip()
+    book_title = str(args.get("book_title") or args.get("title") or args.get("书名") or "").strip()
     new_progressive_items = [
         item for item in items
         if item in PROGRESSIVE_SECRET_ITEMS and enabled and not bool(inventory.get(item))
@@ -3198,7 +3221,7 @@ def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enab
     )
     if secret_content and len(items) != 1:
         return False, ["自定义彩蛋时一次只能赠送一件物品。"]
-    forbidden = _first_forbidden([secret_content]) if secret_content else ""
+    forbidden = _first_forbidden([secret_content, book_title]) if secret_content or book_title else ""
     if forbidden:
         return False, [f"包含禁用项：{forbidden}"]
     if (
@@ -3212,6 +3235,11 @@ def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enab
         return False, [f"使用痕迹最多填写 {MAX_INVENTORY_SECRET_ENTRIES} 条。"]
     if any(len(entry) > 200 for entry in secret_entries) or len(secret_content) > 1000:
         return False, ["每条使用痕迹最多 200 字，总计不能超过 1000 字。"]
+    if enabled and "book" in items and not bool(inventory.get("book")):
+        if not book_title:
+            return False, ["赠送书之前，需要先填写书名。"]
+        if len(book_title) > 100:
+            return False, ["书名最多 100 字。"]
     if enabled and "call_bell" in items and not bool(inventory.get("call_bell")):
         if not voice_line:
             return False, ["赠送语音铃前，囚禁方需要先设置按下时播放的台词。"]
@@ -3261,6 +3289,7 @@ def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enab
             entries = secret_entries or [str(INVENTORY_SECRET_DEFAULTS.get(item_id) or "")]
             entries = [entry for entry in entries if entry]
             inventory_secrets[item_id] = {
+                "title": book_title if item_id == "book" else "",
                 "content": entries[0] if entries else "",
                 "entries": entries,
                 "revealed_count": 0,
@@ -3278,10 +3307,13 @@ def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enab
         state_label = "已赠送" if enabled else "已收回"
         return True, [f"这些物品已经处于{state_label}状态：" + "、".join(labels)]
     action = "gift_item" if enabled else "revoke_item"
-    summary = ("赠送礼物：" if enabled else "收回物品：") + "、".join(
-        str((INVENTORY_ITEMS.get(item_id) or {}).get("label") or item_id)
+    changed_labels = [
+        f"《{book_title}》"
+        if item_id == "book" and book_title
+        else str((INVENTORY_ITEMS.get(item_id) or {}).get("label") or item_id)
         for item_id in changed
-    )
+    ]
+    summary = ("赠送礼物：" if enabled else "收回物品：") + "、".join(changed_labels)
     _append_event(
         state,
         action,
@@ -3293,7 +3325,7 @@ def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enab
     event["inventory_change"] = {
         "enabled": enabled,
         "items": changed,
-        "labels": [str((INVENTORY_ITEMS.get(item_id) or {}).get("label") or item_id) for item_id in changed],
+        "labels": changed_labels,
     }
     return True, [summary + "。本次不占用白天行动。"]
 
@@ -4242,7 +4274,7 @@ def _result(state: dict[str, Any], lines: list[str], *, command: str, ok: bool =
             "choose_recapture_followup action=punishment intensity=medium modifiers=training,sex training_contents=impact_play tools=whip line=...",
             "build_ending_seed",
             "set_config book=true switch=true notebook=true music_player=true tablet=true night_light=true pillow=true",
-            "gift_item items=book secret=可选隐藏彩蛋",
+            "gift_item items=book book_title=书名 secret=五至八条使用痕迹",
             "revoke_item items=book",
             "export_log",
         ],
@@ -4306,6 +4338,7 @@ def _view_state(state: dict[str, Any], view: str) -> dict[str, Any]:
         payload["inventory"] = deepcopy(state.get("inventory") or {})
         payload["inventory_secrets"] = {
             item_id: {
+                "title": str(secret.get("title") or "") if item_id == "book" else "",
                 "revealed": bool(secret.get("revealed")),
                 "revealed_count": int(secret.get("revealed_count") or 0),
                 "total_count": len(secret.get("entries") or ([secret.get("content")] if secret.get("content") else [])),

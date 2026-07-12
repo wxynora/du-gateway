@@ -214,6 +214,7 @@ type CaptivityView = {
   hidden_items?: Array<Record<string, unknown>>;
   inventory?: Record<string, boolean | undefined>;
   inventory_secrets?: Record<string, {
+    title?: string;
     content?: string;
     entries?: string[];
     revealed?: boolean;
@@ -2284,11 +2285,12 @@ function InventoryWarehouse({
   inventorySecrets?: CaptivityView["inventory_secrets"];
   callBellVoice?: CaptivityView["call_bell_voice"];
   disabled?: boolean;
-  onGiftInventoryItem: (itemId: InventoryItemId, secret?: string) => void;
+  onGiftInventoryItem: (itemId: InventoryItemId, secret?: string, title?: string) => void;
   onRevokeInventoryItem: (itemId: InventoryItemId) => void;
 }) {
   const [selectedItem, setSelectedItem] = useState<InventoryItemId | "">("");
   const [itemSecretText, setItemSecretText] = useState("");
+  const [bookTitle, setBookTitle] = useState("");
   const selectedOption = INVENTORY_OPTIONS.find((item) => item.id === selectedItem);
   const selectedActive = selectedItem ? Boolean(activeItems[selectedItem]) : false;
   const progressiveCopy = selectedItem ? PROGRESSIVE_SECRET_COPY[selectedItem] : undefined;
@@ -2301,9 +2303,10 @@ function InventoryWarehouse({
   function handleItemAction() {
     if (!selectedItem) return;
     if (selectedActive) onRevokeInventoryItem(selectedItem);
-    else onGiftInventoryItem(selectedItem, itemSecretText.trim() || undefined);
+    else onGiftInventoryItem(selectedItem, itemSecretText.trim() || undefined, bookTitle.trim() || undefined);
     setSelectedItem("");
     setItemSecretText("");
+    setBookTitle("");
   }
 
   return (
@@ -2314,6 +2317,7 @@ function InventoryWarehouse({
       <div className="warehouse-grid">
         {INVENTORY_OPTIONS.map((item) => {
           const active = Boolean(activeItems[item.id]);
+          const itemTitle = item.id === "book" ? inventorySecrets?.book?.title?.trim() : "";
           return (
             <button
               className={`warehouse-tile ${active ? "active" : ""} ${selectedItem === item.id ? "selected" : ""}`}
@@ -2325,10 +2329,11 @@ function InventoryWarehouse({
               onClick={() => {
                 setSelectedItem(item.id);
                 setItemSecretText("");
+                setBookTitle("");
               }}
             >
               <PaintedIcon kind={item.id} />
-              <span className="warehouse-name">{item.label}</span>
+              <span className="warehouse-name">{itemTitle ? `《${itemTitle}》` : item.label}</span>
               <span className="warehouse-use">{item.usage}</span>
               <span className="warehouse-state">{active ? "已赠送" : "可赠送"}</span>
             </button>
@@ -2344,6 +2349,20 @@ function InventoryWarehouse({
           </div>
           {!selectedActive ? (
             <>
+              {selectedItem === "book" ? (
+                <>
+                  <div className="warehouse-secret-label">书名</div>
+                  <input
+                    className="warehouse-voice-input warehouse-title-input"
+                    type="text"
+                    value={bookTitle}
+                    maxLength={100}
+                    disabled={disabled}
+                    placeholder="输入书名，可以是真实书名，也可以自己编"
+                    onChange={(event) => setBookTitle(event.target.value)}
+                  />
+                </>
+              ) : null}
               <div className="warehouse-secret-label">
                 {selectedItem === "call_bell"
                   ? "对方每次按下时，都会听见铃替他说出这句话。"
@@ -2368,6 +2387,9 @@ function InventoryWarehouse({
           ) : null}
           {selectedActive && (selectedItem === "call_bell" ? callBellVoice?.line : selectedSecret?.content || selectedEntries.length) ? (
             <div className="warehouse-voice-current">
+              {selectedItem === "book" && selectedSecret?.title ? (
+                <div className="warehouse-menu-state">书名 · 《{selectedSecret.title}》</div>
+              ) : null}
               <div className="warehouse-menu-state">
                 {selectedItem === "call_bell"
                   ? "每次播放的预录台词"
@@ -2388,6 +2410,7 @@ function InventoryWarehouse({
               type="button"
               disabled={disabled
                 || (!selectedActive && selectedItem === "call_bell" && !itemSecretText.trim())
+                || (!selectedActive && selectedItem === "book" && !bookTitle.trim())
                 || (!selectedActive && PROGRESSIVE_SECRET_ITEMS.has(selectedItem as InventoryItemId)
                   && (draftEntryCount < MIN_PROGRESSIVE_SECRET_ENTRIES || draftEntryCount > MAX_PROGRESSIVE_SECRET_ENTRIES))}
               onClick={handleItemAction}
@@ -2401,6 +2424,7 @@ function InventoryWarehouse({
               onClick={() => {
                 setSelectedItem("");
                 setItemSecretText("");
+                setBookTitle("");
               }}
             >取消</button>
           </div>
@@ -2412,8 +2436,10 @@ function InventoryWarehouse({
 
 function CaptiveRoomInventory({
   activeItems,
+  inventorySecrets,
 }: {
   activeItems: Partial<Record<InventoryItemId, boolean>>;
+  inventorySecrets?: CaptivityView["inventory_secrets"];
 }) {
   const unlockedItems = INVENTORY_OPTIONS.filter((item) => Boolean(activeItems[item.id]));
   return (
@@ -2426,7 +2452,9 @@ function CaptiveRoomInventory({
           {unlockedItems.map((item) => (
             <div className="warehouse-tile active room-inventory-tile" key={item.id}>
               <PaintedIcon kind={item.id} />
-              <span className="warehouse-name">{item.label}</span>
+              <span className="warehouse-name">{item.id === "book" && inventorySecrets?.book?.title
+                ? `《${inventorySecrets.book.title}》`
+                : item.label}</span>
               <span className="warehouse-use">{item.usage}</span>
             </div>
           ))}
@@ -3639,7 +3667,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
     );
   }
 
-  function applyInventoryItem(itemId: InventoryItemId, enabled: boolean, secret = "") {
+  function applyInventoryItem(itemId: InventoryItemId, enabled: boolean, secret = "", title = "") {
     if (previewRole) {
       setPayload((previous) => {
         if (!previous) return previous;
@@ -3655,7 +3683,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             inventory_secrets: {
               ...(previewCaptorView.inventory_secrets || {}),
               [itemId]: enabled
-                ? { content: secret || "默认彩蛋", revealed: false, configured_by: "xinyue", configured_at: "preview-local" }
+                ? { title: itemId === "book" ? title : "", content: secret || "默认彩蛋", revealed: false, configured_by: "xinyue", configured_at: "preview-local" }
                 : { content: "", revealed: false, configured_by: "", configured_at: "" },
             },
             call_bell_voice: itemId === "call_bell"
@@ -3672,7 +3700,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       enabled ? "正在赠送物品..." : "正在收回物品...",
       "STATUS: UPDATING INVENTORY",
       () => executeCaptivityCommand(
-        `${enabled ? "gift_item" : "revoke_item"} items=${itemId}${enabled && itemId === "call_bell" ? ` voice_line=${quoteArg(secret)}` : enabled && secret ? ` secret=${quoteArg(secret)}` : ""}`,
+        `${enabled ? "gift_item" : "revoke_item"} items=${itemId}${enabled && itemId === "book" ? ` book_title=${quoteArg(title)}` : ""}${enabled && itemId === "call_bell" ? ` voice_line=${quoteArg(secret)}` : enabled && secret ? ` secret=${quoteArg(secret)}` : ""}`,
       ),
     ).then((next) => continueAutomaticSync(next, true));
   }
@@ -3928,11 +3956,14 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             inventorySecrets={view.inventory_secrets || captorView.inventory_secrets}
             callBellVoice={view.call_bell_voice || captorView.call_bell_voice}
             disabled={busy}
-            onGiftInventoryItem={(itemId, voiceLine) => applyInventoryItem(itemId, true, voiceLine)}
+            onGiftInventoryItem={(itemId, secret, title) => applyInventoryItem(itemId, true, secret, title)}
             onRevokeInventoryItem={(itemId) => applyInventoryItem(itemId, false)}
           />
         ) : (
-          <CaptiveRoomInventory activeItems={inventoryActiveItems} />
+          <CaptiveRoomInventory
+            activeItems={inventoryActiveItems}
+            inventorySecrets={view.inventory_secrets || captorView.inventory_secrets}
+          />
         )}
       </section>
 
@@ -4832,8 +4863,12 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         .captivity-game .warehouse-name {
             position: relative;
             z-index: 1;
+            max-width: 100%;
             font-size: 12px;
             font-weight: 800;
+            line-height: 1.25;
+            overflow-wrap: anywhere;
+            text-align: center;
         }
         .captivity-game .warehouse-use {
             position: relative;
@@ -4909,6 +4944,10 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             min-height: 84px;
             margin-top: 10px;
             font-size: 12px;
+        }
+        .captivity-game .warehouse-title-input {
+            min-height: 40px;
+            height: 40px;
         }
         .captivity-game .warehouse-voice-current {
             margin-top: 10px;
