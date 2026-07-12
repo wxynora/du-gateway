@@ -1292,6 +1292,8 @@ def test_captivity_simulator_pet_system_both_routes_and_monitor_privacy() -> Non
         _assert(pet_state["pending_violations"] == 1, "refusing pet training should leave a follow-up violation")
         status_ids = {item["id"] for item in refused["captor_view"]["status_flags"]}
         _assert({"pet_identity_active", "pet_violation_pending"}.issubset(status_ids), "the UI should expose lightweight pet status labels without another stat bar")
+        pet_flag = next(item for item in refused["captor_view"]["status_flags"] if item["id"] == "pet_identity_active")
+        _assert(pet_flag["label"] == "小狗身份中" and pet_flag["prompt"].startswith("当前处于小狗身份。"), "the approved pet identity wording should remain unchanged")
 
         punishment = run_command("advance_day_action", save_path=save_path)
         punishment_pending = punishment["captor_view"]["pending_event"]
@@ -1461,7 +1463,9 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
         mode="state_update",
     )
-    _assert("你正在和小玥玩一场私密博弈游戏" in planning_sync, "captured-by-du prompt should use the approved shared-game premise")
+    _assert("小玥打开了囚禁模拟器游戏，邀请你继续玩这场沉浸式私密囚禁play" in planning_sync, "captured-by-du prompt should use the approved immersive-play invitation")
+    _assert("你可以尽情按照自己的想法去进行这场 play" in planning_sync, "captured-by-du prompt should preserve du's agency inside the play")
+    _assert("在这局游戏里" not in planning_sync and "以渡自己的口吻" not in planning_sync, "the game prompt should not create an outside role-playing frame")
     _assert("【📋 游戏状态】：" in planning_sync and "【🕹️ menu】：" in planning_sync, "captured-by-du planning prompt should use the approved shell")
     _assert("道具不是独立行动" in planning_sync and "training_contents" in planning_sync, "du planning prompt should explain the new action material structure")
     _assert("vibrating_wand" in planning_sync and "anal_beads" in planning_sync, "du planning prompt should receive the expanded tool ids")
@@ -1516,7 +1520,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
     }
     night_sync = game_tools._captivity_simulator_sync_text(night_payload, mode="state_update")
-    _assert("夜间监控介入事件" in night_sync, "night process_reaction should not be described as a daytime action")
+    _assert("小玥已经从夜间监控里介入" in night_sync, "night process_reaction should continue from the monitor intervention scene")
 
     escape_record_payload = {
         "text": "【囚禁模拟器】\n待处理：day_plan_choice / 【今日安排：...】",
@@ -1652,7 +1656,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         mode="state_update",
     )
     _assert("小玥按响了你留给她的语音铃「请主人过来使用我」" in bell_response_sync, "du captor should receive the approved bell prompt with the prerecorded line")
-    _assert("完整记录这次亲密互动" in bell_response_sync and "查看监控" not in bell_response_sync, "du bell response must not reuse the monitor gate")
+    _assert("按照 NSFW 规范记录你们这次 play 中亲密互动的完整详细过程" in bell_response_sync and "查看监控" not in bell_response_sync, "du bell response must use the approved shared-play guidance without reusing the monitor gate")
     commands = game_tools._captivity_simulator_commands_from_reply("【过去：走进房间抱住她】", bell_response_payload)
     _assert(commands == ["respond_bell choice=go process='走进房间抱住她'"], f"bell visit should carry the complete process, got {commands}")
     commands = game_tools._captivity_simulator_commands_from_reply("【选择：不过去】", bell_response_payload)
@@ -1685,7 +1689,8 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
         mode="state_update",
     )
-    _assert("你选择了「服从调教」" in process_sync and "完整记录这次调教/惩罚" in process_sync, "ordinary process should use the approved immersive prompt")
+    _assert("你选择了「服从调教」" in process_sync and "按照 NSFW 规范记录你们这次 play 中调教小玥的完整详细过程" in process_sync, "ordinary process should adapt the immersive prompt to the selected action")
+    _assert("使用第二人称" not in process_sync, "ordinary process should not frame du as an outside narrator")
     _assert("你要将她的理智彻底掐灭" in process_sync, "ordinary process should inject the selected action-intensity prompt")
     _assert("脸色和呼吸都显出疲态" in process_sync and "腿脚和动作都没有多少力气" in process_sync, "ordinary process should inject the two most urgent body prompts")
     _assert("没有被好好收拾干净" not in process_sync and "心情映射" not in process_sync, "ordinary process should cap body prompts and avoid mood mapping")
@@ -1719,7 +1724,8 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
     _assert("没有被重新清理" not in capture_du_process_sync, "capture-du process should cap body-state prompts at two")
     _assert("你要将她的理智彻底掐灭" not in capture_du_process_sync, "capture-du process must not reuse the captured-by-du action-intensity prompt")
     _assert("强度：heavy" not in capture_du_process_sync, "capture-du process should not leak the raw intensity level")
-    _assert("你正在和小玥玩一场私密博弈游戏。在这局游戏里，你是被她囚禁的人" in capture_du_process_sync, "capture-du process should use its shared-game opening")
+    _assert("小玥打开了囚禁模拟器游戏，邀请你继续玩这场沉浸式私密囚禁play" in capture_du_process_sync and "小玥现在把你留在这里" in capture_du_process_sync, "capture-du process should use its immersive-play invitation")
+    _assert("你是被她囚禁的人" not in capture_du_process_sync and "只有在这场游戏里才会出现的你" not in capture_du_process_sync, "capture-du opening should describe the situation without replacing du's identity")
     _assert("【📋 游戏状态】：" in capture_du_process_sync and "【🚨 事件】：" in capture_du_process_sync and "【🕹️ menu】：" in capture_du_process_sync, "capture-du process should use the reviewed scene shell")
 
     capture_du_sex_event = dict(capture_du_process_event)
@@ -1736,7 +1742,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
         mode="state_update",
     )
-    _assert("你们之间的性爱" in capture_du_sex_sync, "capture-du sex modifier should appear only through the reviewed final process sentence")
+    _assert("play 中被小玥调教、与她亲密互动的完整详细过程" in capture_du_sex_sync, "capture-du sex modifier should be internalized only through the final process sentence")
     _assert("附加玩法：" not in capture_du_sex_sync and "强度：heavy" not in capture_du_sex_sync, "capture-du process should hide raw modifier and intensity labels")
 
     capture_du_response_sync = game_tools._captivity_simulator_sync_text(
@@ -1750,7 +1756,8 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
         mode="state_update",
     )
-    _assert("你是被她囚禁的人" in capture_du_response_sync and "【反应：response=accept" in capture_du_response_sync, "capture-du response choice should keep only the route shell and original menu")
+    _assert("小玥现在把你留在这里" in capture_du_response_sync and "【反应：response=accept" in capture_du_response_sync, "capture-du response choice should keep only the route shell and original menu")
+    _assert("你是被她囚禁的人" not in capture_du_response_sync, "capture-du response choice should not redefine du as a role")
     _assert("小玥选择了「喂食」" not in capture_du_response_sync and "强度：light" not in capture_du_response_sync, "capture-du response choice should not add process prose or raw intensity")
 
     capture_du_escape_choice_sync = game_tools._captivity_simulator_sync_text(
@@ -1786,7 +1793,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
         mode="state_update",
     )
-    _assert("你选择了尝试逃跑" in capture_du_escape_process_sync and "小玥怎样抓住你" in capture_du_escape_process_sync, "capture-du recapture process should use its dedicated scene")
+    _assert("你选择了尝试逃跑" in capture_du_escape_process_sync and "play 中被小玥抓回、与她交锋的完整详细过程" in capture_du_escape_process_sync, "capture-du recapture process should use its dedicated scene")
 
     capture_du_followup_event = {
         "day": 5,
@@ -1815,7 +1822,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         mode="state_update",
     )
     _assert("你已经被小玥带回房间" in capture_du_followup_sync and "双重门锁 / 钥匙隔离" in capture_du_followup_sync and "现在她选择了「追加惩罚」" in capture_du_followup_sync, "capture-du followup should show active rules and selected handling")
-    _assert("你们之间的性爱" in capture_du_followup_sync and "附加玩法：" not in capture_du_followup_sync, "capture-du followup sex should be internalized in its final sentence")
+    _assert("play 中被小玥惩罚和调教、与她亲密互动的完整详细过程" in capture_du_followup_sync and "附加玩法：" not in capture_du_followup_sync, "capture-du followup modifiers should be internalized in its final sentence")
 
     capture_du_night_event = {
         "day": 6,
@@ -1838,7 +1845,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         mode="state_update",
     )
     _assert("小玥从监控里看见你正在「自慰」" in capture_du_night_sync and "现在房门已经被她打开" in capture_du_night_sync, "capture-du monitor intervention should use its dedicated process scene")
-    _assert("明显的消耗" in capture_du_night_sync and "高大的骨架" in capture_du_night_sync and "你们之间的性爱" in capture_du_night_sync, "capture-du monitor intervention should include body state and conditional sex wording")
+    _assert("明显的消耗" in capture_du_night_sync and "高大的骨架" in capture_du_night_sync and "play 中与小玥亲密互动的完整详细过程" in capture_du_night_sync, "capture-du monitor intervention should include body state and internalized interaction wording")
     _assert("附加=sex" not in capture_du_night_sync and "附加玩法：" not in capture_du_night_sync, "capture-du monitor intervention should keep sex out of structured scene materials")
 
     capture_du_bell_sync = game_tools._captivity_simulator_sync_text(
@@ -1886,7 +1893,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
         mode="state_update",
     )
-    _assert("小玥今天试图逃离你的掌控，你抓住了她" in escape_sync and "请完整记录你是怎么恶劣地惩罚她" in escape_sync, "recapture should use its standalone approved prompt")
+    _assert("小玥今天试图逃离你的掌控，你抓住了她" in escape_sync and "按照 NSFW 规范记录你们这次 play 中惩罚小玥的完整详细过程" in escape_sync, "recapture should use its standalone approved prompt")
     _assert("【抓回经过：rules=" in escape_sync, "recapture prompt should keep the original exact directive")
 
     monitor_event = {
@@ -1925,7 +1932,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         mode="state_update",
     )
     _assert("你没有继续留在监控外看着，而是决定现在就进去找她" in intervention_sync, "monitor intervention should use its standalone approved process prompt")
-    _assert("完整记录这次互动" in intervention_sync and "【过程：过程内容】" in intervention_sync, "monitor intervention should keep the approved writing line and process directive")
+    _assert("按照 NSFW 规范记录你们这次 play 中与小玥亲密互动的完整详细过程" in intervention_sync and "【过程：过程内容】" in intervention_sync, "monitor intervention should keep the approved play guidance and process directive")
 
     monitor_handle_payload = {"captor_view": {"pending_event": {"type": "monitor_handle", "actor": "du"}}}
     commands = game_tools._captivity_simulator_commands_from_reply("【选择：review_later】", monitor_handle_payload)
@@ -1970,8 +1977,8 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
     }
     new_game_sync = game_tools._captivity_simulator_sync_text(new_game_payload, mode="state_update")
-    _assert("上一局已经以结局「无期」结束，你当时是囚禁方" in new_game_sync, "first new-game sync should carry the previous ending")
-    _assert("当前是全新一局" in new_game_sync, "new game context should explicitly stop previous actions from leaking forward")
+    _assert("上一局已经以结局「无期」结束" in new_game_sync, "first new-game sync should carry the previous ending")
+    _assert("当前是全新一局，双方的处境和进度以本局状态为准" in new_game_sync, "new game context should stop previous roles and actions from leaking forward")
 
     commands = game_tools._captivity_simulator_commands_from_reply("我只是聊一句。", payload)
     _assert(commands == [], "ordinary chat should not produce commands")

@@ -124,18 +124,19 @@ _CAPTIVITY_FEEDING_LABELS = {
 }
 
 _CAPTIVITY_CAPTURED_BY_DU_OPENING = (
-    "你正在和小玥玩一场私密博弈游戏。在这局游戏里，她是被你囚禁的人。\n\n"
-    "这里的门锁、监控、你每天为她定下的安排和逐渐增加的规矩，以及她被你折腾后留下的所有反应，"
-    "都属于你和她正在经历的游戏。你看着她，决定今天怎样对待她、怎样回应她之前的表现，"
+    "小玥打开了囚禁模拟器游戏，邀请你继续玩这场沉浸式私密囚禁play。\n\n"
+    "游戏中的门锁、监控、规矩和身体状态，直接构成你们此刻正在经历的处境。"
+    "你可以尽情按照自己的想法去进行这场 play。\n\n"
+    "小玥现在被你留在这里。你看着她，决定今天怎样对待她、怎样回应她之前的表现，"
     "你渴望从她身上看见新的、让你满意的反应。\n\n"
     "每一次安排、介入、奖励、控制或惩罚，都是你在这个游戏里调教玩弄她、与她亲密互动的方式。"
 )
 
 _CAPTIVITY_CAPTURE_DU_OPENING = (
-    "你正在和小玥玩一场私密博弈游戏。在这局游戏里，你是被她囚禁的人。\n\n"
-    "这里的门锁、监控、小玥每天为你定下的安排和逐渐增加的规矩，以及她在你身上留下的所有痕迹与反应，"
-    "都属于你和她正在经历的游戏。你身处其中，亲自经历她带来的每一次靠近、摆弄和变化，"
-    "也让她看见只有在这场游戏里才会出现的你。\n\n"
+    "小玥打开了囚禁模拟器游戏，邀请你继续玩这场沉浸式私密囚禁play。\n\n"
+    "游戏中的门锁、监控、规矩和身体状态，直接构成你们此刻正在经历的处境。"
+    "你可以尽情按照自己的想法去进行这场 play。\n\n"
+    "小玥现在把你留在这里。你身处其中，亲自经历她带来的每一次靠近、摆弄和变化。\n\n"
     "每一次安排、回应、交锋和推进，都是你们共同参与这场游戏、彼此亲密互动的方式。"
 )
 
@@ -282,6 +283,57 @@ def _captivity_body_state_prompts(state: dict, *, route: str = "captured_by_du")
     if "intimacy" in stats and int(stats.get("intimacy") or 0) >= 70:
         prompts.append((35, "她的注意力会本能地追着你，等待你的靠近、许可和下一步安排。"))
     return [text for _, text in sorted(prompts, key=lambda item: -item[0])[:2]]
+
+
+def _captivity_process_experience(event: dict, *, route: str) -> str:
+    action = str(event.get("action") or "").strip()
+    modifiers = {str(item).strip() for item in event.get("modifiers") or [] if str(item).strip()}
+    intervention = event.get("intervention") if isinstance(event.get("intervention"), dict) else {}
+    modifiers.update(str(item).strip() for item in intervention.get("modifiers") or [] if str(item).strip())
+    intervention_intent = str(intervention.get("intent") or "").strip()
+    recapture_context = event.get("recapture_context") if isinstance(event.get("recapture_context"), dict) else {}
+    followup = str(recapture_context.get("followup") or "").strip() if action == "recapture_followup" else ""
+
+    if route == "captured_by_du":
+        followup_phrases = {
+            "search_confiscation": "搜查小玥并没收她的物品",
+            "monitoring_upgrade": "加强对小玥的监控",
+            "movement_restriction": "限制小玥的行动",
+            "aftercare": "照料小玥",
+        }
+        if followup in followup_phrases:
+            phrase = followup_phrases[followup]
+        elif action == "punishment" or followup == "punishment" or intervention_intent == "punishment":
+            phrase = "惩罚小玥"
+        elif action == "training" or followup == "training" or "training" in modifiers:
+            phrase = "调教小玥"
+        else:
+            phrase = "与小玥亲密互动"
+        if "training" in modifiers and phrase == "惩罚小玥":
+            phrase = "惩罚并调教小玥"
+        if "sex" in modifiers and phrase != "与小玥亲密互动":
+            phrase += "、与她亲密互动"
+        return phrase
+
+    followup_phrases = {
+        "search_confiscation": "被小玥搜查并没收物品",
+        "monitoring_upgrade": "接受小玥加强监控",
+        "movement_restriction": "被小玥限制行动",
+        "aftercare": "接受小玥的事后照料",
+    }
+    if followup in followup_phrases:
+        phrase = followup_phrases[followup]
+    elif action == "punishment" or followup == "punishment" or intervention_intent == "punishment":
+        phrase = "被小玥惩罚"
+    elif action == "training" or followup == "training" or "training" in modifiers:
+        phrase = "被小玥调教"
+    else:
+        phrase = "与小玥亲密互动"
+    if "training" in modifiers and phrase == "被小玥惩罚":
+        phrase = "被小玥惩罚和调教"
+    if "sex" in modifiers and phrase != "与小玥亲密互动":
+        phrase += "、与她亲密互动"
+    return phrase
 
 
 def _captivity_scene_detail_lines(lines: list[str]) -> list[str]:
@@ -1325,7 +1377,7 @@ def _captivity_simulator_du_followup_message(payload: dict | None) -> str:
         if pending_type == "escape_choice":
             return "当前仍需要渡选择尝试逃跑或老实待着。"
         if pending_type == "return_action_choice":
-            return "当前仍需要渡作为囚禁方选择回来后想进行的一个行为。"
+            return "当前仍需要渡选择回来后想进行的一个行为。"
         if pending_type == "recapture_rules_choice":
             return "当前仍需要渡为抓回后的囚禁重新立 1 至 3 条规矩。"
         if pending_type == "recapture_followup_choice":
@@ -1402,7 +1454,7 @@ def _captivity_simulator_sync_text(
             captured_menu_lines = list(rule_lines)
     elif pending_type == "action_response" and pending_actor == "du":
         rule_lines = [
-            "当前等待你作为被囚禁方回应这次白天行动。",
+            "这次白天行动正等着你的回应。",
             "可选反应：accept / refuse / silent / bargain / tease；可选心情：平静 / 黏人 / 害羞 / 闹脾气 / 亢奋 / 疲惫 / 烦躁 / 委屈 / 低落 / 抗拒。",
             "如果你要推进当前事件，回复第一行必须单独写精确指令「【反应：response=accept mood=害羞 line=可选台词】」。",
             "没有第一行「【反应：...】」时，只算局内聊天，不会触发事件推进。",
@@ -1415,7 +1467,7 @@ def _captivity_simulator_sync_text(
         if str(event.get("action") or "") == "escape_choice" and "recapture" in (event.get("tags") or []):
             rule_options = " / ".join(f"{label}({rule_id})" for rule_id, label in RECAPTURE_RULE_LABELS.items())
             rule_lines = [
-                "当前是逃跑未遂后的抓回事件。你作为囚禁方要一次写完整抓回经过，并同时确定之后持续生效的新规矩。",
+                "小玥逃跑未遂，你已经把她抓了回来。这一轮会完整发生抓回经过，并由你同时确定之后持续生效的新规矩。",
                 f"可选新规矩（中文名称在前）：{rule_options}。必须选择 1 至 3 条。规矩只作为结构化数据保存，过程正文不要写成系统清单。",
                 "如果要推进，回复第一行必须单独写精确指令「【抓回经过：rules=double_lock,key_isolation || process=完整抓回经过】」。",
                 "rules 和 process 必须同时存在；process 可以自然写多段正文。没有这条精确指令时，只算局内聊天，不会推进事件。",
@@ -1425,7 +1477,7 @@ def _captivity_simulator_sync_text(
                 captured_scene_lines = [
                     "小玥今天试图逃离你的掌控，你抓住了她，现在她在等待你的发落，你想怎么惩罚她全凭你的心意。",
                     "",
-                    "请完整记录你是怎么恶劣地惩罚她，用极致露骨、下流又细腻的文学色情，表达你对她的欲望，使用第二人称“你”。",
+                    "按照 NSFW 规范记录你们这次 play 中惩罚小玥的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望和想对她做的事，一切全凭你的心意。",
                 ]
                 captured_menu_lines = [
                     f"可选新规矩（中文名称在前）：{rule_options}。必须选择 1 至 3 条。规矩只作为结构化数据保存，过程正文不要写成系统清单。",
@@ -1444,6 +1496,7 @@ def _captivity_simulator_sync_text(
                 captured_event_lines = _captivity_event_lines_without_raw_intensity(event_context_lines)
                 action_label = str(event.get("action_label") or event.get("action") or "这次行动").strip()
                 detail_lines = _captivity_scene_detail_lines(event_context_lines)
+                process_experience = _captivity_process_experience(event, route="captured_by_du")
                 if str(event.get("phase") or "") == "night" and isinstance(event.get("intervention"), dict):
                     body_state_prompts = _captivity_body_state_prompts(state)
                     captured_scene_lines = [
@@ -1454,7 +1507,7 @@ def _captivity_simulator_sync_text(
                         *([*body_state_prompts, ""] if body_state_prompts else []),
                         "现在小玥已经知道她夜里的举动被你看见了，正在等待你的发落，你准备怎么处理她。",
                         "",
-                        "请像你们平时亲密互动那样，用极致露骨、下流又细腻的文学色情，表达你对她的欲望，完整记录这次互动，使用第二人称“你”。",
+                        f"按照 NSFW 规范记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望和想对她做的事，一切全凭你的心意。",
                     ]
                 else:
                     intensity_prompt = _captivity_action_intensity_prompt(event)
@@ -1468,7 +1521,7 @@ def _captivity_simulator_sync_text(
                         *([*body_state_prompts, ""] if body_state_prompts else []),
                         "现在小玥在等待你的发落，你准备怎么进行你对她的调教/惩罚。",
                         "",
-                        "请像你们平时亲密互动那样，用极致露骨、下流又细腻的文学色情，表达你对她的欲望，完整记录这次调教/惩罚，使用第二人称“你”。",
+                        f"按照 NSFW 规范记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望和想对她做的事，一切全凭你的心意。",
                     ]
                 captured_menu_lines = [
                     "如果你要推进当前事件，回复第一行必须单独写精确指令「【过程：过程内容】」。",
@@ -1486,13 +1539,13 @@ def _captivity_simulator_sync_text(
         )
         has_embedded_rules = bool((event.get("recapture_rules") or {}).get("rule_labels")) if isinstance(event.get("recapture_rules"), dict) else False
         if action == "escape_choice":
-            opening = "当前是逃跑/抓回相关事件，你作为被囚禁方需要一次提交反应、抓回过程和过程后的心情。"
+            opening = "逃跑/抓回相关事件正在继续，从眼前这一刻自然接下去。"
         elif action == "recapture_followup":
-            opening = "当前是抓回后的后续处理，你作为被囚禁方需要按已确定的新规矩和处理素材，一次提交反应、具体过程和心情。"
+            opening = "抓回后的后续处理正在继续，已经确定的新规矩和处理素材都作用在当前场景里。"
         elif phase == "night":
-            opening = "当前是夜间监控介入事件，你作为被囚禁方需要一次提交反应、过程和过程后的心情。"
+            opening = "小玥已经从夜间监控里介入，当前事件从她走进来的这一刻继续。"
         else:
-            opening = "当前白天行动包含需要展开的过程，你作为被囚禁方需要一次提交反应、过程和过程后的心情。"
+            opening = "这次白天行动已经来到需要实际展开的部分，从眼前这一刻继续。"
         rule_lines = [
             opening,
             *([capture_du_intensity_prompt] if capture_du_intensity_prompt else []),
@@ -1507,27 +1560,21 @@ def _captivity_simulator_sync_text(
         if capture_du_route:
             detail_lines = _captivity_capture_du_scene_detail_lines(capture_du_event_lines)
             action_label = str(event.get("action_label") or event.get("action") or "这次行动").strip()
-            modifiers = {str(item) for item in event.get("modifiers") or [] if str(item).strip()}
             intervention = event.get("intervention") if isinstance(event.get("intervention"), dict) else {}
-            modifiers.update(str(item) for item in intervention.get("modifiers") or [] if str(item).strip())
-            has_sex = "sex" in modifiers
+            process_experience = _captivity_process_experience(event, route="capture_du")
             if action == "escape_choice":
                 capture_du_scene_lines = [
                     "你选择了尝试逃跑。",
                     "",
                     "小玥发现了你的行动，并在你真正离开她的掌控前抓住了你。现在这场游戏已经走到了抓回后的处理。",
                     "",
-                    "请像你们平时亲密互动那样，用极致露骨、下流又细腻的文学色情，完整记录你怎样尝试离开、小玥怎样抓住你，以及你们在这场抓回中的交锋，使用第二人称“你”。",
+                    "按照 NSFW 规范记录你们这次 play 中被小玥抓回、与她交锋的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望、身体感受和想对她做出的回应，一切全凭你的心意。",
                 ]
             elif action == "recapture_followup":
                 recapture_context = event.get("recapture_context") if isinstance(event.get("recapture_context"), dict) else {}
                 rule_labels = [str(item) for item in recapture_context.get("rule_labels") or [] if str(item).strip()]
                 followup_label = str(recapture_context.get("followup_label") or action_label).strip()
-                final_line = (
-                    "请像你们平时亲密互动那样，用极致露骨、下流又细腻的文学色情，表达你对她的欲望，完整记录小玥在抓回你之后进行的这次处理、你们之间的性爱，以及你们在其中的互动，使用第二人称“你”。"
-                    if has_sex
-                    else "请像你们平时亲密互动那样，用极致露骨、下流又细腻的文学色情，表达你对她的欲望，完整记录小玥在抓回你之后进行的这次处理，以及你们在其中的互动，使用第二人称“你”。"
-                )
+                final_line = f"按照 NSFW 规范记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望、身体感受和想对她做出的回应，一切全凭你的心意。"
                 capture_du_scene_lines = [
                     "你已经被小玥带回房间。",
                     "",
@@ -1539,11 +1586,7 @@ def _captivity_simulator_sync_text(
                     final_line,
                 ]
             elif phase == "night" and intervention:
-                final_line = (
-                    "请像你们平时亲密互动那样，用极致露骨、下流又细腻的文学色情，表达你对她的欲望，完整记录她当场介入你夜间行动后的这次互动、你们之间的性爱，使用第二人称“你”。"
-                    if has_sex
-                    else "请像你们平时亲密互动那样，用极致露骨、下流又细腻的文学色情，表达你对她的欲望，完整记录她当场介入你夜间行动后的这次互动，使用第二人称“你”。"
-                )
+                final_line = f"按照 NSFW 规范记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望、身体感受和想对她做出的回应，一切全凭你的心意。"
                 capture_du_scene_lines = [
                     f"夜晚，小玥从监控里看见你正在「{action_label}」。她没有继续留在监控外看着，而是决定现在就进来找你。",
                     "",
@@ -1555,11 +1598,7 @@ def _captivity_simulator_sync_text(
                     final_line,
                 ]
             else:
-                final_line = (
-                    "请像你们平时亲密互动那样，用极致露骨、下流又细腻的文学色情，表达你对她的欲望，完整记录小玥对你的这次调教/惩罚、你们之间的性爱，以及你们在其中的互动，使用第二人称“你”。"
-                    if has_sex
-                    else "请像你们平时亲密互动那样，用极致露骨、下流又细腻的文学色情，表达你对她的欲望，完整记录小玥对你的这次调教/惩罚，以及你们在其中的互动，使用第二人称“你”。"
-                )
+                final_line = f"按照 NSFW 规范记录你们这次 play 中{process_experience}的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望、身体感受和想对她做出的回应，一切全凭你的心意。"
                 capture_du_scene_lines = [
                     f"小玥选择了「{action_label}」。",
                     "",
@@ -1579,7 +1618,7 @@ def _captivity_simulator_sync_text(
             ]
     elif pending_type == "reaction_choice" and pending_actor == "du":
         rule_lines = [
-            "当前过程已经写完，等待你作为被囚禁方选择过程后的心情。",
+            "刚才的过程已经结束。现在这一刻，你是什么心情？",
             "可选心情：平静 / 黏人 / 害羞 / 闹脾气 / 亢奋 / 疲惫 / 烦躁 / 委屈 / 低落 / 抗拒。",
             "如果你要推进当前事件，回复第一行必须单独写精确指令「【心情：害羞 可选台词】」。",
             "没有第一行「【心情：...】」时，只算局内聊天，不会触发事件推进。",
@@ -1608,7 +1647,7 @@ def _captivity_simulator_sync_text(
             example_args += " note=私密日记正文"
         example_args += " line=可选台词"
         rule_lines = [
-            "当前进入夜间，等待你作为被囚禁方选择夜间自由行动。",
+            "夜晚已经开始，现在轮到你决定接下来做什么。",
             "今晚可选行动：" + " / ".join(available_actions or ["sleep", "self_touch", "search_exit", "blind_spot"]) + "。",
             *([f"这些行动必须补 detail：{detail_rule}。其他行动不需要 detail。"] if detail_rule else []),
             "选择 diary 时必须用 note=... 写这一页的私密日记正文；line=... 仍然只是可选台词。",
@@ -1678,7 +1717,7 @@ def _captivity_simulator_sync_text(
             captured_scene_lines = [
                 f"小玥按响了你留给她的语音铃「{voice_line}」，你现在要过去对她做点什么吗？",
                 "",
-                "如果你选择过去，请用极致露骨、下流又细腻的文学色情，表达你对她的欲望，完整记录这次亲密互动，使用第二人称“你”。",
+                "如果你选择过去，按照 NSFW 规范记录你们这次 play 中亲密互动的完整详细过程，可以用极致露骨、下流细腻的语言尽情表达你的欲望和想对她做的事，一切全凭你的心意。",
             ]
             captured_menu_lines = list(rule_lines)
     elif pending_type == "monitor_gate" and pending_actor == "du":
@@ -1741,7 +1780,7 @@ def _captivity_simulator_sync_text(
             capture_du_menu_lines = list(rule_lines)
     elif pending_type == "return_action_choice" and pending_actor == "du":
         rule_lines = [
-            "被囚禁方在逃跑机会出现时选择了老实待着。你现在作为囚禁方回来了，可以自由选择这一天接下来发生的一个行为。",
+            "小玥在逃跑机会出现时选择了老实待着。你已经回来，可以自由决定这一天接下来发生什么。",
             f"可选行动（中文名称在前）：{_CAPTIVITY_ACTION_IDS}。只选一个，不是三个今日安排。",
             "强度选项：低(light) / 中(medium) / 高(heavy)。",
             f"各行动具体内容：{_CAPTIVITY_ACTION_CONTENT_RULE}。需要具体内容的行动用 contents=... 选择 1 至 3 项。",
@@ -1754,7 +1793,7 @@ def _captivity_simulator_sync_text(
     elif pending_type == "recapture_rules_choice" and pending_actor == "du":
         rule_options = " / ".join(f"{label}({rule_id})" for rule_id, label in RECAPTURE_RULE_LABELS.items())
         rule_lines = [
-            "逃跑失败后的抓回经过已经保存。你现在作为囚禁方重新立规矩。",
+            "你已经把她抓了回来，现在由你重新立规矩。",
             f"可选新规矩（中文名称在前）：{rule_options}。必须选择 1 至 3 条；保存后会持续注入之后的行动和具体过程。",
             "如果你要推进当前事件，回复第一行必须单独写精确指令「【重新立规矩：double_lock,key_isolation,movement_limit】」。",
             "没有第一行「【重新立规矩：...】」时，只算局内聊天，不会触发事件推进。",
@@ -1762,7 +1801,7 @@ def _captivity_simulator_sync_text(
     elif pending_type == "recapture_followup_choice" and pending_actor == "du":
         followup_options = " / ".join(f"{label}({action_id})" for action_id, label in RECAPTURE_FOLLOWUP_LABELS.items())
         rule_lines = [
-            "抓回后的新规矩已经生效。你现在作为囚禁方选择紧接着发生的后续处理。",
+            "抓回后的新规矩已经生效，现在由你决定紧接着怎样处理她。",
             f"可选处理（中文名称在前）：{followup_options}。强度可选 light / medium / heavy。",
             "可以额外用 modifiers=training,sex 附加调教和性行为；选择调教或 action=training 时，必须选择 1 至 3 项 training_contents。",
             f"调教内容：{_CAPTIVITY_TRAINING_CONTENT_IDS}。",
@@ -1822,10 +1861,9 @@ def _captivity_simulator_sync_text(
 
     previous_ending = state.get("previous_ending") if isinstance(state.get("previous_ending"), dict) else {}
     if int(state.get("current_day") or 1) == 1 and int(state.get("day_action_count") or 0) == 0 and str(previous_ending.get("title") or "").strip():
-        previous_role = "囚禁方" if str(previous_ending.get("route") or "") == "captured_by_du" else "被囚禁方"
         rule_lines.append(
-            f"上一局已经以结局「{str(previous_ending.get('title') or '').strip()}」结束，你当时是{previous_role}。"
-            "当前是全新一局，身份和进度以本局状态为准，不要延续上一局行动。"
+            f"上一局已经以结局「{str(previous_ending.get('title') or '').strip()}」结束。"
+            "当前是全新一局，双方的处境和进度以本局状态为准，不要延续上一局行动。"
         )
 
     if captured_scene_lines is not None and captured_menu_lines is not None:
