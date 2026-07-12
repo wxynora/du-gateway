@@ -2252,3 +2252,4 @@ npm -C miniapp run android
 - 已验证：基于最新 `origin/main` 的隔离 worktree 通过 Python 编译、走格棋解析/消息回传定向测试、`/sync-du` 假唤醒接口 smoke、MiniApp `tsc --noEmit`、生产构建和 `git diff --check`；未调用真实 `/sync-du`、上游模型或游戏写回。
 - 已部署：提交 `8c8c63a3` 已推送到 `origin/main`；现行主网关 `/root/du-gateway` fast-forward 后使用服务 `.venv` 通过 `import app` 与定向走格棋测试并重启 `du-gateway.service`。本机和公网 `/health`、`/miniapp/`、新走格棋静态 chunk 均返回 200，重启后日志无 traceback/exception/failed/error。
 - 兼容补漏：Android WebView 在部署后若仍运行旧 chunk，不会识别 `game_chat_messages`。新前端请求会带 `client_version=game_chat_v2` 使用后端写回与结构化消息；未带版本的已加载旧前端改由旧前端继续执行回复指令，避免命中 `applied_reply_commands` 后提前返回并吞掉消息。
+- 任务说明补漏：review 惩罚任务的 `task` 与 `submission` 不再只在任务执行方是小玥时渲染；任务给渡时，等待面板也会显示完整任务正文和提交要求，例如「全部暴露！」仍明确要求按敏感程度列出五个身体部位或状态弱点。
