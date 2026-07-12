@@ -1370,11 +1370,11 @@ def _captivity_simulator_du_followup_message(payload: dict | None) -> str:
         if pending_type == "night_action_choice":
             return "当前仍需要渡选择夜间自由行动。"
         if pending_type == "bell_voice_reveal":
-            return "语音铃第一次播放了预设台词，当前仍需要渡确认已经听清。"
+            return "语音铃正在播放本次预设台词，当前仍需要渡确认已经听清。"
         if pending_type == "bell_response_choice":
             return "小玥按响了语音铃，当前仍需要渡决定是否过去。"
         if pending_type == "item_secret_reveal":
-            return "物品里预先藏好的彩蛋第一次出现了，当前仍需要渡确认已经看完。"
+            return "物品里的一条使用痕迹出现了，当前仍需要渡确认已经看完。"
         if pending_type == "monitor_gate":
             return "当前仍需要渡决定是否打开封存的夜间监控。"
         if pending_type == "monitor_handle":
@@ -1669,8 +1669,8 @@ def _captivity_simulator_sync_text(
         bell_voice = pending_event.get("bell_voice") if isinstance(pending_event.get("bell_voice"), dict) else {}
         voice_line = str(bell_voice.get("line") or "").strip()
         rule_lines = [
-            "你刚刚第一次按下语音铃，直到这一刻才听见囚禁方事先录好的台词。",
-            "台词正文会列在当前事件上下文里；按被囚禁方当下的感受自然接住，不要改写或替囚禁方重新设置。",
+            "你刚刚按下语音铃，本次实际播放的是囚禁方事先录好的固定台词。",
+            "每次按铃，台词正文都会列在当前事件上下文里；按被囚禁方当下的感受自然接住，不要改写或替囚禁方重新设置。",
             "听清后，回复第一行必须单独写精确指令「【确认铃声】」。",
             "没有这条精确指令时，只算局内聊天，不会把本次按铃交给囚禁方处理。",
         ]
@@ -1682,7 +1682,7 @@ def _captivity_simulator_sync_text(
                 "",
                 f"「{voice_line}」",
                 "",
-                "这是你第一次听见这只铃真正会替你说出什么。",
+                "这只铃每次都会替你说出同一句预录台词。",
             ]
             capture_du_menu_lines = [
                 "听清后，回复第一行必须单独写精确指令「【确认铃声】」。",
@@ -1692,8 +1692,10 @@ def _captivity_simulator_sync_text(
         item_secret = pending.get("item_secret") if isinstance(pending.get("item_secret"), dict) else {}
         item_label = str(item_secret.get("item_label") or "物品").strip()
         reveal_text = str(item_secret.get("text") or "").strip()
+        sequence = int(item_secret.get("sequence") or 1)
+        total = int(item_secret.get("total") or 1)
         rule_lines = [
-            f"你第一次使用{item_label}，直到这一刻才发现囚禁方预先藏在里面的彩蛋。",
+            f"你这次使用{item_label}，发现了囚禁方留下的第 {sequence} / {total} 条使用痕迹。",
             *([f"你看到的是：{reveal_text}"] if reveal_text else []),
             "按被囚禁方当下的感受自然接住，不要改写或替囚禁方重新设置。",
             "看完后，回复第一行必须单独写精确指令「【确认彩蛋】」。",
@@ -1701,7 +1703,7 @@ def _captivity_simulator_sync_text(
         ]
         if capture_du_route:
             capture_du_scene_lines = [
-                f"你今晚使用了小玥留给你的「{item_label}」，也第一次发现了她事先藏在里面的内容。",
+                f"你今晚使用了小玥留给你的「{item_label}」，发现了她留下的第 {sequence} / {total} 条使用痕迹。",
                 "",
                 f"「{reveal_text}」",
             ]
@@ -1831,10 +1833,10 @@ def _captivity_simulator_sync_text(
             "赠送和收回物品是独立于三个白天行动的随时行为，不占行动格，也不推进或替换当前 pending；白天、行动之间和夜间都可以进行。",
             "物品 ID：book / switch / notebook / music_player / tablet / night_light / pillow / call_bell。",
             *(["当前已赠送：" + " / ".join(gifted_items) + "。"] if gifted_items else ["当前还没有赠送物品。"]),
-            "每件普通物品都有一个只在被囚禁方第一次使用时出现的隐藏彩蛋。单独赠送可写「【赠送物品：book secret=夹页里藏着的话】」来自定义；不写 secret 时使用该物品的默认彩蛋。自定义彩蛋时一次只送一件。",
-            "不同物品会用各自载体展示：书是夹页留言、Switch 是用户昵称、日记本是第一页、音乐播放器是歌单名、平板是锁屏留言、小夜灯是底部文字、抱枕是耳朵内侧布标。赠送时不要提前把内容告诉被囚禁方。",
-            "普通物品批量赠送仍可写「【赠送物品：book,notebook】」，收回时写「【收回物品：book】」。",
-            "call_bell 是替被囚禁方发声的语音铃。赠送时必须同时设置一段你希望被囚禁方按铃后被迫由铃替其说出口的台词，并写「【赠送语音铃：台词内容】」。这不是你对被囚禁方说的话；被囚禁方在收到时不会得知台词，第一次按下后才会听见。",
+            "书、Switch、音乐播放器和平板是囚禁方自己使用过再送出的物品。单独赠送时必须写 5 至 8 条使用痕迹，用 || 分隔，例如「【赠送物品：book secret=痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5】」；被囚禁方以后每次使用只发现下一条。",
+            "四种旧物痕迹分别是：书的页码标记或批注、Switch 的游戏记录、音乐播放器的喜欢歌曲或歌单、平板的浏览或观看记录。日记本、小夜灯和抱枕仍只在第一次使用时出现一条固定文案。赠送时不要提前把内容告诉被囚禁方。",
+            "一次性文案物品可批量赠送，例如「【赠送物品：notebook,pillow】」；四种旧物必须逐件设置。收回时可写「【收回物品：book】」。",
+            "call_bell 是替被囚禁方发声的语音铃。赠送时必须同时设置一段你希望被囚禁方按铃后被迫由铃替其说出口的台词，并写「【赠送语音铃：台词内容】」。这不是你对被囚禁方说的话；被囚禁方在收到时不会得知台词，第一次按下才会知道内容，之后每次按下都会再次播放，给你的当前事件也会每次带上本次实际台词。",
             "设置语音铃时，台词倾向成人向、强烈羞耻、自我贬低和物化、向主人请求性行为，像是被囚禁方借铃说出的、很没有下限的话；这只是倾向引导，具体内容由你根据关系和当时情境决定，不要照搬固定句式。",
             "如果想在处理当前事件时顺带赠送，第一行写赠送或收回，第二行再写当前 pending 所需的精确指令；系统会先记录物品变化，再继续处理当前事件。",
         ]

@@ -485,6 +485,8 @@ def test_captivity_simulator_inventory_night_actions_and_call_bell() -> None:
 
 
 def test_captivity_simulator_voice_bell_first_use_privacy() -> None:
+    from routes.miniapp import game_tools
+
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "voice-bell.json"
         initial = run_command("new_game route=captured_by_du seed=voice-bell", save_path=save_path)
@@ -533,7 +535,17 @@ def test_captivity_simulator_voice_bell_first_use_privacy() -> None:
         state["pending_event"] = None
         save_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         later_ring = run_command("night_action ring_bell", save_path=save_path)
-        _assert(later_ring["state"]["pending_event"]["type"] == "bell_response_choice", "later rings should go straight to du's visit choice")
+        later_pending = later_ring["state"]["pending_event"]
+        _assert(later_pending["type"] == "bell_voice_reveal", "every ring should replay the configured line before du handles it")
+        _assert(later_pending["event"]["bell_voice"]["line"] == "只有按下以后才听见", "later playback should retain the same configured line")
+        _assert(later_pending["event"]["bell_voice"]["first_reveal"] is False, "later playback should not be marked as first discovery")
+        acknowledged_again = run_command("ack_bell_voice", save_path=save_path)
+        du_pending = acknowledged_again["captor_view"]["pending_event"]
+        _assert(du_pending["event"]["bell_voice"]["line"] == "只有按下以后才听见", "du's handling event must include the actual line on every use")
+        context_lines = game_tools._captivity_simulator_event_context_lines(du_pending)
+        _assert("语音铃播放：只有按下以后才听见" in context_lines, "the dynamic system context must include the actual line on every use")
+        sync_text = game_tools._captivity_simulator_sync_text(acknowledged_again, mode="state_update")
+        _assert("语音铃播放：只有按下以后才听见" in sync_text, "du's backend prompt must include the repeated playback line")
         ignored = run_command("respond_bell choice=skip", save_path=save_path)
         _assert(ignored["ok"] is True, "du should be able to decline a later bell without opening monitor")
 
@@ -544,11 +556,16 @@ def test_captivity_simulator_inventory_secret_first_use_flow() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "book-secret.json"
         run_command("new_game route=captured_by_du seed=book-secret", save_path=save_path)
-        gifted = run_command("gift_item items=book secret='只在翻开时出现'", save_path=save_path)
-        _assert(gifted["ok"] is True and gifted["state"]["inventory"]["book"] is True, "a normal item should accept an optional custom secret")
+        rejected = run_command("gift_item items=book secret='只有一条'", save_path=save_path)
+        _assert(rejected["ok"] is False and "至少 5 条" in rejected["text"], "used items should require at least five traces")
+        gifted = run_command(
+            "gift_item items=book secret='第一页折角 || 第十二页批注 || 书签停在中段 || 封底写过日期 || 扉页留着签名'",
+            save_path=save_path,
+        )
+        _assert(gifted["ok"] is True and gifted["state"]["inventory"]["book"] is True, "a used item should accept five configured traces")
         _assert("content" not in gifted["state"]["inventory_secrets"]["book"], "the captive view must not expose an unrevealed item secret")
-        _assert(gifted["captor_view"]["inventory_secrets"]["book"]["content"] == "只在翻开时出现", "the captor should retain the configured item secret")
-        _assert("只在翻开时出现" not in json.dumps(gifted["state"]["event_log"], ensure_ascii=False), "gift history must not leak a hidden item secret")
+        _assert(len(gifted["captor_view"]["inventory_secrets"]["book"]["entries"]) == 5, "the captor should retain all configured traces")
+        _assert("第一页折角" not in json.dumps(gifted["state"]["event_log"], ensure_ascii=False), "gift history must not leak hidden item traces")
 
         state = _read(save_path)
         state["phase"] = "night"
@@ -558,7 +575,8 @@ def test_captivity_simulator_inventory_secret_first_use_flow() -> None:
         first_read = run_command("night_action read detail=inspect_margins", save_path=save_path)
         pending = first_read["state"]["pending_event"]
         _assert(pending["type"] == "item_secret_reveal", "first use should pause on the item-secret reveal")
-        _assert(pending["item_secret"]["item_id"] == "book" and "只在翻开时出现" in pending["item_secret"]["text"], "the reveal should use the book-specific carrier copy")
+        _assert(pending["item_secret"]["item_id"] == "book" and "第一页折角" in pending["item_secret"]["text"], "the reveal should use the first book trace")
+        _assert((pending["item_secret"]["sequence"], pending["item_secret"]["total"]) == (1, 5), "the first use should expose only trace 1 of 5")
         _assert("item_secret_queue" not in pending, "the captive view should expose only the current reveal, not later queued secrets")
         acknowledged = run_command("ack_item_secret", save_path=save_path)
         _assert(acknowledged["state"]["pending_event"]["type"] == "monitor_gate", "the final reveal confirmation should return to the existing monitor gate")
@@ -570,7 +588,9 @@ def test_captivity_simulator_inventory_secret_first_use_flow() -> None:
         state["pending_event"] = None
         save_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         later_read = run_command("night_action read detail=inspect_margins", save_path=save_path)
-        _assert(later_read["state"]["pending_event"]["type"] == "monitor_gate", "later uses should skip an already revealed item secret")
+        later_secret = later_read["state"]["pending_event"]["item_secret"]
+        _assert((later_secret["sequence"], later_secret["total"]) == (2, 5), "later uses should reveal exactly the next trace")
+        _assert("第十二页批注" in later_secret["text"] and "第一页折角" not in later_secret["text"], "later use must not repeat an earlier trace")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "sleep-secret-queue.json"
@@ -593,22 +613,22 @@ def test_captivity_simulator_inventory_secret_first_use_flow() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "default-secret.json"
         run_command("new_game route=captured_by_du seed=default-secret", save_path=save_path)
-        defaulted = run_command("gift_item items=switch", save_path=save_path)
-        _assert(defaulted["captor_view"]["inventory_secrets"]["switch"]["content"] == "PLAYER 2", "blank normal-item gifting should use its fixed default secret")
+        defaulted = run_command("gift_item items=notebook", save_path=save_path)
+        _assert(defaulted["captor_view"]["inventory_secrets"]["notebook"]["content"] == "第一页留给你。", "one-time items should keep their fixed default secret")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         initial = run_command("new_game route=captured_by_du seed=du-secret-command", save_path=Path(tmpdir) / "default.json")
         command = game_tools._captivity_simulator_commands_from_reply(
-            "【赠送物品：book secret=夹页里藏着的话】",
+            "【赠送物品：book secret=痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5】",
             {"captor_view": initial["captor_view"]},
         )
-        _assert(command == ["gift_item items=book secret='夹页里藏着的话'"], f"du should be able to configure a normal-item secret in the gift directive: {command}")
+        _assert(command == ["gift_item items=book secret='痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5'"], f"du should be able to configure five item traces in one gift directive: {command}")
         sync_text = game_tools._captivity_simulator_sync_text(initial, mode="state_update")
-        _assert("第一次使用时出现的隐藏彩蛋" in sync_text and "赠送时不要提前" in sync_text, "du-captor guidance should explain hidden first-use item secrets")
+        _assert("5 至 8 条使用痕迹" in sync_text and "以后每次使用只发现下一条" in sync_text, "du-captor guidance should explain progressive item traces")
 
     frontend = (ROOT / "miniapp/src/ui/tabs/CaptivitySimulatorGameTab.tsx").read_text(encoding="utf-8")
     _assert("ItemSecretRevealPanel" in frontend and "ack_item_secret" in frontend, "the frontend should render and acknowledge generic item-secret reveals")
-    _assert("可选：设置第一次使用时出现的隐藏彩蛋" in frontend, "the warehouse should let the local captor configure normal-item secrets")
+    _assert("已填写 {draftEntryCount} 条" in frontend and "MIN_PROGRESSIVE_SECRET_ENTRIES = 5" in frontend, "the warehouse should require at least five traces for used items")
 
 
 def test_captivity_simulator_feeding_aftereffects_and_tolerance() -> None:
@@ -1268,6 +1288,21 @@ def test_captivity_simulator_bladder_control_captive_route_only() -> None:
         status = run_command("status", save_path=save_path)
         _assert("bladder" not in status["captor_view"], "the captor route should not expose an unused bladder state")
 
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_path = Path(tmpdir) / "bladder-natural-progression.json"
+        run_command("new_game route=captured_by_du seed=bladder-natural", save_path=save_path)
+        run_command(
+            "plan_day action=feeding water=glass || action=rest contents=quiet_time || action=cleaning",
+            save_path=save_path,
+        )
+        first = run_command("respond_action accept mood=平静", save_path=save_path)
+        _assert(first["state"]["bladder"]["pressure"] == 1, "one glass should start with mild bladder pressure")
+        second = run_command("respond_action accept mood=平静", save_path=save_path)
+        _assert(second["state"]["bladder"]["pressure"] == 2, "a later daytime action should advance unresolved pressure")
+        night = run_command("respond_action accept mood=平静", save_path=save_path)
+        _assert(night["state"]["phase"] == "night" and night["state"]["bladder"]["pressure"] == 3, "unresolved pressure should keep advancing into night")
+        _assert((night["state"].get("night_condition") or {}).get("label") == "快忍不住了", "night UI should receive the derived bladder condition")
+
 
 def test_captivity_simulator_pet_system_both_routes_and_monitor_privacy() -> None:
     from routes.miniapp import game_tools
@@ -1376,8 +1411,8 @@ def test_captivity_simulator_du_captor_inventory_commands() -> None:
         save_path = Path(tmpdir) / "du-captor-gifts.json"
         initial = run_command("new_game route=captured_by_du seed=du-captor-gifts", save_path=save_path)
         command_payload = {"captor_view": initial["captor_view"]}
-        commands = game_tools._captivity_simulator_commands_from_reply("【赠送物品：book,notebook】", command_payload)
-        _assert(commands == ["gift_item items=book,notebook"], f"du gift directive should map to the independent gift command: {commands}")
+        commands = game_tools._captivity_simulator_commands_from_reply("【赠送物品：notebook,pillow】", command_payload)
+        _assert(commands == ["gift_item items=notebook,pillow"], f"du one-time-item gift directive should map to the independent gift command: {commands}")
         before_pending = initial["captor_view"]["pending_event"]
         before_count = initial["state"]["day_action_count"]
         gifted = run_command(commands[0], save_path=save_path)
@@ -1395,11 +1430,11 @@ def test_captivity_simulator_du_captor_inventory_commands() -> None:
         _assert("替我说出预设台词" not in json.dumps(gift_event, ensure_ascii=False), "gift history must not expose the hidden voice line")
         _assert(gifted["captor_view"]["call_bell_voice"]["line"] == "替我说出预设台词", "captor state should retain the configured voice line")
         event_count = len(gifted["captor_view"]["event_log"])
-        repeated = run_command("gift_item items=book", save_path=save_path)
+        repeated = run_command("gift_item items=notebook", save_path=save_path)
         _assert(len(repeated["captor_view"]["event_log"]) == event_count, "repeating an already-gifted item must not create a duplicate gift event")
         _assert("已经处于已赠送状态" in repeated["text"], "duplicate gifting should return an explicit already-gifted state")
         sync_text = game_tools._captivity_simulator_sync_text(gifted, mode="state_update")
-        _assert("当前已赠送：book / notebook / call_bell" in sync_text, "du should see current gifted inventory before planning")
+        _assert("当前已赠送：notebook / pillow / call_bell" in sync_text, "du should see current gifted inventory before planning")
         _assert("替被囚禁方发声" in sync_text and "向主人请求性行为" in sync_text, "du-captor prompt should guide the intended speaker and adult humiliation tendency")
         _assert("随时行为" in sync_text and "不占行动格" in sync_text, "du should be told that gifting is independent from the three actions")
 
@@ -1410,7 +1445,10 @@ def test_captivity_simulator_du_captor_inventory_commands() -> None:
         _assert("diary" in night["state"]["available_night_actions"], "du-gifted notebook should unlock diary for the local captive")
         _assert("ring_bell" in night["state"]["available_night_actions"], "du-gifted call bell should unlock ringing")
         night_pending = night["state"]["pending_event"]
-        night_gift = run_command("gift_item items=tablet", save_path=save_path)
+        night_gift = run_command(
+            "gift_item items=tablet secret='浏览记录1 || 浏览记录2 || 浏览记录3 || 浏览记录4 || 浏览记录5'",
+            save_path=save_path,
+        )
         _assert(night_gift["state"]["phase"] == "night" and night_gift["state"]["day_action_count"] == 3, "night gifting must not advance the phase or action count")
         _assert(night_gift["state"]["pending_event"] == night_pending, "night gifting should preserve the current pending state exactly")
         _assert("watch_video" in night_gift["state"]["available_night_actions"], "a night gift should immediately unlock its related night action")
@@ -2960,6 +2998,8 @@ def test_captivity_simulator_night_detail_branches_and_privacy() -> None:
             state["phase"] = "night"
             state["pending_event"] = None
             state["inventory"][item_id] = True
+            state["inventory_secrets"][item_id]["entries"] = ["已揭示的旧记录"]
+            state["inventory_secrets"][item_id]["revealed_count"] = 1
             state["inventory_secrets"][item_id]["revealed"] = True
             save_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
             run_command(f"night_action {action} detail={detail}", save_path=save_path)
@@ -3097,7 +3137,7 @@ def test_captivity_simulator_scene_copy_and_transition_contract() -> None:
     _assert("initialLoadStartedRef" in frontend and "ROUTE_STORAGE_KEY" not in frontend, "startup should restore from the backend save exactly once instead of trusting a local route flag")
     _assert('title: silent ? "读取存档失败" : "刷新失败"' in frontend, "a failed initial save read should stop on a retryable error instead of showing a new-game selector")
     _assert("env(safe-area-inset-top" in frontend and "env(safe-area-inset-bottom" in frontend, "the game should reserve phone safe areas")
-    _assert("min-height: calc(56px + var(--safe-bottom))" in frontend and "min-height: 44px" in frontend, "the fixed footer should keep a safe bottom inset and touch-sized controls")
+    _assert("--footer-bar-height: calc(56px + var(--safe-bottom))" in frontend and "min-height: var(--footer-bar-height)" in frontend and "min-height: 44px" in frontend, "the fixed footer should keep a safe bottom inset and touch-sized controls")
     for item_id in ("book", "switch", "notebook", "music_player", "tablet", "night_light", "pillow", "call_bell"):
         _assert(f"item-reveal-{item_id}" in frontend, f"{item_id} should have a distinct first-discovery animation hook")
 
