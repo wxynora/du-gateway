@@ -2226,4 +2226,5 @@ npm -C miniapp run android
 - 已修复：直接选择“老实待着”先进入完整“正在同步渡...”等待页；刷新时未完成则继续等待，完成后才进入界面。状态摘要使用“你选择了老实待着，等待渡回来后决定接下来怎么做”。
 - 已隔离：本次发布工作树以最新 `origin/main` 为基线，只包含囚禁模拟器专属源码、路由、测试、计划文档和本地构建产物；随机模仿塔防、R2 拆分、迁移文档及主工作树其他脏改动不进入本提交。
 - 已验证：隔离版本通过囚禁模拟器全量规则测试、私密棋盘回归、后端 `py_compile`、`import app`、MiniApp `tsc --noEmit`、生产构建和 `git diff --check`；应用内预览实测“老实待着”加载未完成时刷新继续停留、完成后刷新进入界面。
-- 未完成 / 下一步：提交推送并重启完整 `du-*` 服务集与 nginx，再检查公网 `/health` 和 `/miniapp/`。
+- 已部署：源码提交 `7b85afd5` 已推送到 `origin/main`；现行主网关 `du-gateway -> 100.119.107.127` fast-forward 后通过后端编译与 `import app`，并重启 `du-gateway`、`du-realtime`、SumiTalk worker、Telegram proactive/webhook worker、微信 iLink 和 nginx。7 个服务均为 `active`，服务器本机与公网 `/health` 正常，公网 `/miniapp/`、新囚禁 chunk 和锁链背景图均返回 200，重启后网关日志未发现 traceback/exception/failed/error。
+- 未完成 / 下次继续：五档行动反应仍待重做；特殊状态措辞继续按实际需要收束，监控介入保持不增加强度。
