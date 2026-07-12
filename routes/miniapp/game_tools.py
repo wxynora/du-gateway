@@ -470,11 +470,16 @@ def _sync_message_counts_as_user_activity(mode: str, message: str) -> bool:
     return str(mode or "").strip().lower() == "chat" and bool(str(message or "").strip())
 
 
-def _captivity_simulator_sync_counts_as_user_activity(mode: str, message: str) -> bool:
+def _captivity_simulator_sync_counts_as_user_activity(
+    mode: str,
+    message: str,
+    *,
+    user_initiated: bool = False,
+) -> bool:
     normalized_mode = str(mode or "").strip().lower()
     if normalized_mode == "chat":
         return bool(str(message or "").strip())
-    return normalized_mode in {"state_update", "ending"}
+    return bool(user_initiated) and normalized_mode in {"state_update", "ending"}
 
 
 def _private_board_pending_activity_signature(payload: dict | None) -> str:
@@ -2055,6 +2060,7 @@ def register_routes(bp) -> None:
         body = request.get_json(silent=True) or {}
         save_id = str(body.get("save_id") or "default").strip() or "default"
         user_message = str(body.get("message") or "").strip()
+        user_initiated = body.get("user_initiated") is True
         mode = str(body.get("mode") or "state_update").strip().lower()
         if mode not in {"chat", "state_update", "ending"}:
             mode = "state_update"
@@ -2111,7 +2117,11 @@ def register_routes(bp) -> None:
         )
         ok = bool((wakeup or {}).get("ok"))
         synced_at = now_beijing_iso()
-        if ok and _captivity_simulator_sync_counts_as_user_activity(mode, user_message):
+        if ok and _captivity_simulator_sync_counts_as_user_activity(
+            mode,
+            user_message,
+            user_initiated=user_initiated,
+        ):
             _mark_captivity_simulator_sync_activity(
                 synced_at,
                 detail={
@@ -2120,7 +2130,7 @@ def register_routes(bp) -> None:
                     "window_id": window_id,
                     "target": target,
                     "mode": mode,
-                    "phase": "user_message",
+                    "phase": "user_message" if mode == "chat" else "gameplay_action",
                 },
             )
         reply_text = str((wakeup or {}).get("reply_text") or (wakeup or {}).get("reply_preview") or "")

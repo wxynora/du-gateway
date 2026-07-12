@@ -18,6 +18,13 @@ def _assert(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def _disable_shared_activity_clock_writes() -> None:
+    """Route tests use shared env config, so never let this script touch the live activity clock."""
+    from storage import r2_store
+
+    r2_store.save_last_user_activity_at = lambda *args, **kwargs: False
+
+
 def _read(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -2121,8 +2128,16 @@ def test_captivity_simulator_sync_activity_policy() -> None:
     _assert(game_tools._sync_message_counts_as_user_activity("chat", "") is False, "empty chat should not count as user activity")
     _assert(game_tools._captivity_simulator_sync_counts_as_user_activity("chat", "小玥说了一句") is True, "captivity chat should count as user activity")
     _assert(game_tools._captivity_simulator_sync_counts_as_user_activity("chat", "") is False, "empty captivity chat should not count as user activity")
-    _assert(game_tools._captivity_simulator_sync_counts_as_user_activity("state_update", "") is True, "successful captivity state sync should count as user activity")
-    _assert(game_tools._captivity_simulator_sync_counts_as_user_activity("ending", "") is True, "successful captivity ending sync should count as user activity")
+    _assert(game_tools._captivity_simulator_sync_counts_as_user_activity("state_update", "") is False, "automatic captivity state sync must not count as user activity")
+    _assert(game_tools._captivity_simulator_sync_counts_as_user_activity("ending", "") is False, "automatic captivity ending sync must not count as user activity")
+    _assert(
+        game_tools._captivity_simulator_sync_counts_as_user_activity("state_update", "", user_initiated=True) is True,
+        "explicit gameplay progress should count as user activity",
+    )
+    _assert(
+        game_tools._captivity_simulator_sync_counts_as_user_activity("ending", "", user_initiated=True) is True,
+        "an ending reached by an explicit gameplay action should count as user activity",
+    )
     _assert(
         "captivity_simulator_user_interaction" in r2_store.LAST_USER_ACTIVITY_ALLOWED_SOURCES,
         "captivity sync activity source must be accepted by the global interaction clock",
@@ -2298,18 +2313,26 @@ def test_captivity_simulator_sync_route_pending_semantics() -> None:
             calls.clear()
             wakeups.clear()
             scenario["name"] = "no_directive"
-            response = client.post("/miniapp-api/game-tools/captivity_simulator/sync-du", json={"save_id": "default"})
+            response = client.post(
+                "/miniapp-api/game-tools/captivity_simulator/sync-du",
+                json={"save_id": "default", "user_initiated": True},
+            )
             data = response.get_json()
             _assert(response.status_code == 200, f"no_directive should be 200, got {response.status_code}: {data}")
             _assert(data["ok"] is True and data["sync_result"] == "no_directive", "plain chat should not advance pending")
             _assert("applied_reply_commands" not in data and "wakeup" not in data, "public no_directive payload should not expose internal sync protocol")
             _assert(data["state"]["pending_event"]["type"] == "monitor_gate", "pending should stay untouched")
             _assert("captor_view" not in data, "captured-by-du sync response should not expose captor view to the local captive")
-            _assert(len(activity_marks) == 1 and activity_marks[0][1]["mode"] == "state_update", f"successful gameplay sync should mark user activity once: {activity_marks}")
+            _assert(
+                len(activity_marks) == 1
+                and activity_marks[0][1]["mode"] == "state_update"
+                and activity_marks[0][1]["phase"] == "gameplay_action",
+                f"successful gameplay sync should mark one explicit gameplay action: {activity_marks}",
+            )
 
             response = client.post(
                 "/miniapp-api/game-tools/captivity_simulator/sync-du",
-                json={"save_id": "default", "mode": "state_update", "message": "自动同步说明"},
+                json={"save_id": "default", "mode": "state_update", "message": "自动同步说明", "user_initiated": True},
             )
             data = response.get_json()
             _assert(response.status_code == 200, f"state_update message sync should succeed, got {response.status_code}: {data}")
@@ -2339,7 +2362,10 @@ def test_captivity_simulator_sync_route_pending_semantics() -> None:
             wakeups.clear()
             activity_marks.clear()
             scenario["name"] = "applied_with_warning"
-            response = client.post("/miniapp-api/game-tools/captivity_simulator/sync-du", json={"save_id": "default"})
+            response = client.post(
+                "/miniapp-api/game-tools/captivity_simulator/sync-du",
+                json={"save_id": "default", "user_initiated": True},
+            )
             data = response.get_json()
             _assert(response.status_code == 200, f"applied_with_warning should keep applied state, got {response.status_code}: {data}")
             _assert(data["ok"] is False and data["sync_result"] == "applied_with_warning", "followup failure should be a partial success warning")
@@ -2531,6 +2557,8 @@ def test_captivity_simulator_ending_sync_notifies_once() -> None:
     old_execute = game_tools.execute_game_command
     old_wakeup = conversation_followup.send_captivity_simulator_wakeup
     old_context = reply_channel_context.resolve_recent_reply_context
+    old_activity_marker = game_tools._mark_captivity_simulator_sync_activity
+    activity_marks: list[tuple[str, dict]] = []
 
     def fake_execute(game_id: str, command: str, save_id: str) -> dict:
         nonlocal current_payload
@@ -2557,6 +2585,9 @@ def test_captivity_simulator_ending_sync_notifies_once() -> None:
         reply_channel_context.resolve_recent_reply_context = lambda default_target="": {
             "channel": "sumitalk", "window_id": "ending_test", "target": default_target or "device", "meta": {},
         }
+        game_tools._mark_captivity_simulator_sync_activity = lambda synced_at, detail=None: activity_marks.append(
+            (str(synced_at), dict(detail or {}))
+        )
         with app.test_client() as client:
             first = client.post("/miniapp-api/game-tools/captivity_simulator/sync-du", json={"save_id": "default", "mode": "ending"})
             first_data = first.get_json()
@@ -2571,10 +2602,12 @@ def test_captivity_simulator_ending_sync_notifies_once() -> None:
             second_data = second.get_json()
             _assert(second.status_code == 200 and second_data["sync_result"] == "ending_already_notified", f"repeat ending sync should be idempotent: {second_data}")
             _assert(len(wakeup_events) == 1, "repeat ending sync must not wake Du again")
+            _assert(not activity_marks, f"automatic ending notification must not update user activity: {activity_marks}")
     finally:
         game_tools.execute_game_command = old_execute
         conversation_followup.send_captivity_simulator_wakeup = old_wakeup
         reply_channel_context.resolve_recent_reply_context = old_context
+        game_tools._mark_captivity_simulator_sync_activity = old_activity_marker
 
 
 def test_captivity_simulator_sync_route_voice_bell_followup() -> None:
@@ -3070,6 +3103,7 @@ def test_captivity_simulator_scene_copy_and_transition_contract() -> None:
 
 
 if __name__ == "__main__":
+    _disable_shared_activity_clock_writes()
     test_captivity_simulator_new_game_views()
     test_captivity_simulator_history_is_complete_and_date_filterable()
     test_captivity_simulator_captured_by_du_event_loop()

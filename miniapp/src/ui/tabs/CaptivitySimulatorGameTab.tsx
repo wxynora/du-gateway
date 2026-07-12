@@ -1746,12 +1746,16 @@ async function executeCaptivityCommand(command: string): Promise<CaptivityPayloa
   return payload;
 }
 
-async function syncCaptivityToDu(mode: "chat" | "state_update" | "ending", message = ""): Promise<CaptivityPayload> {
+async function syncCaptivityToDu(
+  mode: "chat" | "state_update" | "ending",
+  message = "",
+  userInitiated = false,
+): Promise<CaptivityPayload> {
   try {
     const payload = await apiJson<CaptivityPayload>("/miniapp-api/game-tools/captivity_simulator/sync-du", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ save_id: SAVE_ID, mode, message }),
+      body: JSON.stringify({ save_id: SAVE_ID, mode, message, user_initiated: userInitiated }),
     });
     if (!payload?.ok && !["applied", "applied_with_warning"].includes(String(payload?.sync_result || ""))) {
       throw new Error(payload?.message || payload?.error || "同步渡失败");
@@ -3153,14 +3157,14 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       void runWithWait(
         "正在同步渡...",
         "STATUS: ENCRYPTING DATA",
-        () => syncCaptivityToDu(mode),
+        () => syncCaptivityToDu(mode, "", true),
       ).then(handleResult);
       return;
     }
     setBackgroundSyncing(true);
     lastFailedRetryRef.current = null;
     setHasFailedRetry(false);
-    void syncCaptivityToDu(mode)
+    void syncCaptivityToDu(mode, "", true)
       .then((next) => {
         applyPayload(next);
         handleResult(next);
