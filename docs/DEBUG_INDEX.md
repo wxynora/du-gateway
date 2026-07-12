@@ -2234,4 +2234,5 @@ npm -C miniapp run android
 - 已调整：过程收尾改为引用现有 NSFW 规范并记录两人本次 play 的完整详细过程；渡囚禁小玥时保留“欲望和想对她做的事”，小玥囚禁渡时保留“欲望、身体感受和想对她做出的回应”。移除“使用第二人称‘你’”及重复的“你作为囚禁方 / 被囚禁方”出戏措辞。
 - 边界保持：小狗身份整组文案、action × intensity、身体状态、动态场景主体、`【游戏状态】` / `【事件】` / `【menu】` 和全部 pending 精确指令均未修改；唤醒词继续只写“请自然回应”，没有新增“以渡自己的口吻”或其他身份提醒。
 - 已验证：后端 `py_compile`、`import app`、囚禁模拟器全量规则测试、私密棋盘回归与目标文件 `git diff --check` 通过；测试使用临时本地存档，没有调用真实 `/sync-du`、R2、VPS 或上游模型。
-- 未完成 / 下次继续：本轮未提交、未推送、未部署；实际模型代入感仍需部署后用两条路线各跑一轮真实 App 对话验收。
+- 已部署：源码提交 `2cdd14a9` 已推送到 `origin/main`；现行主网关 `/root/du-gateway` fast-forward 后通过后端编译、`import app` 和囚禁模拟器全量规则测试，并重启 `du-gateway`、`du-realtime`、SumiTalk worker、Telegram proactive/webhook worker、微信 iLink 和 nginx。7 个服务均为 `active`，服务器本机与公网 `/health` 正常，公网 `/miniapp/` 返回 200，线上源码已确认包含新常驻开头，重启后日志未发现 traceback/exception/failed/error。
+- 未完成 / 下次继续：实际模型代入感仍需在真实 App 中用两条路线各跑一轮对话验收。
