@@ -1138,7 +1138,7 @@ def test_private_board_sync_returns_applied_chat_and_system_messages() -> None:
         with app.test_client() as client:
             response = client.post(
                 "/game-tools/private_board/sync-du",
-                json={"save_id": "s1", "mode": "state_update", "message": "现在轮到渡。"},
+                json={"save_id": "s1", "client_version": "game_chat_v2", "mode": "state_update", "message": "现在轮到渡。"},
             )
     finally:
         game_tools.execute_game_command = old_execute
@@ -1157,6 +1157,62 @@ def test_private_board_sync_returns_applied_chat_and_system_messages() -> None:
         {"speaker": "du", "text": "我先往前走，等你来追。"},
         {"speaker": "system", "text": "渡发送【掷骰】，已执行他的行动。"},
     ], f"sync response should preserve Du and system messages, got {data.get('game_chat_messages')}")
+
+
+def test_private_board_legacy_sync_leaves_reply_for_loaded_old_frontend() -> None:
+    from flask import Blueprint, Flask
+
+    from routes.miniapp import game_tools
+    from services import conversation_followup
+    from services import reply_channel_context
+
+    commands: list[str] = []
+    old_execute = game_tools.execute_game_command
+    old_wakeup = conversation_followup.send_private_board_wakeup
+    old_context = reply_channel_context.resolve_recent_reply_context
+
+    def fake_execute(game_id: str, command: str, save_id: str) -> dict:
+        commands.append(command)
+        return {
+            "ok": True,
+            "text": "【涩涩走格棋】\n现在轮到渡。",
+            "state": {"turn_actor": "du", "pending_event": None, "game_over": False},
+        }
+
+    reply_text = "【掷骰】\n我先走一步。"
+    try:
+        game_tools.execute_game_command = fake_execute
+        conversation_followup.send_private_board_wakeup = lambda **kwargs: {
+            "ok": True,
+            "reply_text": reply_text,
+            "reply_preview": reply_text,
+        }
+        reply_channel_context.resolve_recent_reply_context = lambda default_target="": {
+            "channel": "tg",
+            "window_id": "tg_test",
+            "target": "123",
+            "meta": {},
+        }
+
+        app = Flask(__name__)
+        bp = Blueprint("private_board_legacy_chat_test", __name__)
+        game_tools.register_routes(bp)
+        app.register_blueprint(bp)
+        with app.test_client() as client:
+            response = client.post(
+                "/game-tools/private_board/sync-du",
+                json={"save_id": "s1", "mode": "state_update", "message": "现在轮到渡。"},
+            )
+    finally:
+        game_tools.execute_game_command = old_execute
+        conversation_followup.send_private_board_wakeup = old_wakeup
+        reply_channel_context.resolve_recent_reply_context = old_context
+
+    data = response.get_json() or {}
+    _assert(response.status_code == 200, f"legacy private board sync should succeed: {response.get_data(as_text=True)}")
+    _assert(commands == ["status"], f"legacy sync must leave command execution to the loaded old frontend, got {commands}")
+    _assert(data.get("reply_text") == reply_text, f"legacy sync should preserve the complete reply, got {data.get('reply_text')}")
+    _assert(data.get("applied_reply_commands") == [], f"legacy sync must not trigger the old frontend early return, got {data.get('applied_reply_commands')}")
 
 
 def test_private_board_reply_commands_apply_to_game_runtime() -> None:
@@ -1252,6 +1308,7 @@ if __name__ == "__main__":
     test_private_board_reply_command_parser()
     test_private_board_applied_commands_keep_chat_and_system_messages()
     test_private_board_sync_returns_applied_chat_and_system_messages()
+    test_private_board_legacy_sync_leaves_reply_for_loaded_old_frontend()
     test_private_board_reply_commands_apply_to_game_runtime()
     test_private_board_du_followup_after_applied_roll()
     print("private_board_game tests ok")

@@ -712,6 +712,7 @@ async function sendPrivateBoardToDu(options: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       save_id: "default",
+      client_version: "game_chat_v2",
       mode: options.mode,
       message: options.message || "",
       roll_text: options.rollText || "",

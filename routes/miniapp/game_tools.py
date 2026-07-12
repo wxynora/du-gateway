@@ -1991,6 +1991,8 @@ def register_routes(bp) -> None:
     def miniapp_private_board_sync_du():
         body = request.get_json(silent=True) or {}
         save_id = str(body.get("save_id") or "default").strip() or "default"
+        client_version = str(body.get("client_version") or "").strip()
+        server_applies_reply = client_version == "game_chat_v2"
         user_message = str(body.get("message") or "").strip()
         mode = str(body.get("mode") or "chat").strip().lower()
         if mode not in {"chat", "roll_result", "state_update", "final_note"}:
@@ -2050,7 +2052,7 @@ def register_routes(bp) -> None:
         followup_wakeups: list[dict] = []
         game_chat_messages: list[dict] = []
         applied_payload: dict | None = None
-        if ok and mode != "final_note":
+        if ok and mode != "final_note" and server_applies_reply:
             for _ in range(3):
                 round_commands, applied_payload = _apply_private_board_reply_commands(save_id, reply_text)
                 game_chat_messages.extend(_private_board_game_chat_messages(reply_text, round_commands))
@@ -2108,6 +2110,7 @@ def register_routes(bp) -> None:
             "followup_wakeups": followup_wakeups,
             "game_chat_messages": game_chat_messages,
             "channel": str((wakeup or {}).get("channel") or ""),
+            "client_version": client_version,
             "mode": mode,
             "synced_at": synced_at,
             "wakeup": wakeup or {},
