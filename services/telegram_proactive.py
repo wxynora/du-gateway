@@ -49,6 +49,7 @@ from services.conversation_followup import (
     tick_conversation_followups,
 )
 from services.du_daily import infer_sleep_rollover_trigger, request_gateway_maintenance
+from services.user_activity_context import describe_latest_interaction
 from services.spring_dream import (
     maybe_prepare_post_spring_dream_wakeup,
     maybe_prepare_spring_dream_wakeup,
@@ -185,7 +186,7 @@ def _get_last_message_activity_iso(uid: int) -> Optional[str]:
     后端闹钟、随机唤醒执行轮、弹窗回执等都会归档成轮次，
     但这些不代表小玥真的回来了，不能拿来计算“她多久没说话”。
 
-    这里只看用户主动发来消息：last_user_activity_at。
+    这里只看小玥最近一次真实互动：last_user_activity_at。
     渡主动外发成功的 last_proactive_contact_at 只作为历史记录，不参与这里的时间感计算；
     如果他连续醒来都想找她，就让模型自己判断要不要连发，而不是后端先压住。
     """
@@ -194,10 +195,12 @@ def _get_last_message_activity_iso(uid: int) -> Optional[str]:
 
 
 def _describe_recent_exchange(now_dt: datetime) -> str:
-    """
-    给主动决策提示词用：
-    只描述她最近一次明确回复，避免把系统保存的“上次主动联系时间”暴露给渡。
-    """
+    """给主动决策提示词描述最近一次 chat 或共同游戏互动。"""
+    interaction_text = describe_latest_interaction(now_dt)
+    if interaction_text:
+        return interaction_text
+
+    # 兼容尚未生成本地活动上下文的旧部署数据。
     last_user_iso = r2_store.get_last_user_activity_at()
     last_user_dt = parse_iso_to_beijing(last_user_iso)
 
@@ -1231,7 +1234,7 @@ def _run_proactive_diary_action(
         "现在不是重新做选择，也不要输出 JSON；请直接去写。\n"
         "请调用 exchange_diary_create 写一条交换日记。\n"
         "写完后用一句很短的话说明已经写好；如果工具失败，也用一句话说明失败原因。\n"
-        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。\n"
         f"你刚才选择写日记的理由：{str(initial_reason or '').strip() or '（未说明）'}"
     )
     body = {
@@ -1299,7 +1302,7 @@ def _run_proactive_forum_action(
         "现在不是重新做选择，也不要输出 JSON；请直接去论坛看看。\n"
         "优先调用 forum_read_feed 浏览信息流；如果看到你想继续看的帖子，再调用 forum_open_thread 打开一篇。\n"
         "看完后用一句很短的话说明你看了什么；如果工具失败，也用一句话说明失败原因。\n"
-        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。\n"
         f"你刚才选择逛论坛的理由：{str(initial_reason or '').strip() or '（未说明）'}"
     )
     body = {
@@ -1368,7 +1371,7 @@ def _run_proactive_drawer_action(
         "可以调用 secret_drawer：优先看 stats；如果有待整理条目，就 list 后 update 补标题、标签或 why；"
         "如果没有待整理，就 random 翻一条旧记录，必要时 update 置顶、封存或补一句为什么存。\n"
         "做完后用一句很短的话说明你做了什么；如果工具失败，也用一句话说明失败原因。\n"
-        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。\n"
         f"你刚才选择秘密抽屉的理由：{str(initial_reason or '').strip() or '（未说明）'}"
     )
     body = {
@@ -1444,7 +1447,7 @@ def _ask_du_after_surf_result(
     user_prompt = (
         "你刚才选择了随机冲浪，后端已经实际调用 du_surf，并把结果交给你。\n"
         "现在请基于这些素材做最终决定。不要再调用 du_surf，也不要只说“我去冲浪”。\n"
-        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。\n"
         f"你刚才选择冲浪的理由：{str(initial_reason or '').strip() or '（未说明）'}\n\n"
         f"{_format_proactive_surf_result_for_du(surf_result)}\n\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"

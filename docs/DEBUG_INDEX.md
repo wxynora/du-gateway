@@ -40,6 +40,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 上游配置 | `storage/upstream_store.py` | active upstream、model cache、models 探测 |
 | 主动消息 | `services/telegram_proactive.py` | 概率主动、主动决策、通道投递、trigger tick |
 | 唤醒/续话 | `services/conversation_followup.py`、`services/reply_channel_context.py` | 事件唤醒、弹窗回执、查岗回应、延迟续话、最近真实聊天入口解析 |
+| Chat / 共同游戏活动时间 | `services/user_activity_context.py`、`pipeline/pipeline.py`、`routes/miniapp/game_tools.py`、`storage/r2_store.py` | 保留 `last_user_reply_at` chat 时间；显式记录小玥与渡共同玩的具体游戏；两类真实互动都刷新 R2 统一唤醒时钟，渡自己玩的游戏不计入 |
 | 设备工具 | `services/device_action_tools.py` | 弹窗、截图、系统闹钟等工具执行和卡片 |
 | 论坛 MCP 工具 | `services/mcp_forum_tools.py`、`services/forum_mcp_client.py` | 论坛高层工具、`cli/get_guide` 映射、外部 SSE MCP 调用 |
 | 随机冲浪工具 | `services/du_surf.py`、`services/gateway_tools.py`、`services/chat_tools.py` | `du_surf` 网关工具，按兴趣池/时间段抽话题，复用 Tavily 轻搜摘要，清洗成可聊卡片；不作为 `web_search` 精确事实查询 |
@@ -52,6 +53,15 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 随机模仿者网关私有工具 | `services/game_tool_runtime.py`、`services/random_imitator_td_tool.py`、`routes/miniapp/game_tools.py`、`routes/chat.py`、`pipeline/pipeline.py`、`services/chat_tools.py`、`scripts/test_random_imitator_td_tool.py` | du-gateway 私有游戏工具接入：`random_imitator_td` 是首个注册游戏；Prompt 开关只固定注入工具，只有专用游戏标记或工具结果自带 `game_tool_loop` 才跳过动态记忆写入与 BODY delta |
 | MiniApp 游戏大厅 / 涩涩走格棋 | `miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/tabs/SeseBoardGameTab.tsx`、`routes/miniapp/game_tools.py`、`services/private_board_game.py`、`services/private_board_tool.py`、`services/game_tool_runtime.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_private_board_game.py` | 「日常 > 游戏」入口，文游显示为「无限流」；`private_board` 走走格棋后端和前端棋盘。小玥通过前端按钮/输入参与，渡通过自然语言精确首行指令参与；右上角局内聊天只发本次消息，不自带局内历史；局内回复不外发主聊天但压缩归档进同一个 `tg_*` window 的 last4；同步成功后按同步时间刷新全局最近活动时钟 |
 | 囚禁模拟器 | `docs/captivity-simulator-plan.md`、`services/captivity_simulator_game.py`、`routes/miniapp/game_tools.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_captivity_simulator_game.py`、`services/game_tool_runtime.py`、`miniapp/src/ui/tabs/CaptivitySimulatorGameTab.tsx`、`miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/AppShell.tsx` | 30 天本地规则模拟器：双路线、三段白天行动、过程/心情、夜间自由行动与监控、逃跑诱导及抓回后规则、物品/道具、事件回顾和固定结局；`/game-tools/captivity_simulator/sync-du` 以 dynamic system 注入当轮上下文，跳过动态记忆和 BODY delta，完整事件正文只留游戏存档 |
+
+当前状态（2026-07-13 chat / 共同游戏活动时间拆分，待提交）：
+- 已完成：R2 `last_user_activity_at` 继续作为统一唤醒时钟，普通 chat 和小玥参与的共同游戏都会刷新；现有唤醒、睡眠、PixelHome 等读取接口和调度算法不改。
+- 已完成：现有 `data/last_user_reply.json` 兼容保留 `last_user_reply_at`，新增 `last_shared_game_activity`；提示词比较两者，chat 分支逐字保留 `[😭X后老婆终于回我了]`，游戏分支写 `老婆 X 分钟前和我在玩<具体游戏名>。`。
+- 已完成：共同游戏采用后端显式白名单，目前只有 `private_board=涩涩走格棋`、`captivity_simulator=囚禁模拟器`；`random_imitator_td` / 植物大战丧尸随机版和未知游戏 fail closed，不写本地记录或 R2 统一时钟。
+- 已完成：走格棋每次通过基本校验的 `/sync-du` 在调用渡前记一次；囚禁模拟器仍只认局内 chat 或 `user_initiated=true` 的操作；渡的自动 follow-up、状态轮询、游戏大厅预览和重复自动结局通知不记。
+- 已完成：SumiTalk / QQ / 微信等共享 `tg_*` 窗口复用现有跨平台真实输入判定补写 chat 时间；带 follow-up 标记的游戏/后端生成不会冒充 chat。主动唤醒描述会按最新类型区分“明确回复”和“和我在玩具体游戏”，调度仍只看统一时钟。
+- 验证：纯本地临时文件和 monkeypatch R2/上游下，`scripts/test_user_activity_context.py`、`scripts/test_private_board_game.py`、`scripts/test_captivity_simulator_game.py` 全部通过；相关 `py_compile`、`import app`、`git diff --check` 通过。
+- 当前边界：改动只在 `/tmp/du-gateway-shared-game-activity` 干净 worktree；未 stage、未 commit、未 push、未部署、未重启。主工作区已有脏改和线上状态均未触碰；下次从该 worktree 的 diff 继续复审或提交。
 
 当前状态（2026-07-11 囚禁模拟器首个完整部署版）：
 - 已完成：规则引擎、双路线 MiniApp、行动/过程/夜间/监控/逃跑/抓回/物品/结局闭环和事件回顾已整合；开发预览只使用本地假数据。

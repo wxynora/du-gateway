@@ -32,6 +32,13 @@ from services.private_board_game import (
 )
 
 
+def _disable_shared_activity_context_writes() -> None:
+    """Route tests must not touch the configured local activity file or shared R2 clock."""
+    from services import user_activity_context
+
+    user_activity_context.mark_shared_game_user_activity = lambda *args, **kwargs: False
+
+
 def _assert(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
@@ -905,48 +912,39 @@ def test_private_board_wakeup_uses_dynamic_system() -> None:
 
 
 def test_private_board_activity_helper_writes_user_activity_source() -> None:
-    import types
-
     from routes.miniapp import game_tools
+    from services import user_activity_context
 
-    captured: list[tuple[str, str, dict]] = []
-    fake_r2_store = types.SimpleNamespace(
-        save_last_user_activity_at=lambda value, **kwargs: captured.append(
-            (str(value), str(kwargs.get("source") or ""), dict(kwargs.get("detail") or {}))
-        )
-        or True
-    )
-    fake_storage = types.SimpleNamespace(r2_store=fake_r2_store)
-    old_storage = sys.modules.get("storage")
-    old_r2_store = sys.modules.get("storage.r2_store")
+    captured: list[dict] = []
+    old_mark = user_activity_context.mark_shared_game_user_activity
     try:
-        sys.modules["storage"] = fake_storage
-        sys.modules["storage.r2_store"] = fake_r2_store
+        user_activity_context.mark_shared_game_user_activity = lambda **kwargs: captured.append(dict(kwargs)) or True
         game_tools._mark_private_board_sync_activity("2026-07-07T22:55:00+08:00")
     finally:
-        if old_storage is None:
-            sys.modules.pop("storage", None)
-        else:
-            sys.modules["storage"] = old_storage
-        if old_r2_store is None:
-            sys.modules.pop("storage.r2_store", None)
-        else:
-            sys.modules["storage.r2_store"] = old_r2_store
+        user_activity_context.mark_shared_game_user_activity = old_mark
 
     _assert(
-        captured == [("2026-07-07T22:55:00+08:00", "private_board_sync_du", {})],
-        f"private board activity helper should write allowed source, got {captured}",
+        captured
+        == [
+            {
+                "game_id": "private_board",
+                "occurred_at": "2026-07-07T22:55:00+08:00",
+                "source": "private_board_sync_du",
+                "detail": {},
+            }
+        ],
+        f"private board activity helper should use shared-game activity, got {captured}",
     )
 
 
-def test_private_board_sync_activity_marks_only_real_user_message() -> None:
+def test_private_board_sync_marks_every_request_before_du_wakeup() -> None:
     from flask import Blueprint, Flask
 
     from routes.miniapp import game_tools
     from services import conversation_followup as cf
     from services import reply_channel_context as rcc
 
-    captured: list[dict] = []
+    events: list[tuple[str, dict]] = []
     old_execute = game_tools.execute_game_command
     old_mark = game_tools._mark_private_board_sync_activity
     old_send = cf.send_private_board_wakeup
@@ -965,8 +963,8 @@ def test_private_board_sync_activity_marks_only_real_user_message() -> None:
 
     try:
         game_tools.execute_game_command = fake_execute
-        game_tools._mark_private_board_sync_activity = lambda synced_at, detail=None: captured.append(dict(detail or {}))
-        cf.send_private_board_wakeup = lambda **kwargs: {"ok": True, "reply_text": "", "reply_preview": ""}
+        game_tools._mark_private_board_sync_activity = lambda synced_at, detail=None: events.append(("activity", dict(detail or {})))
+        cf.send_private_board_wakeup = lambda **kwargs: events.append(("wakeup", {"event_text": str(kwargs.get("event_text") or "")})) or {"ok": True, "reply_text": "", "reply_preview": ""}
         rcc.resolve_recent_reply_context = lambda default_target="": {
             "channel": "tg",
             "window_id": "tg_test",
@@ -1002,28 +1000,23 @@ def test_private_board_sync_activity_marks_only_real_user_message() -> None:
     _assert(state_update_message.status_code == 200, f"state_update message sync should succeed: {state_update_message.get_data(as_text=True)}")
     _assert(final_note_message.status_code == 200, f"final_note message sync should succeed: {final_note_message.get_data(as_text=True)}")
     _assert(chat_message.status_code == 200, f"chat message sync should succeed: {chat_message.get_data(as_text=True)}")
-    _assert(captured == [{"game_id": "private_board", "save_id": "s1", "mode": "chat", "phase": "user_message"}], f"only chat user message sync should mark activity, got {captured}")
-
-
-def test_private_board_pending_creation_activity_is_narrow() -> None:
-    from routes.miniapp import game_tools
-
-    captured: list[dict] = []
-    old_mark = game_tools._mark_private_board_sync_activity
-    try:
-        game_tools._mark_private_board_sync_activity = lambda synced_at, detail=None: captured.append(dict(detail or {}))
-        before = {"ok": True, "state": {"turn_actor": "xinyue", "pending_event": None, "game_over": False}}
-        after_du_turn = {"ok": True, "state": {"turn_actor": "du", "pending_event": None, "game_over": False}}
-
-        game_tools._mark_private_board_pending_created_activity("s1", "status", before, after_du_turn)
-        game_tools._mark_private_board_pending_created_activity("s1", "roll 1", after_du_turn, after_du_turn)
-        game_tools._mark_private_board_pending_created_activity("s1", "roll 1", before, after_du_turn)
-    finally:
-        game_tools._mark_private_board_sync_activity = old_mark
-
     _assert(
-        captured == [{"game_id": "private_board", "save_id": "s1", "command": "roll 1", "phase": "pending_created"}],
-        f"only newly-created du pending/turn should mark activity, got {captured}",
+        [kind for kind, _ in events] == ["activity", "wakeup"] * 4,
+        f"each private-board sync must mark activity before waking Du: {events}",
+    )
+    activity_details = [detail for kind, detail in events if kind == "activity"]
+    _assert(
+        [detail.get("mode") for detail in activity_details] == ["state_update", "state_update", "final_note", "chat"],
+        f"all accepted sync modes should mark shared-game activity: {activity_details}",
+    )
+    _assert(
+        all(
+            detail.get("phase") == "game_sync"
+            and detail.get("window_id") == "tg_test"
+            and detail.get("target") == "123"
+            for detail in activity_details
+        ),
+        f"activity details should keep sync context: {activity_details}",
     )
 
 
@@ -1277,6 +1270,7 @@ def test_private_board_du_followup_after_applied_roll() -> None:
 
 
 if __name__ == "__main__":
+    _disable_shared_activity_context_writes()
     test_private_board_views()
     test_private_board_reset_self_cell()
     test_private_board_action_lock()
@@ -1302,8 +1296,7 @@ if __name__ == "__main__":
     test_private_board_review_feedback()
     test_private_board_wakeup_uses_dynamic_system()
     test_private_board_activity_helper_writes_user_activity_source()
-    test_private_board_sync_activity_marks_only_real_user_message()
-    test_private_board_pending_creation_activity_is_narrow()
+    test_private_board_sync_marks_every_request_before_du_wakeup()
     test_private_board_state_update_sync_includes_message()
     test_private_board_reply_command_parser()
     test_private_board_applied_commands_keep_chat_and_system_messages()

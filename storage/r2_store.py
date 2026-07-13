@@ -322,6 +322,7 @@ LAST_USER_ACTIVITY_ALLOWED_SOURCES = frozenset(
         "cross_platform_tg_window_user_input",
         "private_board_sync_du",
         "captivity_simulator_user_interaction",
+        "shared_game_user_interaction",
     }
 )
 

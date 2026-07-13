@@ -133,6 +133,7 @@ from services.chat_archive_helpers import (
 )
 from services.chat_request_helpers import (
     build_noop_chat_response as _build_noop_chat_response,
+    is_cross_platform_tg_window_user_input as _is_cross_platform_tg_window_user_input,
     is_suspected_rikkahub_phantom_one as _is_suspected_rikkahub_phantom_one,
     last_user_message as _last_user_message,
     maybe_mark_tg_window_user_activity as _maybe_mark_tg_window_user_activity,
@@ -2149,6 +2150,13 @@ def chat_completions():
         )
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
+    if not tg_user_input:
+        tg_user_input = _is_cross_platform_tg_window_user_input(
+            window_id,
+            body,
+            reply_channel=reply_channel,
+            is_followup_generation=_is_followup_generation_request(),
+        )
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
     if slim_voice_call:
         body = _inject_voice_call_style_system(body)

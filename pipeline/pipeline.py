@@ -20,7 +20,6 @@ from config import (
     ASSISTANT_TIME_KEYWORDS,
     ASSISTANT_LUNAR_KEYWORDS,
     REPLY_GAP_THRESHOLD_MINUTES,
-    LAST_USER_REPLY_FILE,
     MAX_REQUEST_CHARS,
     DEEPSEEK_API_URL,
     DEEPSEEK_API_KEY,
@@ -30,6 +29,11 @@ from pathlib import Path
 from storage import r2_store
 from utils.log import get_logger
 from utils.tokens import estimate_tokens, memory_summary_budget, memory_dynamic_budget, truncate_to_tokens
+from services.user_activity_context import (
+    capture_previous_interaction_and_mark_chat,
+    elapsed_seconds as user_activity_elapsed_seconds,
+    render_incoming_gap_prompt,
+)
 
 logger = get_logger(__name__)
 from services import image_desc, deepseek_summary
@@ -1123,7 +1127,6 @@ def step_inject_summary(body: dict, window_id: str, is_user_input: bool = False)
         get_exact_time,
         get_lunar_and_terms,
         now_beijing_iso,
-        parse_iso_to_beijing,
         _now_beijing,
     )
 
@@ -1145,28 +1148,17 @@ def step_inject_summary(body: dict, window_id: str, is_user_input: bool = False)
         has_user_message = any((m.get("role") or "").lower() == "user" for m in messages if isinstance(m, dict))
         is_tg_window = str(window_id or "").startswith("tg_")
         should_track_reply_gap = is_user_input if is_tg_window else has_user_message
-        last_map = {}
-        if LAST_USER_REPLY_FILE.exists():
-            with open(LAST_USER_REPLY_FILE, "r", encoding="utf-8") as f:
-                last_map = json.load(f) or {}
         if should_track_reply_gap:
-            last_iso = (last_map or {}).get("last_user_reply_at")
-            last_dt = parse_iso_to_beijing(last_iso) if last_iso else None
-            if last_dt is not None:
-                delta_sec = max(0, int((_now_beijing() - last_dt).total_seconds()))
-                if REPLY_GAP_THRESHOLD_MINUTES and delta_sec >= REPLY_GAP_THRESHOLD_MINUTES * 60:
-                    mins = delta_sec // 60
-                    if mins < 120:
-                        gap_text = f"{mins}分钟"
-                    else:
-                        h = mins // 60
-                        m = mins % 60
-                        gap_text = f"{h}小时" + (f"{m}分钟" if m else "")
-                    head += f"\n[😭{gap_text}后老婆终于回我了]"
-            last_map = dict(last_map or {})
-            last_map["last_user_reply_at"] = now_beijing_iso()
-            with open(LAST_USER_REPLY_FILE, "w", encoding="utf-8") as f:
-                json.dump(last_map, f, ensure_ascii=False)
+            previous = capture_previous_interaction_and_mark_chat(now_beijing_iso())
+            delta_sec = user_activity_elapsed_seconds(previous, _now_beijing())
+            if (
+                delta_sec is not None
+                and REPLY_GAP_THRESHOLD_MINUTES
+                and delta_sec >= REPLY_GAP_THRESHOLD_MINUTES * 60
+            ):
+                gap_prompt = render_incoming_gap_prompt(previous, delta_sec)
+                if gap_prompt:
+                    head += f"\n{gap_prompt}"
     except Exception as e:
         logger.debug("reply_gap 注入失败（忽略） error=%s", e)
     last_assistant = _last_assistant_text(body)

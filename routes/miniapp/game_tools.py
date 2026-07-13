@@ -448,26 +448,33 @@ def _get_panel_device_id() -> str:
 
 
 def _mark_private_board_sync_activity(synced_at: str, *, source: str = "private_board_sync_du", detail: dict | None = None) -> None:
-    # This clock means real user interaction, not generic R2 save/sync.
     sync_time = str(synced_at or "").strip() or now_beijing_iso()
     try:
-        from storage import r2_store
+        from services.user_activity_context import mark_shared_game_user_activity
 
-        r2_store.save_last_user_activity_at(sync_time, source=source, detail=detail or {})
+        mark_shared_game_user_activity(
+            game_id="private_board",
+            occurred_at=sync_time,
+            source=source,
+            detail=detail or {},
+        )
     except Exception:
         return
 
 
 def _mark_captivity_simulator_sync_activity(synced_at: str, *, detail: dict | None = None) -> None:
-    _mark_private_board_sync_activity(synced_at, source="captivity_simulator_user_interaction", detail=detail or {})
+    sync_time = str(synced_at or "").strip() or now_beijing_iso()
+    try:
+        from services.user_activity_context import mark_shared_game_user_activity
 
-
-def _first_command_token(command: str) -> str:
-    return str(command or "").strip().split(maxsplit=1)[0].strip().lower()
-
-
-def _sync_message_counts_as_user_activity(mode: str, message: str) -> bool:
-    return str(mode or "").strip().lower() == "chat" and bool(str(message or "").strip())
+        mark_shared_game_user_activity(
+            game_id="captivity_simulator",
+            occurred_at=sync_time,
+            source="captivity_simulator_user_interaction",
+            detail=detail or {},
+        )
+    except Exception:
+        return
 
 
 def _captivity_simulator_sync_counts_as_user_activity(
@@ -480,51 +487,6 @@ def _captivity_simulator_sync_counts_as_user_activity(
     if normalized_mode == "chat":
         return bool(str(message or "").strip())
     return bool(user_initiated) and normalized_mode in {"state_update", "ending"}
-
-
-def _private_board_pending_activity_signature(payload: dict | None) -> str:
-    state = (payload or {}).get("state") if isinstance((payload or {}).get("state"), dict) else {}
-    if not _private_board_needs_du_followup(payload):
-        return ""
-    pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else {}
-    return json.dumps(
-        {
-            "pending": pending or None,
-            "turn_actor": state.get("turn_actor"),
-            "game_over": state.get("game_over"),
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        default=str,
-    )
-
-
-def _mark_private_board_pending_created_activity(
-    save_id: str,
-    command: str,
-    before_payload: dict | None,
-    after_payload: dict | None,
-) -> None:
-    if not (after_payload or {}).get("ok"):
-        return
-    action = _first_command_token(command)
-    if action in {"", "status", "open", "打开", "继续"}:
-        return
-    after_sig = _private_board_pending_activity_signature(after_payload)
-    if not after_sig:
-        return
-    before_sig = _private_board_pending_activity_signature(before_payload)
-    if before_sig == after_sig:
-        return
-    _mark_private_board_sync_activity(
-        now_beijing_iso(),
-        detail={
-            "game_id": "private_board",
-            "save_id": str(save_id or "").strip() or "default",
-            "command": str(command or "").strip()[:120],
-            "phase": "pending_created",
-        },
-    )
 
 
 def _clean_private_board_text(text: str) -> str:
@@ -2088,6 +2050,19 @@ def register_routes(bp) -> None:
         if not window_id:
             return jsonify({"ok": False, "error": "缺少最近聊天窗口"}), 400
 
+        synced_at = now_beijing_iso()
+        _mark_private_board_sync_activity(
+            synced_at,
+            detail={
+                "game_id": "private_board",
+                "save_id": save_id,
+                "window_id": window_id,
+                "target": target,
+                "mode": mode,
+                "phase": "game_sync",
+            },
+        )
+
         from services.conversation_followup import send_private_board_wakeup
 
         wakeup = send_private_board_wakeup(
@@ -2099,17 +2074,6 @@ def register_routes(bp) -> None:
             return_only=True,
         )
         ok = bool((wakeup or {}).get("ok"))
-        synced_at = now_beijing_iso()
-        if ok and _sync_message_counts_as_user_activity(mode, user_message):
-            _mark_private_board_sync_activity(
-                synced_at,
-                detail={
-                    "game_id": "private_board",
-                    "save_id": save_id,
-                    "mode": mode,
-                    "phase": "user_message",
-                },
-            )
         reply_text = str((wakeup or {}).get("reply_text") or (wakeup or {}).get("reply_preview") or "")
         applied_reply_commands: list[dict] = []
         followup_wakeups: list[dict] = []
@@ -2229,20 +2193,8 @@ def register_routes(bp) -> None:
         if not window_id:
             return jsonify({"ok": False, "error": "缺少最近聊天窗口"}), 400
 
-        from services.conversation_followup import send_captivity_simulator_wakeup
-
-        wakeup = send_captivity_simulator_wakeup(
-            window_id=window_id,
-            target=target,
-            event_text=event_text,
-            preferred_channel=channel,
-            preferred_meta=meta,
-            return_only=True,
-            player_message=user_message,
-        )
-        ok = bool((wakeup or {}).get("ok"))
         synced_at = now_beijing_iso()
-        if ok and _captivity_simulator_sync_counts_as_user_activity(
+        if _captivity_simulator_sync_counts_as_user_activity(
             mode,
             user_message,
             user_initiated=user_initiated,
@@ -2258,6 +2210,19 @@ def register_routes(bp) -> None:
                     "phase": "user_message" if mode == "chat" else "gameplay_action",
                 },
             )
+
+        from services.conversation_followup import send_captivity_simulator_wakeup
+
+        wakeup = send_captivity_simulator_wakeup(
+            window_id=window_id,
+            target=target,
+            event_text=event_text,
+            preferred_channel=channel,
+            preferred_meta=meta,
+            return_only=True,
+            player_message=user_message,
+        )
+        ok = bool((wakeup or {}).get("ok"))
         reply_text = str((wakeup or {}).get("reply_text") or (wakeup or {}).get("reply_preview") or "")
         applied_reply_commands: list[dict] = []
         followup_wakeups: list[dict] = []
@@ -2379,10 +2344,7 @@ def register_routes(bp) -> None:
         save_id = str(body.get("save_id") or "default").strip() or "default"
         normalized_game_id = normalize_game_id(game_id)
         first_command = command.split(maxsplit=1)[0] if command else "open"
-        before_payload: dict | None = None
         current_payload: dict | None = None
-        if normalized_game_id == "private_board" and _first_command_token(command) not in {"", "status", "open", "打开", "继续"}:
-            before_payload = execute_game_command(game_id, "status", save_id)
         if normalized_game_id == GAME_ID_CAPTIVITY_SIMULATOR and first_command not in {"new", "new_game", "开局", "重开"}:
             current_payload = execute_game_command(game_id, "status", save_id)
             current_state = _captivity_simulator_state(current_payload)
@@ -2397,8 +2359,6 @@ def register_routes(bp) -> None:
             payload = current_payload
         else:
             payload = execute_game_command(game_id, command, save_id)
-        if normalized_game_id == "private_board":
-            _mark_private_board_pending_created_activity(save_id, command, before_payload, payload)
         if str(payload.get("game_id") or "") == "captivity_simulator":
             payload = _captivity_simulator_public_payload(payload)
         status = 200 if payload.get("ok") else (404 if payload.get("error") == "UNKNOWN_GAME" else 500)
