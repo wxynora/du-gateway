@@ -2298,3 +2298,10 @@ npm -C miniapp run android
 - 已调整：`captivity_simulator_reference(category=actions)` 一次返回白天行动及具体内容、三档强度、全部调教玩法、道具与推荐关系、完整喂食参数；`training`、`tools`、`feeding` 分类仍保留给特殊场景单独补查。
 - 已调整：渡安排三个白天行动时只要求调用一次 `category=actions`，提示中明确禁止再分别查询三类资料，避免复杂安排被拆成多轮工具往返。
 - 已验证：开源版 18 条 Python 测试通过；私有囚禁模拟器全量测试、Python 编译、`import app`、私密棋盘回归和 `git diff --check` 通过。测试只读取本地规则和临时假存档。
+
+当前状态（2026-07-13 秘密抽屉分类与写入回报）：
+- 已修复：秘密抽屉对 R2 成功写入的空返回值不再误判为失败，工具整理成功后会返回真实成功结果。
+- 已补齐：静态说明与 `secret_drawer` 工具 schema 明确 `message/photo/dream/note/surf/misc` 分类及保存 action 映射；图片只能用 `photo`，对话只能用 `message`，非法类型直接返回 `INVALID_TYPE`。
+- 线上只读确认：刚才 11 次整理实际已落盘为 5 条 `dream`、3 条 `message`、3 条 `misc`；三张图片因旧调用使用非法 `image` 落为 `misc`，本次未自动改写历史条目。
+- 已验证：秘密抽屉契约测试、目标文件 Python 编译、`import app` 与 `git diff --check` 通过；测试 mock 了 R2，没有写线上抽屉。
+- 未完成 / 下次继续：三张历史图片是否改为 `photo` 等辛玥明确要求；闹钟工具完成态仍在独立未提交 worktree，不能混入本次发布。

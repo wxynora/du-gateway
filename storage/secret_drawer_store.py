@@ -47,7 +47,12 @@ def _write_json(key: str, data: Any) -> bool:
     client = r2_store._s3_client()
     if not client:
         return False
-    return r2_store._write_json(client, key, data)
+    try:
+        r2_store._write_json(client, key, data)
+        return True
+    except Exception as e:
+        logger.error("secret_drawer payload write failed key=%s error=%s", key, e, exc_info=True)
+        return False
 
 
 def _read_payload_json() -> dict | None | object:

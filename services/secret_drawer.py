@@ -270,6 +270,8 @@ def format_inject_block() -> str:
     lines = [
         "###秘密抽屉",
         "你有自己的秘密抽屉，可保存想留下的话、图片、梦境、冲浪内容或碎碎念。保存当前聊天用隐藏标记。",
+        "保存时按内容选择分类：对话/聊天片段用 save_message，图片用 save_photo，梦或春梦用 save_dream，自己的想法/碎碎念用 save_note，网上看到的内容用 save_surf。不要把所有内容都存成 save_message。",
+        "整理已有条目时，type 只使用 message、photo、dream、note、surf、misc；图片是 photo，不是 image；对话是 message，不是 dialog。",
     ]
     if total <= 0:
         lines.append("当前抽屉还是空的。")
@@ -290,7 +292,9 @@ def format_inject_block() -> str:
     if not config.get("read_error") and not str(config.get("box_pin") or "").strip():
         lines.append("PIN 未设置，默认 0000；可用 secret_drawer 的 set_pin 设置 UI 解锁 PIN。")
     lines.append(
-        '隐藏保存：<<<DU_SECRET_SAVE>>>{"action":"save_message","title":"...","tags":["..."],"why":"...","sealed":false}<<<END_DU_SECRET_SAVE>>>。'
+        "隐藏保存时，在 <<<DU_SECRET_SAVE>>> 与 <<<END_DU_SECRET_SAVE>>> 之间输出 JSON；"
+        "action 必须按内容从 save_message、save_photo、save_dream、save_note、save_surf 中选择，"
+        "其余可填 title、tags、why、sealed。"
     )
     lines.append(
         "整理/查看用工具 secret_drawer；action=stats/list/get/update/delete/restore/random/set_pin，参数放 payload。"
@@ -306,7 +310,8 @@ def get_secret_drawer_tools_for_inject() -> list[dict]:
                 "name": "secret_drawer",
                 "description": (
                     "查看/整理秘密抽屉。action=stats/list/get/update/delete/restore/random/set_pin；"
-                    "参数放 payload；get/update/delete/restore 需 id。保存当前聊天用 DU_SECRET_SAVE 隐藏标记，不用工具。"
+                    "参数放 payload；get/update/delete/restore 需 id。update 的 type 只能是 message/photo/dream/note/surf/misc，"
+                    "图片用 photo（不是 image），对话用 message（不是 dialog）。保存当前聊天用 DU_SECRET_SAVE 隐藏标记，不用工具。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -316,7 +321,31 @@ def get_secret_drawer_tools_for_inject() -> list[dict]:
                             "enum": ["stats", "list", "get", "update", "delete", "restore", "random", "set_pin"],
                             "description": "要做什么",
                         },
-                        "payload": {"type": "object", "description": "具体参数，如 id、query、type、tag、include_sealed、sealed_only、limit、title、why、tags、sealed、deleted。"},
+                        "payload": {
+                            "type": "object",
+                            "description": "具体参数；update 时按内容填写正确 type。",
+                            "properties": {
+                                "id": {"type": "string", "description": "get/update/delete/restore 的条目 id"},
+                                "type": {
+                                    "type": "string",
+                                    "enum": ["message", "photo", "dream", "note", "surf", "misc"],
+                                    "description": "条目分类：对话 message、图片 photo、梦境 dream、碎碎念 note、冲浪 surf、其他 misc",
+                                },
+                                "query": {"type": "string"},
+                                "tag": {"type": "string"},
+                                "tags": {"type": "array", "items": {"type": "string"}},
+                                "title": {"type": "string"},
+                                "why": {"type": "string"},
+                                "limit": {"type": "integer"},
+                                "include_sealed": {"type": "boolean"},
+                                "sealed_only": {"type": "boolean"},
+                                "needs_organize": {"type": "boolean"},
+                                "pinned": {"type": "boolean"},
+                                "sealed": {"type": "boolean"},
+                                "deleted": {"type": "boolean"},
+                            },
+                            "additionalProperties": True,
+                        },
                     },
                     "required": ["action"],
                     "additionalProperties": False,
@@ -375,6 +404,17 @@ def execute_secret_drawer_tool(name: str, arguments: dict) -> str:
             item_id = str(payload.get("id") or "").strip()
             patch_keys = {"title", "content", "why", "tags", "pinned", "sealed", "deleted", "type"}
             patch = {k: v for k, v in payload.items() if k in patch_keys}
+            if "type" in patch:
+                requested_type = str(patch.get("type") or "").strip().lower()
+                if requested_type not in secret_drawer_store.VALID_TYPES:
+                    return json.dumps(
+                        {
+                            "ok": False,
+                            "error": "INVALID_TYPE",
+                            "valid_types": sorted(secret_drawer_store.VALID_TYPES),
+                        },
+                        ensure_ascii=False,
+                    )
             item = secret_drawer_store.update_item(item_id, patch)
             return json.dumps({"ok": bool(item), "item": item, **({} if item else {"error": "未找到或更新失败"})}, ensure_ascii=False)
         if action == "delete":
