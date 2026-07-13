@@ -24,14 +24,14 @@ def get_reference_tool_schema() -> dict[str, Any]:
         "type": "function",
         "function": {
             "name": REFERENCE_TOOL_NAME,
-            "description": "按需查询囚禁模拟器的通用选项与规则。只读，不推进游戏；当前事件和提交格式以本轮提示为准。",
+            "description": "按需查询囚禁模拟器的通用选项与规则。只读，不推进游戏；actions 会一次返回白天行动、调教、道具和喂食的完整资料。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "category": {
                         "type": "string",
                         "enum": list(REFERENCE_CATEGORIES),
-                        "description": "actions 行动内容；training 调教内容；tools 道具；feeding 喂食；inventory 物品；night 夜间；escape 抓回规则。",
+                        "description": "actions 完整白天资料（行动、调教、道具、喂食）；其余分类用于单独补查；inventory 物品；night 夜间；escape 抓回规则。",
                     }
                 },
                 "required": ["category"],
@@ -43,6 +43,24 @@ def get_reference_tool_schema() -> dict[str, Any]:
 
 def get_reference(category: str) -> dict[str, Any]:
     category = str(category or "").strip().lower()
+    training_reference = {"training_contents": TRAINING_CONTENTS, "selection": "选择 1 至 3 项"}
+    tools_reference = {
+        "tools": TOOL_LABELS,
+        "recommendations": {tool_id: sorted(contexts) for tool_id, contexts in TOOL_COMPATIBILITY.items()},
+        "selection": "最多选择 2 个；推荐关系不是硬性限制",
+    }
+    feeding_reference = {
+        "rule": "始终包含一份正常食物；额外饮水不能代替食物",
+        "source": {"cook": "自己做", "takeout": "点外卖"},
+        "additive": {
+            "none": "不加料",
+            "body_fluid": "体液",
+            "fictional_sleep": "安眠",
+            "fictional_arousal": "助兴",
+        },
+        "disclosed": {"told": "明确告知", "hint": "暗示", "hidden": "隐瞒"},
+        "water": {"none": "不额外喂水", "glass": "一杯水", "lots": "很多水"},
+    }
     if category == "actions":
         return {
             "intensity": {"light": "低", "medium": "中", "heavy": "高"},
@@ -54,28 +72,17 @@ def get_reference(category: str) -> dict[str, Any]:
                 action_id: label for action_id, label in ACTION_LABELS.items() if action_id not in ACTION_CONTENTS
             },
             "modifiers": {"training": "附加调教", "sex": "附加性行为"},
+            "training": training_reference,
+            "tools": tools_reference,
+            "feeding": feeding_reference,
+            "usage": "白天安排先查本分类一次即可；无需再分别查询 training、tools、feeding",
         }
     if category == "training":
-        return {"training_contents": TRAINING_CONTENTS, "selection": "选择 1 至 3 项"}
+        return training_reference
     if category == "tools":
-        return {
-            "tools": TOOL_LABELS,
-            "recommendations": {tool_id: sorted(contexts) for tool_id, contexts in TOOL_COMPATIBILITY.items()},
-            "selection": "最多选择 2 个；推荐关系不是硬性限制",
-        }
+        return tools_reference
     if category == "feeding":
-        return {
-            "rule": "始终包含一份正常食物；额外饮水不能代替食物",
-            "source": {"cook": "自己做", "takeout": "点外卖"},
-            "additive": {
-                "none": "不加料",
-                "body_fluid": "体液",
-                "fictional_sleep": "安眠",
-                "fictional_arousal": "助兴",
-            },
-            "disclosed": {"told": "明确告知", "hint": "暗示", "hidden": "隐瞒"},
-            "water": {"none": "不额外喂水", "glass": "一杯水", "lots": "很多水"},
-        }
+        return feeding_reference
     if category == "inventory":
         return {
             "items": INVENTORY_ITEMS,

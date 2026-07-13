@@ -1573,7 +1573,7 @@ def _captivity_simulator_sync_text(
             *(["当前状态：" + " / ".join(status_prompts)] if status_prompts else []),
             *(["当前最高只能安排中强度。"] if intensity_cap != "heavy" else []),
             "强度选项：低(light) / 中(medium) / 高(heavy)；用 intensity=... 提交。",
-            "需要具体行动内容时调用 captivity_simulator_reference(category=actions)；调教、道具或喂食参数分别查询 training、tools、feeding，不要凭空猜 ID。",
+            "安排前只调用一次 captivity_simulator_reference(category=actions)；返回内容已经包含具体行动、调教、道具和喂食的全部可选项，不要再分别查询 training、tools、feeding。",
             "如果你要推进当前事件，回复第一行必须单独写精确指令「【今日安排：action=feeding intensity=medium || action=reward intensity=light contents=caress_reward || action=training intensity=medium training_contents=obedience_commands modifiers=sex tools=collar】」。",
             "没有第一行「【今日安排：...】」时，只算局内聊天，不会触发行动安排。",
         ]

@@ -1537,12 +1537,15 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
     _assert("低(light) / 中(medium) / 高(heavy)" in planning_sync, "du planning prompt should enumerate every intensity")
     _assert("action=reward intensity=light contents=caress_reward" in planning_sync, "du planning example should include required concrete content")
     _assert("category=actions" in planning_sync and "category=inventory" in planning_sync, "du planning prompt should point to on-demand references")
-    from services.captivity_simulator_reference import get_reference
+    _assert("只调用一次" in planning_sync and "不要再分别查询" in planning_sync, "day planning should request one combined actions reference call")
+    from services.captivity_simulator_reference import get_reference, get_reference_tool_schema
 
     action_reference = json.dumps(get_reference("actions"), ensure_ascii=False)
     training_reference = json.dumps(get_reference("training"), ensure_ascii=False)
     tool_reference = json.dumps(get_reference("tools"), ensure_ascii=False)
     feeding_reference = json.dumps(get_reference("feeding"), ensure_ascii=False)
+    _assert("vibrating_wand" in action_reference and "夹具调教" in action_reference and "fictional_sleep" in action_reference, "the actions reference should bundle tools, training and feeding choices")
+    _assert("actions 会一次返回" in get_reference_tool_schema()["function"]["description"], "the tool description should advertise the combined actions catalog")
     _assert("vibrating_wand" in tool_reference and "anal_beads" in tool_reference, "tool reference should retain the expanded tool ids")
     _assert("服从调教" in action_reference and "夹具调教" in training_reference, "on-demand references should show Chinese labels alongside stable ids")
     _assert("推荐关系不是硬性限制" in tool_reference, "tool reference should keep compatibility advisory")
