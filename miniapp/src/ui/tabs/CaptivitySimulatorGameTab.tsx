@@ -5279,6 +5279,11 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
             margin-top: 10px;
             resize: none;
         }
+        .captivity-game .player-line-input {
+            min-height: 76px;
+            padding: 12px;
+            line-height: 1.6;
+        }
         .captivity-game select,
         .captivity-game input.compact {
             background: transparent;
@@ -6422,7 +6427,14 @@ function ActionResponsePanel({
           </ToggleButton>
         ))}
       </div>
-      <textarea placeholder="你想说的一句话..." value={line} disabled={disabled} onChange={(event) => onLineChange(event.target.value)} />
+      <textarea
+        className="player-line-input"
+        rows={3}
+        placeholder="你想说的一句话..."
+        value={line}
+        disabled={disabled}
+        onChange={(event) => onLineChange(event.target.value)}
+      />
       <button className="btn btn-large" type="button" disabled={disabled} onClick={onSubmit}>提交并同步</button>
     </>
   );
