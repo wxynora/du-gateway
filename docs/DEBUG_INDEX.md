@@ -7,7 +7,7 @@
 - 已修复：玩家填写的附言继续作为独立游戏频道 user 消息发送；没有附言时发送明确的频道系统提示。引擎内部 ID 仍只用于规则执行，前端公开 payload 会移除 `required_directive`，最终提示不再出现 `action=`、`response=`、pending 类型或路线 ID。
 - 已同步开源实现：中文方括号指令会在适配层转换成内部命令；MCP 主工具返回当前步骤的纯中文游戏提示，`structuredContent` 只保留 `ok` 与同一段文本，不再把整份 pending 或内部 ID 交给模型。
 - 已验证：私有版 `scripts/test_captivity_simulator_game.py` 与相关 Python 编译通过；开源版 25 项 unittest、开源审计、Web TypeScript 与生产构建通过。另用两条合法路线直接打印最终提示核对三段行动合批、过程触发与玩家附言位置。全部使用本地临时存档，未调用 R2、线上后端或模型。
-- 未完成 / 下次继续：本轮尚未提交、push 或重启；发布前从隔离 worktree `/tmp/du-gateway-pet-depth-20260713` 提交，不要混入主工作树其他改动。
+- 已部署：开源提交 `b88e8b1` 与私有源码提交 `a072db3a` 已推送；现行主网关已 fast-forward，服务器端编译、`import app`、囚禁模拟器本地假存档回归与 MiniApp 生产构建通过，并重启 `du-gateway.service` 和 `du-sumitalk-chat-worker.service`。两项服务均为 active，公网 `/health`、`/miniapp/` 与新囚禁模拟器静态 chunk 均返回 200。
 
 当前状态（2026-07-13 囚禁模拟器白天三段合批，仅小玥囚禁渡）：
 - 已完成：`capture_du` 路线下发三个白天行动后只唤醒渡一次；渡在同一条回复中提交三段回应，后端先结算并展示第一段，第二、三段保存在本地存档中，等待小玥逐段推进，不再重复唤醒渡。
