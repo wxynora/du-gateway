@@ -96,6 +96,7 @@ def test_captivity_simulator_history_is_complete_and_day_collapsible() -> None:
         _assert(status["state"]["event_log"][0]["id"] == "history-0", "complete history should preserve chronological order")
 
     frontend = (ROOT / "miniapp/src/ui/tabs/CaptivitySimulatorGameTab.tsx").read_text(encoding="utf-8")
+    _assert("continueAutomaticSync(next, false, true)" in frontend and "continueAutomaticSync(next, true, true)" not in frontend, "captor route should not lock controls behind an unnecessary startup sync")
     _assert('aria-expanded={expandedDays.has(day)}' in frontend and "history-day-group" in frontend, "history UI should group concrete processes into collapsible days")
     _assert("events.filter((event) => Boolean(textLine(event.process_text)))" in frontend, "history UI should exclude events without a concrete process body")
     history_panel = frontend.split("function HistoryPanel", 1)[1].split("function MonitorRoomPanel", 1)[0]
@@ -1526,7 +1527,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
 
     planning_sync = game_tools._captivity_simulator_sync_text(
         {
-            "text": "【囚禁模拟器】\n等待今日安排。",
+            "text": "【囚禁模拟器】\n等待今日安排。\n路线：被渡囚禁\n被囚禁方：小玥",
             "captor_view": {"route": "captured_by_du", "captor": "du", "inventory": {}, "pending_event": {"type": "day_plan_choice", "actor": "du"}, "ending_state": ""},
         },
         mode="state_update",
@@ -1534,6 +1535,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
     _assert("小玥打开了囚禁模拟器游戏，邀请你继续玩这场沉浸式私密囚禁play" in planning_sync, "captured-by-du prompt should use the approved immersive-play invitation")
     _assert("你可以尽情按照自己的想法去进行这场 play" in planning_sync, "captured-by-du prompt should preserve du's agency inside the play")
     _assert("在这局游戏里" not in planning_sync and "以渡自己的口吻" not in planning_sync, "the game prompt should not create an outside role-playing frame")
+    _assert("路线：" not in planning_sync and "被囚禁方：" not in planning_sync, "assistant prompt should hide internal route and actor labels")
     _assert("【📋 游戏状态】：" in planning_sync and "【🕹️ menu】：" in planning_sync, "captured-by-du planning prompt should use the approved shell")
     _assert("道具不是独立行动" in planning_sync and "training_contents" in planning_sync, "du planning prompt should explain the new action material structure")
     _assert("低(light) / 中(medium) / 高(heavy)" in planning_sync, "du planning prompt should enumerate every intensity")

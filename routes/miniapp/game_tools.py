@@ -817,9 +817,10 @@ def _private_board_sync_text(
 
 
 def _clean_captivity_simulator_text(text: str) -> str:
+    hidden_prefixes = ("路线：", "被囚禁方：")
     return "\n".join(
         line for line in str(text or "").splitlines()
-        if not line.strip().startswith("可用命令：")
+        if not line.strip().startswith(("可用命令：", *hidden_prefixes))
     ).strip()
 
 
