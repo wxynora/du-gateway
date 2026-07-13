@@ -54,14 +54,15 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | MiniApp 游戏大厅 / 涩涩走格棋 | `miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/tabs/SeseBoardGameTab.tsx`、`routes/miniapp/game_tools.py`、`services/private_board_game.py`、`services/private_board_tool.py`、`services/game_tool_runtime.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_private_board_game.py` | 「日常 > 游戏」入口，文游显示为「无限流」；`private_board` 走走格棋后端和前端棋盘。小玥通过前端按钮/输入参与，渡通过自然语言精确首行指令参与；右上角局内聊天只发本次消息，不自带局内历史；局内回复不外发主聊天但压缩归档进同一个 `tg_*` window 的 last4；同步成功后按同步时间刷新全局最近活动时钟 |
 | 囚禁模拟器 | `docs/captivity-simulator-plan.md`、`services/captivity_simulator_game.py`、`routes/miniapp/game_tools.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_captivity_simulator_game.py`、`services/game_tool_runtime.py`、`miniapp/src/ui/tabs/CaptivitySimulatorGameTab.tsx`、`miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/AppShell.tsx` | 30 天本地规则模拟器：双路线、三段白天行动、过程/心情、夜间自由行动与监控、逃跑诱导及抓回后规则、物品/道具、事件回顾和固定结局；`/game-tools/captivity_simulator/sync-du` 以 dynamic system 注入当轮上下文，跳过动态记忆和 BODY delta，完整事件正文只留游戏存档 |
 
-当前状态（2026-07-13 chat / 共同游戏活动时间拆分，待提交）：
+当前状态（2026-07-13 chat / 共同游戏活动时间拆分，已部署）：
 - 已完成：R2 `last_user_activity_at` 继续作为统一唤醒时钟，普通 chat 和小玥参与的共同游戏都会刷新；现有唤醒、睡眠、PixelHome 等读取接口和调度算法不改。
 - 已完成：现有 `data/last_user_reply.json` 兼容保留 `last_user_reply_at`，新增 `last_shared_game_activity`；提示词比较两者，chat 分支逐字保留 `[😭X后老婆终于回我了]`，游戏分支写 `老婆 X 分钟前和我在玩<具体游戏名>。`。
 - 已完成：共同游戏采用后端显式白名单，目前只有 `private_board=涩涩走格棋`、`captivity_simulator=囚禁模拟器`；`random_imitator_td` / 植物大战丧尸随机版和未知游戏 fail closed，不写本地记录或 R2 统一时钟。
 - 已完成：走格棋每次通过基本校验的 `/sync-du` 在调用渡前记一次；囚禁模拟器仍只认局内 chat 或 `user_initiated=true` 的操作；渡的自动 follow-up、状态轮询、游戏大厅预览和重复自动结局通知不记。
 - 已完成：SumiTalk / QQ / 微信等共享 `tg_*` 窗口复用现有跨平台真实输入判定补写 chat 时间；带 follow-up 标记的游戏/后端生成不会冒充 chat。主动唤醒描述会按最新类型区分“明确回复”和“和我在玩具体游戏”，调度仍只看统一时钟。
 - 验证：纯本地临时文件和 monkeypatch R2/上游下，`scripts/test_user_activity_context.py`、`scripts/test_private_board_game.py`、`scripts/test_captivity_simulator_game.py` 全部通过；相关 `py_compile`、`import app`、`git diff --check` 通过。
-- 当前边界：改动只在 `/tmp/du-gateway-shared-game-activity` 干净 worktree；未 stage、未 commit、未 push、未部署、未重启。主工作区已有脏改和线上状态均未触碰；下次从该 worktree 的 diff 继续复审或提交。
+- 已部署：功能提交 `4a3ea528` 已推送到 `origin/main`，主网关 `/root/du-gateway` fast-forward 后完成服务器端 `py_compile` / `import app`；`du-gateway.service`、`du-sumitalk-chat-worker.service`、`du-telegram-proactive.service` 已重启为 active/running。本机与公网 `/health`、`/miniapp/` 均返回 200，重启后 warning 级日志为空。
+- 当前边界：主工作区已有脏改、线上游戏存档和 R2 活动时间均未手动修改；部署后由下一次真实 chat 或共同游戏同步自然写入新结构。
 
 当前状态（2026-07-11 囚禁模拟器首个完整部署版）：
 - 已完成：规则引擎、双路线 MiniApp、行动/过程/夜间/监控/逃跑/抓回/物品/结局闭环和事件回顾已整合；开发预览只使用本地假数据。
