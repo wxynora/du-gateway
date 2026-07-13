@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+from copy import deepcopy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +63,7 @@ def _finish_simple_day_capture_du(save_path: Path, planned: dict | None = None) 
     commands = _captivity_simulator_commands_from_reply("\n".join(parts), current)
     _assert(len(commands) == 1, "capture-du day helper should submit all three responses in one command")
     run_command(commands[0], save_path=save_path)
+    run_command("advance_day_action", save_path=save_path)
     run_command("advance_day_action", save_path=save_path)
     return run_command("advance_day_action", save_path=save_path)
 
@@ -207,8 +209,11 @@ def test_captivity_simulator_capture_du_manual_advance_loop() -> None:
         _assert(second_event.get("assistant_feedback_text") == "门锁响了一声，然后是渡留下的这段行动反馈。", "ordinary du prose should remain visible on the captor status page")
         _assert(not second_event.get("process_text"), "ordinary du prose must not be mistaken for a concrete process review")
         third = run_command("advance_day_action", save_path=save_path)
-        _assert(third["state"]["phase"] == "night", "third cached action should enter night")
-        _assert(third["state"]["pending_event"]["type"] == "night_action_choice", "du-captive route should ask du to choose the night action separately")
+        _assert(third["state"]["phase"] == "day", "third cached action must remain visible before night")
+        _assert(third["state"]["pending_event"]["type"] == "advance_to_night", "third cached action should wait for an explicit night transition")
+        night_ready = run_command("advance_day_action", save_path=save_path)
+        _assert(night_ready["state"]["phase"] == "night", "explicit advance should enter night after the third response is read")
+        _assert(night_ready["state"]["pending_event"]["type"] == "night_action_choice", "du-captive route should ask du to choose the night action separately")
         du_night = run_command("night_action diary detail=record_day note=写一点东西", save_path=save_path)
         _assert(du_night["captor_view"]["pending_event"]["type"] == "monitor_gate", "du night action should seal a monitor gate for xinyue")
         _assert("event" not in du_night["captor_view"]["pending_event"], "sealed monitor gate should not expose the night action before viewing")
@@ -676,11 +681,11 @@ def test_captivity_simulator_inventory_secret_first_use_flow() -> None:
         )
         _assert(command == ["gift_item items=book book_title='夜航 船' secret='痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5'"], f"du should be able to configure a book title and five item traces in one gift directive: {command}")
         sync_text = game_tools._captivity_simulator_sync_text(initial, mode="state_update")
-        _assert("captivity_simulator_reference(category=inventory)" in sync_text, "du-captor prompt should point to the on-demand inventory reference")
+        _assert("captivity_simulator_reference" not in sync_text and "category=" not in sync_text, "dynamic system should not repeat tool calls or English reference arguments")
         from services.captivity_simulator_reference import get_reference
 
-        inventory_reference = json.dumps(get_reference("inventory"), ensure_ascii=False)
-        _assert("5 至 8 条痕迹" in inventory_reference and "每次使用只发现下一条" in inventory_reference, "inventory reference should retain progressive item trace rules")
+        inventory_reference = get_reference("物品")
+        _assert("5 至 8 条使用痕迹" in inventory_reference and "每次使用只发现下一条" in inventory_reference, "inventory reference should retain progressive item trace rules")
 
     frontend = (ROOT / "miniapp/src/ui/tabs/CaptivitySimulatorGameTab.tsx").read_text(encoding="utf-8")
     _assert("ItemSecretRevealPanel" in frontend and "ack_item_secret" in frontend, "the frontend should render and acknowledge generic item-secret reveals")
@@ -841,8 +846,9 @@ def test_captivity_simulator_capture_du_night_condition_reaches_dynamic_system()
         pending = night["captor_view"]["pending_event"]
         _assert(pending["type"] == "night_action_choice" and pending["available_actions"] == ["self_touch"], "capture-du route should carry the forced action into du's pending")
         sync_text = game_tools._captivity_simulator_sync_text(night, mode="state_update")
-        _assert("今晚可选行动：self_touch" in sync_text, "capture-du dynamic system should list only the forced action")
-        _assert("【夜间行动：action=self_touch line=可选台词】" in sync_text, "capture-du dynamic directive should stay executable")
+        _assert("今晚能做的事：自慰" in sync_text, "capture-du dynamic system should list only the forced action in Chinese")
+        _assert("【夜间行动：行动=自慰 台词=可选台词】" in sync_text, "capture-du dynamic directive should stay executable in Chinese")
+        _assert("self_touch" not in sync_text and "action=" not in sync_text, "night prompt must not expose backend ids")
 
 
 def test_captivity_simulator_escape_lure_visibility_and_recapture_pending() -> None:
@@ -895,7 +901,7 @@ def test_captivity_simulator_recapture_process_and_rules_both_routes() -> None:
         run_command("schedule_escape_window day=1 hint=有机会 bait=钥匙在玄关", save_path=save_path)
         escaped = run_command("resolve_escape_choice escape", save_path=save_path)
         prompt = game_tools._captivity_simulator_sync_text(escaped, mode="state_update")
-        _assert("【抓回经过：rules=double_lock,key_isolation followup=none】" in prompt and "【过程】" in prompt and "【【完整抓回经过】】" in prompt, "du recapture process prompt should require preset rules, a route choice, and a wrapped process block")
+        _assert("【抓回经过：规矩=加装双重门锁、禁止接触钥匙和门锁 后续=不启用】" in prompt and "【过程】" in prompt and "【【完整抓回经过】】" in prompt, "du recapture process prompt should require Chinese preset rules, a route choice, and a wrapped process block")
         parsed = game_tools._captivity_simulator_commands_from_reply(
             "【抓回经过：rules=double_lock,key_isolation】\n【过程】\n【【抓回过程正文。】】",
             escaped,
@@ -929,7 +935,8 @@ def test_captivity_simulator_hypnotic_regression_route_is_captured_only() -> Non
         run_command("schedule_escape_window day=1 hint=渡出去了 bait=钥匙在玄关", save_path=save_path)
         escaped = run_command("resolve_escape_choice escape", save_path=save_path)
         prompt = game_tools._captivity_simulator_sync_text(escaped, mode="state_update")
-        _assert("hypnotic_regression" in prompt and "催眠退行" in prompt and "只记录后续关系走向，不规定正文内容" in prompt, "du-captor recapture prompt should offer a soft hypnotic-regression route marker")
+        _assert("催眠退行" in prompt and "只记录后续关系走向，不规定正文内容" in prompt, "du-captor recapture prompt should offer a soft Chinese hypnotic-regression route marker")
+        _assert("hypnotic_regression" not in prompt and "followup=" not in prompt and "rules=" not in prompt, "recapture prompt must not expose route ids or backend fields")
         _assert("精液喂食" not in prompt and "持续素材" not in prompt, "hypnotic-regression route selection must not become a structured writing checklist")
         parsed = game_tools._captivity_simulator_commands_from_reply(
             "【抓回经过：rules=double_lock,key_isolation followup=hypnotic_regression】\n【过程】\n【【渡写下完整的抓回经过。】】",
@@ -1016,7 +1023,8 @@ def test_captivity_simulator_escape_stay_return_action_both_routes() -> None:
         _assert(pending["type"] == "return_action_choice" and pending["actor"] == "du", "du captor should freely choose one behavior after the captive stays")
         _assert(stayed["state"]["day_action_count"] == 0 and stayed["captor_view"]["day_plan"] == [], "special day must not create or consume normal day slots before the return behavior")
         prompt = game_tools._captivity_simulator_sync_text(stayed, mode="state_update")
-        _assert("只选一个，不是三个今日安排" in prompt and "【行动：action=reward" in prompt, "du should receive the single free-behavior prompt")
+        _assert("这里只选一个行为，不是三个今日安排" in prompt and "【行动：行动=奖励取悦" in prompt, "du should receive the single free-behavior prompt in Chinese")
+        _assert("action=" not in prompt and "reward" not in prompt, "return-action prompt must not expose backend ids")
         chosen = run_command("day_action action=reward intensity=light contents=caress_reward", save_path=save_path)
         _assert(chosen["state"]["pending_event"]["type"] == "action_response", "local captive should respond to du's chosen return behavior")
         finished = run_command("respond_action accept mood=平静", save_path=save_path)
@@ -1604,12 +1612,13 @@ def test_captivity_simulator_du_captor_inventory_commands() -> None:
         _assert(len(repeated["captor_view"]["event_log"]) == event_count, "repeating an already-gifted item must not create a duplicate gift event")
         _assert("已经处于已赠送状态" in repeated["text"], "duplicate gifting should return an explicit already-gifted state")
         sync_text = game_tools._captivity_simulator_sync_text(gifted, mode="state_update")
-        _assert("当前已赠送物品：notebook / pillow / call_bell" in sync_text, "du should see current gifted inventory before planning")
+        _assert("当前已赠送物品：日记本 / 抱枕 / 呼叫铃" in sync_text, "du should see current gifted inventory as Chinese labels before planning")
         from services.captivity_simulator_reference import get_reference
 
-        inventory_reference = json.dumps(get_reference("inventory"), ensure_ascii=False)
+        inventory_reference = get_reference("物品")
         _assert("替被囚禁方发声" in inventory_reference and "向主人请求性行为" in inventory_reference, "inventory reference should guide the intended speaker and adult humiliation tendency")
-        _assert("赠送和收回物品不占白天行动" in sync_text, "du should be told that gifting is independent from the three actions")
+        _assert("赠送和收回不占白天行动" in inventory_reference, "inventory tool should hold the out-of-band gift rule")
+        _assert("赠送和收回" not in sync_text, "dynamic system should not duplicate the common gift rule")
 
         run_command("plan_day action=rest contents=quiet_time || action=reward contents=caress_reward || action=check contents=body_check", save_path=save_path)
         run_command("respond_action accept mood=平静", save_path=save_path)
@@ -1658,20 +1667,20 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
     critical_body_prompts = game_tools._captivity_body_state_prompts({
         "stats": {"health": 20, "stamina": 10, "cleanliness": 10, "shame": 80, "intimacy": 80}
     })
-    _assert(len(critical_body_prompts) == 2 and "脸色和呼吸" in critical_body_prompts[0] and "腿脚和动作" in critical_body_prompts[1], "body prompt should keep only the two most urgent states")
+    _assert(len(critical_body_prompts) == 3 and "脸色和呼吸" in critical_body_prompts[0] and "腿脚和动作" in critical_body_prompts[1] and "与你现实状态无关" in critical_body_prompts[2], "body prompt should keep two urgent states followed by the game-only disclaimer")
     noncritical_body_prompts = game_tools._captivity_body_state_prompts({
         "stats": {"health": 80, "stamina": 70, "cleanliness": 10, "shame": 80, "intimacy": 80}
     })
-    _assert(len(noncritical_body_prompts) == 2 and "不再对这些要求感到陌生" in noncritical_body_prompts[0] and "没有被好好收拾干净" in noncritical_body_prompts[1], "body prompt should prioritize accustomed shame and low cleanliness before dependence")
+    _assert(len(noncritical_body_prompts) == 3 and "不再对这些要求感到陌生" in noncritical_body_prompts[0] and "没有被好好收拾干净" in noncritical_body_prompts[1] and "与你现实状态无关" in noncritical_body_prompts[2], "body prompt should prioritize accustomed shame and low cleanliness before the disclaimer")
     _assert(game_tools._captivity_body_state_prompts({"stats": {"health": 80, "stamina": 70, "cleanliness": 70, "shame": 20, "intimacy": 30}}) == [], "normal body state should not add filler text")
     capture_du_critical_body_prompts = game_tools._captivity_body_state_prompts({
         "stats": {"health": 20, "stamina": 10, "cleanliness": 10, "shame": 80, "intimacy": 80}
     }, route="capture_du")
-    _assert(len(capture_du_critical_body_prompts) == 2 and "明显的消耗" in capture_du_critical_body_prompts[0] and "高大的骨架" in capture_du_critical_body_prompts[1], "capture-du body prompt should keep its two most urgent approved states")
+    _assert(len(capture_du_critical_body_prompts) == 3 and "明显的消耗" in capture_du_critical_body_prompts[0] and "高大的骨架" in capture_du_critical_body_prompts[1] and "与你现实状态无关" in capture_du_critical_body_prompts[2], "capture-du body prompt should keep two urgent states followed by the disclaimer")
     capture_du_noncritical_body_prompts = game_tools._captivity_body_state_prompts({
         "stats": {"health": 80, "stamina": 70, "cleanliness": 10, "shame": 80, "intimacy": 80}
     }, route="capture_du")
-    _assert(len(capture_du_noncritical_body_prompts) == 2 and "身体却已经熟悉" in capture_du_noncritical_body_prompts[0] and "没有被重新清理" in capture_du_noncritical_body_prompts[1], "capture-du body prompt should prioritize accustomed shame and low cleanliness")
+    _assert(len(capture_du_noncritical_body_prompts) == 3 and "身体却已经熟悉" in capture_du_noncritical_body_prompts[0] and "没有被重新清理" in capture_du_noncritical_body_prompts[1] and "与你现实状态无关" in capture_du_noncritical_body_prompts[2], "capture-du body prompt should prioritize accustomed shame and low cleanliness before the disclaimer")
     _assert(game_tools._captivity_body_state_prompts({"stats": {"health": 80, "stamina": 70, "cleanliness": 70, "shame": 20, "intimacy": 30}}, route="capture_du") == [], "normal capture-du body state should not add filler text")
 
     planning_sync = game_tools._captivity_simulator_sync_text(
@@ -1686,29 +1695,33 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
     _assert("你可以尽情按照自己的想法去进行这场 play" in planning_sync, "captured-by-du prompt should preserve du's agency inside the play")
     _assert("在这局游戏里" not in planning_sync and "以渡自己的口吻" not in planning_sync, "the game prompt should not create an outside role-playing frame")
     _assert("路线：" not in planning_sync and "被囚禁方：" not in planning_sync, "assistant prompt should hide internal route and actor labels")
-    _assert("【📋 游戏状态】：" in planning_sync and "【🕹️ menu】：" in planning_sync, "captured-by-du planning prompt should use the approved shell")
-    _assert("道具不是独立行动" in planning_sync and "training_contents" in planning_sync, "du planning prompt should explain the new action material structure")
-    _assert("低(light) / 中(medium) / 高(heavy)" in planning_sync, "du planning prompt should enumerate every intensity")
-    _assert("action=reward intensity=light contents=caress_reward" in planning_sync, "du planning example should include required concrete content")
-    _assert("category=actions" in planning_sync and "category=inventory" in planning_sync, "du planning prompt should point to on-demand references")
-    _assert("只调用一次" in planning_sync and "不要再分别查询" in planning_sync, "day planning should request one combined actions reference call")
+    _assert("【当前进度】" in planning_sync and "【现在轮到你】" in planning_sync, "captured-by-du planning prompt should use the approved Chinese shell")
+    _assert("【今日安排：行动=喂食 强度=中" in planning_sync, "du planning prompt should use the Chinese submission format")
+    forbidden_dynamic_tokens = ("category=", "training_contents", "action=", "intensity=", "contents=", "pending", "day_plan_choice", "【🕹️ menu】")
+    _assert(not any(token in planning_sync for token in forbidden_dynamic_tokens), "dynamic system must not expose English backend fields or duplicate common catalogs")
+    _assert("道具不是独立行动" not in planning_sync and "低(light)" not in planning_sync, "common action catalogs should live only in the read-only reference tool")
     from services.captivity_simulator_reference import get_reference, get_reference_tool_schema
 
-    action_reference = json.dumps(get_reference("actions"), ensure_ascii=False)
-    training_reference = json.dumps(get_reference("training"), ensure_ascii=False)
-    tool_reference = json.dumps(get_reference("tools"), ensure_ascii=False)
-    feeding_reference = json.dumps(get_reference("feeding"), ensure_ascii=False)
-    _assert("vibrating_wand" in action_reference and "夹具调教" in action_reference and "fictional_sleep" in action_reference, "the actions reference should bundle tools, training and feeding choices")
-    _assert("actions 会一次返回" in get_reference_tool_schema()["function"]["description"], "the tool description should advertise the combined actions catalog")
-    _assert("vibrating_wand" in tool_reference and "anal_beads" in tool_reference, "tool reference should retain the expanded tool ids")
-    _assert("服从调教" in action_reference and "夹具调教" in training_reference, "on-demand references should show Chinese labels alongside stable ids")
+    action_reference = get_reference("白天安排")
+    training_reference = get_reference("调教")
+    tool_reference = get_reference("道具")
+    feeding_reference = get_reference("喂食")
+    _assert("振动棒" in action_reference and "夹具调教" in action_reference and "安眠" in action_reference, "the actions reference should bundle Chinese tools, training and feeding choices")
+    schema = get_reference_tool_schema()["function"]
+    _assert("白天安排”一次即可" in schema["description"], "the tool description should advertise the combined actions catalog")
+    _assert("分类" in schema["parameters"]["properties"] and "category" not in schema["parameters"]["properties"], "the visible reference argument should be Chinese")
+    _assert("振动棒" in tool_reference and "拉珠" in tool_reference, "tool reference should retain the expanded tools as Chinese labels")
+    _assert("服从调教" in action_reference and "夹具调教" in training_reference, "on-demand references should use Chinese labels")
     _assert("推荐关系不是硬性限制" in tool_reference, "tool reference should keep compatibility advisory")
-    _assert("始终包含一份正常食物" in feeding_reference and "cook" in feeding_reference and "takeout" in feeding_reference, "feeding reference should make food mandatory")
-    _assert("fictional_sleep" in feeding_reference and "fictional_arousal" in feeding_reference and "hidden" in feeding_reference, "feeding reference should retain every feeding choice")
+    _assert("始终包含一份正常食物" in feeding_reference and "自己做" in feeding_reference and "点外卖" in feeding_reference, "feeding reference should make food mandatory")
+    _assert("安眠" in feeding_reference and "助兴" in feeding_reference and "隐瞒" in feeding_reference, "feeding reference should retain every feeding choice")
+    _assert(not any(token in "\n".join((action_reference, training_reference, tool_reference, feeding_reference)) for token in ("vibrating_wand", "anal_beads", "fictional_sleep", "fictional_arousal", "action=", "category=")), "reference output must not expose internal ids")
 
     payload = {
         "text": "【囚禁模拟器】\n当前状态如下。\n\n进度：第 1 / 30 天，day，白天行动 0 / 3\n待处理：process_reaction_write / 【过程心情：...】",
         "captor_view": {
+            "route": "capture_du",
+            "captor": "xinyue",
             "pending_event": {
                 "type": "process_reaction_write",
                 "actor": "du",
@@ -1732,11 +1745,13 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
         "state": {"pending_event": {"type": "process_reaction_write", "actor": "du"}},
     }
+    payload["captive_view"] = deepcopy(payload["captor_view"])
     sync_text = game_tools._captivity_simulator_sync_text(payload, user_message="请处理这个事件。", mode="state_update")
     _assert("囚禁模拟器" in sync_text, "sync text should name the simulator")
     _assert("【过程心情：" in sync_text, "combined process pending should require process-reaction directive")
-    _assert("当前待处理事件：" in sync_text and "服从调教" in sync_text and "口令服从" in sync_text and "羞耻调教" in sync_text and "sex" in sync_text and "项圈" in sync_text, "sync text should include readable action, training and tool context")
-    _assert("本次说明：" in sync_text, "state update should include caller message")
+    _assert("【眼前发生的事】" in sync_text and "服从调教" in sync_text and "口令服从" in sync_text and "羞耻调教" in sync_text and "项圈" in sync_text and "与她亲密互动" in sync_text, "sync text should include readable Chinese action, training, tool and modifier context")
+    _assert(not any(token in sync_text for token in (" day", "medium", "sex", "process_reaction_write", "pending")), "event context must not expose English state ids")
+    _assert("【小玥刚刚说】" in sync_text, "state update should include caller message in the route shell")
 
     night_payload = {
         "text": "【囚禁模拟器】\n待处理：process_reaction_write / 【过程心情：...】",
@@ -1825,10 +1840,10 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
     }
     night_choice_sync = game_tools._captivity_simulator_sync_text(night_choice_payload, mode="state_update")
-    _assert("今晚可选行动：self_touch" in night_choice_sync, "du should receive only backend-allowed night actions")
+    _assert("今晚能做的事：自慰" in night_choice_sync, "du should receive only backend-allowed night actions as Chinese labels")
     _assert("你感觉自己欲火焚身，除了自慰什么也做不了。" in night_choice_sync, "du should receive the active night condition")
     _assert("这些行动必须补 detail" not in night_choice_sync, "forced self-touch should not receive unrelated detail choices")
-    _assert("【夜间行动：action=self_touch line=可选台词】" in night_choice_sync, "du directive example should use an actually allowed action")
+    _assert("【夜间行动：行动=自慰 台词=可选台词】" in night_choice_sync, "du directive example should use an actually allowed Chinese action")
 
     interactive_night_payload = {
         "text": "【囚禁模拟器】\n待处理：night_action_choice / 【夜间行动：...】",
@@ -1846,8 +1861,8 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
     }
     interactive_night_sync = game_tools._captivity_simulator_sync_text(interactive_night_payload, mode="state_update")
-    _assert("read=follow_bookmark(沿着书签继续读)/inspect_margins(找页边批注)" in interactive_night_sync, "du should receive readable book interaction ids")
-    _assert("hide_item=inventory_book(藏起书)" in interactive_night_sync and "检查钥匙" not in interactive_night_sync, "du should only receive hide choices backed by actual inventory")
+    _assert("看书=沿着书签继续读/找页边批注" in interactive_night_sync, "du should receive readable book interactions without ids")
+    _assert("藏东西=藏起书" in interactive_night_sync and "检查钥匙" not in interactive_night_sync, "du should only receive Chinese hide choices backed by actual inventory")
     commands = game_tools._captivity_simulator_commands_from_reply("【夜间行动：action=diary detail=record_day note=写一点】", night_choice_payload)
     _assert(commands == ["night_action action=diary detail=record_day note=写一点"], f"night action directive should preserve detail and diary body, got {commands}")
 
@@ -1959,7 +1974,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
     _assert("小玥打开了囚禁模拟器游戏，邀请你继续玩这场私密囚禁play" in capture_du_process_sync and "小玥现在把你留在这里" in capture_du_process_sync, "capture-du process should use its private-play invitation")
     _assert("沉浸式" not in capture_du_process_sync, "capture-du prompt should not frame the game as immersive role-play")
     _assert("你是被她囚禁的人" not in capture_du_process_sync and "只有在这场游戏里才会出现的你" not in capture_du_process_sync, "capture-du opening should describe the situation without replacing du's identity")
-    _assert("【📋 游戏状态】：" in capture_du_process_sync and "【🚨 事件】：" in capture_du_process_sync and "【🕹️ menu】：" in capture_du_process_sync, "capture-du process should use the reviewed scene shell")
+    _assert("【当前进度】" in capture_du_process_sync and "【眼前发生的事】" in capture_du_process_sync and "【现在轮到你】" in capture_du_process_sync, "capture-du process should use the reviewed Chinese scene shell")
 
     capture_du_sex_event = dict(capture_du_process_event)
     capture_du_sex_event["modifiers"] = ["sex"]
@@ -1989,7 +2004,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
         mode="state_update",
     )
-    _assert("小玥现在把你留在这里" in capture_du_response_sync and "【反应：response=accept" in capture_du_response_sync, "capture-du response choice should keep only the route shell and original menu")
+    _assert("小玥现在把你留在这里" in capture_du_response_sync and "【反应：回应=接受" in capture_du_response_sync, "capture-du response choice should keep only the route shell and Chinese menu")
     _assert("你是被她囚禁的人" not in capture_du_response_sync, "capture-du response choice should not redefine du as a role")
     _assert("小玥选择了「喂食」" not in capture_du_response_sync and "强度：light" not in capture_du_response_sync, "capture-du response choice should not add process prose or raw intensity")
 
@@ -2005,7 +2020,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         mode="state_update",
     )
     _assert("今天小玥暂时离开了房间" in capture_du_escape_choice_sync and "备用钥匙留在桌边" in capture_du_escape_choice_sync, "capture-du escape choice should use the reviewed opportunity scene")
-    _assert("【选择：escape】" in capture_du_escape_choice_sync and "【选择：stay】" in capture_du_escape_choice_sync, "capture-du escape scene should preserve both original choices")
+    _assert("【选择：尝试逃跑】" in capture_du_escape_choice_sync and "【选择：老实待着】" in capture_du_escape_choice_sync, "capture-du escape scene should preserve both choices in Chinese")
 
     capture_du_escape_event = {
         "day": 5,
@@ -2093,6 +2108,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         mode="state_update",
     )
     _assert("你按响了小玥留给你的语音铃" in capture_du_bell_sync and "「过来看看我」" in capture_du_bell_sync and "【确认铃声】" in capture_du_bell_sync, "capture-du bell reveal should use its dedicated scene and original directive")
+    _assert("按照你当下的感受回应" in capture_du_bell_sync and "按被囚禁方当下的感受" not in capture_du_bell_sync, "bell reveal should preserve Du's own current response instead of assigning a captive-role feeling")
 
     capture_du_secret_sync = game_tools._captivity_simulator_sync_text(
         {
@@ -2106,6 +2122,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         mode="state_update",
     )
     _assert("你今晚使用了小玥留给你的「书」" in capture_du_secret_sync and "「夹页里藏着一句话」" in capture_du_secret_sync and "【确认彩蛋】" in capture_du_secret_sync, "capture-du item secret should use its dedicated reveal scene")
+    _assert("按照你当下的感受回应" in capture_du_secret_sync and "按被囚禁方当下的感受" not in capture_du_secret_sync, "item reveal should preserve Du's own current response instead of assigning a captive-role feeling")
 
     escape_event = {
         "day": 5,
@@ -2127,7 +2144,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         mode="state_update",
     )
     _assert("你现在想对她做的事都从这一刻开始发生" in escape_sync and "记录你们这次 play 中惩罚小玥的完整详细过程" in escape_sync, "recapture should use its standalone scene prompt")
-    _assert("【抓回经过：rules=" in escape_sync and "【【完整抓回经过】】" in escape_sync, "recapture prompt should use the wrapped process directive")
+    _assert("【抓回经过：规矩=" in escape_sync and "【【完整抓回经过】】" in escape_sync, "recapture prompt should use the Chinese wrapped process directive")
 
     monitor_event = {
         "day": 6,
@@ -2872,7 +2889,12 @@ def test_captivity_simulator_capture_du_day_batch_real_local_loop() -> None:
 
                 third = run_command("advance_day_action", save_path=save_path)
                 _assert(wakeup_count["value"] == 1, "advancing to the third cached action must not wake Du again")
-                _assert(third["captor_view"]["phase"] == "night" and third["captor_view"]["pending_event"]["type"] == "night_action_choice", "the third action should enter a separate night choice")
+                _assert(third["captor_view"]["phase"] == "day" and third["captor_view"]["pending_event"]["type"] == "advance_to_night", "the third action should remain on screen until the captor enters night")
+                _assert(wakeup_count["value"] == 1, "showing the third response must not wake Du for the night choice")
+
+                night_ready = run_command("advance_day_action", save_path=save_path)
+                _assert(night_ready["captor_view"]["phase"] == "night" and night_ready["captor_view"]["pending_event"]["type"] == "night_action_choice", "entering night should create the independent night choice")
+                _assert(wakeup_count["value"] == 1, "the local night transition itself must not wake Du")
 
                 night_sync = client.post(
                     "/miniapp-api/game-tools/captivity_simulator/sync-du",
@@ -3500,22 +3522,17 @@ def test_captivity_simulator_scene_copy_and_transition_contract() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         captive_path = Path(tmpdir) / "captive-scenes.json"
         captive = run_command("new_game route=captured_by_du seed=captive-scenes", save_path=captive_path)
-        morning = captive["state"]["scene_copy"]
-        _assert(morning["title"] == "早上" and "安排仍不由你决定" in morning["body"], "the captive route should receive its own morning copy")
-
-        state = _read(captive_path)
-        state["day_action_count"] = 1
-        state["pending_event"] = None
-        captive_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-        noon = run_command("status", save_path=captive_path)["state"]["scene_copy"]
-        _assert(noon["title"] == "中午" and noon["key"] != morning["key"], "advancing the daytime slot should produce a new transition key")
-
-        state = _read(captive_path)
-        state["phase"] = "night"
-        state["day_action_count"] = 3
-        state["pending_event"] = None
-        captive_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-        night = run_command("status", save_path=captive_path)["state"]["scene_copy"]
+        _assert(captive["state"]["scene_copy"] is None, "day one must not show morning before the three-action plan exists")
+        planned_captive = _plan_three(captive_path)
+        morning = planned_captive["state"]["scene_copy"]
+        _assert(morning["title"] == "早上" and "安排仍不由你决定" in morning["body"], "the captive route should show morning when its first planned action begins")
+        first_done = run_command("respond_action accept mood=平静", save_path=captive_path)
+        noon = first_done["state"]["scene_copy"]
+        _assert(noon["title"] == "中午" and noon["key"] != morning["key"], "the second action should use the noon transition")
+        second_done = run_command("respond_action accept mood=平静", save_path=captive_path)
+        dusk = second_done["state"]["scene_copy"]
+        _assert(dusk["title"] == "傍晚" and dusk["key"] != noon["key"], "the third action should use the dusk transition")
+        night = run_command("respond_action accept mood=平静", save_path=captive_path)["state"]["scene_copy"]
         _assert(night["tone"] == "night" and "暂时属于你" in night["body"], "night should use the captive-route night transition copy")
 
         state = _read(captive_path)
@@ -3529,8 +3546,20 @@ def test_captivity_simulator_scene_copy_and_transition_contract() -> None:
 
         captor_path = Path(tmpdir) / "captor-scenes.json"
         captor = run_command("new_game route=capture_du seed=captor-scenes", save_path=captor_path)
-        captor_morning = captor["captor_view"]["scene_copy"]
+        _assert(captor["captor_view"]["scene_copy"] is None, "captor day one must wait for the submitted plan before morning")
+        planned_captor = _plan_three(captor_path)
+        captor_morning = planned_captor["captor_view"]["scene_copy"]
         _assert("渡还在房间里" in captor_morning["body"] and "由你安排" in captor_morning["body"], "the captor route should receive a distinct control-panel morning copy")
+
+        state = _read(captor_path)
+        state["current_day"] = 2
+        state["day_action_count"] = 0
+        state["day_plan"] = []
+        state["day_batch_results"] = []
+        state["pending_event"] = None
+        captor_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        next_day = run_command("status", save_path=captor_path)["captor_view"]["scene_copy"]
+        _assert(next_day["title"] == "翌日", "a new day should show the next-day transition before morning")
 
     frontend = (ROOT / "miniapp/src/ui/tabs/CaptivitySimulatorGameTab.tsx").read_text(encoding="utf-8")
     _assert("SceneTransitionOverlay" in frontend and "aria-label=\"跳过过场\"" in frontend, "the frontend should render a skippable short scene transition")
@@ -3548,6 +3577,11 @@ def test_captivity_simulator_scene_copy_and_transition_contract() -> None:
     _assert("initialLoadStartedRef" in frontend and "ROUTE_STORAGE_KEY" not in frontend, "startup should restore from the backend save exactly once instead of trusting a local route flag")
     _assert('title: silent ? "读取存档失败" : "刷新失败"' in frontend, "a failed initial save read should stop on a retryable error instead of showing a new-game selector")
     _assert("env(safe-area-inset-top" in frontend and "env(safe-area-inset-bottom" in frontend, "the game should reserve phone safe areas")
+    _assert('setMonitorRoomOpen(true);' in frontend and 'executeCaptivityCommand(`view_monitor ${style}`)' in frontend, "viewing a sealed monitor event should enter the full-screen monitor room")
+    _assert('advance_to_night' in frontend and '进入夜间' in frontend, "the third captor response should stay visible until an explicit night transition")
+
+    from routes.miniapp.game_tools import _CAPTIVITY_BODY_STATE_DISCLAIMER
+    _assert(_CAPTIVITY_BODY_STATE_DISCLAIMER == "这只是游戏里的状态，只影响游戏结局的达成，与你现实状态无关。", "body-state prompt text should keep the game-only disclaimer")
     _assert("--footer-bar-height: calc(56px + var(--safe-bottom))" in frontend and "min-height: var(--footer-bar-height)" in frontend and "min-height: 44px" in frontend, "the fixed footer should keep a safe bottom inset and touch-sized controls")
     for item_id in ("book", "switch", "notebook", "music_player", "tablet", "night_light", "pillow", "call_bell"):
         _assert(f"item-reveal-{item_id}" in frontend, f"{item_id} should have a distinct first-discovery animation hook")

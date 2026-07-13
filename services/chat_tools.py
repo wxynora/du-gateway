@@ -816,7 +816,7 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
     if name == "captivity_simulator_reference":
         from services.captivity_simulator_reference import get_reference
 
-        return json.dumps(get_reference(str((arguments or {}).get("category") or "")), ensure_ascii=False)
+        return get_reference(str((arguments or {}).get("分类") or (arguments or {}).get("category") or ""))
     if str(name or "").strip().startswith("maps_"):
         from services.amap_mcp_tools import execute_amap_mcp_tool
         return execute_amap_mcp_tool(name, arguments if isinstance(arguments, dict) else {})

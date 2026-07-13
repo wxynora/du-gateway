@@ -964,8 +964,7 @@ def send_captivity_simulator_wakeup(
         archive=True,
         extra_instruction=(
             "这是小玥在囚禁模拟器页面内发给你的游戏交流，不是她在主聊天框里说的话。"
-            "请自然回应；如果你要推进当前事件，第一行必须单独写页面规则里要求的精确指令。"
-            "通用选项需要时只调用 captivity_simulator_reference 查询；不要调用其他工具，不要解释工具、接口、系统流程，不要替小玥说话。"
+            "按照你当下的感受回应。"
         ),
         wakeup_kind="captivity_simulator",
         system_event=True,
