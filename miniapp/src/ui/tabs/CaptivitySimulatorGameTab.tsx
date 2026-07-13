@@ -165,6 +165,7 @@ type CaptivityPending = {
     total?: number;
   };
   event?: CaptivityEvent;
+  events?: CaptivityEvent[];
 };
 
 type DayPlanSpec = {
@@ -774,6 +775,10 @@ type EscapeRoomId = (typeof ESCAPE_ROOM_OPTIONS)[number]["id"];
 
 function escapeRoomBait(roomId: EscapeRoomId | string): string {
   return ESCAPE_ROOM_OPTIONS.find((item) => item.id === roomId)?.bait || ESCAPE_ROOM_OPTIONS[0].bait;
+}
+
+function escapeRoomFromBait(bait: string): EscapeRoomId {
+  return ESCAPE_ROOM_OPTIONS.find((item) => item.bait === String(bait || "").trim())?.id || "entry";
 }
 
 function defaultPlanSlots(): PlanSlot[] {
@@ -1709,6 +1714,7 @@ const PENDING_LABELS: Record<string, string> = {
 };
 
 const CAPTOR_WAITING_LABELS: Record<string, string> = {
+  day_batch_response: "等待渡一次写完今天三段回应。",
   action_response: "等待渡选择回应和此刻心情。",
   process_write: "等待渡补写这一段过程。",
   process_reaction_write: "等待渡提交回应、过程和心情。",
@@ -2527,6 +2533,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
   const initialLoadStartedRef = useRef(false);
   const lastSceneKeyRef = useRef("");
   const lastProcessTransitionKeyRef = useRef("");
+  const escapeWindowHydratedIdRef = useRef("");
   const sceneTransitionTimerRef = useRef<number | null>(null);
   const previewSyncReadyAtRef = useRef(0);
   const lastFailedRetryRef = useRef<(() => void) | null>(null);
@@ -2596,6 +2603,26 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
   const applyPayload = useCallback((next: CaptivityPayload) => {
     setPayload(next);
   }, []);
+
+  useEffect(() => {
+    if (role !== "captor") return;
+    const windows = (view.escape_windows || []).filter((item) => item && typeof item === "object");
+    const scheduled = windows.filter((item) => String(item.status || "") === "scheduled");
+    const active = scheduled.length ? scheduled[scheduled.length - 1] : windows[windows.length - 1];
+    if (!active) return;
+    const hydrationId = String(active.id || `${active.day || ""}:${active.created_at || ""}`);
+    if (!hydrationId || escapeWindowHydratedIdRef.current === hydrationId) return;
+    escapeWindowHydratedIdRef.current = hydrationId;
+    const day = Number(active.day || 0);
+    const hint = String(active.hint || "").trim();
+    const bait = String(active.bait || "").trim();
+    if (day >= 1 && day <= 30) setEscapeDay(day);
+    if (hint) setEscapeHint(hint);
+    if (bait) {
+      setEscapeBait(bait);
+      setEscapeRoom(escapeRoomFromBait(bait));
+    }
+  }, [role, view.escape_windows]);
 
   const dismissSceneTransition = useCallback(() => {
     if (sceneTransitionTimerRef.current !== null) {
@@ -3056,7 +3083,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       isReturnActionPlanner ? "正在确定回来后的行为..." : "正在下发今日安排...",
       "SYNC_RESULT: PENDING",
       () => executeCaptivityCommand(isReturnActionPlanner ? buildReturnActionCommand() : buildPlanCommand()),
-    ).then((next) => continueAutomaticSync(next, Boolean(playerLine), false, playerLine));
+    ).then((next) => continueAutomaticSync(next, false, false, playerLine));
   }
 
   function submitResponse() {
@@ -3402,7 +3429,13 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
           () => executeCaptivityCommand("advance_day_action"),
         ).then((next) => {
           if (!next) return;
-          playNextStageForPayload(next);
+          const review = findNewProcessReview(next, payload);
+          if (review) {
+            setProcessReview(review);
+            setFooterTab("history");
+          } else {
+            playNextStageForPayload(next);
+          }
           continueAutomaticSync(next);
         });
       } else if (payload) {
@@ -3433,8 +3466,14 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       () => executeCaptivityCommand("advance_day_action"),
     ).then((next) => {
       if (!next) return;
-      const playerLine = textLine(viewFromPayload(next).pending_event?.event?.line);
-      continueAutomaticSync(next, Boolean(playerLine), false, playerLine);
+      const review = findNewProcessReview(next, payload);
+      if (review) {
+        setProcessReview(review);
+        setFooterTab("history");
+      } else {
+        playNextStageForPayload(next);
+      }
+      continueAutomaticSync(next);
     });
   }
 

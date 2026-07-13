@@ -47,6 +47,25 @@ def _finish_simple_day_captured_by_du(save_path: Path) -> dict:
     return run_command("respond_action bargain mood=疲惫 line=第三件", save_path=save_path)
 
 
+def _finish_simple_day_capture_du(save_path: Path, planned: dict | None = None) -> dict:
+    from routes.miniapp.game_tools import _captivity_simulator_commands_from_reply
+
+    current = planned or _plan_three(save_path)
+    pending = current["captor_view"]["pending_event"]
+    parts: list[str] = []
+    for slot, event in enumerate(pending.get("events") or [], start=1):
+        parts.append(f"【第{slot}段：response=accept mood=平静 line=】")
+        if bool(event.get("requires_process")):
+            parts.extend([f"【过程{slot}】", f"【【第 {slot} 段本地测试完整经过。】】"])
+        else:
+            parts.append(f"第 {slot} 段本地测试回应。")
+    commands = _captivity_simulator_commands_from_reply("\n".join(parts), current)
+    _assert(len(commands) == 1, "capture-du day helper should submit all three responses in one command")
+    run_command(commands[0], save_path=save_path)
+    run_command("advance_day_action", save_path=save_path)
+    return run_command("advance_day_action", save_path=save_path)
+
+
 def test_captivity_simulator_new_game_views() -> None:
     from routes.miniapp.game_tools import _captivity_simulator_public_payload
 
@@ -157,33 +176,39 @@ def test_captivity_simulator_captured_by_du_event_loop() -> None:
 
 
 def test_captivity_simulator_capture_du_manual_advance_loop() -> None:
+    from routes.miniapp.game_tools import _captivity_simulator_commands_from_reply
+
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "capture_du.json"
         run_command("new_game route=capture_du seed=manual-loop", save_path=save_path)
         run_command("set_config notebook=true", save_path=save_path)
         planned = _plan_three(save_path, process_first=True)
-        _assert(planned["state"]["pending_event"]["type"] == "process_reaction_write", "process action with du captive should ask du for process and mood in one turn")
+        _assert(planned["state"]["pending_event"]["type"] == "day_batch_response", "all three capture-du actions should reach du in one batch")
 
-        first_done = run_command(
-            "submit_process_reaction response=accept mood=害羞 line=写完了 process=这一段过程正文。",
-            save_path=save_path,
+        commands = _captivity_simulator_commands_from_reply(
+            "【第1段：response=accept mood=害羞 line=写完了】\n"
+            "【过程1】\n"
+            "【【这一段过程正文。】】\n"
+            "【第2段：response=refuse mood=闹脾气 line=不要】\n"
+            "门锁响了一声，然后是渡留下的这段行动反馈。\n"
+            "【第3段：response=silent mood=疲惫 line=最后一件】\n"
+            "渡安静地完成最后一段回应。",
+            planned,
         )
+        _assert(len(commands) == 1 and commands[0].startswith("submit_day_batch "), "one du reply should produce one batch command")
+        first_done = run_command(commands[0], save_path=save_path)
         _assert(first_done["state"]["day_action_count"] == 1, "first action should settle after combined process reaction")
         _assert(first_done["state"]["pending_event"]["type"] == "advance_action", "xinyue-captor route should wait for local advance")
         _assert(first_done["state"]["event_log"][-1]["post_reaction"]["mood"] == "害羞", "combined process reaction should log one mood")
 
         second = run_command("advance_day_action", save_path=save_path)
-        _assert(second["state"]["pending_event"]["type"] == "action_response", "manual advance should show the next planned action")
-        second_done = run_command("respond_action refuse mood=闹脾气 line=不要 feedback='门锁响了一声，然后是渡留下的这段行动反馈。'", save_path=save_path)
-        _assert(second_done["state"]["pending_event"]["type"] == "advance_action", "non-process du response should also stop before next action")
-        second_event = second_done["captor_view"]["event_log"][-1]
+        _assert(second["state"]["pending_event"]["type"] == "advance_action", "manual advance should consume the cached second response locally")
+        second_event = second["captor_view"]["event_log"][-1]
         _assert(second_event.get("assistant_feedback_text") == "门锁响了一声，然后是渡留下的这段行动反馈。", "ordinary du prose should remain visible on the captor status page")
         _assert(not second_event.get("process_text"), "ordinary du prose must not be mistaken for a concrete process review")
         third = run_command("advance_day_action", save_path=save_path)
-        _assert(third["state"]["pending_event"]["type"] == "action_response", "third action should be shown after manual advance")
-        closed = run_command("respond_action silent mood=疲惫 line=最后一件", save_path=save_path)
-        _assert(closed["state"]["phase"] == "night", "third action should enter night")
-        _assert(closed["state"]["pending_event"]["type"] == "night_action_choice", "du-captive route should ask du to choose the night action")
+        _assert(third["state"]["phase"] == "night", "third cached action should enter night")
+        _assert(third["state"]["pending_event"]["type"] == "night_action_choice", "du-captive route should ask du to choose the night action separately")
         du_night = run_command("night_action diary detail=record_day note=写一点东西", save_path=save_path)
         _assert(du_night["captor_view"]["pending_event"]["type"] == "monitor_gate", "du night action should seal a monitor gate for xinyue")
         _assert("event" not in du_night["captor_view"]["pending_event"], "sealed monitor gate should not expose the night action before viewing")
@@ -354,7 +379,7 @@ def test_captivity_simulator_action_contents_and_expanded_tools() -> None:
             save_path=save_path,
         )
         _assert(result["ok"] is True, "compatible expanded BDSM tools should be accepted by the rule engine")
-        event = result["captor_view"]["pending_event"]["event"]
+        event = result["captor_view"]["pending_event"]["events"][0]
         _assert(event["tools"] == ["whip", "ruler"], "the event should retain at most two compatible tools")
         _assert(event["training_contents"] == ["impact_play"], "event should retain explicit training content")
         _assert(event["requires_process"] is True, "specific training content and tools should require a detailed process")
@@ -376,7 +401,7 @@ def test_captivity_simulator_action_contents_and_expanded_tools() -> None:
             save_path=mismatch_path,
         )
         _assert(mismatch["ok"] is True, "known tools should remain freely combinable even when they are not recommended")
-        _assert(mismatch["captor_view"]["pending_event"]["event"]["tools"] == ["ruler"], "free tool combinations should be retained in the event")
+        _assert(mismatch["captor_view"]["pending_event"]["events"][0]["tools"] == ["ruler"], "free tool combinations should be retained in the event")
 
         invalid = Path(tmpdir) / "invalid-tool.json"
         run_command("new_game route=capture_du seed=invalid-tool", save_path=invalid)
@@ -396,9 +421,9 @@ def test_captivity_simulator_action_contents_and_expanded_tools() -> None:
             save_path=save_path,
         )
         _assert(result["ok"] is True, "duplicate material ids should be normalized instead of breaking the plan")
-        event = result["captor_view"]["pending_event"]["event"]
+        event = result["captor_view"]["pending_event"]["events"][0]
         _assert(event["training_contents"] == ["impact_play"] and event["tools"] == ["whip"], "duplicate content and tool ids should not stack")
-        _assert(result["captor_view"]["pending_event"]["type"] == "process_reaction_write", "requires_process=false must not bypass mandatory process flow")
+        _assert(result["captor_view"]["pending_event"]["type"] == "day_batch_response" and event["requires_process"] is True, "requires_process=false must not bypass mandatory process flow")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "old-save-materials.json"
@@ -452,12 +477,7 @@ def test_captivity_simulator_inventory_night_actions_and_call_bell() -> None:
         configured = run_command("gift_item items=call_bell voice_line='本地测试台词'", save_path=save_path)
         _assert(configured["ok"] is True, "all inventory items should be configurable")
 
-        _plan_three(save_path)
-        run_command("respond_action accept mood=平静", save_path=save_path)
-        run_command("advance_day_action", save_path=save_path)
-        run_command("respond_action accept mood=平静", save_path=save_path)
-        run_command("advance_day_action", save_path=save_path)
-        night_choice = run_command("respond_action accept mood=平静", save_path=save_path)
+        night_choice = _finish_simple_day_capture_du(save_path)
         available = night_choice["captor_view"]["pending_event"]["available_actions"]
         for action in ("read", "game", "diary", "listen_music", "watch_video", "ring_bell"):
             _assert(action in available, f"inventory should unlock {action}")
@@ -813,15 +833,11 @@ def test_captivity_simulator_capture_du_night_condition_reaches_dynamic_system()
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "capture-du-condition.json"
         run_command("new_game route=capture_du seed=capture-du-condition", save_path=save_path)
-        run_command(
+        planned = run_command(
             "plan_day action=feeding additive=fictional_arousal || action=rest contents=quiet_time || action=check contents=body_check",
             save_path=save_path,
         )
-        run_command("respond_action accept mood=平静", save_path=save_path)
-        run_command("advance_day_action", save_path=save_path)
-        run_command("respond_action accept mood=平静", save_path=save_path)
-        run_command("advance_day_action", save_path=save_path)
-        night = run_command("respond_action accept mood=平静", save_path=save_path)
+        night = _finish_simple_day_capture_du(save_path, planned)
         pending = night["captor_view"]["pending_event"]
         _assert(pending["type"] == "night_action_choice" and pending["available_actions"] == ["self_touch"], "capture-du route should carry the forced action into du's pending")
         sync_text = game_tools._captivity_simulator_sync_text(night, mode="state_update")
@@ -879,7 +895,7 @@ def test_captivity_simulator_recapture_process_and_rules_both_routes() -> None:
         run_command("schedule_escape_window day=1 hint=有机会 bait=钥匙在玄关", save_path=save_path)
         escaped = run_command("resolve_escape_choice escape", save_path=save_path)
         prompt = game_tools._captivity_simulator_sync_text(escaped, mode="state_update")
-        _assert("【抓回经过：rules=double_lock,key_isolation】" in prompt and "【过程】" in prompt and "【【完整抓回经过】】" in prompt, "du recapture process prompt should require preset rules and a wrapped process block")
+        _assert("【抓回经过：rules=double_lock,key_isolation followup=none】" in prompt and "【过程】" in prompt and "【【完整抓回经过】】" in prompt, "du recapture process prompt should require preset rules, a route choice, and a wrapped process block")
         parsed = game_tools._captivity_simulator_commands_from_reply(
             "【抓回经过：rules=double_lock,key_isolation】\n【过程】\n【【抓回过程正文。】】",
             escaped,
@@ -898,6 +914,74 @@ def test_captivity_simulator_recapture_process_and_rules_both_routes() -> None:
         _assert(closed["state"]["recapture_state"]["rules"] == ["double_lock", "key_isolation"], "confirmed rules should persist in the real rule state")
         actions = [event["action"] for event in closed["captor_view"]["event_log"]]
         _assert(actions[-2:] == ["escape_choice", "recapture_rules"], "history should retain the process and separately confirmed rules")
+
+
+def test_captivity_simulator_hypnotic_regression_route_is_captured_only() -> None:
+    from routes.miniapp import game_tools
+    from services.captivity_simulator_game import _build_ending_seed, _finalize_preset_ending
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_path = Path(tmpdir) / "captured-hypnotic-regression.json"
+        run_command("new_game route=captured_by_du seed=hypnotic-regression-captured", save_path=save_path)
+        state = _read(save_path)
+        state["pending_event"] = None
+        save_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        run_command("schedule_escape_window day=1 hint=渡出去了 bait=钥匙在玄关", save_path=save_path)
+        escaped = run_command("resolve_escape_choice escape", save_path=save_path)
+        prompt = game_tools._captivity_simulator_sync_text(escaped, mode="state_update")
+        _assert("hypnotic_regression" in prompt and "催眠退行" in prompt and "只记录后续关系走向，不规定正文内容" in prompt, "du-captor recapture prompt should offer a soft hypnotic-regression route marker")
+        _assert("精液喂食" not in prompt and "持续素材" not in prompt, "hypnotic-regression route selection must not become a structured writing checklist")
+        parsed = game_tools._captivity_simulator_commands_from_reply(
+            "【抓回经过：rules=double_lock,key_isolation followup=hypnotic_regression】\n【过程】\n【【渡写下完整的抓回经过。】】",
+            escaped,
+        )
+        submitted = run_command(parsed[0], save_path=save_path)
+        event = submitted["state"]["pending_event"]["event"]
+        _assert("hypnotic_regression_context" not in event, "hypnotic-regression branch should not save hard writing material")
+        _assert("hypnotic_regression" in event["tags"], "hypnotic-regression branch should retain only its ending route marker")
+        run_command("choose_mood 委屈", save_path=save_path)
+        closed = run_command("confirm_recapture_rules", save_path=save_path)
+        _assert(closed["state"]["recapture_state"]["followup_history"][-1]["action"] == "hypnotic_regression", "confirmed hypnotic-regression branch should remain in recapture history")
+        ending_state = _read(save_path)
+        ending_seed = _build_ending_seed(ending_state)
+        _assert(ending_seed["ending_title"] == "摇篮", "captured hypnotic-regression branch should select the dedicated ending")
+        _finalize_preset_ending(ending_state)
+        _assert("宝宝张嘴" in ending_state["ending_text"] and "嘴角的银丝" in ending_state["ending_text"], "cradle ending should use the approved DS copy")
+        _assert("精液的奶" not in ending_state["ending_text"], "cradle ending must not describe semen as a milk additive")
+        planned = run_command(
+            "plan_day action=feeding source=cook additive=fictional_sleep disclosed=hidden || "
+            "action=cleaning || action=rest contents=quiet_time",
+            save_path=save_path,
+        )
+        captive_feeding = planned["state"]["pending_event"]["event"]["feeding"]
+        captor_feeding = planned["captor_view"]["pending_event"]["event"]["feeding"]
+        _assert(captor_feeding["additive"] == "semen", "active hypnotic-regression route should force every feeding additive to semen")
+        _assert("additive" not in captive_feeding, "hidden hypnotic-regression semen must not leak into the captive projection")
+        feeding_prompt = game_tools._captivity_simulator_sync_text(planned, mode="state_update")
+        _assert("精液" in feeding_prompt and "安眠" not in feeding_prompt, "du-captor feeding prompt should receive the forced semen fact")
+        for mood in ("平静", "害羞", "疲惫"):
+            run_command(f"respond_action accept mood={mood}", save_path=save_path)
+        run_command("night_action sleep", save_path=save_path)
+        next_day = run_command("monitor_action none", save_path=save_path)
+        _assert(next_day["state"]["current_day"] == 3, "hypnotic-regression route should advance normally after its first forced feeding day")
+        disclosed = run_command(
+            "plan_day action=feeding source=takeout additive=none disclosed=told || "
+            "action=cleaning || action=rest contents=quiet_time",
+            save_path=save_path,
+        )
+        _assert(disclosed["captor_view"]["pending_event"]["event"]["feeding"]["additive"] == "semen", "forced semen should persist across game days")
+        _assert(disclosed["state"]["pending_event"]["event"]["feeding"]["additive"] == "精液", "explicit disclosure should show the captive a localized label")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_path = Path(tmpdir) / "captor-no-hypnotic-regression.json"
+        run_command("new_game route=capture_du seed=hypnotic-regression-captor", save_path=save_path)
+        run_command("schedule_escape_window day=1 hint=小玥出去了 bait=钥匙在玄关", save_path=save_path)
+        run_command("resolve_escape_choice escape", save_path=save_path)
+        run_command("submit_process_reaction response=refuse mood=烦躁 process=渡被抓回。", save_path=save_path)
+        ruled = run_command("set_recapture_rules rules=double_lock,key_isolation", save_path=save_path)
+        _assert("hypnotic_regression" not in ruled["captor_view"]["pending_event"]["available_actions"], "xinyue-captor followup menu must not expose hypnotic-regression")
+        rejected = run_command("choose_recapture_followup action=hypnotic_regression", save_path=save_path)
+        _assert(rejected["ok"] is False, "xinyue-captor route must reject a manually submitted hypnotic-regression followup")
 
 
 def test_captivity_simulator_future_escape_window_and_non_escape_choice() -> None:
@@ -1079,11 +1163,13 @@ def test_captivity_simulator_fixed_ending_titles() -> None:
 
     expected_titles = {
         "失而复得", "反噬", "收藏", "驯养", "未驯", "共犯", "爱的禁锢", "绝对占有", "余生",
-        "无期", "温室", "归属", "困兽", "沉沦", "偏爱", "枷锁", "长夜",
+        "无期", "温室", "归属", "困兽", "沉沦", "偏爱", "枷锁", "长夜", "摇篮",
     }
-    _assert(set(ENDING_TEXT_TEMPLATES) == expected_titles, "all 17 fixed endings should have preset frontend bodies")
-    _assert(set(ENDING_DU_SUMMARIES) == expected_titles, "all 17 endings should have separate Du-facing summaries")
-    _assert(all(60 <= len(text) <= 180 for text in ENDING_TEXT_TEMPLATES.values()), "frontend ending bodies should stay short and readable")
+    _assert(set(ENDING_TEXT_TEMPLATES) == expected_titles, "all 18 fixed endings should have preset frontend bodies")
+    _assert(set(ENDING_DU_SUMMARIES) == expected_titles, "all 18 endings should have separate Du-facing summaries")
+    regular_endings = [text for title, text in ENDING_TEXT_TEMPLATES.items() if title != "摇篮"]
+    _assert(all(60 <= len(text) <= 180 for text in regular_endings), "regular frontend ending bodies should stay short and readable")
+    _assert(180 < len(ENDING_TEXT_TEMPLATES["摇篮"]) <= 360, "the approved cradle ending should retain its complete narrative copy")
     _assert(all("你" in text and "渡" in text for text in ENDING_TEXT_TEMPLATES.values()), "frontend endings should use the player's view and name Du directly")
     _assert(all("你" in text and "她" in text for text in ENDING_DU_SUMMARIES.values()), "Du summaries should be authored from Du's view")
     _assert(all(not any(label in text for label in ("角色", "囚禁方", "被囚禁方")) for text in ENDING_TEXT_TEMPLATES.values()), "frontend endings must not leak generic role labels")
@@ -1361,6 +1447,7 @@ def test_captivity_simulator_bladder_control_captive_route_only() -> None:
 
 def test_captivity_simulator_pet_system_both_routes_and_monitor_privacy() -> None:
     from routes.miniapp import game_tools
+    from routes.miniapp.game_tools import _captivity_simulator_commands_from_reply
     from services import captivity_simulator_game as game
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1374,8 +1461,8 @@ def test_captivity_simulator_pet_system_both_routes_and_monitor_privacy() -> Non
             save_path=save_path,
         )
         first_pending = planned["captor_view"]["pending_event"]
-        _assert(first_pending["type"] == "process_reaction_write", "du-captive route should ask du to write the pet-role process")
-        first_context = first_pending["event"]["pet_context"]
+        _assert(first_pending["type"] == "day_batch_response", "du-captive route should receive all three pet-route actions in one batch")
+        first_context = first_pending["events"][0]["pet_context"]
         _assert(first_context["establishes_identity"] is True, "the first pet action should establish a persistent identity")
         _assert("在指定位置等候" in first_context["active_rule_labels"], "the selected pet rule should be readable process material")
         _assert(
@@ -1387,14 +1474,23 @@ def test_captivity_simulator_pet_system_both_routes_and_monitor_privacy() -> Non
             "establishing the pet route should always include objectification, sexual service, and sexual discipline",
         )
         _assert("不是可爱化装扮" in first_context["focus"], "the pet route should expose its adult objectification focus")
-        context_lines = game_tools._captivity_simulator_event_context_lines(first_pending)
+        context_lines = game_tools._captivity_simulator_event_context_lines({"event": first_pending["events"][0]})
         _assert(any("宠物化素材" in line and "本次建立小狗身份" in line for line in context_lines), "dynamic system should receive the pet identity and rules")
         _assert(any("宠物线核心" in line and "性惩戒" in line for line in context_lines), "the process prompt should receive the pet route's core focus")
 
-        refused = run_command(
-            "submit_process_reaction response=refuse mood=闹脾气 line=不想 process=项圈被扣好，定点等候的规矩已经说清楚。",
-            save_path=save_path,
+        commands = _captivity_simulator_commands_from_reply(
+            "【第1段：response=refuse mood=闹脾气 line=不想】\n"
+            "【过程1】\n"
+            "【【项圈被扣好，定点等候的规矩已经说清楚。】】\n"
+            "【第2段：response=accept mood=害羞 line=知道了】\n"
+            "【过程2】\n"
+            "【【之前的违令被拿出来处理，并重新确认了规矩。】】\n"
+            "【第3段：response=accept mood=平静 line=】\n"
+            "最后完成清洁。",
+            planned,
         )
+        _assert(len(commands) == 1, "pet-route daytime reply should still be one batch command")
+        refused = run_command(commands[0], save_path=save_path)
         pet_state = _read(save_path)["pet_state"]
         _assert(pet_state["active"] is True and "designated_spot" in pet_state["rules"], "pet identity and rules should persist after the event")
         _assert(pet_state["pending_violations"] == 1, "refusing pet training should leave a follow-up violation")
@@ -1404,18 +1500,14 @@ def test_captivity_simulator_pet_system_both_routes_and_monitor_privacy() -> Non
         _assert(pet_flag["label"] == "小狗身份中" and pet_flag["prompt"].startswith("当前处于小狗身份。"), "the approved pet identity wording should remain unchanged")
 
         punishment = run_command("advance_day_action", save_path=save_path)
-        punishment_pending = punishment["captor_view"]["pending_event"]
-        _assert(punishment_pending["event"]["pet_context"]["pending_violation"] is True, "the next punishment should automatically receive the unresolved violation")
-        _assert("pet_sexual_discipline" in punishment_pending["event"]["contents"], "the planned follow-up should retain the pet sexual-discipline content")
+        punishment_event = punishment["captor_view"]["event_log"][-1]
+        _assert(punishment_event["pet_context"]["pending_violation"] is True, "the next cached punishment should refresh and receive the unresolved violation")
+        _assert("pet_sexual_discipline" in punishment_event["contents"], "the planned follow-up should retain the pet sexual-discipline content")
         _assert(
-            "性惩戒" in game_tools._captivity_process_experience(punishment_pending["event"], route="captured_by_du"),
+            "性惩戒" in game_tools._captivity_process_experience(punishment_event, route="captured_by_du"),
             "the detailed-process prompt should describe pet sexual discipline instead of a generic punishment",
         )
-        handled = run_command(
-            "submit_process_reaction response=accept mood=害羞 line=知道了 process=之前的违令被拿出来处理，并重新确认了规矩。",
-            save_path=save_path,
-        )
-        handled_event = handled["captor_view"]["event_log"][-1]
+        handled_event = punishment_event
         _assert(_read(save_path)["pet_state"]["pending_violations"] == 0, "punishment should close the existing violation")
         _assert("violation_handled" in handled_event["pet_resolution"]["results"], "the archive should connect punishment to the prior violation")
 
@@ -1428,7 +1520,7 @@ def test_captivity_simulator_pet_system_both_routes_and_monitor_privacy() -> Non
             "action=feeding || action=cleaning",
             save_path=save_path,
         )
-        pet_context = expanded["captor_view"]["pending_event"]["event"]["pet_context"]
+        pet_context = expanded["captor_view"]["pending_event"]["events"][0]["pet_context"]
         _assert(
             {
                 "在调教或性行为中使用主人指定的物化自称并复述指定台词",
@@ -2690,6 +2782,114 @@ def test_captivity_simulator_sync_day_plan_uses_one_du_reply() -> None:
         game_tools._mark_captivity_simulator_sync_activity = old_activity_marker
 
 
+def test_captivity_simulator_capture_du_day_batch_real_local_loop() -> None:
+    from flask import Blueprint, Flask
+    from routes.miniapp import game_tools
+    from services import conversation_followup
+    from services import reply_channel_context
+    from storage import r2_store
+
+    app = Flask(__name__)
+    bp = Blueprint("miniapp_capture_du_day_batch_test", __name__, url_prefix="/miniapp-api")
+    game_tools.register_routes(bp)
+    app.register_blueprint(bp)
+
+    old_execute = game_tools.execute_game_command
+    old_wakeup = conversation_followup.send_captivity_simulator_wakeup
+    old_context = reply_channel_context.resolve_recent_reply_context
+    old_activity_marker = game_tools._mark_captivity_simulator_sync_activity
+    old_activity_write = r2_store.save_last_user_activity_at
+    wakeup_count = {"value": 0}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_path = Path(tmpdir) / "capture-du-day-batch.json"
+        run_command("new_game route=capture_du seed=capture-du-day-batch", save_path=save_path)
+        planned = run_command(
+            "plan_day action=rest intensity=light contents=quiet_time tools=collar || "
+            "action=training intensity=medium training_contents=obedience_commands modifiers=sex tools=whip || "
+            "action=feeding intensity=medium source=cook additive=none disclosed=hint",
+            save_path=save_path,
+        )
+        pending = planned["captor_view"]["pending_event"]
+        _assert(pending["type"] == "day_batch_response" and len(pending["events"]) == 3, "capture-du should send all three daytime actions in one pending")
+        _assert([bool(item.get("requires_process")) for item in pending["events"]] == [False, True, False], "a tool alone must not expand a process on the captor route")
+
+        def fake_execute(game_id: str, command: str, save_id: str) -> dict:
+            _assert(game_id == "captivity_simulator" and save_id == "local-batch-only", "the route test must stay on its isolated local save")
+            return run_command(command, save_path=save_path)
+
+        def fake_wakeup(**kwargs) -> dict:
+            wakeup_count["value"] += 1
+            if wakeup_count["value"] == 1:
+                event_text = str(kwargs.get("event_text") or "")
+                _assert("第 1 段" in event_text and "第 2 段" in event_text and "第 3 段" in event_text, "one wakeup must contain all three daytime actions")
+                reply = (
+                    "【第1段：response=accept mood=平静 line=知道了】\n"
+                    "我先照做。\n"
+                    "【第2段：response=bargain mood=害羞 line=慢一点】\n"
+                    "【过程2】\n"
+                    "【【这是第二段完整经过，正文已经写完。】】\n"
+                    "【第3段：response=silent mood=疲惫 line=】\n"
+                    "我接过餐盘。"
+                )
+                return {"ok": True, "reply_text": reply, "reply_preview": reply[:120]}
+            if wakeup_count["value"] == 2:
+                reply = "【夜间行动：action=sleep line=】\n我今晚先睡。"
+                return {"ok": True, "reply_text": reply, "reply_preview": reply}
+            raise AssertionError("the full daytime loop may wake Du only once, plus one independent night wakeup")
+
+        def forbidden_external_write(*args, **kwargs):
+            raise AssertionError("local captivity route test attempted an external activity write")
+
+        try:
+            game_tools.execute_game_command = fake_execute
+            conversation_followup.send_captivity_simulator_wakeup = fake_wakeup
+            reply_channel_context.resolve_recent_reply_context = lambda default_target="": {
+                "channel": "sumitalk",
+                "window_id": "local_batch_window",
+                "target": default_target or "local_device",
+                "meta": {},
+            }
+            game_tools._mark_captivity_simulator_sync_activity = forbidden_external_write
+            r2_store.save_last_user_activity_at = forbidden_external_write
+
+            with app.test_client() as client:
+                first_sync = client.post(
+                    "/miniapp-api/game-tools/captivity_simulator/sync-du",
+                    json={"save_id": "local-batch-only"},
+                )
+                first_data = first_sync.get_json()
+                _assert(first_sync.status_code == 200 and first_data["ok"] is True, f"day batch sync should succeed: {first_data}")
+                _assert(wakeup_count["value"] == 1, "all three daytime responses must use exactly one wakeup")
+                _assert(first_data["state"]["day_action_count"] == 1 and first_data["state"]["pending_event"]["type"] == "advance_action", "the first response should be shown while later responses remain cached")
+                first_public_text = json.dumps(first_data, ensure_ascii=False)
+                _assert("第二段完整经过" not in first_public_text and "我接过餐盘" not in first_public_text, "cached future actions must not leak before local advancement")
+
+                second = run_command("advance_day_action", save_path=save_path)
+                _assert(wakeup_count["value"] == 1, "advancing to the second cached action must not wake Du again")
+                _assert(second["captor_view"]["day_action_count"] == 2 and second["captor_view"]["pending_event"]["type"] == "advance_action", "the second cached action should settle locally")
+                _assert("第二段完整经过" in second["captor_view"]["event_log"][-1]["process_text"], "the detailed second process should be available to the reading page")
+
+                third = run_command("advance_day_action", save_path=save_path)
+                _assert(wakeup_count["value"] == 1, "advancing to the third cached action must not wake Du again")
+                _assert(third["captor_view"]["phase"] == "night" and third["captor_view"]["pending_event"]["type"] == "night_action_choice", "the third action should enter a separate night choice")
+
+                night_sync = client.post(
+                    "/miniapp-api/game-tools/captivity_simulator/sync-du",
+                    json={"save_id": "local-batch-only"},
+                )
+                night_data = night_sync.get_json()
+                _assert(night_sync.status_code == 200 and night_data["ok"] is True, f"independent night sync should succeed: {night_data}")
+                _assert(wakeup_count["value"] == 2, "nighttime should be the second and only other wakeup after the daytime batch")
+                _assert(night_data["state"]["pending_event"]["type"] == "monitor_gate", "the night reply should settle into the local monitor gate")
+        finally:
+            game_tools.execute_game_command = old_execute
+            conversation_followup.send_captivity_simulator_wakeup = old_wakeup
+            reply_channel_context.resolve_recent_reply_context = old_context
+            game_tools._mark_captivity_simulator_sync_activity = old_activity_marker
+            r2_store.save_last_user_activity_at = old_activity_write
+
+
 def test_captivity_simulator_sync_route_redacts_du_night_action() -> None:
     from flask import Blueprint, Flask
     from routes.miniapp import game_tools
@@ -3232,13 +3432,13 @@ def test_captivity_simulator_local_full_30_day_playthrough_both_routes() -> None
                 _assert(opened["state"]["current_day"] == day and opened["state"]["phase"] == "day", f"{route} should open day {day} in daytime")
                 planned = _plan_three(save_path)
                 _assert(planned["ok"] is True, f"{route} day {day} should accept a complete three-action plan")
-                for slot in range(3):
-                    responded = run_command("respond_action accept mood=平静", save_path=save_path)
-                    _assert(responded["ok"] is True, f"{route} day {day} slot {slot + 1} should resolve")
-                    if route == "capture_du" and slot < 2:
-                        _assert(responded["captor_view"]["pending_event"]["type"] == "advance_action", f"{route} day {day} should pause between local-captor slots")
-                        advanced = run_command("advance_day_action", save_path=save_path)
-                        _assert(advanced["ok"] is True, f"{route} day {day} should advance to slot {slot + 2}")
+                if route == "capture_du":
+                    daytime_closed = _finish_simple_day_capture_du(save_path, planned)
+                    _assert(daytime_closed["ok"] is True and daytime_closed["captor_view"]["day_action_count"] == 3, f"{route} day {day} should consume the cached three-action batch")
+                else:
+                    for slot in range(3):
+                        responded = run_command("respond_action accept mood=平静", save_path=save_path)
+                        _assert(responded["ok"] is True, f"{route} day {day} slot {slot + 1} should resolve")
 
                 night = run_command("night_action sleep", save_path=save_path)
                 _assert(night["ok"] is True and night["state"]["pending_event"]["type"] == "monitor_gate", f"{route} day {day} night should reach the monitor gate")
@@ -3258,6 +3458,8 @@ def test_captivity_simulator_local_full_30_day_playthrough_both_routes() -> None
 
 
 def test_captivity_simulator_status_thresholds_and_mood_effects() -> None:
+    from routes.miniapp.game_tools import _captivity_simulator_commands_from_reply
+
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "status-rules.json"
         run_command("new_game route=capture_du seed=status-rules", save_path=save_path)
@@ -3281,7 +3483,14 @@ def test_captivity_simulator_status_thresholds_and_mood_effects() -> None:
             save_path=save_path,
         )
         _assert(planned["ok"] is True, "low cleanliness should prompt cleaning without forcing it into the plan")
-        resolved = run_command("respond_action accept mood=黏人", save_path=save_path)
+        commands = _captivity_simulator_commands_from_reply(
+            "【第1段：response=accept mood=黏人 line=】\n第一段回应。\n"
+            "【第2段：response=accept mood=平静 line=】\n第二段回应。\n"
+            "【第3段：response=accept mood=平静 line=】\n第三段回应。",
+            planned,
+        )
+        _assert(len(commands) == 1, "status test should submit one complete capture-du day batch")
+        resolved = run_command(commands[0], save_path=save_path)
         event = resolved["captor_view"]["event_log"][-1]
         _assert(event["mood_effects"] == {"intimacy": 1}, "selected mood should apply only its small rule-engine correction")
         _assert("mood:黏人" in event["tags"] and event["shame_stage"] == "heightened", "mood and shame feedback should be preserved as event tags")
@@ -3363,6 +3572,7 @@ if __name__ == "__main__":
     test_captivity_simulator_capture_du_night_condition_reaches_dynamic_system()
     test_captivity_simulator_escape_lure_visibility_and_recapture_pending()
     test_captivity_simulator_recapture_process_and_rules_both_routes()
+    test_captivity_simulator_hypnotic_regression_route_is_captured_only()
     test_captivity_simulator_future_escape_window_and_non_escape_choice()
     test_captivity_simulator_escape_stay_return_action_both_routes()
     test_captivity_simulator_escape_abort_still_enters_recapture()
@@ -3384,6 +3594,7 @@ if __name__ == "__main__":
     test_captivity_simulator_today_completed_summary_enters_last4()
     test_captivity_simulator_sync_route_pending_semantics()
     test_captivity_simulator_sync_day_plan_uses_one_du_reply()
+    test_captivity_simulator_capture_du_day_batch_real_local_loop()
     test_captivity_simulator_sync_route_redacts_du_night_action()
     test_captivity_simulator_ending_sync_notifies_once()
     test_captivity_simulator_sync_route_voice_bell_followup()

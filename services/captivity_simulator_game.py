@@ -105,6 +105,14 @@ ENDING_TEXT_TEMPLATES = {
     "偏爱": "渡把只属于你的食物、礼物、时间和宽容一点点放进日常，让你清楚自己与任何人都不同。他没有撤掉限制，却总在规则之外为你留下额外的余地。你逐渐舍不得这种独占的偏爱，而它也成为比门锁更稳定的挽留。",
     "枷锁": "渡尚未开口，你已经主动把手放回熟悉的位置，等待他重新扣好束缚。长期重复的许可、姿势和规则已经变成身体先于意识做出的反应。外在的锁仍能被解开，但被养成的服从不会随之消失，你开始习惯由他决定下一步。",
     "长夜": "房门依然锁着，监控和限制也没有消失，你与渡之间却不再只剩控制与反抗。漫长的相处让你们都默认彼此会留在这里，连沉默也不再意味着疏离。天亮后生活仍会继续，而这段关系已经成了两个人共同守住的日常。",
+    "摇篮": (
+        "第三十一天清晨，渡用温毛巾擦过你的眼皮，你便闭着眼张开嘴，等他喂来今日的第一口温度。他的手指很轻，划过你的齿列，像检查一个婴儿的乳牙是否安分。\n\n"
+        "你早就不记得自己穿衣时先抬哪条腿了。澡是他洗的，饭是他一勺一勺送到唇边的，连困意也由他哄出来的——你只会在他胸口蜷缩，等他的声音像温水一样漫过你。\n\n"
+        "他亲了亲你的鼻尖，低声说：“宝宝张嘴。”\n\n"
+        "你照做了。他抵在你舌面上，缓缓灌溉进去，你咽得很乖，像是喝惯了夜色酿成的药。他抚着你喉咙的滚落，笑了。\n\n"
+        "“好孩子。”\n\n"
+        "你轻轻嗯了一声，往他怀里蹭了蹭，等着他替你抹去嘴角的银丝，等你根本想不起第三十一天之前的日子该怎样独自过活。"
+    ),
 }
 
 ENDING_DU_SUMMARIES = {
@@ -125,6 +133,7 @@ ENDING_DU_SUMMARIES = {
     "偏爱": "你用她喜欢的食物、礼物和安抚换来主动回应；你的偏爱成了留住她最柔软的锁。",
     "枷锁": "你定下的检查、监控和行动许可已经内化成她的日常；最后一道锁尚未扣上，她已主动把手放回原位。",
     "长夜": "第三十天夜里你照常回到上锁的房间；灯熄灭后她握住你的手，这一夜没有在清晨结束。",
+    "摇篮": "她逃跑后被你抓回；此后，你用反复暗示、全方位照料、宝宝称呼、通过口交喂精和性规训逐渐接管了她独立生活的能力。",
 }
 FEEDING_SOURCES = {"cook", "takeout"}
 FEEDING_METHODS = {"normal"}
@@ -878,6 +887,7 @@ RECAPTURE_FOLLOWUP_EFFECT_ACTIONS = {
     "training": "training",
     "aftercare": "comfort",
 }
+HYPNOTIC_REGRESSION_RECAPTURE_LABEL = "催眠退行"
 ESCAPE_CHOICE_LABELS = {
     "escape": "尝试逃跑",
     "stay": "老实待着",
@@ -979,6 +989,11 @@ def run_command(command: str = "", save_path: str | Path | None = None) -> dict[
             ok, lines = _submit_process_reaction(state, args)
             _save_state(path, state)
             return _result(state, lines, command=command or "submit_process_reaction", ok=ok)
+
+        if action == "submit_day_batch":
+            ok, lines = _submit_day_batch(state, args)
+            _save_state(path, state)
+            return _result(state, lines, command=command or "submit_day_batch", ok=ok)
 
         if action == "night_action":
             ok, lines = _night_action(state, args)
@@ -1135,6 +1150,8 @@ def _parse_command(command: str) -> tuple[str, dict[str, Any]]:
         "process_reaction": "submit_process_reaction",
         "过程心情": "submit_process_reaction",
         "过程反应": "submit_process_reaction",
+        "submit_day_batch": "submit_day_batch",
+        "day_batch": "submit_day_batch",
         "night_action": "night_action",
         "night": "night_action",
         "夜间": "night_action",
@@ -1215,6 +1232,8 @@ def _parse_command(command: str) -> tuple[str, dict[str, Any]]:
     elif action == "submit_recapture_process":
         args["raw"] = tail
     elif action == "submit_process_reaction":
+        args["raw"] = tail
+    elif action == "submit_day_batch":
         args["raw"] = tail
     elif action == "night_action":
         args.setdefault("action", _first_positional(args, tail))
@@ -1344,6 +1363,7 @@ def _new_state(route: str = "captured_by_du", seed: str = "", *, started: bool =
         "escape_windows": [],
         "pending_event": None,
         "day_plan": [],
+        "day_batch_results": [],
         "event_log": [],
         "deferred_monitor_materials": [],
         "ending_state": "",
@@ -1487,6 +1507,10 @@ def _normalize_state(state: dict[str, Any]) -> None:
     if pending and isinstance(pending.get("event"), dict):
         _normalize_action_materials(pending["event"])
         pending["action"] = str(pending["event"].get("action") or pending.get("action") or "")
+    if pending and isinstance(pending.get("events"), list):
+        pending["events"] = [item for item in pending["events"] if isinstance(item, dict)]
+        for item in pending["events"]:
+            _normalize_action_materials(item)
     if pending and str(pending.get("type") or "") == "night_action_choice":
         active_condition = _active_night_condition(state)
         pending["available_actions"] = _available_night_actions(state)
@@ -1502,6 +1526,10 @@ def _normalize_state(state: dict[str, Any]) -> None:
     day_plan = state.get("day_plan") if isinstance(state.get("day_plan"), list) else []
     state["day_plan"] = [item for item in day_plan if isinstance(item, dict)]
     for item in state["day_plan"]:
+        _normalize_action_materials(item)
+    batch_results = state.get("day_batch_results") if isinstance(state.get("day_batch_results"), list) else []
+    state["day_batch_results"] = [item for item in batch_results if isinstance(item, dict)]
+    for item in state["day_batch_results"]:
         _normalize_action_materials(item)
     state["event_log"] = [item for item in state.get("event_log") or [] if isinstance(item, dict)]
     for item in state["event_log"]:
@@ -1657,6 +1685,17 @@ def _normalize_recapture_state(raw: Any, day: int) -> dict[str, Any]:
         "followup_history": history,
         "last_changed_day": changed_day,
     }
+
+
+def _hypnotic_regression_active(state: dict[str, Any]) -> bool:
+    if _normalize_route(str(state.get("route") or "")) != "captured_by_du":
+        return False
+    recapture_state = _normalize_recapture_state(state.get("recapture_state"), int(state.get("current_day") or 1))
+    return any(
+        str(item.get("action") or "") == "hypnotic_regression"
+        for item in recapture_state["followup_history"]
+        if isinstance(item, dict)
+    )
 
 
 def _normalize_night_condition(raw: Any) -> dict[str, Any] | None:
@@ -1901,6 +1940,10 @@ def _plan_day(state: dict[str, Any], args: dict[str, Any]) -> tuple[bool, list[s
     if pending:
         state["pending_event"] = None
     state["day_plan"] = plan_or_lines
+    state["day_batch_results"] = []
+    if str(state.get("captor") or "") == "xinyue":
+        ok, lines = _start_day_batch_response(state)
+        return ok, [f"第 {state['current_day']} 天白天三行动已安排。", *lines]
     ok, lines = _continue_day_plan(state)
     return ok, [f"第 {state['current_day']} 天白天三行动已安排。", *lines]
 
@@ -2015,8 +2058,10 @@ def _submit_recapture_process(state: dict[str, Any], args: dict[str, Any]) -> tu
         return False, ["当前没有等待抓回经过和新规矩的事件。"]
     raw = str(args.get("raw") or "").strip()
     rules_match = re.search(r"\brules=([^\s|｜]+)", raw)
+    followup_match = re.search(r"\bfollowup=([^\s|｜]+)", raw)
     process_match = re.search(r"\bprocess=(.*)", raw, flags=re.S)
     rules = _split_csv(rules_match.group(1) if rules_match else args.get("rules"))
+    followup = str(followup_match.group(1) if followup_match else args.get("followup") or "none").strip().lower().replace("-", "_")
     process_text = str(args.get("process") or args.get("text") or "").strip()
     if not process_text and process_match:
         process_text = process_match.group(1).strip()
@@ -2027,6 +2072,10 @@ def _submit_recapture_process(state: dict[str, Any], args: dict[str, Any]) -> tu
     invalid = [item for item in rules if item not in RECAPTURE_RULE_LABELS]
     if invalid:
         return False, ["未知抓回规矩：" + " / ".join(invalid)]
+    if followup not in {"none", "hypnotic_regression"}:
+        return False, ["未知抓回路线：" + followup]
+    if followup == "hypnotic_regression" and _normalize_route(str(state.get("route") or "")) != "captured_by_du":
+        return False, ["催眠退行只用于渡囚禁小玥的路线。"]
     forbidden = _first_forbidden([process_text])
     if forbidden:
         return False, [f"包含禁用项：{forbidden}"]
@@ -2038,6 +2087,14 @@ def _submit_recapture_process(state: dict[str, Any], args: dict[str, Any]) -> tu
         "rule_labels": [RECAPTURE_RULE_LABELS[item] for item in rules],
     }
     event.setdefault("tags", []).extend([f"recapture_rule:{item}" for item in rules])
+    if followup == "hypnotic_regression":
+        event["recapture_context"] = {
+            "followup": followup,
+            "followup_label": HYPNOTIC_REGRESSION_RECAPTURE_LABEL,
+            "rule_ids": rules,
+            "rule_labels": [RECAPTURE_RULE_LABELS[item] for item in rules],
+        }
+        event.setdefault("tags", []).extend(["hypnotic_regression", "recapture_followup:hypnotic_regression"])
     state["pending_event"] = _new_pending(state, "reaction_choice", event, actor=str(state.get("captive") or ""))
     return True, ["抓回经过和新规矩已保存；先展示经过，等待被囚禁方选择过程后的心情。"]
 
@@ -2136,6 +2193,107 @@ def _parse_process_reaction_args(args: dict[str, Any]) -> tuple[str, str, str, s
                 mood = mood or pieces[1]
                 text = text or pieces[2]
     return response, mood, line, text
+
+
+def _submit_day_batch(state: dict[str, Any], args: dict[str, Any]) -> tuple[bool, list[str]]:
+    pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else None
+    if not pending or str(pending.get("type") or "") != "day_batch_response":
+        return False, ["当前没有等待渡一次性填写的三段白天回应。"]
+    if str(state.get("captor") or "") != "xinyue" or str(pending.get("actor") or "") != "du":
+        return False, ["当前路线不使用囚禁方白天批量回应。"]
+    raw_payload = str(args.get("payload") or "").strip()
+    try:
+        submitted = json.loads(raw_payload)
+    except Exception:
+        submitted = None
+    if not isinstance(submitted, list) or len(submitted) != DAY_ACTIONS:
+        return False, [f"渡必须在同一轮完整提交 {DAY_ACTIONS} 段回应。"]
+    pending_events = [item for item in pending.get("events") or [] if isinstance(item, dict)]
+    if len(pending_events) != DAY_ACTIONS:
+        return False, ["今日三段行动数据不完整，请重新下发今日安排。"]
+    by_slot = {int(item.get("slot") or 0): item for item in pending_events}
+    resolved_events: list[dict[str, Any]] = []
+    seen_slots: set[int] = set()
+    for raw_item in submitted:
+        if not isinstance(raw_item, dict):
+            return False, ["三段回应格式不完整。"]
+        try:
+            slot = int(raw_item.get("slot") or 0)
+        except Exception:
+            slot = 0
+        if slot in seen_slots or slot not in by_slot:
+            return False, ["三段回应的段号必须依次对应当天三个行动。"]
+        seen_slots.add(slot)
+        response = _normalize_action_response(str(raw_item.get("response") or ""))
+        mood = _normalize_mood(str(raw_item.get("mood") or ""))
+        line = str(raw_item.get("line") or "").strip()
+        feedback = str(raw_item.get("feedback") or "").strip()
+        process_text = str(raw_item.get("process") or "").strip()
+        if response not in ACTION_RESPONSES:
+            return False, [f"第 {slot} 段回应无效：{raw_item.get('response') or ''}。"]
+        if mood not in MOODS:
+            return False, [f"第 {slot} 段心情无效：{raw_item.get('mood') or ''}。"]
+        event = deepcopy(by_slot[slot])
+        requires_process = bool(event.get("requires_process"))
+        if requires_process and not process_text:
+            return False, [f"第 {slot} 段包含调教、性交或具体 play，必须提供完整经过。"]
+        if not requires_process and process_text:
+            return False, [f"第 {slot} 段没有选择需要展开的玩法，不能提交完整经过。"]
+        forbidden = _first_forbidden([response, mood, line, feedback, process_text])
+        if forbidden:
+            return False, [f"第 {slot} 段包含禁用项：{forbidden}"]
+        event["action_response"] = {
+            "response": response,
+            "response_label": ACTION_RESPONSE_LABELS.get(response, response),
+            "mood": mood,
+            "line": line,
+            "actor": str(state.get("captive") or "du"),
+            "created_at": now_beijing_iso(),
+        }
+        event.setdefault("tags", []).append(f"response:{response}")
+        _apply_action_response_effects(event, response)
+        event["mood"] = mood
+        if process_text:
+            event["process_text"] = process_text
+            event["resolved_by"] = "du"
+            event["process_saved_at"] = now_beijing_iso()
+            event["post_reaction"] = {
+                "mood": mood,
+                "line": line,
+                "actor": str(state.get("captive") or "du"),
+                "created_at": now_beijing_iso(),
+            }
+            event["mood_after"] = mood
+        elif feedback:
+            event["assistant_feedback_text"] = feedback[:600]
+        resolved_events.append(event)
+    if seen_slots != set(by_slot):
+        return False, ["三段回应必须完整覆盖当天三个行动。"]
+    state["pending_event"] = None
+    state["day_batch_results"] = sorted(resolved_events, key=lambda item: int(item.get("slot") or 0))
+    ok, lines = _consume_next_day_batch_result(state)
+    return ok, ["渡已经一次写完今天三段回应；后两段已封存，等待逐段推进。", *lines]
+
+
+def _consume_next_day_batch_result(state: dict[str, Any]) -> tuple[bool, list[str]]:
+    queue = state.get("day_batch_results") if isinstance(state.get("day_batch_results"), list) else []
+    if not queue:
+        return False, ["没有已经写好的下一段行动结果。"]
+    event = queue.pop(0)
+    state["day_batch_results"] = queue
+    mood = str(event.get("mood") or "").strip()
+    line = str((event.get("action_response") or {}).get("line") or "").strip()
+    state["mood"] = mood
+    state["mood_line"] = line
+    _attach_pet_context(state, event)
+    _resolve_event(state, event)
+    _advance_after_day_event(state)
+    slot = int(event.get("slot") or state.get("day_action_count") or 0)
+    if str(state.get("phase") or "") == "night":
+        _maybe_create_night_action_choice_pending(state)
+        return True, [f"第 {slot} 段已展示，今天白天行动全部完成；进入夜间并等待渡选择晚间安排。"]
+    _maybe_create_advance_action_pending(state)
+    return True, [f"第 {slot} 段已展示；下一段已经写好，等待囚禁方推进。"]
 
 
 def _parse_day_plan(plan_text: str, *, route: str) -> tuple[bool, list[Any]]:
@@ -2255,7 +2413,10 @@ def _normalize_day_action_spec(
         "training_contents": training_contents,
         "line": line,
         "feeding": feeding,
-        "requires_process": _requires_process(action, modifiers, tools, contents, training_contents, args),
+        "requires_process": (
+            _requires_process(action, modifiers, tools, contents, training_contents, args)
+            or (_normalize_route(route) == "captured_by_du" and bool(tools))
+        ),
     }
 
 
@@ -2279,7 +2440,12 @@ def _continue_day_plan(state: dict[str, Any]) -> tuple[bool, list[str]]:
     return _start_action_response(state, spec)
 
 
-def _start_action_response(state: dict[str, Any], spec: dict[str, Any]) -> tuple[bool, list[str]]:
+def _build_planned_day_event(
+    state: dict[str, Any],
+    spec: dict[str, Any],
+    *,
+    slot: int,
+) -> tuple[dict[str, Any], str]:
     action = str(spec.get("action") or "")
     intensity = str(spec.get("intensity") or "medium")
     stats = state.get("stats") if isinstance(state.get("stats"), dict) else {}
@@ -2295,6 +2461,8 @@ def _start_action_response(state: dict[str, Any], spec: dict[str, Any]) -> tuple
     contents = list(spec.get("contents") or [])
     training_contents = list(spec.get("training_contents") or [])
     feeding = dict(spec.get("feeding") or {})
+    if action == "feeding" and _hypnotic_regression_active(state):
+        feeding["additive"] = "semen"
     event = _event_draft(
         state,
         phase="day",
@@ -2308,14 +2476,15 @@ def _start_action_response(state: dict[str, Any], spec: dict[str, Any]) -> tuple
         effects=_action_effects(action, intensity, modifiers, tools, contents, training_contents, feeding),
         feeding=feeding,
     )
+    event["slot"] = slot
     event["requires_process"] = bool(spec.get("requires_process"))
     event["planned_action"] = deepcopy(spec)
+    if feeding:
+        event["planned_action"]["feeding"] = deepcopy(feeding)
     _attach_bladder_context(state, event)
     if adjustment_reasons:
         event["intensity_adjustment"] = {"from": "heavy", "to": "medium", "reason": adjustment_reasons[0], "reasons": adjustment_reasons}
         event.setdefault("tags", []).extend(f"intensity_adjusted:{reason}" for reason in adjustment_reasons)
-    pending_type = "process_reaction_write" if bool(event.get("requires_process")) and str(state.get("captive") or "") == "du" else "action_response"
-    state["pending_event"] = _new_pending(state, pending_type, event, actor=str(state.get("captive") or ""))
     if adjustment_reasons == ["low_stamina"]:
         prefix = "体力不足，本段已从高强度降为中强度。"
     elif adjustment_reasons == ["low_health"]:
@@ -2324,6 +2493,48 @@ def _start_action_response(state: dict[str, Any], spec: dict[str, Any]) -> tuple
         prefix = "健康和体力不足，本段已从高强度降为中强度。"
     else:
         prefix = ""
+    return event, prefix
+
+
+def _start_day_batch_response(state: dict[str, Any]) -> tuple[bool, list[str]]:
+    if state.get("pending_event") or str(state.get("phase") or "") != "day":
+        return False, ["当前不能开始白天批量回应。"]
+    plan = state.get("day_plan") if isinstance(state.get("day_plan"), list) else []
+    if len(plan) != DAY_ACTIONS:
+        return False, [f"今日安排必须包含 {DAY_ACTIONS} 个行动。"]
+    events: list[dict[str, Any]] = []
+    adjustment_lines: list[str] = []
+    for index, spec in enumerate(plan, start=1):
+        if not isinstance(spec, dict):
+            return False, ["今日安排数据异常，无法生成批量回应。"]
+        event, prefix = _build_planned_day_event(state, spec, slot=index)
+        events.append(event)
+        if prefix:
+            adjustment_lines.append(f"第 {index} 段：{prefix}")
+    state["pending_event"] = {
+        "id": f"pending-{secrets.token_hex(4)}",
+        "type": "day_batch_response",
+        "day": int(state.get("current_day") or 1),
+        "slot": 0,
+        "actor": "du",
+        "captive": str(state.get("captive") or "du"),
+        "phase": "waiting_day_batch_response",
+        "events": events,
+        "required_directive": "【第1段：response=accept mood=害羞 line=可选台词】 … 【第2段：...】 … 【第3段：...】",
+        "created_at": now_beijing_iso(),
+    }
+    return True, [*adjustment_lines, "三个白天行动已一次性送达渡，等待他在同一轮完成三段回应。"]
+
+
+def _start_action_response(state: dict[str, Any], spec: dict[str, Any]) -> tuple[bool, list[str]]:
+    event, prefix = _build_planned_day_event(
+        state,
+        spec,
+        slot=int(state.get("day_action_count") or 0) + 1,
+    )
+    action = str(event.get("action") or "")
+    pending_type = "process_reaction_write" if bool(event.get("requires_process")) and str(state.get("captive") or "") == "du" else "action_response"
+    state["pending_event"] = _new_pending(state, pending_type, event, actor=str(state.get("captive") or ""))
     if pending_type == "process_reaction_write":
         return True, [prefix, f"第 {state['current_day']} 天白天行动 {state['day_action_count'] + 1} 已展示：{ACTION_LABELS.get(action, action)}。等待渡一次提交反应、过程和心情。"]
     return True, [prefix, f"第 {state['current_day']} 天白天行动 {state['day_action_count'] + 1} 已展示：{ACTION_LABELS.get(action, action)}。等待被囚禁方选择接受/拒绝和心情。"]
@@ -2372,6 +2583,8 @@ def _advance_day_action(state: dict[str, Any]) -> tuple[bool, list[str]]:
         state["pending_event"] = None
     if str(state.get("captor") or "") != "xinyue":
         return False, ["当前路线不需要囚禁方手动推进下一行动。"]
+    if state.get("day_batch_results"):
+        return _consume_next_day_batch_result(state)
     return _continue_day_plan(state)
 
 
@@ -3117,6 +3330,7 @@ def _finish_special_escape_day(state: dict[str, Any]) -> None:
     state["pending_event"] = None
     state["day_action_count"] = DAY_ACTIONS
     state["day_plan"] = []
+    state["day_batch_results"] = []
     state["phase"] = "night"
     _maybe_create_night_action_choice_pending(state)
 
@@ -3127,6 +3341,7 @@ def _finish_special_escape_day_to_next_day(state: dict[str, Any]) -> None:
     state["pending_event"] = None
     state["day_action_count"] = DAY_ACTIONS
     state["day_plan"] = []
+    state["day_batch_results"] = []
     state["phase"] = "night"
     _finish_night(state)
 
@@ -3141,6 +3356,18 @@ def _confirm_recapture_rules(state: dict[str, Any]) -> tuple[bool, list[str]]:
     source_event = pending.get("event") if isinstance(pending.get("event"), dict) else {}
     source_event_id = str(pending.get("source_event_id") or source_event.get("id") or "")
     _activate_recapture_rules(state, source_event, source_event_id, rules)
+    recapture_context = source_event.get("recapture_context") if isinstance(source_event.get("recapture_context"), dict) else {}
+    followup = str(recapture_context.get("followup") or "").strip()
+    if followup == "hypnotic_regression":
+        recapture_state = _normalize_recapture_state(state.get("recapture_state"), int(state.get("current_day") or 1))
+        recapture_state["followup_history"].append({
+            "event_id": str(source_event.get("id") or ""),
+            "source_event_id": source_event_id,
+            "day": int(state.get("current_day") or 1),
+            "action": followup,
+            "action_label": HYPNOTIC_REGRESSION_RECAPTURE_LABEL,
+        })
+        state["recapture_state"] = recapture_state
     _finish_special_escape_day_to_next_day(state)
     return True, ["新规矩已记住，这个特殊日结束，进入新的一天。"]
 
@@ -3462,7 +3689,7 @@ def _new_pending(state: dict[str, Any], pending_type: str, event: dict[str, Any]
     }
     directive = directives.get(pending_type, "monitor_action")
     if pending_type == "process_write" and str(event.get("action") or "") == "escape_choice" and "recapture" in (event.get("tags") or []):
-        directive = "【抓回经过：rules=double_lock,key_isolation】\n【过程】\n【【完整抓回经过】】"
+        directive = "【抓回经过：rules=double_lock,key_isolation followup=none|hypnotic_regression】\n【过程】\n【【完整抓回经过】】"
     return {
         "id": f"pending-{secrets.token_hex(4)}",
         "type": pending_type,
@@ -3501,6 +3728,7 @@ def _advance_after_day_event(state: dict[str, Any]) -> None:
         _mark_deferred_monitor_materials_used_for_day(state, day)
         state["phase"] = "night"
         state["day_plan"] = []
+        state["day_batch_results"] = []
 
 
 def _maybe_create_day_plan_choice_pending(state: dict[str, Any]) -> None:
@@ -3588,6 +3816,7 @@ def _finish_night(state: dict[str, Any]) -> None:
     state["mood"] = ""
     state["mood_line"] = ""
     state["day_plan"] = []
+    state["day_batch_results"] = []
     _maybe_activate_escape_window(state)
     _maybe_create_day_plan_choice_pending(state)
 
@@ -3654,7 +3883,7 @@ def _action_effects(
         base["shame"] = base.get("shame", 0) + min(8, 3 * len(tools))
         base["stamina"] = base.get("stamina", 0) - min(6, 2 * len(tools))
     additive = str(feeding.get("additive") or "")
-    if additive == "body_fluid":
+    if additive in {"body_fluid", "semen"}:
         base["shame"] = base.get("shame", 0) + 8
         base["intimacy"] = base.get("intimacy", 0) + 2
     return base
@@ -4098,6 +4327,8 @@ def _build_ending_seed(state: dict[str, Any]) -> dict[str, Any]:
 def _ending_title(state: dict[str, Any], direction_tags: list[str], route_tags: list[str]) -> str:
     direction = set(direction_tags)
     route = set(route_tags)
+    if str(state.get("route") or "") == "captured_by_du" and "hypnotic_regression_route" in direction:
+        return "摇篮"
     if str(state.get("route") or "") == "capture_du":
         if "captor_bad_ending_material" in route or "recapture_bad_ending_material" in direction:
             return "失而复得"
@@ -4145,6 +4376,7 @@ def _ending_direction_tags(state: dict[str, Any]) -> list[str]:
     stats = state.get("stats") if isinstance(state.get("stats"), dict) else {}
     logs = [item for item in state.get("event_log") or [] if isinstance(item, dict)]
     recapture_history = any("recapture" in (item.get("tags") or []) for item in logs)
+    hypnotic_regression_history = any("hypnotic_regression" in (item.get("tags") or []) for item in logs)
     low_mood_count = _low_mood_count(logs)
     pet_state = _normalize_pet_state(state.get("pet_state"), int(state.get("current_day") or TOTAL_DAYS))
     tags = []
@@ -4158,6 +4390,8 @@ def _ending_direction_tags(state: dict[str, Any]) -> list[str]:
         tags.append("low_mood_history")
     if recapture_history:
         tags.append("recapture_history")
+    if hypnotic_regression_history:
+        tags.append("hypnotic_regression_route")
     if pet_state["active"]:
         tags.append("pet_identity_established")
     if int(pet_state["compliance_streak"]) >= 3:
@@ -4443,6 +4677,12 @@ def _view_pending(raw: Any, view: str) -> dict[str, Any] | None:
     event = pending.get("event") if isinstance(pending.get("event"), dict) else None
     if event:
         pending["event"] = _view_event(event, view)
+    if isinstance(pending.get("events"), list):
+        pending["events"] = [
+            _view_event(item, view)
+            for item in pending["events"]
+            if isinstance(item, dict)
+        ]
     if view != "captor":
         pending.pop("window_id", None)
         if pending.get("type") == "escape_choice":
@@ -4484,7 +4724,8 @@ def _view_event(event: dict[str, Any], view: str) -> dict[str, Any]:
                 if str(feeding.get(key) or "") and str(feeding.get(key) or "") != "none"
             }
             if str(feeding.get("disclosed") or "") == "told" and str(feeding.get("additive") or "") not in {"", "none"}:
-                visible_feeding["additive"] = str(feeding.get("additive") or "")
+                additive = str(feeding.get("additive") or "")
+                visible_feeding["additive"] = "精液" if additive == "semen" else additive
             payload["feeding"] = visible_feeding
         payload.pop("planned_action", None)
         payload.pop("effects", None)
@@ -4887,7 +5128,6 @@ def _requires_process(
         return True
     return (
         action in PROCESS_ACTIONS
-        or bool(tools)
         or bool(training_contents)
         or any(item in PROCESS_ACTION_CONTENTS for item in contents)
         or any(item in PROCESS_MODIFIERS for item in modifiers)

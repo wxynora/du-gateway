@@ -119,7 +119,7 @@ def _captivity_night_detail_rule(pending: dict | None) -> str:
 _CAPTIVITY_FEEDING_LABELS = {
     "source": {"cook": "自己做", "takeout": "点外卖"},
     "method": {"normal": "正常喂食"},
-    "additive": {"none": "不加料", "body_fluid": "体液", "fictional_sleep": "安眠", "fictional_arousal": "助兴"},
+    "additive": {"none": "不加料", "body_fluid": "体液", "semen": "精液", "fictional_sleep": "安眠", "fictional_arousal": "助兴"},
     "disclosed": {"told": "明确告知", "hint": "暗示", "hidden": "隐瞒"},
     "water": {"none": "不额外喂水", "glass": "喂一杯水", "lots": "喂很多水"},
 }
@@ -885,6 +885,9 @@ def _captivity_simulator_public_text(text: str) -> str:
         "【收回物品：",
         "【重新立规矩：",
         "【后续处理：",
+        "【第1段：",
+        "【第2段：",
+        "【第3段：",
     )
     metadata_prefixes = (
         "【囚禁模拟器】",
@@ -1268,6 +1271,9 @@ def _captivity_simulator_today_completed_lines(state: dict, *, max_items: int = 
 
 def _captivity_simulator_commands_from_reply(reply_text: str, payload: dict | None = None) -> list[str]:
     raw_reply = str(reply_text or "").strip()
+    batch_command = _captivity_simulator_day_batch_command(raw_reply, payload)
+    if batch_command:
+        return [batch_command]
     parsed = _pop_private_board_directive(raw_reply)
     if not parsed:
         return []
@@ -1405,6 +1411,61 @@ def _captivity_simulator_commands_from_reply(reply_text: str, payload: dict | No
     return []
 
 
+def _captivity_simulator_day_batch_command(reply_text: str, payload: dict | None) -> str:
+    pending = _captivity_simulator_pending(payload)
+    if str(pending.get("type") or "") != "day_batch_response":
+        return ""
+    raw = str(reply_text or "").strip()
+    matches = list(re.finditer(r"【\s*第\s*([123])\s*段\s*[：:]\s*([^】]*?)】", raw))
+    if len(matches) != 3 or [int(match.group(1)) for match in matches] != [1, 2, 3]:
+        return ""
+    pending_events = {
+        int(item.get("slot") or 0): item
+        for item in pending.get("events") or []
+        if isinstance(item, dict)
+    }
+    submitted: list[dict] = []
+    for index, match in enumerate(matches):
+        slot = int(match.group(1))
+        value = str(match.group(2) or "").strip()
+        try:
+            tokens = shlex.split(value)
+        except ValueError:
+            tokens = value.split()
+        fields = {
+            key.strip(): raw_value.strip()
+            for token in tokens
+            if "=" in token
+            for key, raw_value in [token.split("=", 1)]
+        }
+        if not fields.get("response") or not fields.get("mood"):
+            return ""
+        chunk_end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+        chunk = raw[match.end():chunk_end].strip()
+        process_match = re.search(
+            rf"【\s*过程\s*{slot}\s*】\s*【【([\s\S]*?)】】",
+            chunk,
+        )
+        process_text = _clean_captivity_simulator_text(process_match.group(1)) if process_match else ""
+        feedback = chunk
+        if process_match:
+            feedback = (chunk[:process_match.start()] + chunk[process_match.end():]).strip()
+        feedback = _clean_captivity_simulator_text(feedback)
+        requires_process = bool((pending_events.get(slot) or {}).get("requires_process"))
+        if requires_process and not process_text:
+            return ""
+        submitted.append({
+            "slot": slot,
+            "response": fields["response"],
+            "mood": fields["mood"],
+            "line": fields.get("line", ""),
+            "feedback": feedback if not requires_process else "",
+            "process": process_text,
+        })
+    payload_text = json.dumps(submitted, ensure_ascii=False, separators=(",", ":"))
+    return f"submit_day_batch payload={shlex.quote(payload_text)}"
+
+
 def _apply_captivity_simulator_reply_commands(save_id: str, reply_text: str, payload: dict | None = None) -> tuple[list[dict], dict | None]:
     applied: list[dict] = []
     last_payload: dict | None = None
@@ -1428,6 +1489,10 @@ def _apply_captivity_simulator_reply_commands(save_id: str, reply_text: str, pay
 
 def _captivity_simulator_redacted_night_text() -> str:
     return "夜间行动内容已封存；打开监控前不返回具体内容。"
+
+
+def _captivity_simulator_redacted_day_batch_text() -> str:
+    return "渡已经一次写完今天三段回应；当前只展示已经推进到的这一段。"
 
 
 def _captivity_simulator_command_needs_redaction(command: str, payload: dict | None) -> bool:
@@ -1471,6 +1536,7 @@ def _captivity_simulator_needs_du_followup(payload: dict | None) -> bool:
         actor = str(pending.get("actor") or "").strip()
         if pending_type in {
             "day_plan_choice",
+            "day_batch_response",
             "action_response",
             "process_write",
             "process_reaction_write",
@@ -1498,6 +1564,8 @@ def _captivity_simulator_du_followup_message(payload: dict | None) -> str:
         pending_type = str(pending.get("type") or "").strip()
         if pending_type == "day_plan_choice":
             return "当前仍需要渡一次性安排今天三个白天行动。"
+        if pending_type == "day_batch_response":
+            return "当前仍需要渡在同一轮一次写完今天三个白天行动的回应。"
         if pending_type == "action_response":
             return "当前仍需要渡选择对这次行动的反应和心情。"
         if pending_type == "process_write":
@@ -1596,6 +1664,24 @@ def _captivity_simulator_sync_text(
         if captured_route:
             captured_scene_lines = []
             captured_menu_lines = list(rule_lines)
+    elif pending_type == "day_batch_response" and pending_actor == "du":
+        batch_events = [item for item in pending.get("events") or [] if isinstance(item, dict)]
+        batch_lines: list[str] = []
+        for index, event in enumerate(batch_events, start=1):
+            detail_lines = _captivity_capture_du_event_lines(
+                _captivity_simulator_event_context_lines({"event": event})
+            )
+            process_label = "需要完整经过" if bool(event.get("requires_process")) else "只需简短回应"
+            batch_lines.extend([f"第 {index} 段（{process_label}）：", *detail_lines])
+        capture_du_event_lines = batch_lines
+        capture_du_scene_lines = []
+        capture_du_menu_lines = [
+            "今天的三个白天行动已经一次性交给你。你要在同一条回复里按顺序完成三段，系统会先展示第一段，后两段只保存等待她推进，不会再次询问你。",
+            "每段都先写「【第N段：response=accept mood=害羞 line=可选台词】」；response 可选 accept / refuse / silent / bargain / tease，心情沿用当前可选心情。",
+            "标记为“需要完整经过”的段落，紧接着写「【过程N】\n【【完整正文】】」。",
+            "标记为“只需简短回应”的段落不要写过程块，只在该段指令后写一至三句自然回应；不要扩写完整事件经过。",
+            "第 1、2、3 段必须在同一条回复里全部出现。不要写夜间安排；白天三段展示完后，系统会另行询问今晚的行动。",
+        ]
     elif pending_type == "action_response" and pending_actor == "du":
         rule_lines = [
             "这次白天行动正等着你的回应。",
@@ -1613,7 +1699,8 @@ def _captivity_simulator_sync_text(
             rule_lines = [
                 "小玥逃跑未遂，你已经把她抓了回来。这一轮会完整发生抓回经过，并由你同时确定之后持续生效的新规矩。",
                 f"可选新规矩（中文名称在前）：{rule_options}。必须选择 1 至 3 条。规矩只作为结构化数据保存，过程正文不要写成系统清单。",
-                "如果要推进，先写「【抓回经过：rules=double_lock,key_isolation】」，再用「【过程】\n【【完整抓回经过】】」提交正文。",
+                "如果这次抓回自然转向催眠退行，让她逐渐习惯被你全方位照料、失去独立生活能力，使用 followup=hypnotic_regression；否则使用 followup=none。followup 只记录后续关系走向，不规定正文内容。",
+                "如果要推进，先写「【抓回经过：rules=double_lock,key_isolation followup=none】」，再用「【过程】\n【【完整抓回经过】】」提交正文。",
                 "规矩和过程块必须同时存在；双层方括号内可以自然写多段正文。格式不完整时只算局内聊天，不会推进事件。",
             ]
             if captured_route:
@@ -1625,7 +1712,8 @@ def _captivity_simulator_sync_text(
                 ]
                 captured_menu_lines = [
                     f"可选新规矩（中文名称在前）：{rule_options}。必须选择 1 至 3 条。规矩只作为结构化数据保存，过程正文不要写成系统清单。",
-                    "如果要推进，先写「【抓回经过：rules=double_lock,key_isolation】」，再用「【过程】\n【【完整抓回经过】】」提交正文。",
+                    "如果这次抓回自然转向催眠退行，让她逐渐习惯被你全方位照料、失去独立生活能力，使用 followup=hypnotic_regression；否则使用 followup=none。followup 只记录后续关系走向，不规定正文内容。",
+                    "如果要推进，先写「【抓回经过：rules=double_lock,key_isolation followup=none】」，再用「【过程】\n【【完整抓回经过】】」提交正文。",
                     "规矩和过程块必须同时存在；双层方括号内可以自然写多段正文。格式不完整时只算局内聊天，不会推进事件。",
                 ]
         else:
@@ -2365,12 +2453,19 @@ def register_routes(bp) -> None:
 
         status_code = 200 if ok or applied_reply_commands else 502
         redact_reply = _captivity_simulator_should_redact_sync_reply(initial_pending, applied_reply_commands)
-        safe_reply_text = _captivity_simulator_redacted_night_text() if redact_reply else reply_text
-        safe_player_text = _captivity_simulator_redacted_night_text() if redact_reply else str(payload.get("player_text") or "")
-        safe_wakeup = _redact_captivity_simulator_wakeup(wakeup, safe_reply_text) if redact_reply else (wakeup or {})
+        redact_day_batch = str(initial_pending.get("type") or "") == "day_batch_response"
+        safe_reply_text = (
+            _captivity_simulator_redacted_night_text()
+            if redact_reply
+            else _captivity_simulator_redacted_day_batch_text()
+            if redact_day_batch
+            else reply_text
+        )
+        safe_player_text = safe_reply_text if redact_reply or redact_day_batch else str(payload.get("player_text") or "")
+        safe_wakeup = _redact_captivity_simulator_wakeup(wakeup, safe_reply_text) if redact_reply or redact_day_batch else (wakeup or {})
         safe_followup_wakeups = (
             _redact_captivity_simulator_followup_wakeups(followup_wakeups, safe_reply_text)
-            if redact_reply
+            if redact_reply or redact_day_batch
             else followup_wakeups
         )
         response_payload = {
