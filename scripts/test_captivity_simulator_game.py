@@ -1361,6 +1361,7 @@ def test_captivity_simulator_bladder_control_captive_route_only() -> None:
 
 def test_captivity_simulator_pet_system_both_routes_and_monitor_privacy() -> None:
     from routes.miniapp import game_tools
+    from services import captivity_simulator_game as game
 
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "capture-du-pet-system.json"
@@ -1368,7 +1369,7 @@ def test_captivity_simulator_pet_system_both_routes_and_monitor_privacy() -> Non
         planned = run_command(
             "plan_day "
             "action=training training_contents=pet_play,pet_position_wait tools=collar || "
-            "action=punishment contents=rule_escalation || "
+            "action=punishment contents=pet_sexual_discipline modifiers=sex tools=collar || "
             "action=cleaning",
             save_path=save_path,
         )
@@ -1377,8 +1378,18 @@ def test_captivity_simulator_pet_system_both_routes_and_monitor_privacy() -> Non
         first_context = first_pending["event"]["pet_context"]
         _assert(first_context["establishes_identity"] is True, "the first pet action should establish a persistent identity")
         _assert("在指定位置等候" in first_context["active_rule_labels"], "the selected pet rule should be readable process material")
+        _assert(
+            {
+                "在调教或性行为中使用主人指定的物化自称并复述指定台词",
+                "按主人的口令以宠物身份提供性服务",
+                "违令后接受以羞耻和性惩戒为主的处理",
+            }.issubset(set(first_context["active_rule_labels"])),
+            "establishing the pet route should always include objectification, sexual service, and sexual discipline",
+        )
+        _assert("不是可爱化装扮" in first_context["focus"], "the pet route should expose its adult objectification focus")
         context_lines = game_tools._captivity_simulator_event_context_lines(first_pending)
         _assert(any("宠物化素材" in line and "本次建立小狗身份" in line for line in context_lines), "dynamic system should receive the pet identity and rules")
+        _assert(any("宠物线核心" in line and "性惩戒" in line for line in context_lines), "the process prompt should receive the pet route's core focus")
 
         refused = run_command(
             "submit_process_reaction response=refuse mood=闹脾气 line=不想 process=项圈被扣好，定点等候的规矩已经说清楚。",
@@ -1395,6 +1406,11 @@ def test_captivity_simulator_pet_system_both_routes_and_monitor_privacy() -> Non
         punishment = run_command("advance_day_action", save_path=save_path)
         punishment_pending = punishment["captor_view"]["pending_event"]
         _assert(punishment_pending["event"]["pet_context"]["pending_violation"] is True, "the next punishment should automatically receive the unresolved violation")
+        _assert("pet_sexual_discipline" in punishment_pending["event"]["contents"], "the planned follow-up should retain the pet sexual-discipline content")
+        _assert(
+            "性惩戒" in game_tools._captivity_process_experience(punishment_pending["event"], route="captured_by_du"),
+            "the detailed-process prompt should describe pet sexual discipline instead of a generic punishment",
+        )
         handled = run_command(
             "submit_process_reaction response=accept mood=害羞 line=知道了 process=之前的违令被拿出来处理，并重新确认了规矩。",
             save_path=save_path,
@@ -1408,15 +1424,22 @@ def test_captivity_simulator_pet_system_both_routes_and_monitor_privacy() -> Non
         run_command("new_game route=capture_du seed=expanded-pet-rules", save_path=save_path)
         expanded = run_command(
             "plan_day "
-            "action=training training_contents=pet_owner_address,pet_begging,pet_display tools=collar || "
+            "action=training training_contents=pet_objectification,pet_sexual_service,pet_sexual_discipline tools=collar || "
             "action=feeding || action=cleaning",
             save_path=save_path,
         )
         pet_context = expanded["captor_view"]["pending_event"]["event"]["pet_context"]
         _assert(
-            {"用指定称呼叫主人", "用指定姿势和称呼求取性行为", "按口令接受展示和检查"}.issubset(set(pet_context["active_rule_labels"])),
-            "expanded pet play should become concrete process material instead of decorative labels",
+            {
+                "在调教或性行为中使用主人指定的物化自称并复述指定台词",
+                "按主人的口令以宠物身份提供性服务",
+                "违令后接受以羞耻和性惩戒为主的处理",
+            }.issubset(set(pet_context["active_rule_labels"])),
+            "deep pet play should become concrete process material instead of decorative labels",
         )
+
+        migrated = game._normalize_pet_state({"active": True, "rules": ["designated_spot"]}, 3)
+        _assert(set(game.PET_CORE_RULES).issubset(set(migrated["rules"])), "older active pet saves should gain the new core rules")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "captured-by-du-pet-system.json"

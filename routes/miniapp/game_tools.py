@@ -17,6 +17,7 @@ from services.captivity_simulator_game import (
     ACTION_CONTENTS,
     ACTION_LABELS,
     NIGHT_DETAIL_OPTIONS,
+    PET_RELATED_TRAINING,
     RECAPTURE_FOLLOWUP_LABELS,
     RECAPTURE_RULE_LABELS,
     TOOL_COMPATIBILITY,
@@ -289,12 +290,28 @@ def _captivity_body_state_prompts(state: dict, *, route: str = "captured_by_du")
 
 def _captivity_process_experience(event: dict, *, route: str) -> str:
     action = str(event.get("action") or "").strip()
+    training_contents = {
+        str(item).strip()
+        for item in event.get("training_contents") or []
+        if str(item).strip()
+    }
+    contents = {str(item).strip() for item in event.get("contents") or [] if str(item).strip()}
     modifiers = {str(item).strip() for item in event.get("modifiers") or [] if str(item).strip()}
     intervention = event.get("intervention") if isinstance(event.get("intervention"), dict) else {}
+    training_contents.update(
+        str(item).strip()
+        for item in intervention.get("training_contents") or []
+        if str(item).strip()
+    )
     modifiers.update(str(item).strip() for item in intervention.get("modifiers") or [] if str(item).strip())
     intervention_intent = str(intervention.get("intent") or "").strip()
     recapture_context = event.get("recapture_context") if isinstance(event.get("recapture_context"), dict) else {}
     followup = str(recapture_context.get("followup") or "").strip() if action == "recapture_followup" else ""
+    pet_scene = bool(training_contents.intersection(PET_RELATED_TRAINING))
+    pet_sexual_discipline = bool(
+        {"pet_sexual_discipline", "pet_sexual_service"}.intersection(training_contents)
+        or {"pet_objectification_discipline", "pet_sexual_discipline"}.intersection(contents)
+    )
 
     if route == "captured_by_du":
         followup_phrases = {
@@ -303,7 +320,11 @@ def _captivity_process_experience(event: dict, *, route: str) -> str:
             "movement_restriction": "限制小玥的行动",
             "aftercare": "照料小玥",
         }
-        if followup in followup_phrases:
+        if pet_sexual_discipline:
+            phrase = "以宠物身份物化、训诫并性惩戒小玥"
+        elif pet_scene:
+            phrase = "把小玥作为宠物进行深度物化与性服从调教"
+        elif followup in followup_phrases:
             phrase = followup_phrases[followup]
         elif action == "punishment" or followup == "punishment" or intervention_intent == "punishment":
             phrase = "惩罚小玥"
@@ -313,7 +334,7 @@ def _captivity_process_experience(event: dict, *, route: str) -> str:
             phrase = "与小玥亲密互动"
         if "training" in modifiers and phrase == "惩罚小玥":
             phrase = "惩罚并调教小玥"
-        if "sex" in modifiers and phrase != "与小玥亲密互动":
+        if "sex" in modifiers and "性" not in phrase and phrase != "与小玥亲密互动":
             phrase += "、与她亲密互动"
         return phrase
 
@@ -323,7 +344,11 @@ def _captivity_process_experience(event: dict, *, route: str) -> str:
         "movement_restriction": "被小玥限制行动",
         "aftercare": "接受小玥的事后照料",
     }
-    if followup in followup_phrases:
+    if pet_sexual_discipline:
+        phrase = "被小玥以宠物身份物化、训诫并性惩戒"
+    elif pet_scene:
+        phrase = "被小玥作为宠物进行深度物化与性服从调教"
+    elif followup in followup_phrases:
         phrase = followup_phrases[followup]
     elif action == "punishment" or followup == "punishment" or intervention_intent == "punishment":
         phrase = "被小玥惩罚"
@@ -333,7 +358,7 @@ def _captivity_process_experience(event: dict, *, route: str) -> str:
         phrase = "与小玥亲密互动"
     if "training" in modifiers and phrase == "被小玥惩罚":
         phrase = "被小玥惩罚和调教"
-    if "sex" in modifiers and phrase != "与小玥亲密互动":
+    if "sex" in modifiers and "性" not in phrase and phrase != "与小玥亲密互动":
         phrase += "、与她亲密互动"
     return phrase
 
@@ -1104,13 +1129,16 @@ def _captivity_simulator_event_context_lines(pending: dict) -> list[str]:
     pet_context = event.get("pet_context") if isinstance(event.get("pet_context"), dict) else {}
     if pet_context:
         pet_bits = []
+        focus = str(pet_context.get("focus") or "").strip()
+        if focus:
+            lines.append("宠物线核心：" + focus)
         if pet_context.get("establishes_identity"):
             pet_bits.append("本次建立小狗身份")
         active_rules = [str(item) for item in pet_context.get("active_rule_labels") or [] if str(item or "").strip()]
         if active_rules:
             pet_bits.append("现有规矩=" + " / ".join(active_rules))
         if pet_context.get("pending_violation"):
-            pet_bits.append("已有待处理违令")
+            pet_bits.append("已有待处理违令，可作为物化训诫或性惩戒的直接前因")
         if pet_context.get("compliance_ready"):
             pet_bits.append("已有服从记录可作为奖励依据")
         if pet_bits:
