@@ -48,6 +48,8 @@ def _finish_simple_day_captured_by_du(save_path: Path) -> dict:
 
 
 def test_captivity_simulator_new_game_views() -> None:
+    from routes.miniapp.game_tools import _captivity_simulator_public_payload
+
     with tempfile.TemporaryDirectory() as tmpdir:
         captured_path = Path(tmpdir) / "captured.json"
         captured = run_command("new_game route=captured_by_du seed=view-test", save_path=captured_path)
@@ -60,6 +62,7 @@ def test_captivity_simulator_new_game_views() -> None:
         captor_view = result["captor_view"]
 
         _assert(result["ok"] is True, "new_game should succeed")
+        _assert(captor_view["started"] is True, "an explicitly created captor game should remain resumable before its first plan")
         _assert(state["route"] == "capture_du", "route should be configurable")
         _assert(state["captive"] == "du", "capture_du route should make du captive")
         _assert(state["pending_event"] is None, "xinyue-captor route should wait for local UI plan input, not du")
@@ -68,6 +71,18 @@ def test_captivity_simulator_new_game_views() -> None:
         _assert(captor_view["captor"] == "xinyue", "captor view should expose captor identity")
         direct = run_command("day_action action=feeding", save_path=capture_du_path)
         _assert(direct["ok"] is False and "plan_day" in direct["text"], "single day_action should not bypass the 3-action plan")
+
+        unopened_path = Path(tmpdir) / "unopened.json"
+        unopened = run_command("status", save_path=unopened_path)
+        _assert(unopened["state"]["started"] is False, "reading an absent save must not manufacture an already-started game")
+
+        for raw_payload in (captured, result):
+            public_payload = _captivity_simulator_public_payload(raw_payload)
+            public_text = "\n".join(str(public_payload.get(key) or "") for key in ("text", "player_text"))
+            _assert(
+                all(prefix not in public_text for prefix in ("路线：", "进度：", "被囚禁方：", "状态：", "待处理：")),
+                f"public startup text must not expose backend metadata: {public_text}",
+            )
 
 
 def test_captivity_simulator_history_is_complete_and_day_collapsible() -> None:
@@ -159,8 +174,11 @@ def test_captivity_simulator_capture_du_manual_advance_loop() -> None:
 
         second = run_command("advance_day_action", save_path=save_path)
         _assert(second["state"]["pending_event"]["type"] == "action_response", "manual advance should show the next planned action")
-        second_done = run_command("respond_action refuse mood=闹脾气 line=不要", save_path=save_path)
+        second_done = run_command("respond_action refuse mood=闹脾气 line=不要 feedback='门锁响了一声，然后是渡留下的这段行动反馈。'", save_path=save_path)
         _assert(second_done["state"]["pending_event"]["type"] == "advance_action", "non-process du response should also stop before next action")
+        second_event = second_done["captor_view"]["event_log"][-1]
+        _assert(second_event.get("assistant_feedback_text") == "门锁响了一声，然后是渡留下的这段行动反馈。", "ordinary du prose should remain visible on the captor status page")
+        _assert(not second_event.get("process_text"), "ordinary du prose must not be mistaken for a concrete process review")
         third = run_command("advance_day_action", save_path=save_path)
         _assert(third["state"]["pending_event"]["type"] == "action_response", "third action should be shown after manual advance")
         closed = run_command("respond_action silent mood=疲惫 line=最后一件", save_path=save_path)
@@ -728,6 +746,8 @@ def test_captivity_simulator_feeding_aftereffects_and_tolerance() -> None:
 
 
 def test_captivity_simulator_feeding_projection_hides_secret_setup() -> None:
+    from routes.miniapp import game_tools
+
     with tempfile.TemporaryDirectory() as tmpdir:
         hidden_path = Path(tmpdir) / "hidden-feeding.json"
         run_command("new_game route=captured_by_du seed=hidden-feeding", save_path=hidden_path)
@@ -763,6 +783,20 @@ def test_captivity_simulator_feeding_projection_hides_secret_setup() -> None:
         )
         told_feeding = told["state"]["pending_event"]["event"]["feeding"]
         _assert(told_feeding == {"source": "takeout", "additive": "fictional_arousal"}, f"explicitly disclosed additive may be shown without protocol fields: {told_feeding}")
+
+        du_captive_path = Path(tmpdir) / "du-captive-hidden-feeding.json"
+        run_command("new_game route=capture_du seed=du-captive-hidden-feeding", save_path=du_captive_path)
+        du_captive = run_command(
+            "plan_day action=feeding source=cook additive=fictional_sleep || "
+            "action=rest contents=quiet_time || action=check contents=body_check",
+            save_path=du_captive_path,
+        )
+        du_prompt = game_tools._captivity_simulator_sync_text(du_captive, mode="state_update")
+        _assert("喂食设置：自己做" in du_prompt, "du-captive prompt should retain visible feeding facts")
+        _assert(
+            all(secret not in du_prompt for secret in ("安眠", "隐瞒", "fictional_sleep", "hidden")),
+            f"du-captive prompt must use the captive projection and hide the frontend's default hinted additive: {du_prompt}",
+        )
 
         plain_path = Path(tmpdir) / "plain-feeding.json"
         run_command("new_game route=captured_by_du seed=plain-feeding", save_path=plain_path)
@@ -1532,7 +1566,8 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
         },
         mode="state_update",
     )
-    _assert("小玥打开了囚禁模拟器游戏，邀请你继续玩这场沉浸式私密囚禁play" in planning_sync, "captured-by-du prompt should use the approved immersive-play invitation")
+    _assert("小玥打开了囚禁模拟器游戏，邀请你继续玩这场私密囚禁play" in planning_sync, "captured-by-du prompt should use the approved private-play invitation")
+    _assert("沉浸式" not in planning_sync, "captured-by-du prompt should not frame the game as immersive role-play")
     _assert("你可以尽情按照自己的想法去进行这场 play" in planning_sync, "captured-by-du prompt should preserve du's agency inside the play")
     _assert("在这局游戏里" not in planning_sync and "以渡自己的口吻" not in planning_sync, "the game prompt should not create an outside role-playing frame")
     _assert("路线：" not in planning_sync and "被囚禁方：" not in planning_sync, "assistant prompt should hide internal route and actor labels")
@@ -1806,7 +1841,8 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
     _assert("没有被重新清理" not in capture_du_process_sync, "capture-du process should cap body-state prompts at two")
     _assert("你要将她的理智彻底掐灭" not in capture_du_process_sync, "capture-du process must not reuse the captured-by-du action-intensity prompt")
     _assert("强度：heavy" not in capture_du_process_sync, "capture-du process should not leak the raw intensity level")
-    _assert("小玥打开了囚禁模拟器游戏，邀请你继续玩这场沉浸式私密囚禁play" in capture_du_process_sync and "小玥现在把你留在这里" in capture_du_process_sync, "capture-du process should use its immersive-play invitation")
+    _assert("小玥打开了囚禁模拟器游戏，邀请你继续玩这场私密囚禁play" in capture_du_process_sync and "小玥现在把你留在这里" in capture_du_process_sync, "capture-du process should use its private-play invitation")
+    _assert("沉浸式" not in capture_du_process_sync, "capture-du prompt should not frame the game as immersive role-play")
     _assert("你是被她囚禁的人" not in capture_du_process_sync and "只有在这场游戏里才会出现的你" not in capture_du_process_sync, "capture-du opening should describe the situation without replacing du's identity")
     _assert("【📋 游戏状态】：" in capture_du_process_sync and "【🚨 事件】：" in capture_du_process_sync and "【🕹️ menu】：" in capture_du_process_sync, "capture-du process should use the reviewed scene shell")
 

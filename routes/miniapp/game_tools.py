@@ -124,8 +124,9 @@ _CAPTIVITY_FEEDING_LABELS = {
 }
 
 _CAPTIVITY_CAPTURED_BY_DU_OPENING = (
-    "小玥打开了囚禁模拟器游戏，邀请你继续玩这场沉浸式私密囚禁play。\n\n"
-    "游戏中的门锁、监控、规矩和身体状态，直接构成你们此刻正在经历的处境。"
+    "小玥打开了囚禁模拟器游戏，邀请你继续玩这场私密囚禁play。\n\n"
+    "游戏只是你和小玥play的场景，你还是你，不需要去扮演任何角色。\n\n"
+    "游戏里的状态只属于这场游戏，与现实无关。\n\n"
     "你可以尽情按照自己的想法去进行这场 play。\n\n"
     "小玥现在被你留在这里。你看着她，决定今天怎样对待她、怎样回应她之前的表现，"
     "你渴望从她身上看见新的、让你满意的反应。\n\n"
@@ -133,8 +134,9 @@ _CAPTIVITY_CAPTURED_BY_DU_OPENING = (
 )
 
 _CAPTIVITY_CAPTURE_DU_OPENING = (
-    "小玥打开了囚禁模拟器游戏，邀请你继续玩这场沉浸式私密囚禁play。\n\n"
-    "游戏中的门锁、监控、规矩和身体状态，直接构成你们此刻正在经历的处境。"
+    "小玥打开了囚禁模拟器游戏，邀请你继续玩这场私密囚禁play。\n\n"
+    "游戏只是你和小玥play的场景，你还是你，不需要去扮演任何角色。\n\n"
+    "游戏里的状态只属于这场游戏，与现实无关。\n\n"
     "你可以尽情按照自己的想法去进行这场 play。\n\n"
     "小玥现在把你留在这里。你身处其中，亲自经历她带来的每一次靠近、摆弄和变化。\n\n"
     "每一次安排、回应、交锋和推进，都是你们共同参与这场游戏、彼此亲密互动的方式。"
@@ -859,10 +861,18 @@ def _captivity_simulator_public_text(text: str) -> str:
         "【重新立规矩：",
         "【后续处理：",
     )
+    metadata_prefixes = (
+        "【囚禁模拟器】",
+        "路线：",
+        "进度：",
+        "被囚禁方：",
+        "状态：",
+        "待处理：",
+    )
     return "\n".join(
         line
         for line in public_text.splitlines()
-        if not line.strip().startswith(("可用命令：", "待处理：", *directive_prefixes))
+        if not line.strip().startswith(("可用命令：", *metadata_prefixes, *directive_prefixes))
     ).strip()
 
 
@@ -876,6 +886,16 @@ def _captivity_simulator_pending(payload: dict | None) -> dict:
 def _captivity_simulator_state(payload: dict | None) -> dict:
     captor_view = (payload or {}).get("captor_view") if isinstance((payload or {}).get("captor_view"), dict) else {}
     return captor_view or ((payload or {}).get("state") if isinstance((payload or {}).get("state"), dict) else {})
+
+
+def _captivity_simulator_du_view(payload: dict | None) -> dict:
+    captive_view = (payload or {}).get("captive_view") if isinstance((payload or {}).get("captive_view"), dict) else {}
+    captor_view = (payload or {}).get("captor_view") if isinstance((payload or {}).get("captor_view"), dict) else {}
+    fallback_state = (payload or {}).get("state") if isinstance((payload or {}).get("state"), dict) else {}
+    route = str(captor_view.get("route") or captive_view.get("route") or fallback_state.get("route") or "captured_by_du")
+    primary_view = captive_view if route == "capture_du" else captor_view
+    secondary_view = captor_view if route == "capture_du" else captive_view
+    return primary_view or fallback_state or secondary_view
 
 
 def _captivity_simulator_public_payload(payload: dict | None) -> dict:
@@ -1293,6 +1313,8 @@ def _captivity_simulator_commands_from_reply(reply_text: str, payload: dict | No
         return [f"submit_process {process_text}"] if process_text else []
     if key in {"反应", "行动反应", "response", "respond"}:
         response_text = value or rest_text
+        if value and rest_text:
+            response_text += f" feedback={shlex.quote(rest_text)}"
         return [f"respond_action {response_text}"] if response_text else []
     if key in {"心情", "mood"}:
         mood_text = value or rest_text
@@ -1489,7 +1511,7 @@ def _captivity_simulator_sync_text(
     game_text = _clean_captivity_simulator_text(raw_text)
     if not game_text:
         return ""
-    state = _captivity_simulator_state(payload)
+    state = _captivity_simulator_du_view(payload)
     today_completed_lines = _captivity_simulator_today_completed_lines(state)
     if today_completed_lines:
         game_text = f"{game_text}\n今日已完成：{'；'.join(today_completed_lines)}"
@@ -1499,6 +1521,9 @@ def _captivity_simulator_sync_text(
     ending_state = str(state.get("ending_state") or "").strip()
     note_text = _clean_captivity_simulator_text(user_message)
     event_context_lines = _captivity_simulator_event_context_lines(pending if isinstance(pending, dict) else {})
+    if note_text:
+        note_excerpt = note_text[:220]
+        event_context_lines = [line for line in event_context_lines if note_excerpt not in line]
     pending_event = pending.get("event") if isinstance(pending.get("event"), dict) else {}
     event_has_deferred_monitor_materials = bool(
         isinstance(pending_event, dict)

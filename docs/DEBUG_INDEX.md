@@ -2,6 +2,14 @@
 
 这个文件用于快速定位问题。先按“现象”找入口，再看关键文件和日志关键词。
 
+当前状态（2026-07-13 囚禁模拟器开局与视角泄漏审查）：
+- 已完成：给渡构造动态游戏提示时按渡在当前路线中的真实投影视图取数据；小玥是囚禁方时，前端未提供告知方式、后端默认 `hint` 的加料内容不再提前泄漏给作为被囚禁方的渡。
+- 已完成：公开 MiniApp 文本剥离 `路线 / 进度 / 被囚禁方 / 状态 / 待处理` 等后端元数据；结构化 state 仍保留前端正常渲染所需字段。
+- 已完成：存档新增 `started` 标记，明确开局但尚未下发首日安排的囚禁方路线可以直接恢复；单纯读取不存在的存档不会制造“已开始”状态，旧存档按路线和已有进度兼容推断。
+- 已完成：普通行动中渡在指令后的正文存为 `assistant_feedback_text`，停在本段状态页等待手动推进；不写入 `process_text`，因此不会误入具体经过回顾。
+- 已验证：`.venv/bin/python scripts/test_captivity_simulator_game.py`、MiniApp `npm run build`、相关 Python `py_compile` 和 `git diff --check` 通过；开源版对应存档恢复修复通过 19 项 unittest 与 Web build。全程仅使用本地临时存档，未调用线上后端。
+- 未完成 / 下次继续：部署后检查 `du-gateway.service`、`du-sumitalk-chat-worker.service` 和公开 `/health`、`/miniapp/`；不要在路由烟测里调用真实 `/sync-du` 或写线上游戏存档。
+
 ## 先做三件事
 
 ```bash
