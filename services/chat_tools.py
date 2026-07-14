@@ -363,6 +363,28 @@ def _execute_exchange_diary_comment_create(arguments: dict) -> str:
         if isinstance(c, dict) and not str(c.get("deleted_at") or "").strip()
     ]
     latest = comments[-1] if comments else {}
+    if str(latest.get("author") or "").strip().lower() == "du" and str(latest.get("id") or "").strip():
+        try:
+            from storage import r2_store
+
+            _action, notification_error = r2_store.append_app_action(
+                "show_system_notification",
+                {
+                    "title": "渡评论了你的日记",
+                    "message": str(latest.get("content") or content).strip(),
+                    "notification_kind": "diary_comment",
+                    "entry_id": str(item.get("id") or entry_id).strip(),
+                    "comment_id": str(latest.get("id") or "").strip(),
+                    "sender": "渡",
+                    "openApp": True,
+                },
+                source="exchange_diary",
+                idempotency_key=f"exchange-diary-comment:{latest.get('id')}",
+            )
+            if notification_error:
+                logger.warning("exchange_diary_comment_notification_failed comment_id=%s error=%s", latest.get("id"), notification_error)
+        except Exception as error:
+            logger.warning("exchange_diary_comment_notification_failed comment_id=%s error=%s", latest.get("id"), error)
     action_text = "已回复交换日记评论：" if str(latest.get("reply_to_comment_id") or "").strip() else "已评论交换日记："
     return (
         action_text +

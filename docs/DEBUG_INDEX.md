@@ -242,6 +242,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 当前状态（2026-06-27 交换日记工具迁移）：
 - 已完成：`services/chat_tools.py` 新增并注入 `exchange_diary_create/list/read/comment_create`，执行走 `storage.exchange_diary_store`；旧兼容入口已关闭，不再注入也不再执行。
 - 已完成：`exchange_diary_list` 工具说明已明确：`author` 不传或传空时是 du/xy 混合时间线，传 `du` / `xy` 才按作者过滤；渡用工具 list 时直接返回正文、最近评论和 comment id，默认 5 条、最大 20 条，避免为了看正文再多调一次 read；`exchange_diary_read` 保留给查看单条完整评论细节。`exchange_diary_comment_create` 是给渡用来评论/回复日记的工具，先 list 拿 entry id 和 comment id；不填 `reply_to_comment_id` 是普通评论，填了就是回复那条评论。
+- 已完成：渡成功评论或回复后，后端按 `comment_id` 幂等追加 `show_system_notification`；通知 payload 保留 `notification_kind=diary_comment`、`entry_id`、`comment_id` 和 `sender`，供原生 App 显示渡的头像与备注名并打开对应日记。
 - 已完成：随机唤醒写日记执行轮优先提示渡调用 `exchange_diary_create`；dashboard 动作摘要只把 `exchange_diary_create` 显示为“写了日记”，列表/读取/评论工具不展示。
 - 已验证：`.venv/bin/python -m py_compile services/chat_tools.py services/telegram_proactive.py routes/miniapp/dashboard.py` 通过；后续综合验证见上一段交换日记当前状态。
 
