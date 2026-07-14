@@ -2449,3 +2449,4 @@ npm -C miniapp run android
 - 已完成：`GET /miniapp-api/memory-debug` 在已有动态层统计读取中同时返回 `dynamic_memories`，原生 App 不再为每 5 秒刷新重复读取一次 R2 current。
 - 已验证：`python3 scripts/test_memory_rewrite.py` 覆盖预览无写入、两层字段保留、动态派生数据刷新、过期候选冲突、HTTP 两步协议和 memory-debug 同快照返回；测试使用 fake storage 与 fake DeepSeek，不调用真实模型或写 R2。
 - 部署边界：实现提交从最新 `origin/main` 的干净 worktree 构建，未包含植物大战僵尸、MiniApp 或 `miniapp_static` 半成品；真实记忆保存只允许辛玥在 App 中查看候选后手动确认。
+- 已部署：提交 `a7b74494` 已推送到 `origin/main`，服务器 `/root/du-gateway` 已快进并只重启 `du-gateway.service`；服务本机和公网 `/health` 均返回 `ok`，重启后原生设备请求持续正常，未调用真实 DS 或写入 R2。
