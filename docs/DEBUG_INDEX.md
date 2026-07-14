@@ -2220,6 +2220,32 @@ npm -C miniapp run android
 - 已验证：隔离 smoke 覆盖 8317 命中、8082 不命中、最终顺序为 `BASE -> CODEX_ONLY -> NSFW_RULES`，并确认该条目允许保存为空；后端 `py_compile`、MiniApp `tsc --noEmit` 和 `/tmp` 隔离生产构建通过。
 - 未完成 / 下次继续：实际专用 Prompt 内容仍为空，由小玥在手机 Prompt 管理中填写；部署后用 CPA 上游发一轮并在 Prompt Cache 静态区确认顺序。
 
+当前状态（2026-07-10 主网关 VPS 全量迁移方案）：
+- 已完成：新增 `docs/main_gateway_vps_migration_plan.md`，按实际线上盘点写清新主网关、旧代理节点、Claude OAuth 转发 VPS 三者边界；覆盖云防火墙优先、复用本机 SSH 公钥、`nora` sudo、SSH 加固、UFW、Fail2ban、Tailscale、2 GB swap、全业务/QQ/CPA/证书/SQLite 迁移、最终停写同步、DNS 切换、完整验收、reboot 验收和回滚。
+- 已确认：旧主网关当前业务监听、enabled service、数据路径、证书和 user service；`duxy-home.com` 当前指向 `47.250.162.10`，`proxy.duxy-home.com` 保持旧机，`us.duxy-home.com` 和 Claude 转发 VPS `45.76.171.91 / 100.86.248.99` 均不改。旧机 UFW 实际 inactive，新机不复用该状态；阿里云 Aegis/云助手/云监控不迁移。
+- 已确认：旧机继续保留独立 Trojan 代理；新主网关另建新代理节点。CPA 第一版随主网关原样迁移，不在搬家时同时改去转发 VPS；Claude tunnel 继续保持网关本机 `127.0.0.1:8082` 语义。
+- 已完成（执行阶段 A/B）：新主 VPS `43.155.136.6` 已创建；本机 alias `du-gateway-new` 使用现有 Ed25519 公钥登录 `nora`，root/密码登录已关闭。UFW、Fail2ban、约 2 GB swap、journald 限额、上海时区和基础包已落地；公网复扫当前只开放 TCP 22。
+- 已完成（Tailscale）：新主机 `du-gateway-main` 已加入现有 tailnet，IP 为 `100.119.107.127`；到 Claude 转发 VPS `100.86.248.99` 为直连。转发端 `8082` 不直接监听 Tailscale，后续仍复制旧机专用 SSH tunnel key/unit，保持新网关本机 `127.0.0.1:8082`。
+- 未完成 / 下次继续：尚未复制业务工作树、持久数据、QQ/NapCat、CPA、systemd、nginx/证书或 tunnel key；旧主机服务、DNS 和代理均未改动。下一步先做不停机首轮复制与新机运行环境重建；新代理域名仍待确定，80/443/8443 在业务就绪前保持关闭。当前业务源码、MiniApp 静态包、囚禁模拟器和原生 UI 对齐等脏改均不得混入本次迁移文档提交。
+
+当前状态（2026-07-10 主网关 VPS 迁移执行进度）：
+- 已完成：新主网关 `43.155.136.6` 的 SSH 公钥登录、`nora` 免密 sudo、SSH 加固、UFW、Fail2ban、Tailscale、现有约 2 GB swap、journald 限额和基础运行环境；公网外部复扫当前只有 TCP 22 开放。
+- 已完成：首轮复制线上工作树、持久数据、QQ/NapCat、CPA、systemd 精确白名单、nginx 主站配置、主域名证书和 Claude tunnel；Python/Node/连接器依赖均在新机重建，没有复用旧 venv/node_modules。
+- 已完成：CPA 与 Claude tunnel 已在新机以 loopback 方式运行；主网关和 realtime 短时离线预演通过，`/health`、MiniApp、HTTPS hosts 定向和 Tailscale `8080` 入口均验证成功，预演后业务服务已重新停止。
+- 已完成：新机已安装官方 Codex CLI，并放入最小 OAuth 凭证、群聊桥接脚本、独立虚拟环境和 user systemd unit；新机桥接保持 disabled/inactive，本机桥接仍在运行，最终切换必须先停本机再启新机。
+- 未完成 / 下次继续：旧主网关业务仍在线，DNS、旧代理和转发 VPS 均未改；下一步在确认短暂停机后停止旧业务、做最终增量同步、启动并验收新机服务，再开放云防火墙/UFW 的 80/443 并切换 `duxy-home.com`。新代理域名尚未确定，8443 和 Trojan 留到域名确定后启用。
+
+当前状态（2026-07-10 主网关 VPS 主切换完成）：
+- 已完成：`duxy-home.com` 已从旧机 `47.250.162.10` 切到首尔新机 `43.155.136.6`；旧机、新机、Cloudflare `1.1.1.1` 和 Google `8.8.8.8` 均解析到新 IP，公网 `/health`、`/miniapp/` 返回 200，证书仍为 `duxy-home.com` 且有效期至 2026-08-15。
+- 已完成：旧业务与本机 Codex 桥接停写后，最终同步 `data/`、`.env`、`guild1.db` 及 WAL/SHM、QQ 本地数据；内容哈希和 QQ 文件清单核对一致，所有迁移 SQLite `PRAGMA quick_check` 均为 `ok`。QQ 换机后完成一次扫码登录，NapCat、OneBot HTTP 上报和 `qq-connector` 已启动。
+- 已完成：新机网关、realtime、SumiTalk、TG 两个 worker、微信、NapCat、QQ connector、nginx、Claude tunnel、Tailscale、Fail2ban、CPA、Codex 群聊桥接共 14 项均 active，`systemctl --failed` 为空；Claude tunnel 与 CPA 的无鉴权模型接口均返回预期 401，证明 loopback 链路可达但没有发真实模型请求。
+- 已完成：新机 UFW 与腾讯云安全组开放 80/443，业务内网端口仍未暴露，8443 尚未开放；切换后 nginx 无 499/5xx，journal 约 24 MB，内存约 1.2/3.6 GiB，系统盘约 16%。
+- 已完成：旧机网关、QQ/TG/微信/App、Claude tunnel 和旧 CPA 已停止并禁用自启；旧 nginx、Trojan、Tailscale、Fail2ban 保持 active，`proxy.duxy-home.com` 仍指向旧 IP，旧 Trojan 8443 外部可连。本机旧 Codex LaunchAgent 已停止并持久禁用，避免和新机桥接双消费。
+- 已修复：新旧 nginx 都存在“开机时 Tailscale 地址尚未分配，绑定 Tailscale 8080 失败”的竞态；两台机器均新增 `nginx.service.d/tailscale-wait.conf`，等待各自 Tailscale IPv4，并设置启动失败自动重试。两边 `nginx -t` 和重启验证均通过。
+- 已完成（新独立代理）：`kr.duxy-home.com` 指向新机，独立 Let's Encrypt 证书有效期至 2026-10-08；Trojan 监听 `8443/TCP`，使用独立密码和随机订阅路径，UFW 与腾讯云安全组均已放行。服务不以 root/nobody 运行，而使用专用 `trojan` 系统用户；配置和证书私钥权限为 `root:trojan 0640`，续期 hook 会恢复权限、reload nginx 并 restart Trojan。旧 VPS 临时 Trojan 客户端完整走通，代理出口为 `43.155.136.6`；订阅公网返回 200。
+- 已收口（本机别名）：当前主机统一使用 `du-gateway`（Tailscale）和 `du-gateway-public`（公网）；旧阿里云只保留 `du-proxy-old` / `du-proxy-old-ts` 两个代理机维护别名，SSH 配置中不再保留旧主机名。已禁用的 Mac Codex 桥接回滚配置也已改到新主网关内网入口。
+- 未完成 / 下次继续：安排一次新机整机 reboot 验收，并由小玥做 App/QQ/TG/微信/SumiTalk 的实聊抽测。旧迁移备份继续保留作回滚，不删除旧 VPS。
+
 当前状态（2026-07-11 R2 存储拆分第一刀）：
 - 已完成：新增 `storage/r2_client.py`，集中承接 Cloudflare R2 S3 客户端、JSON 读取和带重试的 JSON 写入；`storage/r2_store.py` 继续按原私有函数名兼容导出，现有调用方不需要改。
 - 已完成：新增 `storage/r2_wenyou_store.py`，完整迁出文游 session、钱包、候选池、连续性卡片和归档的 SQLite 主存 / R2 回填与可选备份逻辑；`storage/r2_store.py` 保留全部原文游 API 兼容导出，文件从 4282 行降到 3865 行。

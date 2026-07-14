@@ -1,6 +1,8 @@
 # Claude OAuth Proxy 新 VPS 迁移方案
 
-目标：旧 VPS 继续跑 `du-gateway`、QQ/TG/App 等现有服务；新 VPS 单独跑 Claude Code CLI 和 Claude OAuth proxy。旧 VPS 只通过本机 `127.0.0.1:8082` 访问新 VPS proxy，避免主网关大搬家，也避免 Claude OAuth proxy 暴露公网。
+> 当前口径（2026-07-10）：本文记录的是迁移前的分层方案，主网关现已迁至腾讯云首尔，通过 `ssh du-gateway` 维护；旧阿里云只保留为代理节点，通过 `du-proxy-old` / `du-proxy-old-ts` 维护，不再运行网关业务。涉及当前网关部署、日志、重启和 Claude tunnel 排查时，以 `docs/main_gateway_vps_migration_plan.md` 与 `docs/DEBUG_INDEX.md` 顶部主机口径为准。
+
+历史目标：旧 VPS 继续跑 `du-gateway`、QQ/TG/App 等现有服务；新 VPS 单独跑 Claude Code CLI 和 Claude OAuth proxy。旧 VPS 只通过本机 `127.0.0.1:8082` 访问新 VPS proxy，避免主网关大搬家，也避免 Claude OAuth proxy 暴露公网。
 
 当前推荐架构：
 
@@ -67,7 +69,7 @@ http://127.0.0.1:8082/v1/chat/completions
 ```bash
 NEW_VPS_IP="新 VPS 公网 IP"
 NEW_VPS_USER="duproxy"
-OLD_VPS_ALIAS="ali-du"
+OLD_VPS_ALIAS="du-proxy-old"
 ```
 
 确认旧 VPS 当前 Claude proxy 已停：
