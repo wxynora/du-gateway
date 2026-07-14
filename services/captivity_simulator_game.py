@@ -1333,6 +1333,8 @@ def _new_state(route: str = "captured_by_du", seed: str = "", *, started: bool =
         "stats": {"health": 80, "stamina": 75, "cleanliness": 70, "shame": 0, "intimacy": 20},
         "inventory": {key: False for key in INVENTORY_ITEMS},
         "inventory_secrets": {key: _empty_inventory_secret() for key in INVENTORY_ITEMS},
+        "pending_gifts": [],
+        "night_gift_deliveries": [],
         "call_bell_voice": {
             "line": "",
             "revealed": False,
@@ -1470,6 +1472,40 @@ def _normalize_state(state: dict[str, Any]) -> None:
             "configured_at": str(raw_secret.get("configured_at") or "").strip(),
         }
     state["inventory_secrets"] = normalized_secrets
+    normalized_pending_gifts: list[dict[str, Any]] = []
+    for raw_gift in state.get("pending_gifts") or []:
+        if not isinstance(raw_gift, dict):
+            continue
+        item_id = str(raw_gift.get("item") or "").strip()
+        if item_id not in INVENTORY_ITEMS or bool(state["inventory"].get(item_id)):
+            continue
+        entries = [
+            str(entry).strip()[:200]
+            for entry in raw_gift.get("entries") or []
+            if str(entry).strip()
+        ][:MAX_INVENTORY_SECRET_ENTRIES]
+        normalized_pending_gifts.append({
+            "item": item_id,
+            "label": str(raw_gift.get("label") or (INVENTORY_ITEMS.get(item_id) or {}).get("label") or item_id).strip(),
+            "title": str(raw_gift.get("title") or "").strip()[:100] if item_id == "book" else "",
+            "entries": entries,
+            "voice_line": str(raw_gift.get("voice_line") or "").strip()[:500] if item_id == "call_bell" else "",
+            "note": str(raw_gift.get("note") or "").strip()[:500],
+            "giver": str(raw_gift.get("giver") or state.get("captor") or "").strip(),
+            "queued_at": str(raw_gift.get("queued_at") or "").strip(),
+        })
+    state["pending_gifts"] = normalized_pending_gifts
+    state["night_gift_deliveries"] = [
+        {
+            "item": str(item.get("item") or "").strip(),
+            "label": str(item.get("label") or "").strip(),
+            "title": str(item.get("title") or "").strip(),
+            "note": str(item.get("note") or "").strip(),
+            "giver": str(item.get("giver") or "").strip(),
+        }
+        for item in state.get("night_gift_deliveries") or []
+        if isinstance(item, dict) and str(item.get("item") or "").strip() in INVENTORY_ITEMS
+    ]
     exposure = state.get("additive_exposure") if isinstance(state.get("additive_exposure"), dict) else {}
     try:
         sleep_exposure = max(0, int(exposure.get("fictional_sleep") or 0))
@@ -1518,6 +1554,7 @@ def _normalize_state(state: dict[str, Any]) -> None:
         pending["condition_prompt"] = str((active_condition or {}).get("prompt") or "")
         pending["condition_caption"] = str((active_condition or {}).get("caption") or "")
         pending["pet_rule_prompt"] = _pet_night_rule_prompt(state)
+        pending["gift_deliveries"] = deepcopy(state.get("night_gift_deliveries") or [])
     if pending and str(pending.get("type") or "") == "day_plan_choice":
         status = _status_profile(state)
         pending["status_flags"] = deepcopy(status["flags"])
@@ -3481,6 +3518,81 @@ def _set_config(state: dict[str, Any], args: dict[str, Any]) -> tuple[bool, list
     return True, ["配置已更新：" + "，".join(changed)]
 
 
+def _night_gift_window_open(state: dict[str, Any]) -> bool:
+    if str(state.get("phase") or "") != "night":
+        return False
+    pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else None
+    return not pending or str(pending.get("type") or "") == "night_action_choice"
+
+
+def _deliver_pending_gifts_for_night(state: dict[str, Any]) -> list[dict[str, str]]:
+    if not _night_gift_window_open(state):
+        return []
+    queued = [item for item in state.get("pending_gifts") or [] if isinstance(item, dict)]
+    if not queued:
+        return []
+    inventory = state.get("inventory") if isinstance(state.get("inventory"), dict) else {}
+    inventory_secrets = state.get("inventory_secrets") if isinstance(state.get("inventory_secrets"), dict) else {}
+    deliveries: list[dict[str, str]] = []
+    for gift in queued:
+        item_id = str(gift.get("item") or "").strip()
+        if item_id not in INVENTORY_ITEMS or bool(inventory.get(item_id)):
+            continue
+        configured_at = str(gift.get("queued_at") or now_beijing_iso())
+        configured_by = str(gift.get("giver") or state.get("captor") or "")
+        entries = [str(entry).strip() for entry in gift.get("entries") or [] if str(entry).strip()]
+        inventory[item_id] = True
+        if item_id == "call_bell":
+            voice_line = str(gift.get("voice_line") or "").strip()
+            state["call_bell_voice"] = {
+                "line": voice_line,
+                "revealed": False,
+                "configured_by": configured_by,
+                "configured_at": configured_at,
+            }
+            inventory_secrets[item_id] = {
+                "title": "",
+                "content": voice_line,
+                "entries": [voice_line] if voice_line else [],
+                "revealed_count": 0,
+                "revealed": False,
+                "configured_by": configured_by,
+                "configured_at": configured_at,
+            }
+        else:
+            if not entries:
+                default_content = str(INVENTORY_SECRET_DEFAULTS.get(item_id) or "")
+                entries = [default_content] if default_content else []
+            inventory_secrets[item_id] = {
+                "title": str(gift.get("title") or "").strip() if item_id == "book" else "",
+                "content": entries[0] if entries else "",
+                "entries": entries,
+                "revealed_count": 0,
+                "revealed": False,
+                "configured_by": configured_by,
+                "configured_at": configured_at,
+            }
+        deliveries.append({
+            "item": item_id,
+            "label": str(gift.get("label") or (INVENTORY_ITEMS.get(item_id) or {}).get("label") or item_id),
+            "title": str(gift.get("title") or "").strip() if item_id == "book" else "",
+            "note": str(gift.get("note") or "").strip(),
+            "giver": configured_by,
+        })
+    state["inventory"] = inventory
+    state["inventory_secrets"] = inventory_secrets
+    state["pending_gifts"] = []
+    if deliveries:
+        current = [item for item in state.get("night_gift_deliveries") or [] if isinstance(item, dict)]
+        state["night_gift_deliveries"] = [*current, *deliveries]
+        pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else None
+        if pending and str(pending.get("type") or "") == "night_action_choice":
+            pending["available_actions"] = _available_night_actions(state)
+            pending["detail_options"] = _night_detail_options_for_state(state)
+            pending["gift_deliveries"] = deepcopy(state["night_gift_deliveries"])
+    return deliveries
+
+
 def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enabled: bool) -> tuple[bool, list[str]]:
     items = _split_csv(args.get("items") or args.get("item"))
     if not items:
@@ -3490,12 +3602,15 @@ def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enab
         return False, ["未知物品：" + " / ".join(invalid)]
     inventory = state.get("inventory") if isinstance(state.get("inventory"), dict) else {}
     inventory_secrets = state.get("inventory_secrets") if isinstance(state.get("inventory_secrets"), dict) else {}
+    pending_gifts = [item for item in state.get("pending_gifts") or [] if isinstance(item, dict)]
+    queued_ids = {str(item.get("item") or "") for item in pending_gifts}
     voice_line = str(args.get("voice_line") or args.get("voice") or "").strip()
     secret_content = str(args.get("secret") or args.get("easter_egg") or args.get("彩蛋") or "").strip()
     book_title = str(args.get("book_title") or args.get("title") or args.get("书名") or "").strip()
+    gift_note = str(args.get("note") or args.get("message") or args.get("附言") or "").strip()
     new_progressive_items = [
         item for item in items
-        if item in PROGRESSIVE_SECRET_ITEMS and enabled and not bool(inventory.get(item))
+        if item in PROGRESSIVE_SECRET_ITEMS and enabled and not bool(inventory.get(item)) and item not in queued_ids
     ]
     if new_progressive_items and len(items) != 1:
         return False, ["使用过的物品需要逐件赠送，并分别填写 5 至 8 条使用痕迹。"]
@@ -3514,6 +3629,7 @@ def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enab
         progressive_item
         and enabled
         and not bool(inventory.get(progressive_item))
+        and progressive_item not in queued_ids
         and len(secret_entries) < MIN_INVENTORY_SECRET_ENTRIES
     ):
         return False, [f"赠送使用过的物品前，需要按行填写至少 {MIN_INVENTORY_SECRET_ENTRIES} 条使用痕迹。"]
@@ -3521,12 +3637,12 @@ def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enab
         return False, [f"使用痕迹最多填写 {MAX_INVENTORY_SECRET_ENTRIES} 条。"]
     if any(len(entry) > 200 for entry in secret_entries) or len(secret_content) > 1000:
         return False, ["每条使用痕迹最多 200 字，总计不能超过 1000 字。"]
-    if enabled and "book" in items and not bool(inventory.get("book")):
+    if enabled and "book" in items and not bool(inventory.get("book")) and "book" not in queued_ids:
         if not book_title:
             return False, ["赠送书之前，需要先填写书名。"]
         if len(book_title) > 100:
             return False, ["书名最多 100 字。"]
-    if enabled and "call_bell" in items and not bool(inventory.get("call_bell")):
+    if enabled and "call_bell" in items and not bool(inventory.get("call_bell")) and "call_bell" not in queued_ids:
         if not voice_line:
             return False, ["赠送语音铃前，囚禁方需要先设置按下时播放的台词。"]
         forbidden = _first_forbidden([voice_line])
@@ -3534,63 +3650,64 @@ def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enab
             return False, [f"包含禁用项：{forbidden}"]
         if len(voice_line) > 500:
             return False, ["语音铃台词不能超过 500 字。"]
+    if len(gift_note) > 500:
+        return False, ["礼物附言不能超过 500 字。"]
     changed: list[str] = []
     labels: list[str] = []
-    for item_id in items:
-        label = str((INVENTORY_ITEMS.get(item_id) or {}).get("label") or item_id)
-        labels.append(label)
-        if bool(inventory.get(item_id)) == enabled:
-            continue
-        inventory[item_id] = enabled
-        changed.append(item_id)
-    state["inventory"] = inventory
-    if "call_bell" in changed:
-        if enabled:
-            state["call_bell_voice"] = {
-                "line": voice_line,
-                "revealed": False,
-                "configured_by": str(state.get("captor") or ""),
-                "configured_at": now_beijing_iso(),
-            }
-            inventory_secrets["call_bell"] = {
-                "content": voice_line,
-                "entries": [voice_line],
-                "revealed_count": 0,
-                "revealed": False,
-                "configured_by": str(state.get("captor") or ""),
-                "configured_at": now_beijing_iso(),
-            }
-        else:
-            state["call_bell_voice"] = {
-                "line": "",
-                "revealed": False,
-                "configured_by": "",
-                "configured_at": "",
-            }
-            inventory_secrets["call_bell"] = _empty_inventory_secret()
-    for item_id in changed:
-        if item_id == "call_bell":
-            continue
-        if enabled:
+    if enabled:
+        for item_id in items:
+            label = str((INVENTORY_ITEMS.get(item_id) or {}).get("label") or item_id)
+            labels.append(label)
+            if bool(inventory.get(item_id)) or item_id in queued_ids:
+                continue
             entries = secret_entries or [str(INVENTORY_SECRET_DEFAULTS.get(item_id) or "")]
-            entries = [entry for entry in entries if entry]
-            inventory_secrets[item_id] = {
+            pending_gifts.append({
+                "item": item_id,
+                "label": label,
                 "title": book_title if item_id == "book" else "",
-                "content": entries[0] if entries else "",
-                "entries": entries,
-                "revealed_count": 0,
-                "revealed": False,
-                "configured_by": str(state.get("captor") or ""),
-                "configured_at": now_beijing_iso(),
-            }
-        else:
+                "entries": [entry for entry in entries if entry] if item_id != "call_bell" else [],
+                "voice_line": voice_line if item_id == "call_bell" else "",
+                "note": gift_note,
+                "giver": str(state.get("captor") or ""),
+                "queued_at": now_beijing_iso(),
+            })
+            changed.append(item_id)
+        state["pending_gifts"] = pending_gifts
+        delivered_now = _deliver_pending_gifts_for_night(state)
+    else:
+        delivered_now = []
+        for item_id in items:
+            label = str((INVENTORY_ITEMS.get(item_id) or {}).get("label") or item_id)
+            labels.append(label)
+            was_queued = item_id in queued_ids
+            was_delivered = bool(inventory.get(item_id))
+            if not was_queued and not was_delivered:
+                continue
+            pending_gifts = [gift for gift in pending_gifts if str(gift.get("item") or "") != item_id]
+            inventory[item_id] = False
             inventory_secrets[item_id] = _empty_inventory_secret()
-    state["inventory_secrets"] = inventory_secrets
-    pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else None
-    if pending and str(pending.get("type") or "") == "night_action_choice":
-        pending["available_actions"] = _available_night_actions(state)
+            if item_id == "call_bell":
+                state["call_bell_voice"] = {
+                    "line": "",
+                    "revealed": False,
+                    "configured_by": "",
+                    "configured_at": "",
+                }
+            changed.append(item_id)
+        state["pending_gifts"] = pending_gifts
+        state["inventory"] = inventory
+        state["inventory_secrets"] = inventory_secrets
+        state["night_gift_deliveries"] = [
+            gift for gift in state.get("night_gift_deliveries") or []
+            if isinstance(gift, dict) and str(gift.get("item") or "") not in set(items)
+        ]
+        pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else None
+        if pending and str(pending.get("type") or "") == "night_action_choice":
+            pending["available_actions"] = _available_night_actions(state)
+            pending["detail_options"] = _night_detail_options_for_state(state)
+            pending["gift_deliveries"] = deepcopy(state["night_gift_deliveries"])
     if not changed:
-        state_label = "已赠送" if enabled else "已收回"
+        state_label = "已安排发放或已赠送" if enabled else "已收回"
         return True, [f"这些物品已经处于{state_label}状态：" + "、".join(labels)]
     action = "gift_item" if enabled else "revoke_item"
     changed_labels = [
@@ -3599,7 +3716,11 @@ def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enab
         else str((INVENTORY_ITEMS.get(item_id) or {}).get("label") or item_id)
         for item_id in changed
     ]
-    summary = ("赠送礼物：" if enabled else "收回物品：") + "、".join(changed_labels)
+    summary = (
+        ("今晚已发放礼物：" if delivered_now else "已加入今晚待发放：")
+        if enabled
+        else "收回物品："
+    ) + "、".join(changed_labels)
     _append_event(
         state,
         action,
@@ -3612,8 +3733,11 @@ def _change_inventory_items(state: dict[str, Any], args: dict[str, Any], *, enab
         "enabled": enabled,
         "items": changed,
         "labels": changed_labels,
+        "status": "delivered" if delivered_now else ("queued" if enabled else "revoked"),
     }
-    return True, [summary + "。本次不占用白天行动。"]
+    if enabled and gift_note:
+        event["gift_note"] = gift_note
+    return True, [summary + "。本次不占用白天行动，也不会单独同步。"]
 
 
 def _event_draft(
@@ -3815,6 +3939,7 @@ def _maybe_create_night_action_choice_pending(state: dict[str, Any]) -> None:
         return
     if str(state.get("phase") or "") != "night":
         return
+    _deliver_pending_gifts_for_night(state)
     if str(state.get("captive") or "") != "du":
         return
     condition = _active_night_condition(state)
@@ -3831,6 +3956,7 @@ def _maybe_create_night_action_choice_pending(state: dict[str, Any]) -> None:
         "condition_prompt": str((condition or {}).get("prompt") or ""),
         "condition_caption": str((condition or {}).get("caption") or ""),
         "pet_rule_prompt": _pet_night_rule_prompt(state),
+        "gift_deliveries": deepcopy(state.get("night_gift_deliveries") or []),
         "required_directive": "【夜间行动：action=sleep line=可选台词】",
         "created_at": now_beijing_iso(),
     }
@@ -3838,6 +3964,7 @@ def _maybe_create_night_action_choice_pending(state: dict[str, Any]) -> None:
 
 def _finish_night(state: dict[str, Any]) -> None:
     state["night_condition"] = None
+    state["night_gift_deliveries"] = []
     if int(state.get("current_day") or 1) >= TOTAL_DAYS:
         _finalize_preset_ending(state)
         return
@@ -4611,7 +4738,16 @@ def _result(state: dict[str, Any], lines: list[str], *, command: str, ok: bool =
 
 def _view_state(state: dict[str, Any], view: str) -> dict[str, Any]:
     pending = _view_pending(state.get("pending_event"), view)
-    events = [_view_event(item, view) for item in state.get("event_log") or [] if isinstance(item, dict)]
+    events = [
+        _view_event(item, view)
+        for item in state.get("event_log") or []
+        if isinstance(item, dict)
+        and not (
+            view != "captor"
+            and str(item.get("action") or "") == "gift_item"
+            and str((item.get("inventory_change") or {}).get("status") or "") == "queued"
+        )
+    ]
     status = _status_profile(state)
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -4640,6 +4776,7 @@ def _view_state(state: dict[str, Any], view: str) -> dict[str, Any]:
         "game_over": bool(state.get("game_over")),
         "result": str(state.get("result") or ""),
         "night_condition": _view_night_condition(_active_night_condition(state), view),
+        "night_gift_deliveries": deepcopy(state.get("night_gift_deliveries") or []),
         "night_detail_options": _night_detail_options_for_state(state),
         "status_flags": deepcopy(status["flags"]),
         "intensity_cap": str(status["intensity_cap"]),
@@ -4661,6 +4798,7 @@ def _view_state(state: dict[str, Any], view: str) -> dict[str, Any]:
         ]
         payload["inventory"] = deepcopy(state.get("inventory") or {})
         payload["inventory_secrets"] = deepcopy(state.get("inventory_secrets") or {})
+        payload["pending_gifts"] = deepcopy(state.get("pending_gifts") or [])
         payload["call_bell_voice"] = deepcopy(state.get("call_bell_voice") or {})
         payload["deferred_monitor_materials"] = deepcopy(state.get("deferred_monitor_materials") or [])
     else:

@@ -154,6 +154,7 @@ type CaptivityPending = {
   available_night_actions?: string[];
   detail_options?: Record<string, Record<string, string>>;
   status_flags?: StatusFlag[];
+  gift_deliveries?: GiftDelivery[];
   intensity_cap?: string;
   required_directive?: string;
   item_secret?: {
@@ -166,6 +167,20 @@ type CaptivityPending = {
   };
   event?: CaptivityEvent;
   events?: CaptivityEvent[];
+};
+
+type GiftDelivery = {
+  item?: string;
+  label?: string;
+  title?: string;
+  note?: string;
+  giver?: string;
+};
+
+type PendingGift = GiftDelivery & {
+  entries?: string[];
+  voice_line?: string;
+  queued_at?: string;
 };
 
 type DayPlanSpec = {
@@ -216,6 +231,8 @@ type CaptivityView = {
   escape_windows?: Array<Record<string, unknown>>;
   hidden_items?: Array<Record<string, unknown>>;
   inventory?: Record<string, boolean | undefined>;
+  pending_gifts?: PendingGift[];
+  night_gift_deliveries?: GiftDelivery[];
   inventory_secrets?: Record<string, {
     title?: string;
     content?: string;
@@ -1701,6 +1718,16 @@ function shouldResumeGame(payload: CaptivityPayload): boolean {
   return hasMeaningfulProgress(view);
 }
 
+function isWaitingForDuDayPlan(payload: CaptivityPayload | null): boolean {
+  if (payloadRoute(payload) !== "captured_by_du") return false;
+  const view = viewFromPayload(payload);
+  const pending = view.pending_event;
+  return String(view.phase || "day") === "day"
+    && !(view.day_plan || []).length
+    && String(pending?.type || "") === "day_plan_choice"
+    && String(pending?.actor || "") === "du";
+}
+
 const COMMAND_ARG_PATTERN = /\b(?:action|intensity|intent|modifiers|tools|contents|training_contents|source|additive|response|mood|line|day|hint|bait)=/;
 
 const PENDING_LABELS: Record<string, string> = {
@@ -1839,13 +1866,13 @@ async function syncCaptivityToDu(
       body: JSON.stringify({ save_id: SAVE_ID, mode, message, user_initiated: userInitiated }),
     });
     if (!payload?.ok && !["applied", "applied_with_warning"].includes(String(payload?.sync_result || ""))) {
-      throw new Error(payload?.message || payload?.error || "同步渡失败");
+      throw new Error(payload?.message || payload?.error || payload?.player_text || "同步渡失败");
     }
     return payload;
   } catch (e) {
     const maybePayload = e instanceof ApiError ? e.payload : null;
-    if (maybePayload?.state || maybePayload?.captive_view || maybePayload?.captor_view) {
-      return maybePayload as CaptivityPayload;
+    if (maybePayload) {
+      throw new Error(maybePayload.message || maybePayload.error || maybePayload.player_text || "同步渡失败");
     }
     throw e;
   }
@@ -2303,6 +2330,7 @@ function ToolSelectGrid({
 
 function InventoryWarehouse({
   activeItems,
+  pendingGifts,
   inventorySecrets,
   callBellVoice,
   disabled,
@@ -2313,14 +2341,18 @@ function InventoryWarehouse({
   inventorySecrets?: CaptivityView["inventory_secrets"];
   callBellVoice?: CaptivityView["call_bell_voice"];
   disabled?: boolean;
-  onGiftInventoryItem: (itemId: InventoryItemId, secret?: string, title?: string) => void;
+  pendingGifts?: PendingGift[];
+  onGiftInventoryItem: (itemId: InventoryItemId, secret?: string, title?: string, note?: string) => void;
   onRevokeInventoryItem: (itemId: InventoryItemId) => void;
 }) {
   const [selectedItem, setSelectedItem] = useState<InventoryItemId | "">("");
   const [itemSecretText, setItemSecretText] = useState("");
   const [bookTitle, setBookTitle] = useState("");
+  const [giftNote, setGiftNote] = useState("");
   const selectedOption = INVENTORY_OPTIONS.find((item) => item.id === selectedItem);
-  const selectedActive = selectedItem ? Boolean(activeItems[selectedItem]) : false;
+  const selectedDelivered = selectedItem ? Boolean(activeItems[selectedItem]) : false;
+  const selectedQueued = selectedItem ? pendingGifts?.some((item) => item.item === selectedItem) || false : false;
+  const selectedActive = selectedDelivered || selectedQueued;
   const progressiveCopy = selectedItem ? PROGRESSIVE_SECRET_COPY[selectedItem] : undefined;
   const selectedSecret = selectedItem ? inventorySecrets?.[selectedItem] : undefined;
   const selectedEntries = selectedSecret?.entries || [];
@@ -2331,10 +2363,11 @@ function InventoryWarehouse({
   function handleItemAction() {
     if (!selectedItem) return;
     if (selectedActive) onRevokeInventoryItem(selectedItem);
-    else onGiftInventoryItem(selectedItem, itemSecretText.trim() || undefined, bookTitle.trim() || undefined);
+    else onGiftInventoryItem(selectedItem, itemSecretText.trim() || undefined, bookTitle.trim() || undefined, giftNote.trim() || undefined);
     setSelectedItem("");
     setItemSecretText("");
     setBookTitle("");
+    setGiftNote("");
   }
 
   return (
@@ -2345,25 +2378,27 @@ function InventoryWarehouse({
       <div className="warehouse-grid">
         {INVENTORY_OPTIONS.map((item) => {
           const active = Boolean(activeItems[item.id]);
+          const queued = pendingGifts?.some((gift) => gift.item === item.id) || false;
           const itemTitle = item.id === "book" ? inventorySecrets?.book?.title?.trim() : "";
           return (
             <button
-              className={`warehouse-tile ${active ? "active" : ""} ${selectedItem === item.id ? "selected" : ""}`}
+              className={`warehouse-tile ${active || queued ? "active" : ""} ${selectedItem === item.id ? "selected" : ""}`}
               type="button"
               aria-pressed={active}
-              aria-label={`${item.label}，${active ? "已赠送" : "可赠送"}`}
+              aria-label={`${item.label}，${queued ? "待发放" : active ? "已赠送" : "可赠送"}`}
               disabled={disabled}
               key={item.id}
               onClick={() => {
                 setSelectedItem(item.id);
                 setItemSecretText("");
                 setBookTitle("");
+                setGiftNote("");
               }}
             >
               <PaintedIcon kind={item.id} />
               <span className="warehouse-name">{itemTitle ? `《${itemTitle}》` : item.label}</span>
               <span className="warehouse-use">{item.usage}</span>
-              <span className="warehouse-state">{active ? "已赠送" : "可赠送"}</span>
+              <span className="warehouse-state">{queued ? "待发放" : active ? "已赠送" : "可赠送"}</span>
             </button>
           );
         })}
@@ -2373,7 +2408,7 @@ function InventoryWarehouse({
           <div>
             <div className="warehouse-menu-title">{selectedOption.label}</div>
             <div className="warehouse-menu-use">{selectedOption.usage}</div>
-            <div className="warehouse-menu-state">{selectedActive ? "已赠送" : "未赠送"}</div>
+            <div className="warehouse-menu-state">{selectedQueued ? "今晚待发放" : selectedDelivered ? "已赠送" : "未赠送"}</div>
           </div>
           {!selectedActive ? (
             <>
@@ -2411,6 +2446,15 @@ function InventoryWarehouse({
               {progressiveCopy ? (
                 <div className="warehouse-menu-state">已填写 {draftEntryCount} 条，需要 {MIN_PROGRESSIVE_SECRET_ENTRIES}–{MAX_PROGRESSIVE_SECRET_ENTRIES} 条</div>
               ) : null}
+              <div className="warehouse-secret-label">附言（可选）</div>
+              <textarea
+                className="warehouse-voice-input"
+                value={giftNote}
+                maxLength={500}
+                disabled={disabled}
+                placeholder="这句话会在今晚发放礼物时一起出现"
+                onChange={(event) => setGiftNote(event.target.value)}
+              />
             </>
           ) : null}
           {selectedActive && (selectedItem === "call_bell" ? callBellVoice?.line : selectedSecret?.content || selectedEntries.length) ? (
@@ -2453,6 +2497,7 @@ function InventoryWarehouse({
                 setSelectedItem("");
                 setItemSecretText("");
                 setBookTitle("");
+                setGiftNote("");
               }}
             >取消</button>
           </div>
@@ -2576,7 +2621,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
 
   const eventLog = useMemo(() => view.event_log || [], [view.event_log]);
   const latestEvent = eventLog[eventLog.length - 1];
-  const currentEvent = pending?.event || latestEvent;
+  const currentEvent = pending?.event || (pendingType === "escape_choice" ? undefined : latestEvent);
   const availableNightActions = view.available_night_actions?.length
     ? view.available_night_actions
     : pending?.available_actions?.length
@@ -2729,6 +2774,29 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         lastSceneKeyRef.current = String(refreshedView.scene_copy?.key || "");
       }
       applyPayload(next);
+      if (isWaitingForDuDayPlan(next)) {
+        const message = "渡的安排还没有写入存档。";
+        lastFailedRetryRef.current = () => {
+          void runWithWait(
+            "正在等待渡写下今天的安排...",
+            "STATUS: WAITING_FOR_DAY_PLAN",
+            async () => {
+              const synced = await syncCaptivityToDu("state_update", "", true);
+              if (isWaitingForDuDayPlan(synced)) throw new Error(message);
+              return synced;
+            },
+          );
+        };
+        setHasFailedRetry(true);
+        setWait({
+          visible: true,
+          title: "安排尚未完成",
+          detail: message,
+          error: message,
+        });
+        setScreen("game");
+        return;
+      }
       if (!silent) {
         lastFailedRetryRef.current = null;
         setHasFailedRetry(false);
@@ -2760,7 +2828,7 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         error: message,
       });
     }
-  }, [applyPayload, previewRole]);
+  }, [applyPayload, previewRole, runWithWait]);
 
   function retryLastFailedOperation() {
     lastFailedRetryRef.current?.();
@@ -2862,17 +2930,41 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       setPlanSlots(defaultPlanSlots());
       return;
     }
+    if (nextRoute === "captured_by_du") {
+      let initialized = false;
+      const startCapturedRoute = async () => {
+        if (!initialized) {
+          const created = await executeCaptivityCommand("new_game route=captured_by_du");
+          initialized = true;
+          applyPayload(created);
+        }
+        const next = await syncCaptivityToDu("state_update", "", true);
+        if (isWaitingForDuDayPlan(next)) {
+          throw new Error(next.player_text || next.message || next.error || "渡的安排还没有写入存档。");
+        }
+        setScreen("game");
+        setFooterTab("status");
+        setPlanSlots(defaultPlanSlots());
+        return next;
+      };
+      void runWithWait(
+        "正在等待渡写下今天的安排...",
+        "STATUS: WAITING_FOR_DAY_PLAN",
+        startCapturedRoute,
+      );
+      return;
+    }
     void runWithWait(
       "正在建立囚禁档案...",
       "STATUS: INITIALIZING ROUTE",
-      () => executeCaptivityCommand(`new_game route=${nextRoute}`),
-    ).then((next) => {
-      if (!next) return;
-      setScreen("game");
-      setFooterTab("status");
-      setPlanSlots(defaultPlanSlots());
-      continueAutomaticSync(next, false, true);
-    });
+      async () => {
+        const next = await executeCaptivityCommand("new_game route=capture_du");
+        setScreen("game");
+        setFooterTab("status");
+        setPlanSlots(defaultPlanSlots());
+        return next;
+      },
+    );
   }
 
   function returnToSelector() {
@@ -3310,12 +3402,17 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
     const waitingForDuNext = String(nextView.pending_event?.actor || "") === "du";
     const endingNext = String(nextView.phase || "") === "ending" || nextPendingType.startsWith("ending_") || Boolean(nextView.ending_state);
     if (!force && !waitingForDuNext && !endingNext) return false;
-    const runSync = () => syncDu(endingNext ? "ending" : "state_update", next, background, playerMessage);
+    const runSync = (syncInBackground = background) => syncDu(endingNext ? "ending" : "state_update", next, syncInBackground, playerMessage);
     const scene = nextView.scene_copy;
     const sceneKey = String(scene?.key || "");
     if (scene && sceneKey && sceneKey !== lastSceneKeyRef.current) {
       lastSceneKeyRef.current = sceneKey;
-      playSceneTransition(scene, runSync);
+      if (nextPendingType === "escape_choice") {
+        playSceneTransition(scene);
+        runSync(true);
+      } else {
+        playSceneTransition(scene, runSync);
+      }
       return true;
     }
     runSync();
@@ -3788,29 +3885,35 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
     );
   }
 
-  function applyInventoryItem(itemId: InventoryItemId, enabled: boolean, secret = "", title = "") {
+  function applyInventoryItem(itemId: InventoryItemId, enabled: boolean, secret = "", title = "", note = "") {
     if (previewRole) {
       setPayload((previous) => {
         if (!previous) return previous;
         const previewCaptorView = previous.captor_view || {};
+        const queuedGifts = (previewCaptorView.pending_gifts || []).filter((gift) => gift.item !== itemId);
+        const nextInventorySecrets = { ...(previewCaptorView.inventory_secrets || {}) };
+        if (!enabled) {
+          nextInventorySecrets[itemId] = { content: "", revealed: false, configured_by: "", configured_at: "" };
+        }
         return {
           ...previous,
           captor_view: {
             ...previewCaptorView,
             inventory: {
               ...(previewCaptorView.inventory || {}),
-              [itemId]: enabled,
+              [itemId]: enabled ? Boolean(previewCaptorView.inventory?.[itemId]) : false,
             },
-            inventory_secrets: {
-              ...(previewCaptorView.inventory_secrets || {}),
-              [itemId]: enabled
-                ? { title: itemId === "book" ? title : "", content: secret || "默认彩蛋", revealed: false, configured_by: "xinyue", configured_at: "preview-local" }
-                : { content: "", revealed: false, configured_by: "", configured_at: "" },
-            },
+            pending_gifts: enabled
+              ? [...queuedGifts, {
+                item: itemId,
+                label: INVENTORY_OPTIONS.find((item) => item.id === itemId)?.label || itemId,
+                title: itemId === "book" ? title : "",
+                note,
+              }]
+              : queuedGifts,
+            inventory_secrets: nextInventorySecrets,
             call_bell_voice: itemId === "call_bell"
-              ? (enabled
-                ? { line: secret, revealed: false, configured_by: "xinyue", configured_at: "preview-local" }
-                : { line: "", revealed: false, configured_by: "", configured_at: "" })
+              ? (enabled ? previewCaptorView.call_bell_voice : { line: "", revealed: false, configured_by: "", configured_at: "" })
               : previewCaptorView.call_bell_voice,
           },
         };
@@ -3821,9 +3924,9 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
       enabled ? "正在赠送物品..." : "正在收回物品...",
       "STATUS: UPDATING INVENTORY",
       () => executeCaptivityCommand(
-        `${enabled ? "gift_item" : "revoke_item"} items=${itemId}${enabled && itemId === "book" ? ` book_title=${quoteArg(title)}` : ""}${enabled && itemId === "call_bell" ? ` voice_line=${quoteArg(secret)}` : enabled && secret ? ` secret=${quoteArg(secret)}` : ""}`,
+        `${enabled ? "gift_item" : "revoke_item"} items=${itemId}${enabled && itemId === "book" ? ` book_title=${quoteArg(title)}` : ""}${enabled && itemId === "call_bell" ? ` voice_line=${quoteArg(secret)}` : enabled && secret ? ` secret=${quoteArg(secret)}` : ""}${enabled && note ? ` note=${quoteArg(note)}` : ""}`,
       ),
-    ).then((next) => continueAutomaticSync(next, true));
+    );
   }
 
   function closeSubpage() {
@@ -4073,10 +4176,11 @@ export function CaptivitySimulatorGameTab({ onBack }: { onBack: () => void }) {
         {role === "captor" ? (
           <InventoryWarehouse
             activeItems={inventoryActiveItems}
+            pendingGifts={view.pending_gifts || captorView.pending_gifts}
             inventorySecrets={view.inventory_secrets || captorView.inventory_secrets}
             callBellVoice={view.call_bell_voice || captorView.call_bell_voice}
             disabled={busy}
-            onGiftInventoryItem={(itemId, secret, title) => applyInventoryItem(itemId, true, secret, title)}
+            onGiftInventoryItem={(itemId, secret, title, note) => applyInventoryItem(itemId, true, secret, title, note)}
             onRevokeInventoryItem={(itemId) => applyInventoryItem(itemId, false)}
           />
         ) : (
@@ -6261,7 +6365,7 @@ function RuntimePanel({
               </div>
               <div className="event-main">
                 {pendingType === "escape_choice" && waitingForDu
-                  ? "逃跑诱导已经送达渡。"
+                  ? "等待渡选择逃跑回应。"
                   : isRecaptureDecision
                     ? pendingLabel(pending, role)
                     : event.line || event.action_label || publicDirectiveText(pending?.required_directive, pending, role) || (isEnding ? "30 天闭环已完成，等待结局。" : "等待下一段事件。")}
@@ -6306,6 +6410,7 @@ function RuntimePanel({
         <NightActionPanel
           actions={availableNightActions}
           condition={nightCondition}
+          giftDeliveries={pending?.gift_deliveries?.length ? pending.gift_deliveries : view.night_gift_deliveries || []}
           petRulePrompt={petRulePrompt}
           value={nightAction}
           detail={nightDetail}
@@ -6449,7 +6554,7 @@ function renderEventSummary(event: CaptivityEvent, pending: CaptivityPending | n
     feedingRows.length ? `喂食：${feedingRows.join(" / ")}` : "",
     event.action_response?.response_label ? `回应：${event.action_response.response_label} / 心情：${event.action_response.mood || "未选"}` : "",
     event.post_reaction?.mood ? `此刻心情：${event.post_reaction.mood}` : "",
-    event.monitor?.viewed ? `监控：${event.monitor.style || "view"} / ${event.monitor.handle || "未处理"}` : "",
+    event.monitor?.viewed ? `监控：${monitorStyleLabel(event.monitor.style)} / ${monitorHandleLabel(event.monitor.handle)}` : "",
     intervention.intent ? `当场介入：${intervention.intent_label || interventionIntentLabel(intervention.intent)}` : "",
     intervention.modifiers?.length ? `介入附加：${intervention.modifiers.map(interventionModifierLabel).join(" / ")}` : "",
     intervention.training_contents?.length ? `介入调教：${intervention.training_contents.map(trainingContentLabel).join(" / ")}` : "",
@@ -6628,6 +6733,7 @@ function MoodPanel({
 function NightActionPanel({
   actions,
   condition,
+  giftDeliveries,
   petRulePrompt,
   value,
   detail,
@@ -6643,6 +6749,7 @@ function NightActionPanel({
 }: {
   actions: string[];
   condition: NightCondition | null;
+  giftDeliveries: GiftDelivery[];
   petRulePrompt: string;
   value: string;
   detail: string;
@@ -6659,6 +6766,19 @@ function NightActionPanel({
   return (
     <>
       <div className="panel-title">你的安排 <span className="sub">NIGHT</span></div>
+      {giftDeliveries.length ? (
+        <div className="action-card">
+          <div className="action-metadata">今晚收到的礼物</div>
+          {giftDeliveries.map((gift, index) => {
+            const label = gift.title ? `《${gift.title}》` : gift.label || "礼物";
+            return (
+              <div className="event-sub" key={`${gift.item || label}-${index}`}>
+                渡送了你一个礼物「{label}」{gift.note ? `，附言：「${gift.note}」` : ""}。
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
       <div className="action-card">
         {condition?.label ? <div className="action-metadata">{condition.label}</div> : null}
         <div className="event-sub">

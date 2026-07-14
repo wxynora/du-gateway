@@ -32,6 +32,15 @@ def _read(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _enter_night_for_gift_delivery(save_path: Path) -> dict:
+    state = _read(save_path)
+    state["phase"] = "night"
+    state["day_action_count"] = 3
+    state["pending_event"] = None
+    save_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    return run_command("status", save_path=save_path)
+
+
 def _plan_three(save_path: Path, *, process_first: bool = False) -> dict:
     plan = (
         "action=training intensity=medium training_contents=obedience_commands modifiers=sex || action=feeding intensity=medium || action=cleaning intensity=light"
@@ -132,7 +141,13 @@ def test_captivity_simulator_history_is_complete_and_day_collapsible() -> None:
         _assert(status["state"]["event_log"][0]["id"] == "history-0", "complete history should preserve chronological order")
 
     frontend = (ROOT / "miniapp/src/ui/tabs/CaptivitySimulatorGameTab.tsx").read_text(encoding="utf-8")
-    _assert("continueAutomaticSync(next, false, true)" in frontend and "continueAutomaticSync(next, true, true)" not in frontend, "captor route should not lock controls behind an unnecessary startup sync")
+    start_route = frontend.split("function startRoute", 1)[1].split("function returnToSelector", 1)[0]
+    captured_start = start_route.split('if (nextRoute === "captured_by_du")', 1)[1].split("void runWithWait(", 1)[0]
+    captor_start = start_route.split('executeCaptivityCommand("new_game route=capture_du")', 1)[1]
+    _assert("startCapturedRoute" in captured_start and 'syncCaptivityToDu("state_update", "", true)' in captured_start, "the captive route should stay in its initial-plan loading flow until the stored plan is ready")
+    _assert('executeCaptivityCommand("new_game route=capture_du")' in start_route and "syncCaptivityToDu" not in captor_start, "the captor route should open its planner without starting any assistant sync")
+    _assert("syncInitialDuDayPlan" not in frontend, "startup should use the shared wait/retry contract instead of a second independent sync loop")
+    _assert("isWaitingForDuDayPlan(next)" in frontend and "STATUS: WAITING_FOR_DAY_PLAN" in frontend, "refresh and startup should keep the loading screen until the assistant day plan is stored")
     _assert('aria-expanded={expandedDays.has(day)}' in frontend and "history-day-group" in frontend, "history UI should group concrete processes into collapsible days")
     _assert("events.filter((event) => Boolean(textLine(event.process_text)))" in frontend, "history UI should exclude events without a concrete process body")
     history_panel = frontend.split("function HistoryPanel", 1)[1].split("function MonitorRoomPanel", 1)[0]
@@ -472,6 +487,8 @@ def test_captivity_simulator_action_contents_and_expanded_tools() -> None:
 
 
 def test_captivity_simulator_inventory_night_actions_and_call_bell() -> None:
+    from routes.miniapp import game_tools
+
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "capture-du-inventory.json"
         run_command("new_game route=capture_du seed=inventory-actions", save_path=save_path)
@@ -479,13 +496,16 @@ def test_captivity_simulator_inventory_night_actions_and_call_bell() -> None:
             "set_config book=true switch=true notebook=true music_player=true tablet=true night_light=true pillow=true",
             save_path=save_path,
         )
-        configured = run_command("gift_item items=call_bell voice_line='本地测试台词'", save_path=save_path)
+        configured = run_command("gift_item items=call_bell voice_line='本地测试台词' note='按下它就会替你说话'", save_path=save_path)
         _assert(configured["ok"] is True, "all inventory items should be configurable")
+        _assert(configured["captor_view"]["pending_gifts"][0]["item"] == "call_bell", "the bell should remain queued during the day")
 
         night_choice = _finish_simple_day_capture_du(save_path)
         available = night_choice["captor_view"]["pending_event"]["available_actions"]
         for action in ("read", "game", "diary", "listen_music", "watch_video", "ring_bell"):
             _assert(action in available, f"inventory should unlock {action}")
+        gift_prompt = game_tools._captivity_simulator_sync_text(night_choice, mode="state_update")
+        _assert("小玥送了你一个礼物「呼叫铃」，附言：「按下它就会替你说话」" in gift_prompt, "du should receive the gift and its note only with the night action menu")
 
         rang = run_command("night_action ring_bell line=过来一下", save_path=save_path)
         _assert(rang["state"]["pending_event"]["type"] == "bell_voice_reveal", "the configured bell should reveal its line on first use")
@@ -551,16 +571,14 @@ def test_captivity_simulator_voice_bell_first_use_privacy() -> None:
         _assert(initial["state"]["inventory"]["call_bell"] is False, "failed gifting must not unlock the bell")
 
         gifted = run_command("gift_item items=call_bell voice_line='只有按下以后才听见'", save_path=save_path)
-        _assert(gifted["ok"] is True and gifted["state"]["inventory"]["call_bell"] is True, "configured voice bell should be gifted")
+        _assert(gifted["ok"] is True and gifted["state"]["inventory"]["call_bell"] is False, "configured voice bell should wait for the nightly delivery")
+        _assert(gifted["captor_view"]["pending_gifts"][0]["item"] == "call_bell", "the configured bell should be visible to the captor as pending delivery")
         _assert("call_bell_voice" not in gifted["state"], "captive state must keep the prerecorded line private")
-        _assert(gifted["captor_view"]["call_bell_voice"]["revealed"] is False, "captor state should record that the line has not played yet")
         _assert("只有按下以后才听见" not in json.dumps(gifted["state"]["event_log"], ensure_ascii=False), "gift history must not leak the line")
 
-        state = _read(save_path)
-        state["phase"] = "night"
-        state["day_action_count"] = 3
-        state["pending_event"] = None
-        save_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        delivered = _enter_night_for_gift_delivery(save_path)
+        _assert(delivered["state"]["inventory"]["call_bell"] is True, "the bell should enter the room when night begins")
+        _assert(delivered["captor_view"]["call_bell_voice"]["revealed"] is False, "the delivered bell should remain unrevealed until first use")
         first_ring = run_command("night_action ring_bell", save_path=save_path)
         first_pending = first_ring["state"]["pending_event"]
         _assert(first_pending["type"] == "bell_voice_reveal", "first ring should pause on the one-time playback reveal")
@@ -614,18 +632,15 @@ def test_captivity_simulator_inventory_secret_first_use_flow() -> None:
             "gift_item items=book book_title='夜航船' secret='第一页折角 || 第十二页批注 || 书签停在中段 || 封底写过日期 || 扉页留着签名'",
             save_path=save_path,
         )
-        _assert(gifted["ok"] is True and gifted["state"]["inventory"]["book"] is True, "a used item should accept five configured traces")
-        _assert(gifted["state"]["inventory_secrets"]["book"]["title"] == "夜航船", "the captive should see the gifted book title")
-        _assert(gifted["captor_view"]["inventory_secrets"]["book"]["title"] == "夜航船", "the captor should retain the configured book title")
-        _assert("content" not in gifted["state"]["inventory_secrets"]["book"], "the captive view must not expose an unrevealed item secret")
-        _assert(len(gifted["captor_view"]["inventory_secrets"]["book"]["entries"]) == 5, "the captor should retain all configured traces")
+        _assert(gifted["ok"] is True and gifted["state"]["inventory"]["book"] is False, "a used item should wait for the nightly delivery")
+        _assert(gifted["captor_view"]["pending_gifts"][0]["title"] == "夜航船", "the captor should retain the queued book title")
+        _assert(len(gifted["captor_view"]["pending_gifts"][0]["entries"]) == 5, "the captor should retain all queued traces")
         _assert("第一页折角" not in json.dumps(gifted["state"]["event_log"], ensure_ascii=False), "gift history must not leak hidden item traces")
 
-        state = _read(save_path)
-        state["phase"] = "night"
-        state["day_action_count"] = 3
-        state["pending_event"] = None
-        save_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        delivered = _enter_night_for_gift_delivery(save_path)
+        _assert(delivered["state"]["inventory_secrets"]["book"]["title"] == "夜航船", "the captive should see the book title only after nightly delivery")
+        _assert("content" not in delivered["state"]["inventory_secrets"]["book"], "the captive view must not expose an unrevealed item secret")
+        _assert(len(delivered["captor_view"]["inventory_secrets"]["book"]["entries"]) == 5, "the delivered book should retain all configured traces")
         first_read = run_command("night_action read detail=inspect_margins", save_path=save_path)
         pending = first_read["state"]["pending_event"]
         _assert(pending["type"] == "item_secret_reveal", "first use should pause on the item-secret reveal")
@@ -670,22 +685,24 @@ def test_captivity_simulator_inventory_secret_first_use_flow() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "default-secret.json"
         run_command("new_game route=captured_by_du seed=default-secret", save_path=save_path)
-        defaulted = run_command("gift_item items=notebook", save_path=save_path)
+        run_command("gift_item items=notebook", save_path=save_path)
+        defaulted = _enter_night_for_gift_delivery(save_path)
         _assert(defaulted["captor_view"]["inventory_secrets"]["notebook"]["content"] == "第一页留给你。", "one-time items should keep their fixed default secret")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         initial = run_command("new_game route=captured_by_du seed=du-secret-command", save_path=Path(tmpdir) / "default.json")
         command = game_tools._captivity_simulator_commands_from_reply(
-            "【赠送物品：book book_title=夜航 船 secret=痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5】",
+            "【赠送物品：book book_title=夜航 船 secret=痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5 附言=今晚再拆】",
             {"captor_view": initial["captor_view"]},
         )
-        _assert(command == ["gift_item items=book book_title='夜航 船' secret='痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5'"], f"du should be able to configure a book title and five item traces in one gift directive: {command}")
+        _assert(command == ["gift_item items=book book_title='夜航 船' secret='痕迹1 || 痕迹2 || 痕迹3 || 痕迹4 || 痕迹5' note='今晚再拆'"], f"du should be able to configure a book title, five item traces, and a note in one gift directive: {command}")
         sync_text = game_tools._captivity_simulator_sync_text(initial, mode="state_update")
         _assert("captivity_simulator_reference" not in sync_text and "category=" not in sync_text, "dynamic system should not repeat tool calls or English reference arguments")
         from services.captivity_simulator_reference import get_reference
 
         inventory_reference = get_reference("物品")
         _assert("5 至 8 条使用痕迹" in inventory_reference and "每次使用只发现下一条" in inventory_reference, "inventory reference should retain progressive item trace rules")
+        _assert("入夜后统一发放" in inventory_reference and "不会单独触发同步" in inventory_reference, "inventory reference should explain the queued nightly delivery rule")
 
     frontend = (ROOT / "miniapp/src/ui/tabs/CaptivitySimulatorGameTab.tsx").read_text(encoding="utf-8")
     _assert("ItemSecretRevealPanel" in frontend and "ack_item_secret" in frontend, "the frontend should render and acknowledge generic item-secret reveals")
@@ -1006,6 +1023,47 @@ def test_captivity_simulator_future_escape_window_and_non_escape_choice() -> Non
         _assert(observed["state"]["pending_event"]["type"] == "day_plan_choice", "non-escape choice should return to normal day planning")
         _assert(observed["state"]["event_log"][-1]["escape"]["choice"] == "observe", "non-escape choice should be logged")
         _assert(observed["captor_view"]["event_log"][-1]["escape"]["choice_label"] == "观察", "non-escape choice should notify captor view")
+
+
+def test_captivity_simulator_capture_du_projected_escape_prompt() -> None:
+    from routes.miniapp import game_tools
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_path = Path(tmpdir) / "capture-du-escape.json"
+        run_command("new_game route=capture_du seed=projected-escape", save_path=save_path)
+        run_command("schedule_escape_window day=2 hint=小玥今天有事出去了 bait=备用钥匙在玄关", save_path=save_path)
+        state = _read(save_path)
+        state["phase"] = "night"
+        state["day_action_count"] = 3
+        state["pending_event"] = {
+            "type": "monitor_gate",
+            "actor": "xinyue",
+            "event": {
+                "id": "night-before-escape",
+                "day": 1,
+                "slot": 0,
+                "phase": "night",
+                "route": "capture_du",
+                "action": "sleep",
+                "action_label": "老实睡觉",
+                "intensity": "light",
+                "modifiers": ["night"],
+                "tools": [],
+                "contents": [],
+                "training_contents": [],
+                "tags": ["night"],
+                "feeding": {},
+                "effects": {},
+            },
+        }
+        save_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+        next_day = run_command("monitor_action none", save_path=save_path)
+        _assert(next_day["captor_view"]["pending_event"]["actor"] == "du", "capture-du escape choice should belong to du")
+        _assert("actor" not in next_day["captive_view"]["pending_event"], "du's captive projection should continue hiding the internal actor field")
+        escape_prompt = game_tools._captivity_simulator_sync_text(next_day, mode="state_update")
+        _assert("小玥今天有事出去了" in escape_prompt and "备用钥匙在玄关" in escape_prompt, "the activated escape prompt should preserve the configured hint and bait")
+        _assert("【选择：尝试逃跑】" in escape_prompt and "【选择：老实待着】" in escape_prompt, "the projected escape pending must still tell du both available choices")
 
 
 def test_captivity_simulator_escape_stay_return_action_both_routes() -> None:
@@ -1593,26 +1651,28 @@ def test_captivity_simulator_du_captor_inventory_commands() -> None:
         _assert(commands == ["gift_item items=notebook,pillow"], f"du one-time-item gift directive should map to the independent gift command: {commands}")
         before_pending = initial["captor_view"]["pending_event"]
         before_count = initial["state"]["day_action_count"]
-        gifted = run_command(commands[0], save_path=save_path)
+        gifted = run_command(commands[0] + " note='今晚再拆'", save_path=save_path)
         voice_commands = game_tools._captivity_simulator_commands_from_reply("【赠送语音铃：替我说出预设台词】", gifted)
         _assert(voice_commands == ["gift_item items=call_bell voice_line='替我说出预设台词'"], f"voice bell directive should preserve the captor's hidden line: {voice_commands}")
         gifted = run_command(voice_commands[0], save_path=save_path)
         _assert(gifted["captor_view"]["pending_event"]["type"] == "day_plan_choice", "gifting should preserve du's day-plan pending")
         _assert(gifted["captor_view"]["pending_event"] == before_pending, "gifting should preserve the complete pending event")
         _assert(gifted["state"]["day_action_count"] == before_count, "gifting must not consume a daytime action")
-        _assert(gifted["state"]["inventory"]["notebook"] is True, "captive view should expose gifted inventory")
+        _assert(gifted["state"]["inventory"]["notebook"] is False, "daytime gifting must not expose or unlock inventory before night")
+        _assert({item["item"] for item in gifted["captor_view"]["pending_gifts"]} == {"notebook", "pillow", "call_bell"}, "the captor should see every queued gift")
         gift_event = gifted["captor_view"]["event_log"][-1]
         _assert(gift_event["action"] == "gift_item" and "out_of_band" in gift_event["tags"], "gifting should be logged as an out-of-band event")
         _assert(gift_event["inventory_change"]["items"] == ["call_bell"], "voice bell gift history should keep the changed item")
         _assert("call_bell_voice" not in gifted["state"], "captive state must not expose the voice bell configuration before first use")
         _assert("替我说出预设台词" not in json.dumps(gift_event, ensure_ascii=False), "gift history must not expose the hidden voice line")
-        _assert(gifted["captor_view"]["call_bell_voice"]["line"] == "替我说出预设台词", "captor state should retain the configured voice line")
+        bell_gift = next(item for item in gifted["captor_view"]["pending_gifts"] if item["item"] == "call_bell")
+        _assert(bell_gift["voice_line"] == "替我说出预设台词", "captor pending state should retain the configured voice line")
         event_count = len(gifted["captor_view"]["event_log"])
         repeated = run_command("gift_item items=notebook", save_path=save_path)
         _assert(len(repeated["captor_view"]["event_log"]) == event_count, "repeating an already-gifted item must not create a duplicate gift event")
-        _assert("已经处于已赠送状态" in repeated["text"], "duplicate gifting should return an explicit already-gifted state")
+        _assert("已经处于已安排发放或已赠送状态" in repeated["text"], "duplicate gifting should return an explicit queued-or-gifted state")
         sync_text = game_tools._captivity_simulator_sync_text(gifted, mode="state_update")
-        _assert("当前已赠送物品：日记本 / 抱枕 / 呼叫铃" in sync_text, "du should see current gifted inventory as Chinese labels before planning")
+        _assert("日记本" not in sync_text and "呼叫铃" not in sync_text, "queued gifts must not enter the captive context before night")
         from services.captivity_simulator_reference import get_reference
 
         inventory_reference = get_reference("物品")
@@ -1626,6 +1686,9 @@ def test_captivity_simulator_du_captor_inventory_commands() -> None:
         night = run_command("respond_action accept mood=平静", save_path=save_path)
         _assert("diary" in night["state"]["available_night_actions"], "du-gifted notebook should unlock diary for the local captive")
         _assert("ring_bell" in night["state"]["available_night_actions"], "du-gifted call bell should unlock ringing")
+        delivered_labels = {item["label"] for item in night["state"]["night_gift_deliveries"]}
+        _assert(delivered_labels == {"日记本", "抱枕", "呼叫铃"}, "all daytime gifts should be distributed together at night")
+        _assert(any(item["note"] == "今晚再拆" for item in night["state"]["night_gift_deliveries"]), "gift notes should arrive with the nightly delivery")
         night_pending = night["state"]["pending_event"]
         night_gift = run_command(
             "gift_item items=tablet secret='浏览记录1 || 浏览记录2 || 浏览记录3 || 浏览记录4 || 浏览记录5'",
@@ -2730,6 +2793,133 @@ def test_captivity_simulator_sync_route_pending_semantics() -> None:
         game_tools._mark_captivity_simulator_sync_activity = old_activity_marker
 
 
+def test_captivity_simulator_sync_delivers_scheduled_escape_chain() -> None:
+    from flask import Blueprint, Flask
+    from routes.miniapp import game_tools
+    from services import conversation_followup
+    from services import reply_channel_context
+
+    app = Flask(__name__)
+    bp = Blueprint("miniapp_escape_followup_test", __name__, url_prefix="/miniapp-api")
+    game_tools.register_routes(bp)
+    app.register_blueprint(bp)
+
+    def make_payload(pending: dict, player_text: str) -> dict:
+        state = {
+            "route": "capture_du",
+            "captor": "xinyue",
+            "captive": "du",
+            "current_day": 2,
+            "total_days": 30,
+            "day_action_count": 0,
+            "day_action_limit": 3,
+            "phase": "day",
+            "stats": {"health": 80, "stamina": 70, "cleanliness": 70, "shame": 20, "intimacy": 20},
+            "pending_event": pending,
+            "event_log": [],
+            "ending_state": "",
+        }
+        return {
+            "ok": True,
+            "text": "【囚禁模拟器】\n" + player_text,
+            "player_text": player_text,
+            "state": deepcopy(state),
+            "captive_view": deepcopy(state),
+            "captor_view": deepcopy(state),
+        }
+
+    night_event = {
+        "id": "night-process",
+        "day": 1,
+        "slot": 0,
+        "phase": "night",
+        "action": "training",
+        "action_label": "夜间介入",
+        "tags": ["night"],
+    }
+    escape_event = {
+        "id": "escape-process",
+        "day": 2,
+        "slot": 0,
+        "phase": "day",
+        "action": "escape_choice",
+        "action_label": "逃跑诱导：尝试逃跑",
+        "tags": ["escape", "recapture"],
+    }
+    payloads = [
+        make_payload(
+            {"type": "process_reaction_write", "actor": "du", "event": night_event},
+            "等待渡完成昨晚的介入经过。",
+        ),
+        make_payload(
+            {
+                "type": "escape_choice",
+                "actor": "du",
+                "hint": "小玥今天出去了",
+                "bait": "备用钥匙在玄关",
+            },
+            "第二天的逃跑诱导已经激活。",
+        ),
+        make_payload(
+            {"type": "process_reaction_write", "actor": "du", "event": escape_event},
+            "渡选择尝试逃跑，等待完整抓回经过。",
+        ),
+        make_payload(
+            {"type": "recapture_rules_choice", "actor": "xinyue", "event": escape_event},
+            "抓回经过已保存，等待囚禁方重新立规矩。",
+        ),
+    ]
+    wakeup_count = {"value": 0}
+    apply_count = {"value": 0}
+    old_execute = game_tools.execute_game_command
+    old_apply = game_tools._apply_captivity_simulator_reply_commands
+    old_wakeup = conversation_followup.send_captivity_simulator_wakeup
+    old_context = reply_channel_context.resolve_recent_reply_context
+    old_activity_marker = game_tools._mark_captivity_simulator_sync_activity
+
+    def fake_execute(game_id: str, command: str, save_id: str) -> dict:
+        _assert(command == "status", f"unexpected direct command: {command}")
+        return payloads[0]
+
+    def fake_apply(
+        save_id: str,
+        reply_text: str,
+        payload: dict | None = None,
+        **_kwargs,
+    ) -> tuple[list[dict], dict]:
+        apply_count["value"] += 1
+        return [{"command": f"step-{apply_count['value']}", "ok": True}], payloads[apply_count["value"]]
+
+    def fake_wakeup(**kwargs) -> dict:
+        wakeup_count["value"] += 1
+        return {"ok": True, "reply_text": f"reply-{wakeup_count['value']}", "reply_preview": "ok"}
+
+    try:
+        game_tools.execute_game_command = fake_execute
+        game_tools._apply_captivity_simulator_reply_commands = fake_apply
+        conversation_followup.send_captivity_simulator_wakeup = fake_wakeup
+        reply_channel_context.resolve_recent_reply_context = lambda default_target="": {
+            "channel": "sumitalk",
+            "window_id": "sumitalk_test",
+            "target": default_target or "device",
+            "meta": {},
+        }
+        game_tools._mark_captivity_simulator_sync_activity = lambda *args, **kwargs: None
+        with app.test_client() as client:
+            response = client.post("/miniapp-api/game-tools/captivity_simulator/sync-du", json={"save_id": "default"})
+            data = response.get_json()
+            _assert(response.status_code == 200 and data["ok"] is True, f"escape followup chain should complete: {data}")
+            _assert(wakeup_count["value"] == 3, "night close, escape choice, and recapture process should use exactly three bounded wakeups")
+            _assert(apply_count["value"] == 3, "each required escape step should apply exactly once")
+            _assert(data["state"]["pending_event"]["type"] == "recapture_rules_choice", "the chain must stop as soon as control returns to the user")
+    finally:
+        game_tools.execute_game_command = old_execute
+        game_tools._apply_captivity_simulator_reply_commands = old_apply
+        conversation_followup.send_captivity_simulator_wakeup = old_wakeup
+        reply_channel_context.resolve_recent_reply_context = old_context
+        game_tools._mark_captivity_simulator_sync_activity = old_activity_marker
+
+
 def test_captivity_simulator_sync_day_plan_uses_one_du_reply() -> None:
     from flask import Blueprint, Flask
     from routes.miniapp import game_tools
@@ -3324,6 +3514,223 @@ def test_captivity_simulator_sync_route_capture_du_returns_to_captor() -> None:
         game_tools._mark_captivity_simulator_sync_activity = old_activity_marker
 
 
+def test_captivity_simulator_sync_high_risk_night_chains_use_local_saves() -> None:
+    from flask import Blueprint, Flask
+    from routes.miniapp import game_tools
+    from services import conversation_followup
+    from services import reply_channel_context
+
+    app = Flask(__name__)
+    bp = Blueprint("miniapp_high_risk_night_test", __name__, url_prefix="/miniapp-api")
+    game_tools.register_routes(bp)
+    app.register_blueprint(bp)
+
+    active_path: dict[str, Path] = {}
+    replies: list[str] = []
+    prompts: list[str] = []
+    old_execute = game_tools.execute_game_command
+    old_wakeup = conversation_followup.send_captivity_simulator_wakeup
+    old_context = reply_channel_context.resolve_recent_reply_context
+    old_activity_marker = game_tools._mark_captivity_simulator_sync_activity
+
+    def fake_execute(game_id: str, command: str, save_id: str) -> dict:
+        _assert(game_id == "captivity_simulator", f"unexpected game id: {game_id}")
+        return run_command(command, save_path=active_path["value"])
+
+    def fake_wakeup(**kwargs) -> dict:
+        prompts.append(str(kwargs.get("event_text") or ""))
+        _assert(bool(replies), "fake assistant reply queue ran dry")
+        reply = replies.pop(0)
+        return {"ok": True, "reply_text": reply, "reply_preview": reply[:120], "channel": "sumitalk"}
+
+    try:
+        game_tools.execute_game_command = fake_execute
+        conversation_followup.send_captivity_simulator_wakeup = fake_wakeup
+        reply_channel_context.resolve_recent_reply_context = lambda default_target="": {
+            "channel": "sumitalk",
+            "window_id": "sumitalk_local_chain",
+            "target": default_target or "device",
+            "meta": {},
+        }
+        game_tools._mark_captivity_simulator_sync_activity = lambda *args, **kwargs: None
+
+        with tempfile.TemporaryDirectory() as tmpdir, app.test_client() as client:
+            root = Path(tmpdir)
+
+            initial_plan_path = root / "captured-initial-plan.json"
+            active_path["value"] = initial_plan_path
+            run_command("new_game route=captured_by_du seed=initial-plan", save_path=initial_plan_path)
+            prompts.clear()
+            replies[:] = [
+                "【今日安排：行动=喂食 强度=低 || 行动=清洗 强度=低 || 行动=看管休息 强度=低 内容=安静待着】",
+            ]
+            initial_sync = client.post(
+                "/miniapp-api/game-tools/captivity_simulator/sync-du",
+                json={"save_id": "local", "mode": "state_update", "user_initiated": True},
+            )
+            initial_payload = initial_sync.get_json()
+            _assert(initial_sync.status_code == 200 and initial_payload["ok"] is True, f"initial captive plan sync should complete: {initial_payload}")
+            _assert(initial_payload["state"]["pending_event"]["type"] == "action_response", "the initial sync should return the first stored action to the captive")
+            refreshed = client.post(
+                "/miniapp-api/game-tools/captivity_simulator",
+                json={"save_id": "local", "command": "status"},
+            )
+            refreshed_payload = refreshed.get_json()
+            _assert(refreshed.status_code == 200 and refreshed_payload["state"]["pending_event"]["type"] == "action_response", "plain status refresh should recover the first stored action without another sync")
+            _assert(refreshed_payload["state"]["pending_event"]["event"]["action"] == "feeding", "refreshed captive state should keep the first action body")
+
+            rejected_plan_path = root / "captured-rejected-plan.json"
+            active_path["value"] = rejected_plan_path
+            run_command("new_game route=captured_by_du seed=rejected-plan", save_path=rejected_plan_path)
+            prompts.clear()
+            replies[:] = [
+                "【今日安排：行动=喂食 强度=低 || 行动=清洗 强度=低 || 行动=看管休息 强度=低 内容=安静独处】",
+            ]
+            rejected_sync = client.post(
+                "/miniapp-api/game-tools/captivity_simulator/sync-du",
+                json={"save_id": "local", "mode": "state_update", "user_initiated": True},
+            )
+            rejected_payload = rejected_sync.get_json()
+            _assert(rejected_sync.status_code == 502 and rejected_payload["ok"] is False, f"a rejected assistant directive must fail the sync request: {rejected_payload}")
+            _assert(rejected_payload["sync_result"] == "directive_rejected", "a rejected directive must not masquerade as a partial success")
+            rejected_refresh = client.post(
+                "/miniapp-api/game-tools/captivity_simulator",
+                json={"save_id": "local", "command": "status"},
+            ).get_json()
+            _assert(rejected_refresh["state"]["pending_event"]["type"] == "day_plan_choice", "a rejected plan must leave the save waiting for a valid day plan")
+
+            skip_path = root / "captured-monitor-skip.json"
+            active_path["value"] = skip_path
+            run_command("new_game route=captured_by_du seed=monitor-skip", save_path=skip_path)
+            _finish_simple_day_captured_by_du(skip_path)
+            run_command("night_action sleep", save_path=skip_path)
+            prompts.clear()
+            replies[:] = [
+                "【选择：不看】",
+                "【今日安排：action=feeding intensity=light || action=cleaning intensity=light || action=rest intensity=light contents=quiet_time】",
+            ]
+            skipped = client.post("/miniapp-api/game-tools/captivity_simulator/sync-du", json={"save_id": "local"})
+            skipped_payload = skipped.get_json()
+            _assert(skipped.status_code == 200 and skipped_payload["ok"] is True, f"monitor skip should close night and plan the next day: {skipped_payload}")
+            _assert(len(prompts) == 2 and not replies, "monitor skip should use one reply for closing night and one reply for the next three-action plan")
+            _assert(skipped_payload["state"]["current_day"] == 2, "monitor skip should advance exactly one game day")
+            _assert(skipped_payload["state"]["pending_event"]["type"] == "action_response", "next-day plan should return control to the local captive")
+            pending_before_gift = deepcopy(_read(skip_path)["pending_event"])
+            prompts.clear()
+            replies[:] = ["【赠送物品：notebook】\n【反应：回应=拒绝 心情=烦躁 台词=不许动】"]
+            gifted_during_local_turn = client.post(
+                "/miniapp-api/game-tools/captivity_simulator/sync-du",
+                json={"save_id": "local", "mode": "chat", "message": "这是我的局内附言"},
+            )
+            gifted_payload = gifted_during_local_turn.get_json()
+            persisted_after_gift = _read(skip_path)
+            _assert(gifted_during_local_turn.status_code == 200 and gifted_payload["ok"] is True, f"out-of-band gift should still work during a local turn: {gifted_payload}")
+            _assert(persisted_after_gift["pending_event"] == pending_before_gift, "assistant reply must not consume or replace a pending choice owned by the local player")
+            _assert(persisted_after_gift["inventory"]["notebook"] is False, "assistant gifting during a local turn must not unlock the item before night")
+            _assert(persisted_after_gift["pending_gifts"][0]["item"] == "notebook", "assistant captor may queue an out-of-band gift without changing the current action")
+
+            intervention_path = root / "captured-monitor-intervention.json"
+            active_path["value"] = intervention_path
+            run_command("new_game route=captured_by_du seed=monitor-intervention", save_path=intervention_path)
+            _finish_simple_day_captured_by_du(intervention_path)
+            run_command("night_action self_touch", save_path=intervention_path)
+            prompts.clear()
+            replies[:] = [
+                "【查看监控：全程看】",
+                "【选择：处理=当场介入 介入=抓现行 附加=调教 调教=口令服从 道具=项圈】",
+                "【过程】\n【【完整夜间介入经过。】】",
+            ]
+            intervened = client.post("/miniapp-api/game-tools/captivity_simulator/sync-du", json={"save_id": "local"})
+            intervened_payload = intervened.get_json()
+            _assert(intervened.status_code == 200 and intervened_payload["ok"] is True, f"captured route monitor intervention should finish in one bounded sync: {intervened_payload}")
+            _assert(len(prompts) == 2 and len(replies) == 1, "view and intervention choice should stop before consuming the process reply")
+            _assert(intervened_payload["state"]["pending_event"]["type"] == "action_response", "intervention should first return to the local captive for a response")
+            responded = run_command("respond_action accept mood=害羞 line=知道了", save_path=intervention_path)
+            _assert(responded["state"]["pending_event"]["type"] == "process_write", "the local response should open the assistant process step")
+            prompts.clear()
+            process_response = client.post("/miniapp-api/game-tools/captivity_simulator/sync-du", json={"save_id": "local"})
+            process_payload = process_response.get_json()
+            _assert(process_response.status_code == 200 and process_payload["ok"] is True, f"intervention process should complete after the local response: {process_payload}")
+            _assert(len(prompts) == 1 and not replies, "the detailed intervention process should use the remaining single assistant reply")
+            _assert(process_payload["state"]["pending_event"]["type"] == "reaction_choice", "completed intervention should wait for the local captive's final mood")
+
+            bell_path = root / "captured-bell-skip.json"
+            active_path["value"] = bell_path
+            run_command("new_game route=captured_by_du seed=bell-skip", save_path=bell_path)
+            run_command("gift_item items=call_bell voice_line='本地测试固定台词'", save_path=bell_path)
+            _finish_simple_day_captured_by_du(bell_path)
+            run_command("night_action ring_bell", save_path=bell_path)
+            run_command("ack_bell_voice", save_path=bell_path)
+            prompts.clear()
+            replies[:] = [
+                "【选择：不过去】",
+                "【今日安排：action=feeding intensity=light || action=cleaning intensity=light || action=rest intensity=light contents=quiet_time】",
+            ]
+            bell_skipped = client.post("/miniapp-api/game-tools/captivity_simulator/sync-du", json={"save_id": "local"})
+            bell_payload = bell_skipped.get_json()
+            _assert(bell_skipped.status_code == 200 and bell_payload["ok"] is True, f"skipping a bell response should not strand the next day: {bell_payload}")
+            _assert(len(prompts) == 2 and bell_payload["state"]["pending_event"]["type"] == "action_response", "bell skip should close night and return a complete next-day plan")
+
+            secrets_path = root / "capture-du-two-secrets.json"
+            active_path["value"] = secrets_path
+            run_command("new_game route=capture_du seed=two-secrets", save_path=secrets_path)
+            run_command("gift_item items=night_light secret='灯的使用痕迹'", save_path=secrets_path)
+            run_command("gift_item items=pillow secret='抱枕的使用痕迹'", save_path=secrets_path)
+            _finish_simple_day_capture_du(secrets_path)
+            prompts.clear()
+            replies[:] = ["【夜间行动：action=sleep】", "【确认彩蛋】", "【确认彩蛋】"]
+            secrets_response = client.post("/miniapp-api/game-tools/captivity_simulator/sync-du", json={"save_id": "local"})
+            secrets_payload = secrets_response.get_json()
+            _assert(secrets_response.status_code == 200 and secrets_payload["ok"] is True, f"two item discoveries should complete without a retry: {secrets_payload}")
+            _assert(len(prompts) == 3 and not replies, "one night action plus two discoveries should use exactly three assistant replies")
+            _assert(secrets_payload["captor_view"]["pending_event"]["type"] == "monitor_gate", "after both discoveries, control should return to the local captor's monitor gate")
+            persisted_secrets = _read(secrets_path)["inventory_secrets"]
+            _assert(persisted_secrets["night_light"]["revealed_count"] == 1 and persisted_secrets["pillow"]["revealed_count"] == 1, "both item discoveries must persist before the monitor step")
+
+            capture_intervention_path = root / "capture-du-intervention.json"
+            active_path["value"] = capture_intervention_path
+            run_command("new_game route=capture_du seed=capture-intervention", save_path=capture_intervention_path)
+            _finish_simple_day_capture_du(capture_intervention_path)
+            prompts.clear()
+            replies[:] = ["【夜间行动：action=self_touch】"]
+            night_choice = client.post("/miniapp-api/game-tools/captivity_simulator/sync-du", json={"save_id": "local"}).get_json()
+            _assert(night_choice["captor_view"]["pending_event"]["type"] == "monitor_gate", "assistant captive's night action should return to the local monitor room")
+            local_monitor_pending = deepcopy(_read(capture_intervention_path)["pending_event"])
+            prompts.clear()
+            replies[:] = ["【查看监控：全程看】"]
+            blocked_monitor = client.post(
+                "/miniapp-api/game-tools/captivity_simulator/sync-du",
+                json={"save_id": "local", "mode": "chat", "message": "我还没有选择是否查看"},
+            )
+            blocked_payload = blocked_monitor.get_json()
+            _assert(blocked_monitor.status_code == 200 and blocked_payload["ok"] is True, f"chat should still be delivered while the monitor belongs to the local player: {blocked_payload}")
+            pending_after_blocked_monitor = _read(capture_intervention_path)["pending_event"]
+            _assert(
+                pending_after_blocked_monitor["id"] == local_monitor_pending["id"]
+                and pending_after_blocked_monitor["type"] == "monitor_gate"
+                and pending_after_blocked_monitor["event"]["id"] == local_monitor_pending["event"]["id"],
+                f"assistant must not open a monitor pending owned by the local captor: before={local_monitor_pending} after={pending_after_blocked_monitor}",
+            )
+            run_command("view_monitor full", save_path=capture_intervention_path)
+            pending_process = run_command(
+                "monitor_action intervene intent=catch modifiers=training training_contents=obedience_commands tools=collar",
+                save_path=capture_intervention_path,
+            )
+            _assert(pending_process["captor_view"]["pending_event"]["type"] == "process_reaction_write", "local captor intervention should request one combined assistant process")
+            prompts.clear()
+            replies[:] = ["【过程心情：回应=接受 心情=害羞】\n【过程】\n【【完整介入经过。】】"]
+            completed = client.post("/miniapp-api/game-tools/captivity_simulator/sync-du", json={"save_id": "local"})
+            completed_payload = completed.get_json()
+            _assert(completed.status_code == 200 and completed_payload["ok"] is True, f"local-captor intervention process should resolve cleanly: {completed_payload}")
+            _assert(len(prompts) == 1 and not replies, "local-captor intervention should need exactly one assistant process reply")
+            _assert(completed_payload["captor_view"]["current_day"] == 2 and completed_payload["captor_view"]["pending_event"] is None, "resolved intervention should enter the next day without another assistant task")
+    finally:
+        game_tools.execute_game_command = old_execute
+        conversation_followup.send_captivity_simulator_wakeup = old_wakeup
+        reply_channel_context.resolve_recent_reply_context = old_context
+        game_tools._mark_captivity_simulator_sync_activity = old_activity_marker
+
+
 def test_captivity_simulator_night_detail_branches_and_privacy() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "night-details.json"
@@ -3567,6 +3974,9 @@ def test_captivity_simulator_scene_copy_and_transition_contract() -> None:
     _assert('<span className="scene-transition-body" style={{ animationDelay:' in frontend and "@keyframes captivitySceneBody" in frontend, "the scene title should stagger while the body fades in as one block")
     _assert('content: "GAME START"' in frontend, "the Switch first-discovery screen should display GAME START")
     _assert('>确认夜间行动</button>' in frontend and '.then((next) => continueAutomaticSync(next))' in frontend, "confirming a night action should save locally and continue into the sync flow")
+    gift_block = frontend.split("function applyInventoryItem", 1)[1].split("function closeSubpage", 1)[0]
+    _assert("continueAutomaticSync" not in gift_block and "note=${quoteArg(note)}" in gift_block, "gifting should only update the save and carry an optional note, never trigger its own sync")
+    _assert("渡送了你一个礼物" in frontend, "the local captive night panel should name the assistant as the gift giver")
     _assert('>同步</button>' not in frontend and 'disabled={disabled || !canRetry}' in frontend, "the footer should expose retry only for a real failed operation instead of duplicating sync")
     monitor_copy_block = frontend.split("const NIGHT_MONITOR_SCENE_COPY", 1)[1].split("};", 1)[0]
     for action_id in ("sleep", "self_touch", "read", "game", "listen_music", "watch_video", "search_exit", "hide_item", "diary", "blind_spot", "ring_bell", "pet_wait"):
@@ -3579,6 +3989,12 @@ def test_captivity_simulator_scene_copy_and_transition_contract() -> None:
     _assert("env(safe-area-inset-top" in frontend and "env(safe-area-inset-bottom" in frontend, "the game should reserve phone safe areas")
     _assert('setMonitorRoomOpen(true);' in frontend and 'executeCaptivityCommand(`view_monitor ${style}`)' in frontend, "viewing a sealed monitor event should enter the full-screen monitor room")
     _assert('advance_to_night' in frontend and '进入夜间' in frontend, "the third captor response should stay visible until an explicit night transition")
+    _assert('pending?.event || (pendingType === "escape_choice" ? undefined : latestEvent)' in frontend, "an escape pending must not render last night's event as the current event")
+    _assert('nextPendingType === "escape_choice"' in frontend and 'runSync(true);' in frontend, "a newly activated escape choice should start syncing before its transition can be interrupted")
+    _assert('逃跑诱导已经送达渡。' not in frontend and '等待渡选择逃跑回应。' in frontend, "the escape card must show a waiting state instead of claiming an unverified delivery")
+    _assert('监控：${monitorStyleLabel(event.monitor.style)} / ${monitorHandleLabel(event.monitor.handle)}' in frontend, "monitor summaries must render Chinese labels instead of backend ids")
+    gift_block = frontend.split("function applyInventoryItem", 1)[1].split("function closeSubpage", 1)[0]
+    _assert("continueAutomaticSync" not in gift_block, "gifting should never start or continue synchronization on its own")
 
     from routes.miniapp.game_tools import _CAPTIVITY_BODY_STATE_DISCLAIMER
     _assert(_CAPTIVITY_BODY_STATE_DISCLAIMER == "这只是游戏里的状态，只影响游戏结局的达成，与你现实状态无关。", "body-state prompt text should keep the game-only disclaimer")
@@ -3608,6 +4024,7 @@ if __name__ == "__main__":
     test_captivity_simulator_recapture_process_and_rules_both_routes()
     test_captivity_simulator_hypnotic_regression_route_is_captured_only()
     test_captivity_simulator_future_escape_window_and_non_escape_choice()
+    test_captivity_simulator_capture_du_projected_escape_prompt()
     test_captivity_simulator_escape_stay_return_action_both_routes()
     test_captivity_simulator_escape_abort_still_enters_recapture()
     test_captivity_simulator_recapture_rules_have_mechanical_effects()
@@ -3627,6 +4044,7 @@ if __name__ == "__main__":
     test_captivity_simulator_archive_compaction()
     test_captivity_simulator_today_completed_summary_enters_last4()
     test_captivity_simulator_sync_route_pending_semantics()
+    test_captivity_simulator_sync_delivers_scheduled_escape_chain()
     test_captivity_simulator_sync_day_plan_uses_one_du_reply()
     test_captivity_simulator_capture_du_day_batch_real_local_loop()
     test_captivity_simulator_sync_route_redacts_du_night_action()
@@ -3634,6 +4052,7 @@ if __name__ == "__main__":
     test_captivity_simulator_sync_route_voice_bell_followup()
     test_captivity_simulator_sync_route_redacts_followup_night_preview()
     test_captivity_simulator_sync_route_capture_du_returns_to_captor()
+    test_captivity_simulator_sync_high_risk_night_chains_use_local_saves()
     test_captivity_simulator_night_detail_branches_and_privacy()
     test_captivity_simulator_local_full_30_day_playthrough_both_routes()
     test_captivity_simulator_status_thresholds_and_mood_effects()

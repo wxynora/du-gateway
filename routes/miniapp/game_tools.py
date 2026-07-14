@@ -1418,15 +1418,29 @@ def _captivity_simulator_commands_from_reply(reply_text: str, payload: dict | No
         enabled = key not in {"收回物品", "收回", "revoke"}
         secret_text = ""
         book_title = ""
-        item_text = value
-        secret_match = re.search(r"(?:^|\s)(?:secret|easter_egg|彩蛋)=(.+)$", value, flags=re.I)
-        if secret_match:
-            secret_text = str(secret_match.group(1) or "").strip()
-            item_text = value[:secret_match.start()].strip()
-        title_match = re.search(r"(?:^|\s)(?:book_title|书名)=(.+)$", item_text, flags=re.I)
-        if title_match:
-            book_title = str(title_match.group(1) or "").strip()
-            item_text = item_text[:title_match.start()].strip()
+        gift_note = ""
+        field_pattern = re.compile(
+            r"(?:^|\s)(secret|easter_egg|彩蛋|book_title|书名|note|message|附言)=",
+            flags=re.I,
+        )
+        field_matches = list(field_pattern.finditer(value))
+        item_text = value[:field_matches[0].start()].strip() if field_matches else value
+        for index, match in enumerate(field_matches):
+            value_end = field_matches[index + 1].start() if index + 1 < len(field_matches) else len(value)
+            field_value = value[match.end():value_end].strip()
+            try:
+                parsed_values = shlex.split(field_value)
+                if len(parsed_values) == 1:
+                    field_value = parsed_values[0]
+            except ValueError:
+                return []
+            normalized_field = str(match.group(1) or "").strip().lower()
+            if normalized_field in {"secret", "easter_egg", "彩蛋"}:
+                secret_text = field_value
+            elif normalized_field in {"book_title", "书名"}:
+                book_title = field_value
+            else:
+                gift_note = field_value
         raw_items = [item.strip() for item in re.split(r"[,，/|\s]+", item_text) if item.strip()]
         item_ids: list[str] = []
         for item in raw_items:
@@ -1440,6 +1454,8 @@ def _captivity_simulator_commands_from_reply(reply_text: str, payload: dict | No
             command += f" book_title={shlex.quote(book_title)}"
         if enabled and secret_text:
             command += f" secret={shlex.quote(secret_text)}"
+        if enabled and gift_note:
+            command += f" note={shlex.quote(gift_note)}"
         commands = [command]
         if rest_text:
             next_commands = _captivity_simulator_commands_from_reply(rest_text, payload)
@@ -1595,10 +1611,18 @@ def _captivity_simulator_day_batch_command(reply_text: str, payload: dict | None
     return f"submit_day_batch payload={shlex.quote(payload_text)}"
 
 
-def _apply_captivity_simulator_reply_commands(save_id: str, reply_text: str, payload: dict | None = None) -> tuple[list[dict], dict | None]:
+def _apply_captivity_simulator_reply_commands(
+    save_id: str,
+    reply_text: str,
+    payload: dict | None = None,
+    *,
+    allow_pending_commands: bool = True,
+) -> tuple[list[dict], dict | None]:
     applied: list[dict] = []
     last_payload: dict | None = None
     commands = _captivity_simulator_commands_from_reply(reply_text, payload)
+    if not allow_pending_commands:
+        commands = [command for command in commands if command.startswith(("gift_item ", "revoke_item "))][:1]
     allowed_count = 2 if commands and commands[0].startswith(("gift_item ", "revoke_item ")) else 1
     for command in commands[:allowed_count]:
         result = execute_game_command("captivity_simulator", command, save_id)
@@ -1686,6 +1710,22 @@ def _captivity_simulator_needs_du_followup(payload: dict | None) -> bool:
     return False
 
 
+def _captivity_simulator_allows_required_followup(current_type: str, next_type: str) -> bool:
+    if current_type == "monitor_gate" and next_type in {"monitor_handle", "day_plan_choice"}:
+        return True
+    if current_type == "monitor_handle" and next_type in {"day_plan_choice", "process_write"}:
+        return True
+    if current_type == "bell_response_choice" and next_type == "day_plan_choice":
+        return True
+    if current_type == "night_action_choice" and next_type in {"bell_voice_reveal", "item_secret_reveal"}:
+        return True
+    if current_type == "item_secret_reveal" and next_type == "item_secret_reveal":
+        return True
+    if next_type == "escape_choice":
+        return True
+    return current_type == "escape_choice" and next_type in {"process_write", "process_reaction_write"}
+
+
 def _captivity_simulator_du_followup_message(payload: dict | None) -> str:
     state = _captivity_simulator_state(payload)
     pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else None
@@ -1741,8 +1781,9 @@ def _captivity_simulator_sync_text(
     if today_completed_lines:
         game_text = f"{game_text}\n今日已完成：{'；'.join(today_completed_lines)}"
     pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else {}
+    control_pending = _captivity_simulator_pending(payload)
     pending_type = str((pending or {}).get("type") or "").strip()
-    pending_actor = str((pending or {}).get("actor") or "").strip()
+    pending_actor = str((control_pending or {}).get("actor") or (pending or {}).get("actor") or "").strip()
     ending_state = str(state.get("ending_state") or "").strip()
     note_text = _clean_captivity_simulator_text(user_message)
     event_context_lines = _captivity_simulator_event_context_lines(pending if isinstance(pending, dict) else {})
@@ -1980,6 +2021,20 @@ def _captivity_simulator_sync_text(
             for item in pending.get("available_actions") or []
             if str(item).strip()
         ]
+        gift_deliveries = [
+            item for item in pending.get("gift_deliveries") or []
+            if isinstance(item, dict) and str(item.get("label") or "").strip()
+        ]
+        gift_lines = []
+        for gift in gift_deliveries:
+            gift_title = str(gift.get("title") or "").strip()
+            gift_label = f"《{gift_title}》" if gift_title else str(gift.get("label") or "礼物").strip()
+            gift_note = str(gift.get("note") or "").strip()
+            gift_lines.append(
+                f"小玥送了你一个礼物「{gift_label}」"
+                + (f"，附言：「{gift_note}」" if gift_note else "")
+                + "。"
+            )
         condition_prompt = str(pending.get("condition_prompt") or "").strip()
         condition_caption = str(pending.get("condition_caption") or "").strip()
         pet_rule_prompt = str(pending.get("pet_rule_prompt") or "").strip()
@@ -1996,6 +2051,7 @@ def _captivity_simulator_sync_text(
         example_args += " 台词=可选台词"
         rule_lines = [
             "夜晚已经开始，现在轮到你决定接下来做什么。",
+            *gift_lines,
             "今晚能做的事：" + " / ".join(NIGHT_ACTIONS.get(item, item) for item in (available_actions or ["sleep", "self_touch", "search_exit", "blind_spot"])) + "。",
             *([f"需要补充具体动向时，可选：{detail_rule}。"] if detail_rule else []),
             *([f"当前状态提示：{condition_prompt}"] if condition_prompt else []),
@@ -2463,9 +2519,15 @@ def register_routes(bp) -> None:
 
         if ok:
             initial_pending_type = str(initial_pending.get("type") or "")
-            max_rounds = 2 if initial_pending_type in {"monitor_gate", "night_action_choice"} else 1
+            current_pending_type = initial_pending_type
+            max_rounds = 3
             for round_index in range(max_rounds):
-                round_commands, applied_payload = _apply_captivity_simulator_reply_commands(save_id, reply_text, payload)
+                round_commands, applied_payload = _apply_captivity_simulator_reply_commands(
+                    save_id,
+                    reply_text,
+                    payload,
+                    allow_pending_commands=_captivity_simulator_needs_du_followup(payload),
+                )
                 applied_reply_commands.extend(round_commands)
                 if applied_payload:
                     payload = applied_payload
@@ -2474,20 +2536,15 @@ def register_routes(bp) -> None:
                 sync_result = "applied"
                 if any(not bool(item.get("ok")) for item in round_commands):
                     ok = False
-                    sync_result = "applied_with_warning"
+                    sync_result = "directive_rejected"
                     break
                 if not _captivity_simulator_needs_du_followup(payload):
                     break
                 next_pending = _captivity_simulator_pending(payload)
+                next_pending_type = str(next_pending.get("type") or "")
                 allow_required_followup = (
-                    round_index == 0
-                    and (
-                        (initial_pending_type == "monitor_gate" and str(next_pending.get("type") or "") == "monitor_handle")
-                        or (
-                            initial_pending_type == "night_action_choice"
-                            and str(next_pending.get("type") or "") in {"bell_voice_reveal", "item_secret_reveal"}
-                        )
-                    )
+                    round_index < max_rounds - 1
+                    and _captivity_simulator_allows_required_followup(current_pending_type, next_pending_type)
                 )
                 if not allow_required_followup:
                     ok = False
@@ -2530,6 +2587,7 @@ def register_routes(bp) -> None:
                 synced_at = now_beijing_iso()
                 wakeup = followup
                 reply_text = followup_reply
+                current_pending_type = next_pending_type
 
         if ok and initial_ending_state == "ending_ready_to_notify":
             notified_payload = execute_game_command("captivity_simulator", "mark_ending_notified", save_id)
@@ -2541,7 +2599,10 @@ def register_routes(bp) -> None:
                 sync_result = "applied_with_warning"
                 wakeup = {"ok": False, "error": "结局已送达渡，但本地通知状态保存失败，请重试。"}
 
-        status_code = 200 if ok or applied_reply_commands else 502
+        partial_success = sync_result == "applied_with_warning" and any(
+            bool(item.get("ok")) for item in applied_reply_commands
+        )
+        status_code = 200 if ok or partial_success else 502
         redact_reply = _captivity_simulator_should_redact_sync_reply(initial_pending, applied_reply_commands)
         redact_day_batch = str(initial_pending.get("type") or "") == "day_batch_response"
         safe_reply_text = (
