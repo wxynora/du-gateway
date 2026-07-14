@@ -29,6 +29,12 @@
 - 两条路线边界：`captured_by_du` 由小玥在前端选择“尝试逃跑 / 老实待着”，不把选择菜单发给渡；`capture_du` 会把第二天逃跑提示、钥匙位置和两项选择完整发给渡，等待渡选择。
 - 已验证：私有版完整囚禁模拟器测试、两条真实规则引擎路线回归、相关 Python 编译、MiniApp 生产构建与 `git diff --check` 通过；开源版 26 项 unittest、开源审计、Web 生产构建与 `git diff --check` 通过。全部使用本地临时存档或假适配器，未访问 R2、线上后端或模型。
 - 该阶段边界：当时私有版与开源版均只完成本地修改；后续提交与推送状态以上方最新条目为准。私有临时分支仍不应直接用当前本地构建产物覆盖线上。
+当前服务器别名（2026-07-10）：
+
+- `ssh du-gateway`：当前腾讯云首尔主网关，走 Tailscale `100.119.107.127`；部署、日志、重启默认都用这个。
+- `ssh du-gateway-public`：当前主网关公网备用入口 `43.155.136.6`。
+- `ssh du-proxy-old`：旧阿里云公网 `47.250.162.10`，现在只保留旧代理/nginx/Tailscale/Fail2ban，不再承载网关业务。
+- `ssh du-proxy-old-ts`：旧代理机 Tailscale `100.92.76.117`，仅用于内网维护。
 
 当前状态（2026-07-13 囚禁模拟器中文提示边界与 MCP 收束）：
 - 已修复：两条路线送给渡的动态提示只保留当前进度、眼前事件和本轮中文指令；通用行动、调教、道具、喂食、物品、夜间与逃跑目录改由只读参考工具按需返回纯中文文本，不再重复塞进动态 system。
@@ -72,8 +78,8 @@ rg -n "报错关键词|接口名|函数名" routes services storage pipeline min
 服务器上的线上进程可能不在当前本地目录。先确认实际进程和部署路径：
 
 ```bash
-ssh ali-du 'ps -ef | grep -E "[p]ython|[g]unicorn|[f]lask|[n]ode"'
-ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
+ssh du-gateway 'ps -ef | grep -E "[p]ython|[g]unicorn|[f]lask|[n]ode"'
+ssh du-gateway 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 ```
 
 ## 核心文件地图
@@ -1176,8 +1182,8 @@ rg -n "core-prompt|核心|入口风格|SumiTalk|禁言|silence" routes services 
 
 ```bash
 rg -n "claude|anthropic|thinking|cache_control|tool_use|oauth|8317|8082" scripts routes storage .env
-ssh -o ControlMaster=no ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
-ssh -o ControlMaster=no ali-du 'sudo systemctl status claude-proxy-tunnel.service --no-pager -l | sed -n "1,80p"'
+ssh -o ControlMaster=no du-gateway 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
+ssh -o ControlMaster=no du-gateway 'sudo systemctl status claude-proxy-tunnel.service --no-pager -l | sed -n "1,80p"'
 ssh -o ControlMaster=no duproxy@45.76.171.91 'systemctl --user status claude-oauth-proxy.service --no-pager -l | sed -n "1,80p"'
 ```
 
@@ -1218,7 +1224,7 @@ CLAUDE_PROXY_SYNC_URL=https://duxy-home.com/internal/claude-oauth-sync
 CLAUDE_PROXY_STATUS_URL=https://duxy-home.com/internal/claude-oauth-status
 CLAUDE_PROXY_SYNC_KEY=...
 CLAUDE_PROXY_SSH_FALLBACK=1
-CLAUDE_PROXY_SSH_HOST=ali-du
+CLAUDE_PROXY_SSH_HOST=du-gateway
 CLAUDE_PROXY_SSH_AUTH_FILE=/home/duproxy/.cli-proxy-api/claude-oauth.json
 CLAUDE_PROXY_SSH_SERVICE=claude-oauth-proxy.service
 CLAUDE_REFRESH_BUFFER_SECONDS=60
@@ -1249,7 +1255,7 @@ launchctl kickstart -k gui/$(id -u)/com.doraemon.claude-token-sync
 查远端 Claude OAuth proxy 服务：
 
 ```bash
-ssh -o ControlMaster=no ali-du 'sudo systemctl show claude-proxy-tunnel.service -p ActiveState -p SubState -p MainPID --no-pager; ss -ltnp 2>/dev/null | grep ":8082" || true'
+ssh -o ControlMaster=no du-gateway 'sudo systemctl show claude-proxy-tunnel.service -p ActiveState -p SubState -p MainPID --no-pager; ss -ltnp 2>/dev/null | grep ":8082" || true'
 ssh -o ControlMaster=no duproxy@45.76.171.91 'systemctl --user show claude-oauth-proxy.service -p ActiveState -p SubState -p MainPID --no-pager; ss -ltnp 2>/dev/null | grep ":8082" || true'
 ssh -o ControlMaster=no duproxy@45.76.171.91 'journalctl --user -u claude-oauth-proxy.service -n 120 --no-pager -o cat | grep -Ei "401|refresh|auth file|cloudflare|error|model|Invalid proxy key"'
 ```
@@ -1284,7 +1290,7 @@ ss -ltnp 2>/dev/null | grep ":8082"
 先确认当前 active upstream 指向哪条线，别把 Claude OAuth proxy 和 CPA 混在一起：
 
 ```bash
-ssh -o ControlMaster=no ali-du 'cd /root/du-gateway && .venv/bin/python - <<'"'"'PY'"'"'
+ssh -o ControlMaster=no du-gateway 'cd /root/du-gateway && .venv/bin/python - <<'"'"'PY'"'"'
 from storage.upstream_store import load_upstreams, get_cached_active_model
 data = load_upstreams()
 items = data.get("items") or []
@@ -1305,12 +1311,12 @@ PY
 5. 确认脚本走的是 Claude OAuth sync URL，不要把 CPA/Codex 反代服务混进来。
 
 当前状态（2026-07-07）：
-- 主链路：旧网关 `ali-du` 仍把 Claude OAuth upstream 配成 `http://127.0.0.1:8082/v1/chat/completions`；这个本机 8082 由 `claude-proxy-tunnel.service` 转发到新 VPS。当前 tunnel 通过 drop-in `/etc/systemd/system/claude-proxy-tunnel.service.d/10-tailscale-target.conf` 覆盖 `ExecStart`，SSH 目标为 Tailscale `duproxy@100.86.248.99`，远端仍是新 VPS 自己视角的 `127.0.0.1:8082`。旧网关本地 `claude-oauth-proxy.service` 应保持 `inactive/dead`。
+- 主链路：当时的阿里云主网关（现为旧代理节点 `du-proxy-old-ts`）把 Claude OAuth upstream 配成 `http://127.0.0.1:8082/v1/chat/completions`；这个本机 8082 由 `claude-proxy-tunnel.service` 转发到新 VPS。当前主网关已经迁到腾讯云 `du-gateway`，继续沿用同样的本机 8082 隧道边界。tunnel 的 SSH 目标为 Tailscale `duproxy@100.86.248.99`，远端仍是转发 VPS 自己视角的 `127.0.0.1:8082`；主网关本地 `claude-oauth-proxy.service` 应保持 `inactive/dead`。
 - 新 VPS：`claude-oauth-proxy.service` 是 `duproxy` 的用户级 systemd service，unit 在 `/home/duproxy/.config/systemd/user/claude-oauth-proxy.service`，路径 `/home/duproxy/claude-proxy/proxy.js`，只监听 `127.0.0.1:8082`；refresh token 由新 VPS proxy 持有并自刷新。查询和重启优先用 `systemctl --user status|restart claude-oauth-proxy.service`。
 - 已修：旧网关 `/root/du-gateway/.env` 中 `http://127.0.0.1:8082/v1/chat/completions` 对应的 `TARGET_AI_API_KEYS` 已更新为新 VPS 当前 `PROXY_KEY`，旧 key 备份在 `/root/du-gateway/.env.bak-claude-key-20260704-161039`。
 - 已修：旧网关 `/root/du-gateway/.env` 中 `CLAUDE_OAUTH_SYNC_KEY` 已更新为新 VPS 当前 sync key，用于 MiniApp/API 管理查询 `/internal/oauth-status`；旧 key 备份在 `/root/du-gateway/.env.bak-claude-sync-key-20260704-163203`。
 - 已修：旧网关 tunnel 单元已从 `root@45.76.171.91` 改为 `duproxy@45.76.171.91`，随后通过 drop-in 切到 `duproxy@100.86.248.99`；转发 VPS 已禁 root SSH，`duproxy` 有免密 sudo。旧网关 tunnel 私钥 `/root/.ssh/du_new_vps_ed25519` 的公钥已加入新 VPS `duproxy`。
-- 已配置：转发 VPS 已加入 Tailscale，IP 为 `100.86.248.99`；本机可直接 `ssh duproxy@100.86.248.99`。旧网关 `ali-du` 到转发 VPS 的 Tailscale 链路已验证为 direct，切换后 `ss -tnp` 显示 `100.92.76.117 -> 100.86.248.99:22`。这主要改善安全边界和可维护性，不保证比公网更快。回滚生产 tunnel 时删除 drop-in 或把目标改回 `duproxy@45.76.171.91` 后 `daemon-reload && restart claude-proxy-tunnel.service`；切换前备份为 `/root/claude-proxy-tunnel.service.before-tailscale-20260707-084239.txt`。
+- 已配置：转发 VPS 已加入 Tailscale，IP 为 `100.86.248.99`；本机可直接 `ssh duproxy@100.86.248.99`。迁移前旧阿里云节点 `du-proxy-old-ts` 到转发 VPS 的 Tailscale 链路已验证为 direct，切换后 `ss -tnp` 显示 `100.92.76.117 -> 100.86.248.99:22`；当前生产隧道随主网关迁到 `du-gateway`。这主要改善安全边界和可维护性，不保证比公网更快。回滚生产 tunnel 时删除 drop-in 或把目标改回 `duproxy@45.76.171.91` 后 `daemon-reload && restart claude-proxy-tunnel.service`；迁移前旧机备份为 `/root/claude-proxy-tunnel.service.before-tailscale-20260707-084239.txt`。
 - 已配置：转发 VPS 同时作为 `du-proxy-new-us` Trojan 节点，公网入口改为 `us.duxy-home.com:443`，证书由新 VPS `certbot` 管理，Trojan 配置 `/etc/trojan/config.json` 指向 `/etc/letsencrypt/live/us.duxy-home.com/fullchain.pem` 和 `privkey.pem`，SNI 为 `us.duxy-home.com`；旧 `45.76.171.91:8443` 路径已确认公网会卡，UFW 不再放行 8443。订阅源只改新美国节点 `/var/www/proxy-sub/du-proxy-new-us-HTEsRb3ujVT5JXFCEPflhwhnSZmFlJmrRHkqAk5p.yaml` 为 `server: us.duxy-home.com`、`port: 443`、`sni: us.duxy-home.com`；马来西亚订阅 `a9K3mQ8xLp2Rt7Vn4Hs6Yw1Bc5Zd0Ef7.yaml` 仍是 `proxy.duxy-home.com:8443`，不要误改。
 - 已收束：转发 VPS 上遗留的系统级 `/etc/systemd/system/claude-oauth-proxy.service` 会和用户级服务抢 `127.0.0.1:8082` 导致 `EADDRINUSE` 循环重启；已 `disable --now` 系统级服务，保留用户级服务运行，并设置 `loginctl enable-linger duproxy`，避免无人登录时用户级服务无法开机自启。
 - 已验证：旧网关带 `.env` 的 8082 key 请求 `http://127.0.0.1:8082/v1/models` 返回 `200 OK`，模型数 9，包含 `claude-sonnet-5`、`claude-fable-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-sonnet-4-6`；旧网关带 `CLAUDE_OAUTH_SYNC_KEY` 请求 `http://127.0.0.1:8082/internal/oauth-status` 返回 `ok=True`、`canRefresh=True`、`expiresInSeconds` 和 `rateLimitSnapshot`；`du-gateway.service` 和 `du-sumitalk-chat-worker.service` 已重启为 active/running。
@@ -1326,7 +1332,7 @@ PY
 - 已删除：`/Users/doraemon/claude-token-sync.sh` 里的 Keychain `expiresAt` 临时改小/恢复逻辑，以及 `CLAUDE_KEYCHAIN_EXPIRES_SPOOF`、`CLAUDE_KEYCHAIN_SPOOF_EXPIRES_SECONDS` 配置说明。
 - 已调整：同步日志从 `refreshed=...` 改成 `refresh_attempted=...`，避免误解为“脚本已强制刷新出新 token”。后续判断是否真的刷新，只看 Keychain/远端状态接口里的 `expiresAt` 是否变新、`stale=false`。
 当前状态（2026-06-10 SSH fallback）：
-- 已改动：`/Users/doraemon/claude-token-sync.sh` 保持 HTTP POST 为主链路；`sync_oauth_to_server` 在 HTTP POST 最终失败后会走 SSH fallback，默认 `ali-du`、远端 auth 文件 `/home/nora/.cli-proxy-api/claude-sumikamiss@gmail.com.json`、服务 `claude-oauth-proxy.service`。
+- 已改动：`/Users/doraemon/claude-token-sync.sh` 保持 HTTP POST 为主链路；`sync_oauth_to_server` 在 HTTP POST 最终失败后会走 SSH fallback。迁移后网关 SSH fallback 使用 `du-gateway`；本段记录的旧 nora auth 路径和服务名仅用于排查历史配置，当前完整 credential 主链路仍以转发 VPS 为准。
 - 已验证：`bash -n /Users/doraemon/claude-token-sync.sh` 通过；正常 `/Users/doraemon/claude-token-sync.sh --force` 仍输出 `synced oauth via_http`；用 `CLAUDE_TOKEN_SYNC_ENV=/dev/null` 故意去掉 HTTP sync key 后，日志出现 `http sync unavailable missing CLAUDE_PROXY_SYNC_KEY`、`ssh fallback synced oauth`、`synced oauth via_ssh_fallback`，远端服务保持 active。
 - 已收尾：再次正常 `--force` 后 `.claude-token-sync.state` 恢复 `REMOTE_EXPIRES_AT_MS`、`LAST_UNAUTHORIZED_AT=0`、`LAST_SYNCED_EXPIRES_AT_MS`。
 当前状态（2026-06-11 Claude 额度快照）：
@@ -1363,8 +1369,8 @@ PY
 
 ```bash
 rg -n "Codex|codex|CPA|cliproxy|proxy|upstream|TARGET_AI_URLS|TARGET_AI_API_KEYS" docs scripts routes storage .env
-ssh -o ControlMaster=no ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
-ssh -o ControlMaster=no ali-du 'systemctl --user list-units --type=service --all | grep -Ei "codex|cliproxy|proxy|cpa"'
+ssh -o ControlMaster=no du-gateway 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
+ssh -o ControlMaster=no du-gateway 'systemctl --user list-units --type=service --all | grep -Ei "codex|cliproxy|proxy|cpa"'
 ```
 
 注意：
@@ -2062,12 +2068,12 @@ npm -C miniapp run android
 - 未完成 / 下次继续：本轮只改聊天顶部视觉，不改聊天发送、群聊逻辑、ChatStore 或 Android 原生通知；当前工作区仍有既有 Android 通知/悬浮球和 `tools/` 脏文件，提交时不要混入。
 
 当前状态（2026-06-08 Tailscale 内网桥接与本地 token sync）：
-- 已完成：Mac 和 VPS 加入同一 tailnet；Mac 为 `100.105.159.127`，VPS `ali-du` 为 `100.92.76.117`。VPS 与 Mac 均已关闭 Tailscale DNS 接管（`CorpDNS=false`），VPS 持久 DNS 改为 `223.5.5.5` / `1.1.1.1`，配置在 `/etc/systemd/network/10-netplan-eth0.network.d/du-gateway-dns.conf`，避免阿里云 `100.100.2.136/138` 与 Tailscale 网段冲突后导致 R2/Cloudflare 解析超时。
+- 已完成：Mac 和当时的阿里云主网关加入同一 tailnet；Mac 为 `100.105.159.127`，旧节点现用别名 `du-proxy-old-ts`，IP 为 `100.92.76.117`。两端均已关闭 Tailscale DNS 接管（`CorpDNS=false`），旧节点持久 DNS 改为 `223.5.5.5` / `1.1.1.1`，配置在 `/etc/systemd/network/10-netplan-eth0.network.d/du-gateway-dns.conf`，避免阿里云 `100.100.2.136/138` 与 Tailscale 网段冲突后导致 R2/Cloudflare 解析超时。
 - 已完成：VPS 新增只监听 Tailscale IP 的 Nginx 内网入口 `/etc/nginx/conf.d/du-gateway-tailscale.conf`，监听 `100.92.76.117:8080` 并反代到 `127.0.0.1:5000`；公网 `https://duxy-home.com` 保持不变，手机/自用前端未切内网。
-- 已完成：本机 `~/.ssh/config` 中 `ali-du` 已切到 `100.92.76.117`，新增 `ali-du-public` 保留旧公网 `47.250.162.10` 备用；Codex 群聊桥接 `/Users/doraemon/.du-gateway-codex-bridge/.env` 的 `GATEWAY_URL` 已切到 `http://100.92.76.117:8080` 并重启 LaunchAgent。
-- 已确认：`ssh ali-du` 当前登录用户为 `nora`，具备免密 sudo（`sudo -n true` 通过）；需要操作 `/root/du-gateway` 或重启 `du-gateway` 时，用 `sudo -n bash -lc 'cd /root/du-gateway && ...'`，不要误判为“没有 root 目录权限就不能部署”。
+- 历史记录：本机当时通过 Tailscale `100.92.76.117` 维护阿里云主网关，并保留公网 `47.250.162.10` 备用；迁移后这两个入口统一改名为 `du-proxy-old-ts` / `du-proxy-old`，只用于旧代理节点维护。Codex 群聊桥接现已切到腾讯云主网关 `http://100.119.107.127:8080`。
+- 已确认：新主网关统一通过 `ssh du-gateway` 登录，用户为 `nora` 且具备免密 sudo；需要操作 `/root/du-gateway` 或重启服务时，用 `sudo -n bash -lc 'cd /root/du-gateway && ...'`，不要误判为“没有 root 目录权限就不能部署”。
 - 已完成：本地 Claude token sync 的 `/Users/doraemon/.claude-token-sync.env` 已把 `CLAUDE_PROXY_SYNC_URL` / `CLAUDE_PROXY_STATUS_URL` 切到 `http://100.92.76.117:8080/internal/claude-oauth-*`；`com.doraemon.claude-token-sync` LaunchAgent 已重新加载，配置来源仍是 `.env`，没有把 token 写入 plist。
-- 已验证：`https://duxy-home.com/health` 和 `/miniapp/` 为 200；`http://100.92.76.117:8080/health` 为 200；带 `X-PC-Token` 调内网 `/api/codex_group_chat/tasks/recent` 为 200；桥接新启动日志显示 `gateway_host=100.92.76.117:8080`；`/Users/doraemon/claude-token-sync.sh --mark` 成功写出 `marked http status has_status=1`；`ssh ali-du` 与 `ssh ali-du-public` 均可用。
+- 历史验证：迁移前阿里云内网入口和公网入口均通过检查；迁移后的当前验收以 `ssh du-gateway` / `ssh du-gateway-public`、腾讯云 Tailscale `100.119.107.127` 和公网 `43.155.136.6` 为准。
 - 未完成 / 下次继续：手机和自用前端仍走公网，不要误以为已切 Tailscale。当前 `8080` 内网入口反代整个网关；在 tailnet 只有自用 Mac/VPS 时风险较低，若后续加入手机、临时设备或他人账号，应收窄为只允许 `100.105.159.127` 且只放行 `/health`、`/api/codex_group_chat/`、`/internal/claude-oauth-*`。生产机后续使用 Tailscale 默认先加 `--accept-dns=false`，不要再让它接管 DNS。
 
 当前状态（2026-06-11 MiniApp 主聊天文本附件）：
@@ -2397,3 +2403,11 @@ npm -C miniapp run android
 - 防误判：只有明显旋律性音高变化并伴随节奏、拉长音等演唱线索时才判为唱歌；单个拖长音、普通语气起伏或证据不足时按普通说话转写，不强猜。
 - 边界保持：只修改 Gemini/OpenRouter 主 STT 的转写提示词，不改音频保存、消息发送、TTS 或 Deepgram fallback 链路。
 - 已验证：新增 3 条提示词契约测试；目标文件 Python 编译、测试、`import app` 与 `git diff --check` 通过。尚未使用真实用户音频调用上游模型。
+
+当前状态（2026-07-13 阶段摘要与长期记忆摘要方案重写）：
+- 已完成：重新落盘 `docs/阶段摘要与长期记忆方案.md`，恢复“三天固定阶段片段持续积累，长期记忆第一版上线后随每个新片段增量更新”的总体架构。
+- 已确认：现有约 14 天中期记忆继续独立滑动；阶段摘要永久保留且默认不注入聊天；长期记忆保留 `ordinary_memory`、`intimacy_memory`、`relationship_threads`、`life_threads`、`project_threads`、`stable_preferences`、`loose_ends` 七个正文分区。
+- 已确认：阶段摘要和长期记忆最终正文都由 DS 以渡的第一人称写成；“我”只指渡，辛玥使用“小玥 / 老婆 / 辛玥 / 她”，不使用旁观者口吻。`非典型 DDLG` 仅作为关系来源候选标签，不在网关内预写解释或结论。
+- 已明确：长期第一版先回填并审阅三天阶段片段，再生成带来源和差异的预览草稿；未经辛玥确认不写正式 `latest`、不注入聊天。后续失败不推进消费游标，也不覆盖上一版。
+- 边界保持：本轮只新增方案文档并追加索引，没有修改服务代码、提示词、R2、现有记忆文件、缓存拼装、MiniApp、游戏、VPS 或线上数据。
+- 未完成 / 下次继续：先做只读素材盘点，确认归档覆盖和三天切片缺口；随后只实现阶段摘要的独立存储、幂等、校验、锁和预览，不接聊天注入。当前方案尚未提交、推送或部署。
