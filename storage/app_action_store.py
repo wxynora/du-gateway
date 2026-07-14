@@ -483,13 +483,40 @@ def _normalize_system_notification_payload(payload: dict) -> tuple[Optional[dict
     if category not in {"", "message", "status", "reminder", "event", "error"}:
         category = ""
     open_app = bool(src.get("openApp") if "openApp" in src else src.get("open_app", True))
-    return {
+    normalized = {
         "title": title,
         "message": message,
         "level": level,
         "category": category,
         "openApp": open_app,
-    }, None
+    }
+    notification_kind = str(
+        src.get("notification_kind")
+        or src.get("notificationKind")
+        or src.get("destination")
+        or src.get("route")
+        or ""
+    ).strip().lower()
+    if notification_kind:
+        if notification_kind not in {"private_chat", "group_chat", "diary_comment"}:
+            return None, "notification_kind 无效"
+        normalized["notification_kind"] = notification_kind
+        field_aliases = {
+            "conversation_id": ("conversation_id", "conversationId"),
+            "message_id": ("message_id", "messageId"),
+            "entry_id": ("entry_id", "entryId", "diary_entry_id", "diaryEntryId"),
+            "comment_id": ("comment_id", "commentId"),
+            "sender": ("sender", "sender_name", "senderName"),
+        }
+        for target, aliases in field_aliases.items():
+            value = next((str(src.get(key) or "").strip() for key in aliases if str(src.get(key) or "").strip()), "")
+            if value:
+                normalized[target] = value[:160 if target != "sender" else 40]
+        if notification_kind == "diary_comment" and not normalized.get("entry_id"):
+            return None, "diary_comment 缺少 entry_id"
+        if notification_kind in {"private_chat", "group_chat"} and not normalized.get("message_id"):
+            return None, f"{notification_kind} 缺少 message_id"
+    return normalized, None
 
 
 def _normalize_screen_check_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
