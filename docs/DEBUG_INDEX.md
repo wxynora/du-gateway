@@ -2411,3 +2411,21 @@ npm -C miniapp run android
 - 已明确：长期第一版先回填并审阅三天阶段片段，再生成带来源和差异的预览草稿；未经辛玥确认不写正式 `latest`、不注入聊天。后续失败不推进消费游标，也不覆盖上一版。
 - 边界保持：本轮只新增方案文档并追加索引，没有修改服务代码、提示词、R2、现有记忆文件、缓存拼装、MiniApp、游戏、VPS 或线上数据。
 - 未完成 / 下次继续：先做只读素材盘点，确认归档覆盖和三天切片缺口；随后只实现阶段摘要的独立存储、幂等、校验、锁和预览，不接聊天注入。当前方案尚未提交、推送或部署。
+
+当前状态（2026-07-14 SumiTalk 原生 Android 后端流式接入）：
+- 已完成：原生 Android 的 SumiTalk job 默认启用真实流式，现有 MiniApp job 继续非流；两者仍共用 `/v1/chat/completions` 入口、`X-Reply-Channel=sumitalk`、reply target、window id、last4 和同一套清洗、状态、记忆、Pixel Home、工具、QQ 上下文与存档管道。
+- 已完成：`sumitalk_chat_run_events` 作为 append-only 事件日志，提供稳定 `seq/event_id`、唯一终态和 JSON 摘要恢复；token delta 不再逐次重写 job JSON。新增 `/events` 断点轮询与 `/events/stream` SSE，两者读取同一日志并支持 `after_seq`。
+- 已完成：聊天路由按上游原始顺序落 reasoning、正文增量、工具运行/输出/完成及工具轮中间对话；worker 只聚合终态，不会二次回放正文。增量空格换行保持原样，中间对话不会在最终正文 part 再重复一次。非流任务仍一次性返回最终正文。
+- 已完成：新增 `/miniapp-api/panel-auth/native-device/pair`，复用 trusted-device 和 panel token 做新安装静默配对，错误密钥拒绝，已撤销的同一设备不会被静默解封；App 不恢复登录页或新建账号体系。
+- 已完成：后端主动 SumiTalk 私聊现在用同一稳定 `message_id` 写远端 history、30 天持久 `deliver_chat_message` device action 和旧 realtime；action 携带完整正文、会话类型和时间，供原生 App 幂等写入本地聊天库后通知。日记评论现有 `entry_id + comment_id` 路径不重做。
+- 开关与文档：`SUMITALK_CHAT_NATIVE_STREAM_ENABLED` 默认开启；完整边界、事件协议和验收方式见 `docs/SumiTalk原生安卓后端流式接入.md`。
+- 已验证：三个后端契约脚本覆盖流/非流、配对、撤销、主动消息三路同 ID 和持久 action 幂等；目标 Python 编译、`import app`、原生 JVM/构建/设备定向测试通过。没有调用真实上游、R2 或线上接口。
+- 未完成 / 下次继续：当前尚未提交、push 或重启，本地 APK 也未注入真实配对密钥做联机。部署时确保服务端 `SUMITALK_NATIVE_PAIRING_SECRET` 与 APK 构建参数一致，同时重启 Web App 与 `du-sumitalk-chat-worker.service`，再验收新安装配对/撤销、主动消息离线落库与通知、断网续传、长回复、取消和多工具轮；植物大战僵尸及 `miniapp_static` 半成品不能混入本次提交。
+
+当前状态（2026-07-14 SumiTalk 共同游戏非流与语音通话接口补齐）：
+- 已完成：原生普通聊天仍默认流式；`private_board`、`wenyou`、`captivity_simulator` 通过请求顶层可信 `game_id` 强制非流，`random_imitator_td` 保持流式，旧 MiniApp 和其他平台继续非流。现有共同游戏 `/sync-du` / 独立 GM 非流主链未改。
+- 已完成：新增 `/miniapp-api/voice-call/stream`，复用当前 active model、同一 `/v1/chat/completions`、`X-Window-Id` 与 `X-Voice-Call-Slim` 注入链，只输出可见正文事件；OpenRouter 强制非流时显式发 `degraded`。
+- 已完成：新增 `/voice-call/tts-segment`、短 TTL opaque audio URL、Range 读取和按 turn 取消。临时音频保存在多 worker 共享的本机目录，10 分钟过期，不写 R2 或 segment 级通话记录；旧 `/voice-call` 与普通 chat media 接口保留。
+- 原生衔接：通话分段 TTS 已切专用接口、单段最多 120 字、最多两段并发；主通话模型流继续使用现有持久 rich run event，避免双 run、双消息和双存档。专用 POST stream 保留给整轮录音 fallback / 兼容客户端。
+- 已验证：`scripts/test_voice_call_stream_backend.py`、`scripts/test_sumitalk_native_stream_backend.py` 和目标 Python `py_compile` 通过；原生 `HttpChatMediaGatewayClientTest`、`AssistantSpeechRuntimeTest` 通过。验证全部使用 fake upstream、本机临时目录和 mock 通话记录，没有调用真实模型、R2、线上接口或游戏存档。
+- 未完成 / 下次继续：尚未跑后端全量、原生全量 JVM/build/lint 和真机通话；尚未提交、push、部署或重启。部署后需用真实 App 验收首字/首声、长回复分段、打断清理、OpenRouter degraded、共同游戏完整回合不截断，以及普通聊天与其他平台回归；植物大战僵尸和 `miniapp_static` 半成品继续不能混入提交。

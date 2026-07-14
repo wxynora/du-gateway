@@ -1,12 +1,23 @@
+import hmac
+import re
+
 from flask import jsonify, request
 
-from storage.miniapp_panel_store import list_trusted_devices, revoke_trusted_device, upsert_trusted_device
+from storage.miniapp_panel_store import (
+    get_trusted_device,
+    list_trusted_devices,
+    revoke_trusted_device,
+    upsert_trusted_device,
+)
 from utils.miniapp_panel_auth import (
     issue_panel_token,
     panel_auth_enabled,
     panel_auth_error,
     panel_auth_meta,
 )
+
+
+_NATIVE_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{8,160}$")
 
 
 def register_routes(bp) -> None:
@@ -48,6 +59,54 @@ def register_routes(bp) -> None:
         item = upsert_trusted_device(device_id, note=device_name)
         token, ttl = issue_panel_token(subject=f"device:{device_id}", device_id=device_id)
         return jsonify({"ok": True, "panel_token": token, "expires_in": ttl, "device": item})
+
+    @bp.route("/panel-auth/native-device/pair", methods=["POST"])
+    def miniapp_panel_auth_native_device_pair():
+        if not panel_auth_enabled():
+            return panel_auth_error("panel_auth_misconfigured", 503)
+        from config import SUMITALK_NATIVE_PAIRING_SECRET
+
+        configured_secret = str(SUMITALK_NATIVE_PAIRING_SECRET or "").strip()
+        if not configured_secret:
+            return jsonify({
+                "ok": False,
+                "code": "native_pairing_misconfigured",
+                "error": "服务端未配置原生设备配对",
+            }), 503
+        supplied_secret = str(request.headers.get("X-SumiTalk-Pairing-Secret") or "").strip()
+        if not supplied_secret or not hmac.compare_digest(supplied_secret, configured_secret):
+            return jsonify({
+                "ok": False,
+                "code": "native_pairing_unauthorized",
+                "error": "原生设备配对凭据无效",
+            }), 401
+
+        body = request.get_json(silent=True) or {}
+        device_id = str(body.get("device_id") or "").strip()
+        device_name = str(body.get("device_name") or "SumiTalk Android").strip()[:120]
+        if not _NATIVE_DEVICE_ID_RE.fullmatch(device_id):
+            return jsonify({
+                "ok": False,
+                "code": "device_id_invalid",
+                "error": "原生设备标识无效",
+            }), 400
+        existing = get_trusted_device(device_id)
+        if existing and bool(existing.get("revoked")):
+            return jsonify({
+                "ok": False,
+                "code": "device_revoked",
+                "error": "这个设备已被撤销，不能静默重新配对",
+            }), 403
+
+        item = upsert_trusted_device(device_id, note=device_name)
+        token, ttl = issue_panel_token(subject=f"device:{device_id}", device_id=device_id)
+        return jsonify({
+            "ok": True,
+            "device_id": device_id,
+            "panel_token": token,
+            "expires_in": ttl,
+            "device": item,
+        })
 
     @bp.route("/panel-auth/session", methods=["GET"])
     def miniapp_panel_auth_session():

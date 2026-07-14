@@ -522,6 +522,8 @@ if not SUMITALK_CHAT_QUEUE_DB.is_absolute():
     SUMITALK_CHAT_QUEUE_DB = BASE_DIR / SUMITALK_CHAT_QUEUE_DB
 SUMITALK_CHAT_WORKER_IDLE_SECONDS = float(os.environ.get("SUMITALK_CHAT_WORKER_IDLE_SECONDS", "0.5") or "0.5")
 SUMITALK_CHAT_QUEUE_STALE_SECONDS = float(os.environ.get("SUMITALK_CHAT_QUEUE_STALE_SECONDS", str(max(120, STREAM_TIMEOUT_SECONDS + 180))) or str(max(120, STREAM_TIMEOUT_SECONDS + 180)))
+# 原生 Android 任务走真实 SSE；旧 MiniApp job 继续沿用非流式响应。
+SUMITALK_CHAT_NATIVE_STREAM_ENABLED = os.environ.get("SUMITALK_CHAT_NATIVE_STREAM_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 # Bot 调网关的 base URL（如 http://127.0.0.1:5000 或公网网关地址）
 TELEGRAM_GATEWAY_URL = os.environ.get("TELEGRAM_GATEWAY_URL", "http://127.0.0.1:5000").strip().rstrip("/")
 # Telegram MiniApp（WebApp）对外入口：仅用于 ReplyKeyboard 的 web_app 按钮（Telegram 强制要求 HTTPS）
@@ -672,6 +674,8 @@ MINIAPP_PANEL_SIGNING_SECRET = os.environ.get("MINIAPP_PANEL_SIGNING_SECRET", ""
 MINIAPP_PANEL_TOKEN_TTL_SECONDS = int(os.environ.get("MINIAPP_PANEL_TOKEN_TTL_SECONDS", "2592000"))
 MINIAPP_PANEL_SECOND_PROMPT = os.environ.get("MINIAPP_PANEL_SECOND_PROMPT", "").strip()
 MINIAPP_PANEL_SECOND_ANSWER = os.environ.get("MINIAPP_PANEL_SECOND_ANSWER", "").strip()
+# 原生 APK 只持有配对密钥，用它换取现有 panel token；不向 APK 暴露签名密钥。
+SUMITALK_NATIVE_PAIRING_SECRET = os.environ.get("SUMITALK_NATIVE_PAIRING_SECRET", "").strip() or MINIAPP_PANEL_PASSWORD
 MINIAPP_PANEL_TRUSTED_DEVICES_FILE = DATA_DIR / "miniapp_panel_trusted_devices.json"
 
 # IP 白名单（CIDR/单 IP，逗号分隔）。留空则不限制 IP。

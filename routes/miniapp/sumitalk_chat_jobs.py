@@ -1,10 +1,14 @@
+import json
 import time
 
-from flask import jsonify, request
+from flask import Response, jsonify, request, stream_with_context
 
 from services.sumitalk_chat_queue import (
     build_sumitalk_chat_job_payload,
     cancel_sumitalk_chat_job,
+    get_sumitalk_chat_terminal_event,
+    latest_sumitalk_chat_job_event_seq,
+    list_sumitalk_chat_job_events,
     maybe_mark_sumitalk_chat_job_stale,
     read_sumitalk_chat_job_state,
     valid_sumitalk_chat_job_id,
@@ -12,6 +16,14 @@ from services.sumitalk_chat_queue import (
 
 
 _SUMITALK_CHAT_DIRECT_WAIT_MS = 2500
+_SUMITALK_CHAT_EVENT_WAIT_MAX_MS = 25_000
+_SUMITALK_CHAT_EVENT_POLL_SECONDS = 0.15
+_SUMITALK_CHAT_EVENT_HEARTBEAT_SECONDS = 15.0
+_TERMINAL_EVENT_STATUS = {
+    "assistant_final": "done",
+    "run_error": "error",
+    "run_cancelled": "cancelled",
+}
 
 
 def _response_with_events(job: dict) -> dict:
@@ -112,6 +124,83 @@ def _public_job(job_id: str) -> tuple[dict, int]:
     return public_job, 200
 
 
+def _bounded_query_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(request.args.get(name, default))
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _event_page(job_id: str, *, after_seq: int, limit: int) -> tuple[dict, int]:
+    job = read_sumitalk_chat_job_state(job_id)
+    if not job:
+        return {"ok": False, "error": "任务不存在或已过期"}, 404
+    job = maybe_mark_sumitalk_chat_job_stale(job_id, job) or job
+    events = list_sumitalk_chat_job_events(job_id, after_seq=after_seq, limit=limit)
+    latest_seq = latest_sumitalk_chat_job_event_seq(job_id)
+    terminal_event = get_sumitalk_chat_terminal_event(job_id)
+    status = str(job.get("status") or "running").strip().lower() or "running"
+    if terminal_event:
+        status = _TERMINAL_EVENT_STATUS.get(str(terminal_event.get("kind") or ""), status)
+    last_returned_seq = after_seq
+    if events:
+        try:
+            last_returned_seq = int(events[-1].get("seq") or after_seq)
+        except Exception:
+            last_returned_seq = after_seq
+    has_more = latest_seq > last_returned_seq
+    if terminal_event and has_more:
+        try:
+            terminal_seq = int(terminal_event.get("seq") or 0)
+        except Exception:
+            terminal_seq = 0
+        if terminal_seq > last_returned_seq:
+            status = "running"
+    payload = {
+        "ok": status not in {"error", "cancelled"},
+        "status": status,
+        "job_id": job_id,
+        "run_id": job_id,
+        "events": events,
+        "event_seq": latest_seq,
+        "has_more": has_more,
+    }
+    if job.get("execution_mode"):
+        payload["execution_mode"] = job.get("execution_mode")
+    if status == "done":
+        payload["response"] = _response_with_events(job)
+        payload["status_code"] = int(job.get("status_code") or 200)
+    elif status == "error":
+        payload["error"] = str(job.get("error") or "渡回复失败")
+        payload["status_code"] = int(job.get("status_code") or 500)
+        payload["response"] = _response_with_events(job)
+    elif status == "cancelled":
+        payload["error"] = str(job.get("error") or "已取消发送")
+        payload["status_code"] = int(job.get("status_code") or 499)
+    return payload, 200
+
+
+def _wait_for_sumitalk_chat_events(
+    job_id: str,
+    *,
+    after_seq: int,
+    limit: int,
+    wait_ms: int,
+) -> tuple[dict, int]:
+    deadline = time.monotonic() + max(0, wait_ms) / 1000.0
+    while True:
+        payload, http_status = _event_page(job_id, after_seq=after_seq, limit=limit)
+        if http_status >= 400 or payload.get("events"):
+            return payload, http_status
+        if str(payload.get("status") or "") in {"done", "error", "cancelled"}:
+            return payload, http_status
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return payload, http_status
+        time.sleep(min(_SUMITALK_CHAT_EVENT_POLL_SECONDS, remaining))
+
+
 def register_routes(bp) -> None:
     @bp.route("/sumitalk-chat", methods=["POST"])
     def miniapp_sumitalk_chat_adaptive():
@@ -142,6 +231,82 @@ def register_routes(bp) -> None:
         payload, http_status = _public_job(job_id)
         return jsonify(payload), http_status
 
+    @bp.route("/sumitalk-chat-jobs/<job_id>/events", methods=["GET"])
+    def miniapp_sumitalk_chat_job_events(job_id: str):
+        if not valid_sumitalk_chat_job_id(job_id):
+            return jsonify({"ok": False, "error": "任务不存在或已过期"}), 404
+        after_seq = _bounded_query_int("after_seq", 0, 0, 2_147_483_647)
+        limit = _bounded_query_int("limit", 100, 1, 500)
+        wait_ms = _bounded_query_int("wait_ms", 0, 0, _SUMITALK_CHAT_EVENT_WAIT_MAX_MS)
+        payload, http_status = _wait_for_sumitalk_chat_events(
+            job_id,
+            after_seq=after_seq,
+            limit=limit,
+            wait_ms=wait_ms,
+        )
+        return jsonify(payload), http_status
+
+    @bp.route("/sumitalk-chat-jobs/<job_id>/events/stream", methods=["GET"])
+    def miniapp_sumitalk_chat_job_event_stream(job_id: str):
+        if not valid_sumitalk_chat_job_id(job_id) or not read_sumitalk_chat_job_state(job_id):
+            return jsonify({"ok": False, "error": "任务不存在或已过期"}), 404
+        after_seq = _bounded_query_int("after_seq", 0, 0, 2_147_483_647)
+
+        @stream_with_context
+        def _generate():
+            cursor = after_seq
+            last_heartbeat = time.monotonic()
+            last_state_check = 0.0
+            while True:
+                events = list_sumitalk_chat_job_events(job_id, after_seq=cursor, limit=100)
+                terminal_seen = False
+                for event in events:
+                    try:
+                        cursor = max(cursor, int(event.get("seq") or 0))
+                    except Exception:
+                        pass
+                    if str(event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
+                        terminal_seen = True
+                    yield "data: " + json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+                if terminal_seen:
+                    return
+
+                terminal_event = get_sumitalk_chat_terminal_event(job_id) if not events else None
+                if terminal_event:
+                    try:
+                        terminal_seq = int(terminal_event.get("seq") or 0)
+                    except Exception:
+                        terminal_seq = 0
+                    if terminal_seq <= cursor:
+                        return
+
+                now = time.monotonic()
+                if now - last_state_check >= 2.0:
+                    job = read_sumitalk_chat_job_state(job_id)
+                    if not job:
+                        return
+                    job = maybe_mark_sumitalk_chat_job_stale(job_id, job) or job
+                    if (
+                        str(job.get("status") or "").strip().lower() in {"done", "error", "cancelled"}
+                        and not terminal_event
+                        and not events
+                    ):
+                        return
+                    last_state_check = now
+                if now - last_heartbeat >= _SUMITALK_CHAT_EVENT_HEARTBEAT_SECONDS:
+                    yield ": ping\n\n"
+                    last_heartbeat = now
+                time.sleep(_SUMITALK_CHAT_EVENT_POLL_SECONDS)
+
+        return Response(
+            _generate(),
+            content_type="text/event-stream; charset=utf-8",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     @bp.route("/sumitalk-chat-jobs/<job_id>/cancel", methods=["POST"])
     def miniapp_sumitalk_chat_job_cancel(job_id: str):
         if not valid_sumitalk_chat_job_id(job_id):
@@ -155,4 +320,12 @@ def register_routes(bp) -> None:
         body = request.get_json(silent=True) or {}
         reason = str(body.get("reason") or "client_cancelled").strip()[:160] or "client_cancelled"
         cancel_sumitalk_chat_job(job_id, reason)
-        return jsonify({"ok": True, "status": "cancelled", "job_id": job_id})
+        updated, _ = _public_job(job_id)
+        updated_status = str(updated.get("status") or "cancelled").strip().lower() or "cancelled"
+        return jsonify(
+            {
+                "ok": updated_status not in {"error"},
+                "status": updated_status,
+                "job_id": job_id,
+            }
+        )

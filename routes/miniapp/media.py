@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import logging
 import re
+import threading
 import time
 from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
-from flask import Response, jsonify, request
+from flask import Response, jsonify, request, stream_with_context
 
 from config import R2_PUBLIC_URL, TELEGRAM_PROACTIVE_TARGET_USER_ID, VOICE_CALL_MAX_BYTES, VOICE_CALL_MAX_SECONDS, VOICE_CALL_WINDOW_ID
 from storage import r2_store
@@ -41,6 +43,7 @@ CHAT_MEDIA_DOCUMENT_MAX_BYTES = 10 * 1024 * 1024
 CHAT_MEDIA_DOCUMENT_MAX_CHARS = 60000
 CHAT_MEDIA_DOCUMENT_MAX_PDF_PAGES = 120
 CHAT_MEDIA_THUMB_LONG_EDGE = 720
+_VOICE_CALL_TTS_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
 def _voice_call_default_config() -> dict:
@@ -144,13 +147,13 @@ def _safe_duration_ms(value: object) -> int:
     return max(0, min(duration, 60 * 60 * 1000))
 
 
-def _media_range_response(data: bytes, ctype: str) -> Response:
+def _media_range_response(data: bytes, ctype: str, *, cache_control: str = "public, max-age=86400") -> Response:
     content = data or b""
     total = len(content)
     mime = ctype or "application/octet-stream"
     base_headers = {
         "Accept-Ranges": "bytes",
-        "Cache-Control": "public, max-age=86400",
+        "Cache-Control": cache_control,
     }
     range_header = str(request.headers.get("Range") or "").strip()
     m = re.match(r"^bytes=(\d*)-(\d*)$", range_header)
@@ -184,6 +187,15 @@ def _media_range_response(data: bytes, ctype: str) -> Response:
         "Content-Length": str(len(chunk)),
     }
     return Response(chunk, status=206, mimetype=mime, headers=headers)
+
+
+def _voice_call_sse_event(event: str, payload: dict) -> str:
+    return (
+        f"event: {str(event or 'message').strip() or 'message'}\n"
+        "data: "
+        + json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":"))
+        + "\n\n"
+    )
 
 
 def _chat_media_filename_ext(filename: str) -> str:
@@ -612,6 +624,237 @@ def register_routes(bp) -> None:
         payload["call_id"] = call_id
         payload["call_started_at"] = call_started_at
         return jsonify(payload), status
+
+    @bp.route("/voice-call/stream", methods=["POST"])
+    def miniapp_voice_call_stream():
+        f = request.files.get("audio")
+        if not f:
+            return jsonify({"ok": False, "error": "缺少 audio"}), 400
+        mime_type = (request.form.get("mime_type") or f.mimetype or "application/octet-stream").strip().lower()
+        if mime_type not in CHAT_MEDIA_AUDIO_TYPES:
+            return jsonify({"ok": False, "error": f"暂不支持的音频格式：{mime_type or 'unknown'}"}), 400
+        audio_bytes = f.read()
+        if not audio_bytes:
+            return jsonify({"ok": False, "error": "音频为空"}), 400
+        if len(audio_bytes) > max(1024, int(VOICE_CALL_MAX_BYTES or 0)):
+            return jsonify({"ok": False, "error": "音频太大了，缩短一点再试"}), 400
+
+        duration_ms = _safe_duration_ms(request.form.get("duration_ms") or request.form.get("durationMs"))
+        max_duration_ms = max(0, int(VOICE_CALL_MAX_SECONDS or 0)) * 1000
+        if duration_ms > 0 and max_duration_ms > 0 and duration_ms > max_duration_ms + 1000:
+            return jsonify({"ok": False, "error": "语音太长了，缩短一点再试"}), 400
+
+        filename = (f.filename or "voice.webm").strip() or "voice.webm"
+        window_id = _resolve_voice_call_window_id(request.form.get("window_id") or "")
+        call_id = (request.form.get("call_id") or "").strip() or str(uuid4())
+        call_started_at = (request.form.get("call_started_at") or "").strip() or now_beijing_iso()
+        user_text_override = (request.form.get("user_text_override") or "").strip()
+        turn_id = f"turn_{uuid4().hex}"
+
+        @stream_with_context
+        def generate():
+            yield _voice_call_sse_event(
+                "phase",
+                {"turn_id": turn_id, "phase": "recognizing", "text": "识别中..."},
+            )
+            try:
+                from services.voice_call_pipeline import (
+                    VoiceCallPipelineError,
+                    stream_voice_chat_pipeline,
+                    transcribe_voice_call_input,
+                )
+
+                transcript = transcribe_voice_call_input(
+                    audio_bytes,
+                    mime_type,
+                    filename,
+                    user_text_override=user_text_override,
+                    duration_ms=duration_ms,
+                )
+                user_text = str(transcript.get("user_text") or "").strip()
+                audio_observations = str(transcript.get("audio_observations") or "").strip()
+                yield _voice_call_sse_event(
+                    "transcript",
+                    {
+                        "turn_id": turn_id,
+                        "text": user_text,
+                        "audio_observations": audio_observations,
+                        "stt_provider": str(transcript.get("stt_provider") or "").strip(),
+                    },
+                )
+                yield _voice_call_sse_event(
+                    "phase",
+                    {"turn_id": turn_id, "phase": "thinking", "text": "渡在想..."},
+                )
+                seq = 0
+                accumulated_parts = []
+                reply_text = ""
+                for event in stream_voice_chat_pipeline(
+                    user_text,
+                    window_id=window_id,
+                    audio_observations=audio_observations,
+                ):
+                    kind = str((event or {}).get("kind") or "").strip()
+                    if kind == "degraded":
+                        yield _voice_call_sse_event(
+                            "degraded",
+                            {
+                                "turn_id": turn_id,
+                                "reason": str(event.get("reason") or "upstream_nonstream"),
+                                "text": "当前上游只能伪流式，首句可能会慢一点",
+                            },
+                        )
+                    elif kind == "assistant_delta":
+                        delta = str(event.get("delta") or "")
+                        if not delta:
+                            continue
+                        seq += 1
+                        accumulated_parts.append(delta)
+                        yield _voice_call_sse_event(
+                            "assistant_delta",
+                            {
+                                "turn_id": turn_id,
+                                "seq": seq,
+                                "delta": delta,
+                                "accumulated_text": "".join(accumulated_parts),
+                            },
+                        )
+                    elif kind == "assistant_done":
+                        reply_text = str(event.get("reply_text") or "").strip()
+                if not reply_text:
+                    raise VoiceCallPipelineError("聊天服务没有返回正文", 502)
+                _append_call_record_turns(
+                    call_id=call_id,
+                    started_at=call_started_at,
+                    turns=[
+                        {"role": "user", "text": user_text, "kind": "voice", "timestamp": now_beijing_iso()},
+                        {"role": "assistant", "text": reply_text, "kind": "voice", "timestamp": now_beijing_iso()},
+                    ],
+                    mode="voice",
+                )
+                yield _voice_call_sse_event(
+                    "assistant_done",
+                    {"turn_id": turn_id, "reply_text": reply_text},
+                )
+                yield _voice_call_sse_event(
+                    "done",
+                    {
+                        "turn_id": turn_id,
+                        "ok": True,
+                        "call_id": call_id,
+                        "call_started_at": call_started_at,
+                    },
+                )
+            except GeneratorExit:
+                raise
+            except Exception as e:
+                error_text = str(e or "语音通话失败").strip() or "语音通话失败"
+                logger.warning(
+                    "voice_call_stream_error turn_id=%s call_id=%s error=%s",
+                    turn_id,
+                    call_id,
+                    error_text,
+                    exc_info=True,
+                )
+                yield _voice_call_sse_event(
+                    "error",
+                    {"turn_id": turn_id, "error": error_text},
+                )
+
+        return Response(
+            generate(),
+            content_type="text/event-stream; charset=utf-8",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @bp.route("/voice-call/tts-segment", methods=["POST"])
+    def miniapp_voice_call_tts_segment():
+        body = request.get_json(silent=True) or {}
+        turn_id = str(body.get("turn_id") or "").strip()[:160]
+        segment_id = str(body.get("segment_id") or "").strip()[:160]
+        text = str(body.get("text") or "").strip()
+        audio_format = str(body.get("audio_format") or "mp3").strip().lower() or "mp3"
+        if not turn_id or not segment_id:
+            return jsonify({"ok": False, "error": "缺少 turn_id 或 segment_id"}), 400
+        if not text:
+            return jsonify({"ok": False, "error": "缺少 text"}), 400
+        if len(text) > 120:
+            return jsonify({"ok": False, "error": "单段文字不能超过 120 字"}), 400
+        if audio_format not in {"mp3", "wav"}:
+            return jsonify({"ok": False, "error": f"暂不支持的 audio_format：{audio_format}"}), 400
+        started = time.time()
+        try:
+            from services.minimax_tts import tts_to_audio_bytes
+            from services.voice_call_tts_cache import save_voice_call_tts_audio
+
+            with _VOICE_CALL_TTS_SEMAPHORE:
+                audio_bytes = tts_to_audio_bytes(text, audio_format=audio_format)
+            if not audio_bytes:
+                return jsonify({"ok": False, "error": "语音生成失败"}), 502
+            cached = save_voice_call_tts_audio(
+                audio_bytes,
+                audio_format=audio_format,
+                turn_id=turn_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "voice_call_tts_segment_error turn_id=%s segment_id=%s text_len=%s elapsed_ms=%s error=%s",
+                turn_id,
+                segment_id,
+                len(text),
+                int((time.time() - started) * 1000),
+                e,
+                exc_info=True,
+            )
+            return jsonify({"ok": False, "error": "语音生成失败"}), 502
+        audio_path = f"/miniapp-api/voice-call/tts-audio/{cached['token']}.{audio_format}"
+        public_base = resolve_public_base_url_for_http_request(request.url_root or "").strip().rstrip("/")
+        audio_url = f"{public_base}{audio_path}" if public_base else audio_path
+        logger.info(
+            "voice_call_tts_segment_ok turn_id=%s segment_id=%s text_len=%s bytes=%s elapsed_ms=%s",
+            turn_id,
+            segment_id,
+            len(text),
+            int(cached.get("bytes") or 0),
+            int((time.time() - started) * 1000),
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "turn_id": turn_id,
+                "segment_id": segment_id,
+                "audio_url": audio_url,
+                "audio_format": audio_format,
+                "mime": "audio/wav" if audio_format == "wav" else "audio/mpeg",
+                "bytes": int(cached.get("bytes") or 0),
+                "cached": False,
+                "expires_in": int(cached.get("expires_in") or 600),
+            }
+        )
+
+    @bp.route("/voice-call/tts-audio/<string:token>.<string:audio_format>", methods=["GET"])
+    def miniapp_voice_call_tts_audio(token: str, audio_format: str):
+        from services.voice_call_tts_cache import load_voice_call_tts_audio
+
+        loaded = load_voice_call_tts_audio(token, audio_format)
+        if not loaded:
+            return jsonify({"ok": False, "error": "音频不存在或已过期"}), 404
+        audio_bytes, mime = loaded
+        return _media_range_response(audio_bytes, mime, cache_control="private, no-store, max-age=0")
+
+    @bp.route("/voice-call/tts-cancel", methods=["POST"])
+    def miniapp_voice_call_tts_cancel():
+        body = request.get_json(silent=True) or {}
+        turn_id = str(body.get("turn_id") or "").strip()
+        if not turn_id:
+            return jsonify({"ok": False, "error": "缺少 turn_id"}), 400
+        from services.voice_call_tts_cache import cancel_voice_call_tts_turn
+
+        removed = cancel_voice_call_tts_turn(turn_id)
+        return jsonify({"ok": True, "turn_id": turn_id, "removed": int(removed)})
 
     @bp.route("/voice-call-preview", methods=["POST"])
     def miniapp_voice_call_preview():

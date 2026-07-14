@@ -1,3 +1,4 @@
+import hashlib
 import json
 import time
 from datetime import datetime, timedelta
@@ -139,8 +140,12 @@ def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, crea
         sumitalk_logger.warning("followup_append_skip reason=empty_content device_id=%s", did)
         return False
     now_iso = str(created_at or now_beijing_iso()).strip() or now_beijing_iso()
+    message_digest = hashlib.sha256(
+        f"{did}\0{now_iso}\0{content}".encode("utf-8", errors="ignore")
+    ).hexdigest()[:24]
+    message_id = f"assistant-followup-{message_digest}"
     message = {
-        "id": f"assistant-followup-{int(time.time() * 1000)}",
+        "id": message_id,
         "role": "assistant",
         "content": content,
         "createdAt": now_iso,
@@ -169,6 +174,30 @@ def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, crea
         ok = bool(_save_sumitalk_histories(data))
     if ok:
         sumitalk_logger.info("followup_append_ok preferred=%s device_id=%s chars=%s after=%s", device_id, did, len(content), len(merged_messages))
+        action, action_error = r2_store.append_app_action(
+            "deliver_chat_message",
+            {
+                "message_id": message_id,
+                "text": content,
+                "conversation_id": "du-private",
+                "window_id": "sumitalk-main",
+                "role": "assistant",
+                "sender": "渡",
+                "created_at": now_iso,
+            },
+            device_id=did,
+            expires_in_sec=30 * 24 * 60 * 60,
+            source="proactive_followup",
+            idempotency_key=f"chat-message:{did}:{message_id}",
+        )
+        if action_error or not action:
+            sumitalk_logger.error(
+                "followup_device_action_failed device_id=%s message_id=%s error=%s",
+                did,
+                message_id,
+                action_error or "enqueue_failed",
+            )
+            return False
         try:
             from services.realtime_publish import publish_assistant_message
 

@@ -1265,6 +1265,7 @@ def _stream_with_r2_archive(
     skip_post_archive_body_delta: bool = False,
     du_request_id: str = "",
     tool_executor=None,
+    sumitalk_event_sink=None,
 ):
     """
     包装流式响应：原样转发 SSE，同时在流结束后用收集到的 content 写 R2。
@@ -1283,7 +1284,181 @@ def _stream_with_r2_archive(
     du_daily_maintenance = _is_du_daily_maintenance_request()
     pseudo_cot_stream_enabled = _pseudo_cot_instruction_enabled(body)
 
+    def _emit_stream_event(kind: str, payload: dict | None = None) -> None:
+        if not sumitalk_event_sink:
+            return
+        try:
+            sumitalk_event_sink(kind, payload or {})
+        except Exception:
+            logger.debug("SumiTalk 流式事件回调失败 kind=%s", kind, exc_info=True)
+
+    def _stream_event_text_chunks(text: str):
+        value = str(text or "")
+        for start in range(0, len(value), 1600):
+            yield value[start : start + 1600]
+
+    def _emit_reasoning_snapshot(
+        text: str,
+        round_no: int,
+        *,
+        omitted: bool = False,
+        part_id: str = "",
+    ) -> None:
+        reasoning_text = str(text or "")
+        if not reasoning_text and not omitted:
+            return
+        reasoning_part_id = part_id or f"reasoning-{round_no}"
+        _emit_stream_event(
+            "reasoning_started",
+            {"part_id": reasoning_part_id, "round": round_no, "mode": "delta"},
+        )
+        if reasoning_text:
+            for event_text in _stream_event_text_chunks(reasoning_text):
+                _emit_stream_event(
+                    "reasoning_delta",
+                    {
+                        "part_id": reasoning_part_id,
+                        "round": round_no,
+                        "mode": "delta",
+                        "text": event_text,
+                    },
+                )
+        _emit_stream_event(
+            "reasoning_finished",
+            {
+                "part_id": reasoning_part_id,
+                "round": round_no,
+                "mode": "delta",
+                "omitted": bool(omitted),
+            },
+        )
+
+    def _emit_reasoning_chunk(chunk, round_no: int, part_id: str, state: dict) -> None:
+        try:
+            if not chunk.startswith(b"data: "):
+                return
+            raw = chunk[6:].strip()
+            if not raw or raw == b"[DONE]":
+                return
+            packet = json.loads(raw.decode("utf-8", errors="ignore"))
+            delta = ((packet.get("choices") or [{}])[0] or {}).get("delta") or {}
+            event_parts: list[str] = []
+            raw_content = delta.get("content") or ""
+            if isinstance(raw_content, str) and _THINK_BLOCK_RE.search(raw_content):
+                _clean, in_content_thinking = _extract_thinking_from_content(raw_content)
+                if in_content_thinking:
+                    event_parts.append(in_content_thinking)
+            reasoning_text, _details, omitted = _extract_reasoning_text_and_details(delta)
+            if reasoning_text:
+                event_parts.append(reasoning_text)
+            if omitted:
+                state["omitted"] = True
+            if not event_parts:
+                return
+            if not state.get("started"):
+                _emit_stream_event(
+                    "reasoning_started",
+                    {"part_id": part_id, "round": round_no, "mode": "delta"},
+                )
+                state["started"] = True
+            for text in event_parts:
+                for event_text in _stream_event_text_chunks(text):
+                    _emit_stream_event(
+                        "reasoning_delta",
+                        {
+                            "part_id": part_id,
+                            "round": round_no,
+                            "mode": "delta",
+                            "text": event_text,
+                        },
+                    )
+        except Exception:
+            return
+
+    def _emit_assistant_text_value(
+        text: str,
+        round_no: int,
+        part_id: str,
+        state: dict,
+    ) -> None:
+        if not text:
+            return
+        if not state.get("started"):
+            _emit_stream_event(
+                "assistant_text_started",
+                {"part_id": part_id, "round": round_no, "mode": "delta", "role": "assistant"},
+            )
+            state["started"] = True
+        for event_text in _stream_event_text_chunks(text):
+            _emit_stream_event(
+                "assistant_delta",
+                {
+                    "part_id": part_id,
+                    "round": round_no,
+                    "mode": "delta",
+                    "role": "assistant",
+                    "text": event_text,
+                },
+            )
+
+    def _emit_assistant_sse_chunk(chunk, round_no: int, part_id: str, state: dict) -> None:
+        try:
+            text = chunk.decode("utf-8") if isinstance(chunk, (bytes, bytearray)) else str(chunk or "")
+            for line in text.splitlines():
+                if not line.startswith("data: ") or line[6:].strip() == "[DONE]":
+                    continue
+                packet = json.loads(line[6:])
+                delta = (((packet.get("choices") or [{}])[0] or {}).get("delta") or {})
+                content = delta.get("content")
+                if isinstance(content, str) and content:
+                    _emit_assistant_text_value(content, round_no, part_id, state)
+        except Exception:
+            return
+
+    def _finish_assistant_stream_event(round_no: int, part_id: str, state: dict) -> None:
+        if not state.get("started") or state.get("finished"):
+            return
+        _emit_stream_event(
+            "assistant_text_finished",
+            {"part_id": part_id, "round": round_no, "mode": "delta", "role": "assistant"},
+        )
+        state["finished"] = True
+
+    def _emit_assistant_snapshot(text: str, round_no: int, *, part_id: str = "") -> None:
+        visible_text = _normalize_visible_reply_text(text)
+        if not visible_text:
+            return
+        snapshot_part_id = part_id or f"assistant-text-{round_no}"
+        state = {"started": False, "finished": False}
+        _emit_assistant_text_value(visible_text, round_no, snapshot_part_id, state)
+        _finish_assistant_stream_event(round_no, snapshot_part_id, state)
+
+    def _emit_stream_tool_event(kind: str, payload: dict, round_no: int) -> None:
+        event_payload = dict(payload or {})
+        tool_call_id = str(event_payload.get("tool_call_id") or "").strip()
+        if tool_call_id:
+            event_payload["part_id"] = f"tool-{tool_call_id}"
+        if event_payload.get("result_preview") is not None and event_payload.get("output") is None:
+            event_payload["output"] = event_payload.get("result_preview")
+        event_payload["round"] = round_no
+        event_payload["mode"] = "snapshot"
+        if kind == "tool_call_started":
+            _emit_stream_event(kind, event_payload)
+            if event_payload.get("arguments"):
+                _emit_stream_event(
+                    "tool_arguments_delta",
+                    {
+                        **event_payload,
+                        "arguments_delta": event_payload.get("arguments"),
+                    },
+                )
+            return
+        if kind == "tool_call_finished" and event_payload.get("output"):
+            _emit_stream_event("tool_output_delta", event_payload)
+        _emit_stream_event(kind, event_payload)
+
     def _collect_content_from_chunk(chunk):
+        nonlocal reasoning_omitted
         try:
             if chunk.startswith(b"data: "):
                 payload = chunk[6:].strip()
@@ -1324,9 +1499,7 @@ def _stream_with_r2_archive(
         def _producer():
             try:
                 for chunk in _stream_forward_to_ai(body, headers):
-                    _collect_content_from_chunk(chunk)
-                    # 先收集 reasoning 用于存档，再过滤掉发给客户端的 chunk 里的 reasoning delta
-                    chunk_queue.put(_strip_reasoning_from_sse_chunk(chunk))
+                    chunk_queue.put(chunk)
                 chunk_queue.put(None)
             except Exception as e:
                 logger.warning("流式生产异常 %s", e)
@@ -1340,6 +1513,29 @@ def _stream_with_r2_archive(
         last_send_ts = time.time()
         du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
         pseudo_cot_state = _PseudoCotStreamState() if pseudo_cot_stream_enabled else None
+        assistant_part_id = "assistant-text-1"
+        assistant_event_state = {"started": False, "finished": False}
+        reasoning_part_id = "reasoning-1"
+        reasoning_event_state = {"started": False, "omitted": False}
+
+        def _prepare_no_tool_chunk(raw_chunk):
+            _collect_content_from_chunk(raw_chunk)
+            _emit_reasoning_chunk(raw_chunk, 1, reasoning_part_id, reasoning_event_state)
+            outgoing_chunk = _strip_reasoning_from_sse_chunk(raw_chunk)
+            if pseudo_cot_state:
+                outgoing_chunk = _transform_pseudo_cot_sse_chunk_bytes(
+                    outgoing_chunk,
+                    pseudo_cot_state,
+                )
+            outgoing_chunk = transform_sse_chunk_bytes_pcmd(outgoing_chunk, du_state)
+            _emit_assistant_sse_chunk(
+                outgoing_chunk,
+                1,
+                assistant_part_id,
+                assistant_event_state,
+            )
+            return outgoing_chunk
+
         try:
             while True:
                 buf = []
@@ -1355,6 +1551,7 @@ def _stream_with_r2_archive(
                 if chunk is None:
                     break
 
+                chunk = _prepare_no_tool_chunk(chunk)
                 buf.append(chunk)
                 if chunk.startswith(b"data:") and len(chunk) > 5:
                     data_chunk_count += 1
@@ -1373,21 +1570,29 @@ def _stream_with_r2_archive(
                         if nxt is None:
                             chunk = None
                             break
+                        nxt = _prepare_no_tool_chunk(nxt)
                         buf.append(nxt)
                         if nxt.startswith(b"data:") and len(nxt) > 5:
                             data_chunk_count += 1
                     if chunk is None:
                         # 先把缓冲发完再结束
-                        if pseudo_cot_state:
-                            buf = [_transform_pseudo_cot_sse_chunk_bytes(c, pseudo_cot_state) for c in buf]
-                        yield b"".join([transform_sse_chunk_bytes_pcmd(c, du_state) for c in buf])
+                        yield b"".join(buf)
                         break
 
-                if pseudo_cot_state:
-                    buf = [_transform_pseudo_cot_sse_chunk_bytes(c, pseudo_cot_state) for c in buf]
-                yield b"".join([transform_sse_chunk_bytes_pcmd(c, du_state) for c in buf])
+                yield b"".join(buf)
                 last_send_ts = time.time()
         finally:
+            if reasoning_event_state.get("started"):
+                _emit_stream_event(
+                    "reasoning_finished",
+                    {
+                        "part_id": reasoning_part_id,
+                        "round": 1,
+                        "mode": "delta",
+                        "omitted": bool(reasoning_event_state.get("omitted")),
+                    },
+                )
+            _finish_assistant_stream_event(1, assistant_part_id, assistant_event_state)
             full_content = "".join(content_parts)
             visible_source, inner_os = _split_inner_os_from_text(full_content)
             visible = _extract_and_store_hidden_sidecars(
@@ -1462,11 +1667,20 @@ def _stream_with_r2_archive(
     tool_empty_final_retry_used = False
     tool_midstream_retry_used = False
     game_checkpoint_finalizing = False
+    stream_attempt_no = 0
     tool_visible_content_parts: list[str] = []
     final_thinking_blocks: list[dict] = []
     stream_inner_os_parts: list[str] = []
     try:
         while True:
+            stream_attempt_no += 1
+            event_round = tool_rounds_used + 1
+            reasoning_part_id = f"reasoning-{event_round}-{stream_attempt_no}"
+            round_event_state = {"started": False, "omitted": False}
+            assistant_part_id = f"assistant-text-{event_round}-{stream_attempt_no}"
+            assistant_event_state = {"started": False, "finished": False}
+            assistant_du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
+            assistant_pseudo_state = _PseudoCotStreamState() if pseudo_cot_stream_enabled else None
             chunks = []
             chunk_queue = queue.Queue()
 
@@ -1490,12 +1704,53 @@ def _stream_with_r2_archive(
                 if chunk is None:
                     break
                 chunks.append(chunk)
+                _emit_reasoning_chunk(chunk, event_round, reasoning_part_id, round_event_state)
+                assistant_chunk = _strip_reasoning_from_sse_chunk(chunk)
+                if assistant_pseudo_state:
+                    assistant_chunk = _transform_pseudo_cot_sse_chunk_bytes(
+                        assistant_chunk,
+                        assistant_pseudo_state,
+                    )
+                assistant_chunk = transform_sse_chunk_bytes_pcmd(assistant_chunk, assistant_du_state)
+                _emit_assistant_sse_chunk(
+                    assistant_chunk,
+                    event_round,
+                    assistant_part_id,
+                    assistant_event_state,
+                )
             if len(chunks) == 1 and chunks[0].startswith(b"data: ") and b"error" in chunks[0]:
+                _finish_assistant_stream_event(
+                    event_round,
+                    assistant_part_id,
+                    assistant_event_state,
+                )
                 yield chunks[0]
                 return
             parsed = _parse_stream_to_message(chunks)
+            if round_event_state.get("started"):
+                _emit_stream_event(
+                    "reasoning_finished",
+                    {
+                        "part_id": reasoning_part_id,
+                        "round": event_round,
+                        "mode": "delta",
+                        "omitted": bool(round_event_state.get("omitted")),
+                    },
+                )
+            else:
+                _emit_reasoning_snapshot(
+                    str(parsed.get("reasoning") or ""),
+                    event_round,
+                    omitted=bool(parsed.get("reasoning_omitted")),
+                    part_id=reasoning_part_id,
+                )
             tool_calls = parsed.get("tool_calls")
             if tool_calls and isinstance(tool_calls, list):
+                _finish_assistant_stream_event(
+                    event_round,
+                    assistant_part_id,
+                    assistant_event_state,
+                )
                 if game_checkpoint_finalizing:
                     logger.warning(
                         "game tool checkpoint 收口时上游仍请求工具，已阻止继续执行 window_id=%s tool_calls=%s",
@@ -1503,9 +1758,15 @@ def _stream_with_r2_archive(
                         len(tool_calls),
                     )
                     fallback = "由于防沉迷机制，暂时中止游戏回合。下次可以继续。"
-                    fallback = _merge_visible_tool_round_content(tool_visible_content_parts, fallback)
-                    yield _sse_delta_chunk_bytes(fallback)
-                    content_parts.append(fallback)
+                    archived_fallback = _merge_visible_tool_round_content(tool_visible_content_parts, fallback)
+                    content_parts.append(archived_fallback)
+                    _emit_assistant_snapshot(
+                        fallback,
+                        event_round,
+                        part_id=f"assistant-fallback-{stream_attempt_no}",
+                    )
+                    yield _sse_delta_chunk_bytes(fallback if sumitalk_event_sink else archived_fallback)
+                    yield b"data: [DONE]\n\n"
                     break
                 if tool_rounds_used >= max_processed_tool_rounds:
                     logger.warning(
@@ -1514,9 +1775,15 @@ def _stream_with_r2_archive(
                         len(tool_calls),
                     )
                     cap_hint = "（已达到工具调用轮数上限，为控制费用已停止继续自动调工具。你可以让我基于现有结果继续回答。）"
-                    cap_hint = _merge_visible_tool_round_content(tool_visible_content_parts, cap_hint)
-                    yield _sse_delta_chunk_bytes(cap_hint)
-                    content_parts.append(cap_hint)
+                    archived_cap_hint = _merge_visible_tool_round_content(tool_visible_content_parts, cap_hint)
+                    content_parts.append(archived_cap_hint)
+                    _emit_assistant_snapshot(
+                        cap_hint,
+                        event_round,
+                        part_id=f"assistant-cap-{stream_attempt_no}",
+                    )
+                    yield _sse_delta_chunk_bytes(cap_hint if sumitalk_event_sink else archived_cap_hint)
+                    yield b"data: [DONE]\n\n"
                     break
                 execute_tool_func = tool_executor
                 if execute_tool_func is None:
@@ -1534,7 +1801,18 @@ def _stream_with_r2_archive(
                 if parsed.get("reasoning_omitted"):
                     msg["reasoning_omitted"] = True
                     reasoning_omitted = True
-                current_body = _append_tool_results_and_continue(current_body, msg, tool_calls, execute_tool_func)
+                current_round = tool_rounds_used + 1
+                current_body = _append_tool_results_and_continue(
+                    current_body,
+                    msg,
+                    tool_calls,
+                    execute_tool_func,
+                    on_tool_event=lambda kind, payload, round_no=current_round: _emit_stream_tool_event(
+                        kind,
+                        payload or {},
+                        round_no,
+                    ),
+                )
                 tool_rounds_used += 1
                 if _game_tool_checkpoint_from_messages(current_body.get("messages") or []):
                     logger.info("game tool checkpoint 流式回合转普通收口 window_id=%s round=%s", window_id, tool_rounds_used)
@@ -1547,6 +1825,11 @@ def _stream_with_r2_archive(
                 and (not game_checkpoint_finalizing)
                 and _should_retry_tool_empty_final(parsed.get("content") or "")
             ):
+                _finish_assistant_stream_event(
+                    event_round,
+                    assistant_part_id,
+                    assistant_event_state,
+                )
                 logger.warning("工具续轮最终正文为空，流式路径触发一次强制收口补问")
                 current_body = _inject_tool_empty_final_retry_instruction(current_body)
                 tool_empty_final_retry_used = True
@@ -1560,6 +1843,11 @@ def _stream_with_r2_archive(
                     parsed.get("reasoning") or "",
                 )
             ):
+                _finish_assistant_stream_event(
+                    event_round,
+                    assistant_part_id,
+                    assistant_event_state,
+                )
                 logger.info("工具续轮命中中间态文本，流式路径触发一次内部补问重试")
                 current_body = _inject_tool_midstream_retry_instruction(current_body)
                 tool_midstream_retry_used = True
@@ -1568,14 +1856,15 @@ def _stream_with_r2_archive(
             pseudo_cot_state = _PseudoCotStreamState() if pseudo_cot_stream_enabled else None
             done_chunks = []
             raw_parsed_content = parsed.get("content") or ""
-            parsed_content = dedupe_stream_sumitalk_cards(raw_parsed_content)
-            merged_parsed_content = _merge_visible_tool_round_content(tool_visible_content_parts, parsed_content)
-            if merged_parsed_content != raw_parsed_content:
-                parsed_content = merged_parsed_content
-                parsed_content, parsed_inner_os = _split_inner_os_from_text(parsed_content)
-                if parsed_inner_os:
-                    stream_inner_os_parts.append(parsed_inner_os)
-                visible_content = du_state.feed_delta(parsed_content)
+            final_parsed_content = dedupe_stream_sumitalk_cards(raw_parsed_content)
+            archived_content = _merge_visible_tool_round_content(tool_visible_content_parts, final_parsed_content)
+            archived_content, parsed_inner_os = _split_inner_os_from_text(archived_content)
+            if parsed_inner_os:
+                stream_inner_os_parts.append(parsed_inner_os)
+            outgoing_content = final_parsed_content if sumitalk_event_sink else archived_content
+            outgoing_content, _outgoing_inner_os = _split_inner_os_from_text(outgoing_content)
+            if outgoing_content != raw_parsed_content:
+                visible_content = du_state.feed_delta(outgoing_content)
                 if visible_content:
                     yield _sse_delta_chunk_bytes(visible_content)
             else:
@@ -1587,16 +1876,18 @@ def _stream_with_r2_archive(
                     if pseudo_cot_state:
                         safe_chunk = _transform_pseudo_cot_sse_chunk_bytes(safe_chunk, pseudo_cot_state)
                     yield transform_sse_chunk_bytes_pcmd(safe_chunk, du_state)
-            content_parts.append(parsed_content)
+            content_parts.append(archived_content)
             if _reply_channel() == "sumitalk":
-                extra_card = sumitalk_card_suffix_for_stream(parsed_content, current_body.get("messages") or [])
+                extra_card = sumitalk_card_suffix_for_stream(archived_content, current_body.get("messages") or [])
                 if extra_card:
+                    _emit_assistant_text_value(
+                        extra_card,
+                        event_round,
+                        assistant_part_id,
+                        assistant_event_state,
+                    )
                     yield _sse_delta_chunk_bytes(extra_card)
                     content_parts.append(extra_card)
-            if done_chunks:
-                yield b"data: [DONE]\n\n"
-            else:
-                yield b"data: [DONE]\n\n"
             if parsed.get("reasoning"):
                 reasoning_parts.append(parsed.get("reasoning") or "")
             if parsed.get("reasoning_details"):
@@ -1605,6 +1896,15 @@ def _stream_with_r2_archive(
                 final_thinking_blocks = [b for b in (parsed.get("thinking_blocks") or []) if isinstance(b, dict)]
             if parsed.get("reasoning_omitted"):
                 reasoning_omitted = True
+            _finish_assistant_stream_event(
+                event_round,
+                assistant_part_id,
+                assistant_event_state,
+            )
+            if done_chunks:
+                yield b"data: [DONE]\n\n"
+            else:
+                yield b"data: [DONE]\n\n"
             break
     finally:
         full_content = "".join(content_parts)
@@ -1978,6 +2278,13 @@ def chat_completions():
             from services.sumitalk_chat_queue import append_sumitalk_chat_job_event
             from services.realtime_publish import publish_sumitalk_chat_event
 
+            normalized_payload = dict(payload or {})
+            if str(kind or "").startswith("tool_"):
+                tool_call_id = str(normalized_payload.get("tool_call_id") or "").strip()
+                if tool_call_id and not normalized_payload.get("part_id"):
+                    normalized_payload["part_id"] = f"tool-{tool_call_id}"
+                if normalized_payload.get("result_preview") is not None and normalized_payload.get("output") is None:
+                    normalized_payload["output"] = normalized_payload.get("result_preview")
             event = append_sumitalk_chat_job_event(
                 sumitalk_job_id,
                 kind,
@@ -1985,11 +2292,12 @@ def chat_completions():
                     "job_id": sumitalk_job_id,
                     "client_request_id": sumitalk_client_request_id,
                     "window_id": window_id,
-                    **(payload or {}),
+                    **normalized_payload,
                 },
             )
             if event:
-                sumitalk_logger.info(
+                event_log = sumitalk_logger.debug if str(kind or "").endswith("_delta") else sumitalk_logger.info
+                event_log(
                     "sumitalk_chat_event_emitted job_id=%s kind=%s seq=%s round=%s name=%s text_chars=%s",
                     sumitalk_job_id,
                     kind,
@@ -1998,7 +2306,8 @@ def chat_completions():
                     event.get("name") or "",
                     len(str(event.get("text") or "")),
                 )
-                publish_sumitalk_chat_event(reply_target, event, window_id=window_id)
+                if not str(kind or "").endswith("_delta"):
+                    publish_sumitalk_chat_event(reply_target, event, window_id=window_id)
         except Exception:
             sumitalk_logger.debug(
                 "sumitalk_chat_event_emit_failed job_id=%s kind=%s",
@@ -2044,11 +2353,16 @@ def chat_completions():
             (request.headers.get("User-Agent") or "")[:120],
         )
 
-    def _stream_response(gen):
+    def _stream_response(gen, *, sumitalk_rich_events: bool = False, degraded_reason: str = ""):
+        response_headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+        if sumitalk_rich_events and is_sumitalk_request and sumitalk_job_id:
+            response_headers["X-SumiTalk-Rich-Events"] = "1"
+        if str(degraded_reason or "").strip():
+            response_headers["X-Du-Stream-Degraded"] = str(degraded_reason).strip()
         return Response(
             stream_with_context(gen),
             mimetype="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers=response_headers,
         )
 
     def _sse_from_nonstream_response(resp: dict):
@@ -2259,7 +2573,9 @@ def chat_completions():
                 skip_post_archive_body_delta=skip_post_archive_body_delta,
                 du_request_id=du_request_id,
                 tool_executor=_execute_tool_with_chat_context,
-            )
+                sumitalk_event_sink=_emit_sumitalk_chat_event if is_sumitalk_request else None,
+            ),
+            sumitalk_rich_events=True,
         )
     resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
     cache_debug_entries = [cache_debug] if cache_debug else []
@@ -2274,7 +2590,7 @@ def chat_completions():
             )
         logger.error("Chat 转发失败 error=%s", err, exc_info=True)
         if openrouter_forced_nonstream:
-            return _stream_response(_sse_error(err))
+            return _stream_response(_sse_error(err), degraded_reason="upstream_nonstream")
         return jsonify({"error": err}), status
     if status >= 400:
         if is_sumitalk_request:
@@ -2287,7 +2603,10 @@ def chat_completions():
             )
         logger.warning("Chat 上游返回异常 status=%s", status)
         if openrouter_forced_nonstream:
-            return _stream_response(_sse_error(_extract_upstream_error_detail(resp_json, status) or "upstream error"))
+            return _stream_response(
+                _sse_error(_extract_upstream_error_detail(resp_json, status) or "upstream error"),
+                degraded_reason="upstream_nonstream",
+            )
         return jsonify(resp_json or {"error": "upstream error"}), status
     # 非流式 + 有 Notion 工具时：若上游返回 tool_calls，执行工具并继续请求，直到无 tool_calls 或达到最大轮数
     # 收集中间轮次 reasoning 供 MiniApp 思维链面板使用，但不回填到返回给客户端的 resp_json，
@@ -2723,5 +3042,8 @@ def chat_completions():
             tool_rounds_used,
         )
     if openrouter_forced_nonstream:
-        return _stream_response(_sse_from_nonstream_response(resp_json))
+        return _stream_response(
+            _sse_from_nonstream_response(resp_json),
+            degraded_reason="upstream_nonstream",
+        )
     return jsonify(resp_json), 200

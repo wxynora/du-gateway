@@ -91,12 +91,14 @@ def _miniapp_auth():
         request.path.rstrip("/").endswith("/panel-auth/meta")
         or request.path.rstrip("/").endswith("/panel-auth/check-password")
         or request.path.rstrip("/").endswith("/panel-auth/verify")
+        or request.path.rstrip("/").endswith("/panel-auth/native-device/pair")
         or request.path.rstrip("/").endswith("/client-error")
         or request.path.rstrip("/").endswith("/tts-preview")
         or request.path.rstrip("/").endswith("/stickers/tags-public")
         or request.path.rstrip("/").endswith("/stickers/resolve")
         or request.path.rstrip("/").endswith("/stickers/raw-public")
         or request.path.rstrip("/").endswith("/chat-media/raw-public")
+        or "/miniapp-api/voice-call/tts-audio/" in request.path
         or request.path.rstrip("/").endswith("/device-screenshots/raw-public")
     ):
         enforce_ip_allowlist()

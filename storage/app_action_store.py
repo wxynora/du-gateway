@@ -19,11 +19,13 @@ _APP_ACTION_ALLOWLIST = {
     "request_screen_check",
     "voice_call_invite",
     "recall_message",
+    "deliver_chat_message",
 }
 _APP_ACTION_HISTORY_MAX = 100
 _APP_ACTION_EXPIRES_DEFAULT = 900
 _APP_ACTION_EXPIRES_MIN = 30
 _APP_ACTION_EXPIRES_MAX = 3600
+_APP_ACTION_CHAT_MESSAGE_EXPIRES_MAX = 30 * 24 * 60 * 60
 _APP_ACTION_LEASE_SECONDS = 90
 _APP_ACTION_MAX_RETRY = 3
 _APP_ACTION_VOICE_TAG_RE = re.compile(r"</?voice>", flags=re.IGNORECASE)
@@ -382,6 +384,8 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         return _normalize_voice_call_invite_payload(payload)
     if action_type == "recall_message":
         return _normalize_recall_message_payload(payload)
+    if action_type == "deliver_chat_message":
+        return _normalize_deliver_chat_message_payload(payload)
     if action_type != "create_system_alarm":
         return None, f"不支持的 app action: {action_type}"
     src = payload if isinstance(payload, dict) else {}
@@ -408,6 +412,38 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         "title": title,
         "skipUi": skip_ui,
         "notify": notify,
+    }, None
+
+
+def _normalize_deliver_chat_message_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    src = payload if isinstance(payload, dict) else {}
+    message_id = str(src.get("message_id") or src.get("messageId") or "").strip()
+    if not message_id:
+        return None, "deliver_chat_message 缺少 message_id"
+    text = str(src.get("text") or src.get("content") or "")
+    if not text.strip():
+        return None, "deliver_chat_message 正文不能为空"
+    conversation_id = str(
+        src.get("conversation_id") or src.get("conversationId") or "du-private"
+    ).strip()
+    if conversation_id not in {"du-private", "three-person-group"}:
+        return None, "deliver_chat_message conversation_id 无效"
+    role = str(src.get("role") or "assistant").strip().lower()
+    if role not in {"assistant", "benben"}:
+        return None, "deliver_chat_message role 无效"
+    window_id = str(
+        src.get("window_id") or src.get("windowId") or "sumitalk-main"
+    ).strip() or "sumitalk-main"
+    created_at = str(src.get("created_at") or src.get("createdAt") or "").strip()
+    sender = str(src.get("sender") or ("笨笨" if role == "benben" else "渡")).strip()
+    return {
+        "message_id": message_id[:160],
+        "text": text,
+        "conversation_id": conversation_id,
+        "window_id": window_id[:160],
+        "role": role,
+        "sender": sender[:40],
+        "created_at": created_at[:80],
     }, None
 
 
@@ -808,7 +844,12 @@ def append_app_action(
         ttl = int(expires_in_sec or _APP_ACTION_EXPIRES_DEFAULT)
     except Exception:
         ttl = _APP_ACTION_EXPIRES_DEFAULT
-    ttl = max(_APP_ACTION_EXPIRES_MIN, min(_APP_ACTION_EXPIRES_MAX, ttl))
+    max_ttl = (
+        _APP_ACTION_CHAT_MESSAGE_EXPIRES_MAX
+        if action == "deliver_chat_message"
+        else _APP_ACTION_EXPIRES_MAX
+    )
+    ttl = max(_APP_ACTION_EXPIRES_MIN, min(max_ttl, ttl))
     now = datetime.now(timezone.utc)
     now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     expires_at = (now + timedelta(seconds=ttl)).strftime("%Y-%m-%dT%H:%M:%SZ")

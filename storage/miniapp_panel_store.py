@@ -63,6 +63,20 @@ def touch_trusted_device(device_id: str) -> dict:
     return upsert_trusted_device(device_id)
 
 
+def get_trusted_device(device_id: str) -> dict | None:
+    did = str(device_id or "").strip()
+    if not did:
+        return None
+    with _LOCK:
+        data = _load(MINIAPP_PANEL_TRUSTED_DEVICES_FILE)
+        for item in (data.get("items") or []):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("id") or "").strip() == did:
+                return dict(item)
+    return None
+
+
 def is_trusted_device(device_id: str) -> bool:
     did = str(device_id or "").strip()
     if not did:
