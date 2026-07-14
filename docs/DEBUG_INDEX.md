@@ -93,6 +93,7 @@ ssh du-gateway 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 主聊天响应辅助 | `services/chat_sidecars.py`、`services/chat_response_enrichers.py`、`services/chat_tool_helpers.py`、`services/chat_request_helpers.py`、`services/chat_archive_helpers.py` | 隐藏 sidecar 写入、HTML 预览/SumiTalk 卡片补全、tool 重试/SSE 小工具、入口状态/误触保护、归档后台辅助 |
 | 注入管道 | `pipeline/pipeline.py` | core prompt、summary、last4、sense、dynamic memory、tools 注入 |
 | MiniApp API | `routes/miniapp_api.py` | SumiTalk、设备、思维链、设置、贴纸、日历、上游切换等接口 |
+| 记忆整理 / DS 单条重写 | `routes/miniapp/memory_panel.py`、`services/memory_rewrite.py`、`scripts/test_memory_rewrite.py` | 原生 App 可读取动态层和核心记忆，先请求 DS 重写候选，再由辛玥确认保存；动态层保存后刷新 retrieval text、向量索引、SQLite mirror 和血缘审计，核心层刷新 pending 索引。预览不写 R2，保存会校验原文未被后台更新。 |
 | MiniApp 前端主壳 | `miniapp/src/ui/App.tsx` | 首页、聊天页、设置页、消息渲染、SumiTalk job |
 | SumiTalk 本地聊天存储 | `miniapp/src/ui/storage/chatHistoryDb.ts`、`miniapp/src/ui/chat/*`、`miniapp/src/plugins/sumi-chat-store.ts`、`miniapp/android/app/src/main/java/com/sumitalk/app/SumiChatStorePlugin.java`、`miniapp/android/app/src/main/java/com/sumitalk/app/chat/*` | Android 原生 SQLite ChatStore、本地历史读写抽象和 outbox 恢复 |
 | SumiTalk 原生 UI 源码对齐 | `miniapp/scripts/native-ui-parity-audit.mjs`、`docs/SumiTalk原生UI源码对齐清单.md`、`miniapp/tailwind.config.js`、`miniapp/src/styles.css` | 以 MiniApp TSX/CSS 为设计真源，对照扫描原生 Compose 硬编码；可生成 Markdown、JSON 和 Kotlin token 骨架，但不会覆盖原生仓库 |
@@ -2441,3 +2442,10 @@ npm -C miniapp run android
 - 已修：所有 gateway wakeup 请求不再进入用户互动副作用块，普通聊天路径保持不变。
 - 已验证：回归测试覆盖“已用论坛工具时追加函数绝不调用”“未用工具时仍恰好调用一次”“工具轨迹能从网关传到调度器”“内部唤醒不记用户活动”；相关 Python 编译和既有用户活动测试通过。测试没有请求真实上游、没有读写 R2、没有部署或重启。
 - 未完成 / 下次继续：当前改动尚未提交、push 或部署；线上被污染的历史互动时间未改写。部署后应观察主动决策日志出现“已执行论坛工具，跳过追加执行轮”，并确认写入审计只在真实用户输入出现。
+
+当前状态（2026-07-14 原生 App 动态层 / 核心记忆 DS 单条重写）：
+- 已完成：`POST /miniapp-api/memory-rewrite/preview` 按 `dynamic/core + memory_id` 从服务端当前快照读取原文并调用 DeepSeek，只返回原文、候选、修改说明和 changed 标记，不写 R2；提示词要求保留事实、使用渡第一人称，并只在确属元身份措辞时处理“渡 / 用户 / 助手 / 模型 / 角色扮演”，不做机械替换。
+- 已完成：`POST /miniapp-api/memory-rewrite/apply` 只有在 App 二次确认后才保存；提交携带预览原文，若后台期间已更新则返回 409。动态层只改 `content/retrieval_text/updated_at` 并刷新向量索引、SQLite mirror 与 provenance；核心层只改 `content/updated_at` 并刷新 core pending 索引，其余元数据不动。
+- 已完成：`GET /miniapp-api/memory-debug` 在已有动态层统计读取中同时返回 `dynamic_memories`，原生 App 不再为每 5 秒刷新重复读取一次 R2 current。
+- 已验证：`python3 scripts/test_memory_rewrite.py` 覆盖预览无写入、两层字段保留、动态派生数据刷新、过期候选冲突、HTTP 两步协议和 memory-debug 同快照返回；测试使用 fake storage 与 fake DeepSeek，不调用真实模型或写 R2。
+- 部署边界：实现提交从最新 `origin/main` 的干净 worktree 构建，未包含植物大战僵尸、MiniApp 或 `miniapp_static` 半成品；真实记忆保存只允许辛玥在 App 中查看候选后手动确认。
