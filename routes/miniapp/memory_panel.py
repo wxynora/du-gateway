@@ -281,6 +281,39 @@ def register_routes(bp) -> None:
         except Exception as e:
             return jsonify({"ok": False, "error": str(e), "memories": []}), 500
 
+    @bp.route("/memory-rewrite/preview", methods=["POST"])
+    def miniapp_memory_rewrite_preview():
+        from services.memory_rewrite import MemoryRewriteError, preview_memory_rewrite
+
+        try:
+            body = request.get_json(silent=True) or {}
+            candidate = preview_memory_rewrite(body.get("layer"), body.get("memory_id"))
+            return jsonify({"ok": True, "candidate": candidate})
+        except MemoryRewriteError as e:
+            return jsonify({"ok": False, "error": str(e)}), e.status_code
+        except Exception as e:
+            logger.warning("memory rewrite preview failed: %s", e, exc_info=True)
+            return jsonify({"ok": False, "error": "生成重写候选失败"}), 500
+
+    @bp.route("/memory-rewrite/apply", methods=["POST"])
+    def miniapp_memory_rewrite_apply():
+        from services.memory_rewrite import MemoryRewriteError, apply_memory_rewrite
+
+        try:
+            body = request.get_json(silent=True) or {}
+            result = apply_memory_rewrite(
+                body.get("layer"),
+                body.get("memory_id"),
+                body.get("original_content"),
+                body.get("rewritten_content"),
+            )
+            return jsonify({"ok": True, "result": result})
+        except MemoryRewriteError as e:
+            return jsonify({"ok": False, "error": str(e)}), e.status_code
+        except Exception as e:
+            logger.warning("memory rewrite apply failed: %s", e, exc_info=True)
+            return jsonify({"ok": False, "error": "保存重写结果失败"}), 500
+
     @bp.route("/dynamic-memory-mirror", methods=["GET"])
     def miniapp_dynamic_memory_mirror():
         try:
@@ -393,7 +426,11 @@ def register_routes(bp) -> None:
                     ds_action_counts["other"] += 1
             maintenance_report = r2_store.get_dynamic_memory_maintenance_report() or {}
             core_cache = _core_cache_items_for_debug(core_limit)
-            dynamic_stats = {"maintenance_report": maintenance_report}
+            mems = [item for item in (r2_store.get_dynamic_memory_list() or []) if isinstance(item, dict)]
+            dynamic_stats = {
+                "maintenance_report": maintenance_report,
+                "memory_count": len(mems),
+            }
             try:
                 from memory_vector.config import (
                     VECTOR_MIN_SIM,
@@ -411,7 +448,6 @@ def register_routes(bp) -> None:
                 )
                 from memory_vector.vector_index_store import list_existing_tags
 
-                mems = r2_store.get_dynamic_memory_list() or []
                 mem_tags = sorted({str((m or {}).get("tag") or "").strip() for m in mems if str((m or {}).get("tag") or "").strip()})
                 label_complete_count = 0
                 label_missing_count = 0
@@ -464,7 +500,7 @@ def register_routes(bp) -> None:
                     }
                 )
             except Exception:
-                dynamic_stats = {"maintenance_report": maintenance_report}
+                pass
             return jsonify(
                 {
                     "ok": True,
@@ -482,6 +518,7 @@ def register_routes(bp) -> None:
                     "citation_count": len(citation_events[:limit]),
                     "citation_total_count": len(citation_events),
                     "core_cache": core_cache,
+                    "dynamic_memories": mems,
                     "ds_audit": {
                         "events": ds_audit_events[:limit],
                         "total_count": len(ds_audit_events),
