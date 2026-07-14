@@ -2429,3 +2429,9 @@ npm -C miniapp run android
 - 原生衔接：通话分段 TTS 已切专用接口、单段最多 120 字、最多两段并发；主通话模型流继续使用现有持久 rich run event，避免双 run、双消息和双存档。专用 POST stream 保留给整轮录音 fallback / 兼容客户端。
 - 已验证：`scripts/test_voice_call_stream_backend.py`、`scripts/test_sumitalk_native_stream_backend.py` 和目标 Python `py_compile` 通过；原生 `HttpChatMediaGatewayClientTest`、`AssistantSpeechRuntimeTest` 通过。验证全部使用 fake upstream、本机临时目录和 mock 通话记录，没有调用真实模型、R2、线上接口或游戏存档。
 - 未完成 / 下次继续：尚未跑后端全量、原生全量 JVM/build/lint 和真机通话；尚未提交、push、部署或重启。部署后需用真实 App 验收首字/首声、长回复分段、打断清理、OpenRouter degraded、共同游戏完整回合不截断，以及普通聊天与其他平台回归；植物大战僵尸和 `miniapp_static` 半成品继续不能混入提交。
+
+当前状态（2026-07-14 SumiTalk 原生流式与静默配对部署）：
+- 已发布：实现提交 `fc1dcfc9` 已推送 `main`，服务器从 `6062ae1b` fast-forward；目标 Python 编译与 `import app` 通过，`du-gateway.service`、`du-sumitalk-chat-worker.service` 重启后均为 active，公网 `/health` 返回 200。
+- 已验证：只运行配对、主动私聊、SumiTalk 流/非流和语音通话四个对应契约脚本；没有运行后端全量、Android 全量或设备测试，也没有调用真实模型、R2 或游戏接口。
+- App 状态：使用线上现有配对密钥完成 `assembleDebug`，仅通过 `adb install -r` 覆盖升级；原有 App 数据和授权未清除。新安装身份已成功换取并保存 Keystore 加密 panel token，旧的单条“请先输入面板密码”失败消息及其关联失败 run/event/part 已按固定 ID 删除，其他本地消息和设置未改。
+- 边界：植物大战僵尸、MiniApp 源码和 `miniapp_static` 半成品均未进入本次实现提交。真实 App 的长回复、取消、多工具轮、共同游戏完整回合和流式通话首字/首声仍需后续手动联机验收。
