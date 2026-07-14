@@ -7,6 +7,7 @@
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vite build",
     "build:android": "node ./scripts/build-android.mjs",
+    "audit:native-ui-parity": "node ./scripts/native-ui-parity-audit.mjs",
     "preview": "vite preview --host 0.0.0.0 --port 5173",
     "cap:sync": "npm run build:android && npx cap sync android",
     "cap:copy": "npm run build:android && npx cap copy android",

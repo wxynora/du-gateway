@@ -89,6 +89,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | MiniApp API | `routes/miniapp_api.py` | SumiTalk、设备、思维链、设置、贴纸、日历、上游切换等接口 |
 | MiniApp 前端主壳 | `miniapp/src/ui/App.tsx` | 首页、聊天页、设置页、消息渲染、SumiTalk job |
 | SumiTalk 本地聊天存储 | `miniapp/src/ui/storage/chatHistoryDb.ts`、`miniapp/src/ui/chat/*`、`miniapp/src/plugins/sumi-chat-store.ts`、`miniapp/android/app/src/main/java/com/sumitalk/app/SumiChatStorePlugin.java`、`miniapp/android/app/src/main/java/com/sumitalk/app/chat/*` | Android 原生 SQLite ChatStore、本地历史读写抽象和 outbox 恢复 |
+| SumiTalk 原生 UI 源码对齐 | `miniapp/scripts/native-ui-parity-audit.mjs`、`docs/SumiTalk原生UI源码对齐清单.md`、`miniapp/tailwind.config.js`、`miniapp/src/styles.css` | 以 MiniApp TSX/CSS 为设计真源，对照扫描原生 Compose 硬编码；可生成 Markdown、JSON 和 Kotlin token 骨架，但不会覆盖原生仓库 |
 | SumiTalk 聊天后台队列 | `routes/miniapp/sumitalk_chat_jobs.py`、`services/sumitalk_chat_queue.py`、`scripts/run_sumitalk_chat_worker.py` | App 发消息只入队和轮询 job；独立 worker 消费后调用统一 `/v1/chat/completions`，避免 gunicorn 请求生命周期杀掉长回复 |
 | MiniApp 分页 | `miniapp/src/ui/tabs/*` | 日志、思维链、上游、日历、贴纸、记忆调试等子页 |
 | MiniApp 小家 | `miniapp/src/ui/tabs/PixelHomeTab.tsx`、`services/pixel_home.py`、`storage/pixel_home_store.py`、`routes/miniapp/dashboard.py`、`miniapp/src/assets/life-home-*.png` | 「小家」生活感页面：按 `ui合集/赛博小家` 的单列布局和字体组织，实际小屋图、点击才出现的小点、赛博小家状态注入与事件唤醒 |
