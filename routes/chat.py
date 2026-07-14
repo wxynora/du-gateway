@@ -1082,6 +1082,16 @@ def _tool_trace_has_function(tool_trace: list, name: str) -> bool:
     return False
 
 
+def _executed_tool_names_from_messages(messages: list) -> list[str]:
+    names: list[str] = []
+    for item in _collect_tool_trace_from_messages(messages or []):
+        function = item.get("function") or {} if isinstance(item, dict) else {}
+        name = str(function.get("name") or "").strip() if isinstance(function, dict) else ""
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def _tool_trace_has_game_tool_loop(tool_trace: list) -> bool:
     try:
         from services.game_tool_runtime import tool_trace_has_game_marker
@@ -2144,6 +2154,10 @@ def _is_proactive_decision_request() -> bool:
     return str(request.headers.get("X-DU-PROACTIVE-DECISION") or "").strip().lower() in ("1", "true", "yes")
 
 
+def _should_record_user_interaction_side_effects() -> bool:
+    return not _is_du_daily_maintenance_request() and not _is_gateway_wakeup_request()
+
+
 def _static_models_response():
     """用 GATEWAY_MODELS 拼成 OpenAI 风格的 /v1/models 响应。"""
     if not GATEWAY_MODELS:
@@ -2417,7 +2431,7 @@ def chat_completions():
             return _stream_response(_ghost_noop_stream())
         return jsonify(_build_noop_chat_response(body)), 200
 
-    if not _is_du_daily_maintenance_request():
+    if _should_record_user_interaction_side_effects():
         _maybe_mark_tg_window_user_activity(
             window_id,
             body,
@@ -3020,6 +3034,9 @@ def chat_completions():
                     )
     else:
         logger.info("R2 未存档：上游无 choices 或响应为空")
+    if _is_proactive_decision_request() and isinstance(resp_json, dict):
+        resp_json["du_gateway_executed_tools"] = _executed_tool_names_from_messages(body.get("messages") or [])
+
     if is_sumitalk_request:
         msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
         reasoning_text = ""

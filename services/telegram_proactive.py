@@ -142,6 +142,19 @@ class ProactiveDecision:
     action: str = ""      # 业务向：send_message / no_contact / diary / forum / surf / drawer / other / error / …
     du_reason: str = ""   # 渡在 JSON 里写的理由
     channel: str = ""           # 发送入口：wechat / qq；SumiTalk 暂不参与主动消息
+    executed_tools: tuple[str, ...] = ()
+
+
+_PROACTIVE_FORUM_TOOL_NAMES = frozenset({"forum_read_feed", "forum_open_thread", "cli"})
+
+
+def _gateway_executed_tool_names(data: dict | None) -> tuple[str, ...]:
+    names: list[str] = []
+    for value in (data or {}).get("du_gateway_executed_tools") or []:
+        name = str(value or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return tuple(names)
 
 
 def _get_chat_model() -> str:
@@ -842,6 +855,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         if not text:
             return ProactiveDecision(False, "", "empty_reply", action="empty", du_reason="模型空回复")
         decision = _parse_proactive_model_reply(text, no_token, default_channel=default_channel, channels=channels)
+        decision.executed_tools = _gateway_executed_tool_names(data)
         if decision.should_send and default_channel:
             decision.channel = default_channel
         return decision
@@ -1353,6 +1367,36 @@ def _run_proactive_forum_action(
         return {"ok": False, "error": str(e)[:160], "reply_preview": ""}
 
 
+def _ensure_proactive_forum_action(
+    decision: ProactiveDecision,
+    *,
+    window_id: str,
+    hours_since_last: float,
+    now_dt: Optional[datetime] = None,
+) -> dict:
+    executed_tools = tuple(str(name or "").strip() for name in decision.executed_tools if str(name or "").strip())
+    used_forum_tools = sorted(_PROACTIVE_FORUM_TOOL_NAMES.intersection(executed_tools))
+    if used_forum_tools:
+        logger.info(
+            "主动决策轮已执行论坛工具，跳过追加执行轮 window_id=%s tools=%s",
+            window_id,
+            ",".join(used_forum_tools),
+        )
+        return {
+            "ok": True,
+            "already_executed": True,
+            "executed_tools": used_forum_tools,
+            "reply_preview": "",
+            "error": "",
+        }
+    return _run_proactive_forum_action(
+        window_id=window_id,
+        hours_since_last=hours_since_last,
+        initial_reason=(decision.du_reason or decision.reason or "").strip(),
+        now_dt=now_dt,
+    )
+
+
 def _run_proactive_drawer_action(
     *,
     window_id: str,
@@ -1514,6 +1558,7 @@ def _ask_du_after_surf_result(
                 channel=default_channel,
             )
         decision = _parse_proactive_model_reply(text, TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN.strip() or "NO_CONTACT", default_channel=default_channel, channels=channels)
+        decision.executed_tools = _gateway_executed_tool_names(data)
         if (decision.action or "").strip().lower() == "surf":
             return ProactiveDecision(
                 False,
@@ -1770,10 +1815,10 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         out["du_intent_reason"] = decision.du_reason
     if (decision.action or "").strip().lower() == "forum" and not forum_summary:
         initial_forum_reason = (decision.du_reason or decision.reason or "").strip()
-        forum_summary = _run_proactive_forum_action(
+        forum_summary = _ensure_proactive_forum_action(
+            decision,
             window_id=window_id,
             hours_since_last=hours,
-            initial_reason=initial_forum_reason,
             now_dt=now_dt,
         )
         out["forum"] = forum_summary
@@ -1845,10 +1890,16 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         if forum_summary:
             reply_preview = str(forum_summary.get("reply_preview") or "").strip()
             if forum_summary.get("ok"):
-                reason_store = (
-                    f"最初想逛论坛：{initial_forum_reason or '（未说明）'}；"
-                    f"已追加执行轮提醒渡去逛论坛。"
-                )
+                if forum_summary.get("already_executed"):
+                    reason_store = (
+                        f"最初想逛论坛：{initial_forum_reason or '（未说明）'}；"
+                        "决策轮已实际调用论坛工具，没有重复追加执行轮。"
+                    )
+                else:
+                    reason_store = (
+                        f"最初想逛论坛：{initial_forum_reason or '（未说明）'}；"
+                        "已追加执行轮提醒渡去逛论坛。"
+                    )
                 if surf_summary:
                     reason_store = f"先冲浪后决定逛论坛；{reason_store}"
                 if reply_preview:
