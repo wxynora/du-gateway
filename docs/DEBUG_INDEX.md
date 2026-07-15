@@ -247,6 +247,7 @@ ssh du-gateway 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已完成：`services/hidden_blocks.py` 支持按模块配置一行短隐藏标记（如 `[du:thought ...]`、`[du:followup ...]`、`[du:interaction ...]`），同时保留旧 `<<<DU_*>>>...<<<END_DU_*>>>` 成块格式；若尾部 marker 漏闭合，会隐藏尾部并尝试把尾部内容作为 fallback 保存，避免泄漏到正文。
 - 已完成：`services/du_thought.py`、`services/conversation_followup.py`、`services/interaction_memory.py` 的注入提示词改为优先教短标记；`DU_FOLLOWUP` 的短标记内容直接作为 reason，不再要求 JSON。`services/pending_thoughts.py` 也补了漏右括号兜底，未闭合 `[pending:...]` 不再露到正文。
 - 已完成：`services/du_vitals.py` 支持 `[du:vitals tempo=up focus=0.8 ...]` 松散 key=value；缺失参数会沿用上一轮有效读数或默认值，不再要求每轮完整 JSON。`services/pixel_home.py` 改用同一个容错 parser，并支持 `[du:home spot=sofa activity=坐到她旁边 desire=35]`，后端归一化成原来的 `spot/activity/du_body_state`。
+- 已完成：SumiTalk SSE 与 rich event 的可见文本链已补入同一个 Pixel Home 流式 parser；跨 chunk 的 `[du:home ...]` 不再下发，流结束后仍按原逻辑解析并更新小家状态。
 - 兜底：未闭合隐藏块遇到下一个隐藏标记会停下，不会把后面的 `DU_FOLLOWUP` / `[du:...]` 一起吞掉；旧 `DU_VITALS` / `PIXEL_HOME` JSON 块继续兼容。
 - 已验证：`.venv/bin/python -m py_compile services/hidden_blocks.py services/du_thought.py services/conversation_followup.py services/interaction_memory.py services/pending_thoughts.py services/du_vitals.py services/pixel_home.py services/chat_sidecars.py services/pc_command_handler.py` 通过；本地 smoke 覆盖旧块、短标记、漏闭合尾巴、followup reason、pending 漏右括号、`du:vitals` 沿用上一轮、`du:home` key=value、多段 `du:home`/`PIXEL_HOME` 合并、activity 中含 `状态：` 不误切，以及 `PIXEL_HOME` 漏结束符后仍保留 `DU_FOLLOWUP`。
 - 未完成 / 下次继续：如果以后要统一所有 sidecar 方言，可再设计一个结构化 `DU_META`；本轮没有改存储 schema、前端展示或小家/拟态状态的业务语义。

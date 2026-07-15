@@ -630,6 +630,8 @@ def test_no_tool_reasoning_stream_events() -> None:
         packets = [
             {"choices": [{"delta": {"reasoning_content": "先想"}}]},
             {"choices": [{"delta": {"content": "你\n"}}]},
+            {"choices": [{"delta": {"content": "[du:ho"}}]},
+            {"choices": [{"delta": {"content": "me desire=30]"}}]},
             {"choices": [{"delta": {"reasoning_content": "再想"}}]},
             {"choices": [{"delta": {"content": " 好"}, "finish_reason": "stop"}]},
         ]
@@ -692,9 +694,28 @@ def test_no_tool_reasoning_stream_events() -> None:
             visible_parts.append(str((((packet.get("choices") or [{}])[0] or {}).get("delta") or {}).get("content") or ""))
         assert_eq("".join(visible_parts), "你\n 好", "visible SSE must keep spaces and line breaks")
         assert_true("先想" not in output, "reasoning must stay out of assistant text SSE")
+        assert_true("du:home" not in output, "Pixel Home short markers must stay out of visible SSE")
     finally:
         for name, value in originals.items():
             setattr(chat_route, name, value)
+
+
+def test_pixel_home_stream_and_final_parity() -> None:
+    from services.pc_command_handler import PcmdDuThoughtStreamState
+    from services.pixel_home import split_assistant_for_pixel_home
+
+    state = PcmdDuThoughtStreamState()
+    visible_chunks = [
+        state.feed_delta("去吧。\n[d"),
+        state.feed_delta("u:home desire=30"),
+        state.feed_delta("]"),
+    ]
+    assert_eq("".join(visible_chunks), "去吧。", "streaming must match the final visible reply")
+
+    visible, payload = split_assistant_for_pixel_home("去吧。\n[du:home desire=30]")
+    assert_eq(visible, "去吧。", "final parsing must keep the same visible reply")
+    assert_true(isinstance(payload, dict), "final parsing must preserve the Pixel Home sidecar")
+    assert_eq(payload.get("du_body_state", {}).get("desire_value"), 30, "desire must still reach state update")
 
 
 def test_shared_chat_pipeline_structure() -> None:
@@ -755,6 +776,7 @@ def main() -> None:
         test_worker_stream_and_nonstream(queue)
         test_rich_tool_stream_events()
         test_no_tool_reasoning_stream_events()
+        test_pixel_home_stream_and_final_parity()
         test_shared_chat_pipeline_structure()
 
     print("sumitalk native stream backend contract ok")

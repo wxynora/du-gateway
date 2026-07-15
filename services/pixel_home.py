@@ -2318,6 +2318,10 @@ def split_assistant_for_pixel_home(full_text: str) -> tuple[str, dict | None]:
     return visible.strip(), _merge_pixel_home_payloads(payloads)
 
 
+def compute_visible_streaming(acc: str) -> str:
+    return _PIXEL_HOME_BLOCK.compute_visible_streaming(str(acc or ""))
+
+
 def save_pixel_home_hidden_block(payload: dict | None) -> bool:
     if not isinstance(payload, dict):
         return False
