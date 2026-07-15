@@ -39,6 +39,35 @@ def test_merge_is_unbounded_and_newer_copy_wins() -> None:
     assert_equal(by_id["message-075"]["content"], "canonical-75", "later canonical row must replace stale legacy content")
 
 
+def test_native_group_window_uses_group_fallback_only() -> None:
+    from routes.miniapp.sumitalk_history import _load_sumitalk_history_row
+
+    device_id = "device-native"
+    data = {
+        f"{device_id}::sumitalk-main": {
+            "device_id": device_id,
+            "window_id": "sumitalk-main",
+            "updated_at": "2026-07-15T10:00:00+08:00",
+            "messages": [message(1, content="private-history")],
+        },
+        f"{device_id}::sumitalk-group": {
+            "device_id": device_id,
+            "window_id": "sumitalk-group",
+            "updated_at": "2026-07-15T10:01:00+08:00",
+            "messages": [{
+                **message(2, content="group-history"),
+                "id": "group-message",
+                "role": "benben",
+            }],
+        },
+    }
+
+    private_row = _load_sumitalk_history_row(data, device_id, "tg_8260066512")
+    group_row = _load_sumitalk_history_row(data, device_id, "tg_8260066512-group")
+    assert_equal([item["content"] for item in private_row["messages"]], ["private-history"], "native private window should use main fallback")
+    assert_equal([item["content"] for item in group_row["messages"]], ["group-history"], "native group window must use group fallback")
+
+
 def test_migration_groups_legacy_rows_and_reports_final_counts() -> None:
     from routes.miniapp import sumitalk_history
 
@@ -171,6 +200,7 @@ def test_migration_groups_legacy_rows_and_reports_final_counts() -> None:
 
 def main() -> None:
     test_merge_is_unbounded_and_newer_copy_wins()
+    test_native_group_window_uses_group_fallback_only()
     test_migration_groups_legacy_rows_and_reports_final_counts()
     print("SumiTalk history migration tests passed")
 

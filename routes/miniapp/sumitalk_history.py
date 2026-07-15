@@ -20,6 +20,7 @@ from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 sumitalk_logger = logging.getLogger("sumitalk")
 _SUMITALK_HISTORY_LOCK = threading.Lock()
 _SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
+_SUMITALK_GROUP_WINDOW_ID = "sumitalk-group"
 _HISTORY_LATEST_NOOP_LOG_TTL_SECONDS = 60
 _HISTORY_LATEST_NOOP_LOG_CACHE: dict[str, float] = {}
 
@@ -97,8 +98,11 @@ def _sumitalk_history_candidate_keys(device_id: str, window_id: str = "") -> lis
     if wid == _SUMITALK_MAIN_WINDOW_ID:
         keys.append(did)  # 旧版主会话没有 window_id，兼容读回来。
     elif wid.startswith("tg_"):
-        keys.append(_sumitalk_history_storage_key(did, _SUMITALK_MAIN_WINDOW_ID))
-        keys.append(did)
+        if wid.endswith("-group"):
+            keys.append(_sumitalk_history_storage_key(did, _SUMITALK_GROUP_WINDOW_ID))
+        else:
+            keys.append(_sumitalk_history_storage_key(did, _SUMITALK_MAIN_WINDOW_ID))
+            keys.append(did)
     out = []
     seen = set()
     for key in keys:

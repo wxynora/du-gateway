@@ -611,6 +611,7 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 已完成：迁移按目标窗口一次性合并，旧格式主会话和 `sumitalk-main` 不再互相覆盖；源消息拥有的原始 ID 和派生 ID 会替换目标端的旧迁移副本，目标端独有消息仍保留。
 - 已完成：迁移响应的 `count` 表示目标窗口最终实际保存的消息总数，并单独返回 `source_rows`、`source_count`、`existing_count`；源设备历史行加入迁移时的保留集合，不因本次迁移被修剪。
 - 验证入口：`.venv/bin/python scripts/test_sumitalk_history_migration.py`，覆盖超过 80 条、同 ID 版本优先级、旧/新主会话归并、准确计数和源数据保留。
+- 原生窗口兼容：`tg_*` 私聊读取 `sumitalk-main` 备份；`tg_*-group` 群聊只读取 `sumitalk-group` 备份，不得回退到主会话。否则主聊消息会以重复 ID 写入群聊 SQLite 并导致整批事务回滚。
 
 当前状态（2026-06-08 SumiTalk 图片/语音聊天附件）：
 - 已完成：SumiTalk 私聊消息结构新增 `attachments`；Android 原生 `SumiChatStore` 升到 schema v2，`chat_messages` 增加 `attachments_json`，图片/语音附件重启后不会从本地 SQLite 丢失。
