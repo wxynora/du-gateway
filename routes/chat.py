@@ -51,6 +51,7 @@ from pipeline.pipeline import (
     step_inject_humor_memes,
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
+    step_inject_sumitalk_real_mode,
     step_inject_sense_snapshot,
     step_inject_du_thought,
     step_inject_pending_thoughts,
@@ -2238,6 +2239,11 @@ def chat_completions():
     reply_channel = _reply_channel()
     reply_target = _reply_target()
     is_sumitalk_request = reply_channel == "sumitalk"
+    app_mode = str(body.pop("app_mode", "") or "").strip().lower()
+    sumitalk_real_mode = bool(
+        is_sumitalk_request
+        and app_mode == "real"
+    )
     req_model = str(upstream_store.get_cached_active_model(refresh_if_missing=False) or "").strip()
     if not req_model:
         if is_sumitalk_request:
@@ -2515,6 +2521,7 @@ def chat_completions():
         body = step_inject_dynamic_memory(body, window_id)
     body = step_inject_humor_memes(body)
     body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
+    body = step_inject_sumitalk_real_mode(body, enabled=sumitalk_real_mode)
     body = step_inject_sense_snapshot(body, window_id)
     body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
     body = step_inject_interaction_candidate(body, window_id)

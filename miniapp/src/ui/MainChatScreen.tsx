@@ -4609,6 +4609,7 @@ export function MainChatScreen({
             model: activeModel,
             modelContent: privateModelContent ?? buildPrivateUserContent(content, attachments),
             windowId,
+            appMode: realModeEnabledRef.current ? "real" : undefined,
             musicBgmContext,
             recallTargets,
             replyTarget: resolvedDeviceId,

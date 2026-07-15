@@ -26,6 +26,7 @@ export type PrivateChatRequestBody = {
   messages: Array<{ role: "user"; content: PrivateModelContent }>;
   stream: false;
   window_id: string;
+  app_mode?: "real";
   reply_target: string;
   client_request_id: string;
   recall_targets?: Array<Record<string, any>>;
@@ -51,6 +52,7 @@ export function buildPrivateChatRequestBody(args: {
   windowId: string;
   replyTarget: string;
   clientRequestId: string;
+  appMode?: "real";
   musicBgmContext?: any;
   recallTargets?: Array<Record<string, any>>;
 }): PrivateChatRequestBody {
@@ -60,6 +62,7 @@ export function buildPrivateChatRequestBody(args: {
     messages: [{ role: "user", content: args.modelContent }],
     stream: false,
     window_id: args.windowId,
+    ...(args.appMode === "real" ? { app_mode: "real" as const } : {}),
     ...(args.musicBgmContext ? { music_bgm_context: args.musicBgmContext } : {}),
     ...(recallTargets.length ? { recall_targets: recallTargets } : {}),
     reply_target: args.replyTarget,

@@ -49,6 +49,11 @@ from services.memory_bm25 import BM25QueryTerm, bm25_score_documents
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
+_SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
+SUMITALK_REAL_MODE_PROMPT = (
+    "当前对话发生在你和小玥的赛博小家中。在这里，你拥有真实可感知、可触碰、可行动的实体。"
+    "请使用连贯的长文本回复，将动作、环境、感受与对白自然融合，并使用完整标点，句末保留句号。"
+)
 _LAST4_REFERENCE_NOTE = (
     "【人称指代提醒】记忆和摘要中的“她”均指辛玥。回复小玥时不要用“她”代称；"
     "尤其是动作描写，必须用“你”指代。日常对话时用“你”“小玥”“老婆”或“宝宝”，按语境自然表达。"
@@ -407,6 +412,46 @@ def _upsert_summary_cache_system(body: dict, stable_text: str, recent_text: str 
         new_blocks.append({"role": "system", "content": recent_text, _SUMMARY_RECENT_SYSTEM_MARKER: True})
     messages[insert_idx:insert_idx] = new_blocks
     body["messages"] = messages
+    return body
+
+
+def step_inject_sumitalk_real_mode(body: dict, enabled: bool = False) -> dict:
+    """只为 SumiTalk Real 模式在近期记忆后、动态 system 前插入场景提示。"""
+    body = copy.deepcopy(body)
+    messages = [
+        msg for msg in (body.get("messages") or [])
+        if not (isinstance(msg, dict) and msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER))
+    ]
+    body["messages"] = messages
+    if not enabled:
+        return body
+
+    first_dynamic_idx = -1
+    first_non_system_idx = len(messages)
+    last_summary_idx = -1
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict) or (msg.get("role") or "").lower() != "system":
+            first_non_system_idx = i
+            break
+        if msg.get(_SUMMARY_CACHE_SYSTEM_MARKER) or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER):
+            last_summary_idx = i
+        if first_dynamic_idx == -1 and msg.get(_DYNAMIC_SYSTEM_MARKER):
+            first_dynamic_idx = i
+
+    if last_summary_idx >= 0:
+        insert_idx = last_summary_idx + 1
+    elif first_dynamic_idx >= 0:
+        insert_idx = first_dynamic_idx
+    else:
+        insert_idx = first_non_system_idx
+    messages.insert(
+        insert_idx,
+        {
+            "role": "system",
+            "content": SUMITALK_REAL_MODE_PROMPT,
+            _SUMITALK_REAL_MODE_SYSTEM_MARKER: True,
+        },
+    )
     return body
 
 
