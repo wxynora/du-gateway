@@ -604,6 +604,12 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 已完成：清理聊天页旧的 `syncRemote/remoteTimeoutMs` 参数，避免以后误以为发送链路还会自动上传远端历史。
 - 未完成 / 不要碰：本轮不做自动定时同步、多端冲突选择弹窗、消息级增量同步或长历史分页；云端历史仍只保留后端既有 80 条窗口上限。
 
+当前状态（2026-07-15 云端历史无损迁移）：
+- 已完成：`routes/miniapp/sumitalk_history.py` 取消每个窗口 80 条消息的截断；保留 `SUMITALK_HISTORY_MAX_ROWS` / `SUMITALK_HISTORY_TTL_DAYS` 对设备窗口行的文件级收口，不改变 Android SQLite 主存储、手动上传或恢复边界。
+- 已完成：消息按稳定 `id` 合并，显式窗口记录覆盖旧版无 `window_id` 的同消息旧副本；迁移按目标窗口一次性合并，旧格式主会话和 `sumitalk-main` 不再互相覆盖。
+- 已完成：迁移响应的 `count` 表示目标窗口最终实际保存的消息总数，并单独返回 `source_rows`、`source_count`、`existing_count`；源设备历史行加入迁移时的保留集合，不因本次迁移被修剪。
+- 验证入口：`.venv/bin/python scripts/test_sumitalk_history_migration.py`，覆盖超过 80 条、同 ID 版本优先级、旧/新主会话归并、准确计数和源数据保留。
+
 当前状态（2026-06-08 SumiTalk 图片/语音聊天附件）：
 - 已完成：SumiTalk 私聊消息结构新增 `attachments`；Android 原生 `SumiChatStore` 升到 schema v2，`chat_messages` 增加 `attachments_json`，图片/语音附件重启后不会从本地 SQLite 丢失。
 - 已完成：新增 `miniapp/src/ui/chat/chatMedia.ts`，图片走 `/miniapp-api/chat-media/upload` 上传后作为 `image_url` 参与本轮模型输入；语音走 `/miniapp-api/chat-media/transcribe` 转写成文本后进入普通聊天链路，原音频作为语音附件显示。语音输入只是输入方式，不强制渡用语音回复，也不等待 TTS 后处理。

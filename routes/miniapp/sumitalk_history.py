@@ -18,7 +18,6 @@ from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 
 sumitalk_logger = logging.getLogger("sumitalk")
 _SUMITALK_HISTORY_LOCK = threading.Lock()
-_SUMITALK_HISTORY_MAX_MESSAGES = 80
 _SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
 _HISTORY_LATEST_NOOP_LOG_TTL_SECONDS = 60
 _HISTORY_LATEST_NOOP_LOG_CACHE: dict[str, float] = {}
@@ -116,7 +115,10 @@ def _load_sumitalk_history_row(data: dict, device_id: str, window_id: str = "") 
             rows.append(row)
     if not rows:
         return {}
-    messages = _merge_sumitalk_messages(*[(row.get("messages") or []) for row in rows])
+    # Candidate rows are ordered from the exact key to increasingly broad
+    # legacy fallbacks. Merge fallbacks first so the exact row wins when the
+    # same stable message id exists in more than one storage format.
+    messages = _merge_sumitalk_messages(*[(row.get("messages") or []) for row in reversed(rows)])
     updated_at = ""
     latest_dt = None
     for row in rows:
@@ -230,24 +232,21 @@ def _normalize_sumitalk_messages(items: list[dict]) -> list[dict]:
         if display_parts:
             row["displayParts"] = display_parts
         out.append(row)
-    return out[-_SUMITALK_HISTORY_MAX_MESSAGES:]
+    return out
 
 
 def _merge_sumitalk_messages(*groups: list[dict]) -> list[dict]:
-    merged: list[dict] = []
-    seen: set[tuple[str, str, str, str]] = set()
+    merged_by_id: dict[str, dict] = {}
     for items in groups:
         for item in _normalize_sumitalk_messages(items or []):
-            key = (
-                str(item.get("id") or "").strip(),
-                str(item.get("role") or "").strip(),
-                str(item.get("createdAt") or "").strip(),
-                str(item.get("content") or "").strip(),
-            )
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(item)
+            message_id = str(item.get("id") or "").strip()
+            if message_id:
+                # Message ids are also the native SQLite identity. Later
+                # groups represent newer or more specific copies and replace
+                # stale legacy versions of the same logical message.
+                merged_by_id[message_id] = item
+
+    merged = list(merged_by_id.values())
 
     def _sort_key(row: dict) -> tuple[float, str]:
         created_at = str((row or {}).get("createdAt") or "").strip()
@@ -255,7 +254,7 @@ def _merge_sumitalk_messages(*groups: list[dict]) -> list[dict]:
         return (dt.timestamp() if dt else 0.0), str((row or {}).get("id") or "").strip()
 
     merged.sort(key=_sort_key)
-    return merged[-_SUMITALK_HISTORY_MAX_MESSAGES:]
+    return merged
 
 
 def _sumitalk_message_poll_key(msg: dict) -> str:
@@ -538,16 +537,32 @@ def register_routes(bp) -> None:
                 key for key in list(data.keys())
                 if key == old_device_id or str(key).startswith(f"{old_device_id}::")
             ] if isinstance(data, dict) else []
+
+            source_windows: dict[str, list[tuple[str, dict]]] = {}
             for old_key in old_keys:
                 suffix = str(old_key)[len(old_device_id):]
                 window_id = suffix[2:] if suffix.startswith("::") else ""
                 canonical_window_id = _canonical_sumitalk_history_window_id(window_id)
-                new_key = _sumitalk_history_storage_key(new_device_id, canonical_window_id)
                 old_row = data.get(old_key) if isinstance(data, dict) else None
+                if isinstance(old_row, dict):
+                    source_windows.setdefault(canonical_window_id, []).append((str(old_key), old_row))
+
+            for canonical_window_id, source_rows in source_windows.items():
+                new_key = _sumitalk_history_storage_key(new_device_id, canonical_window_id)
                 new_row = data.get(new_key) if isinstance(data, dict) else None
+
+                # The unscoped legacy main row is the oldest fallback. Apply
+                # explicit window rows after it, so canonical copies win for
+                # identical message ids. Source rows then override any partial
+                # copy left by an earlier migration, while destination-only
+                # messages remain intact.
+                source_rows.sort(key=lambda item: (item[0] != old_device_id, item[0]))
+                source_groups = [(row.get("messages") or []) for _, row in source_rows]
+                source_messages = _merge_sumitalk_messages(*source_groups)
+                existing_messages = _merge_sumitalk_messages((new_row or {}).get("messages") or [])
                 merged_messages = _merge_sumitalk_messages(
-                    (old_row or {}).get("messages") or [],
-                    (new_row or {}).get("messages") or [],
+                    existing_messages,
+                    *source_groups,
                 )
                 payload = {
                     "device_id": new_device_id,
@@ -557,15 +572,15 @@ def register_routes(bp) -> None:
                 }
                 data[new_key] = payload
                 migrated_rows.append({
-                    "old_key": old_key,
+                    "old_keys": [key for key, _ in source_rows],
                     "new_key": new_key,
                     "window_id": canonical_window_id,
-                    "old_count": len((old_row or {}).get("messages") or []),
-                    "new_count": len((new_row or {}).get("messages") or []),
+                    "source_count": len(source_messages),
+                    "existing_count": len(existing_messages),
                     "merged_count": len(merged_messages),
                     "updated_at": payload["updated_at"],
                 })
-            keep_keys = []
+            keep_keys = [str(key) for key in old_keys]
             for row in migrated_rows:
                 new_key = str(row.get("new_key") or "").strip()
                 if new_key:
@@ -574,24 +589,25 @@ def register_routes(bp) -> None:
             ok = _save_sumitalk_histories(data)
         if not ok:
             meta = _sumitalk_request_brief()
-            total_old = sum(int(row.get("old_count") or 0) for row in migrated_rows)
-            total_new = sum(int(row.get("new_count") or 0) for row in migrated_rows)
+            total_source = sum(int(row.get("source_count") or 0) for row in migrated_rows)
+            total_existing = sum(int(row.get("existing_count") or 0) for row in migrated_rows)
             total_merged = sum(int(row.get("merged_count") or 0) for row in migrated_rows)
             sumitalk_logger.error(
-                "history_migrate_failed old_device_id=%s new_device_id=%s rows=%s old_count=%s new_count=%s merged=%s remote=%s ua=%s",
+                "history_migrate_failed old_device_id=%s new_device_id=%s source_rows=%s target_rows=%s source_count=%s existing_count=%s merged=%s remote=%s ua=%s",
                 old_device_id,
                 new_device_id,
+                len(old_keys),
                 len(migrated_rows),
-                total_old,
-                total_new,
+                total_source,
+                total_existing,
                 total_merged,
                 meta["remote"],
                 meta["ua"],
             )
             return jsonify({"ok": False, "error": "迁移失败"}), 500
         meta = _sumitalk_request_brief()
-        total_old = sum(int(row.get("old_count") or 0) for row in migrated_rows)
-        total_new = sum(int(row.get("new_count") or 0) for row in migrated_rows)
+        total_source = sum(int(row.get("source_count") or 0) for row in migrated_rows)
+        total_existing = sum(int(row.get("existing_count") or 0) for row in migrated_rows)
         total_merged = sum(int(row.get("merged_count") or 0) for row in migrated_rows)
         latest_updated_at = str((migrated_rows[-1] if migrated_rows else {}).get("updated_at") or "").strip()
         panel_token = ""
@@ -608,14 +624,15 @@ def register_routes(bp) -> None:
                 e,
             )
         sumitalk_logger.info(
-            "history_migrate_ok old_device_id=%s new_device_id=%s rows=%s old_count=%s new_count=%s merged=%s copied=%s updated_at=%s remote=%s ua=%s",
+            "history_migrate_ok old_device_id=%s new_device_id=%s source_rows=%s target_rows=%s source_count=%s existing_count=%s merged=%s copied=%s updated_at=%s remote=%s ua=%s",
             old_device_id,
             new_device_id,
+            len(old_keys),
             len(migrated_rows),
-            total_old,
-            total_new,
+            total_source,
+            total_existing,
             total_merged,
-            bool(total_old),
+            bool(total_source),
             latest_updated_at,
             meta["remote"],
             meta["ua"],
@@ -629,7 +646,10 @@ def register_routes(bp) -> None:
                 "device_id": new_device_id,
                 "count": total_merged,
                 "rows": len(migrated_rows),
-                "copied": bool(total_old),
+                "source_rows": len(old_keys),
+                "source_count": total_source,
+                "existing_count": total_existing,
+                "copied": bool(total_source),
                 "updated_at": latest_updated_at,
                 "panel_token": panel_token,
                 "expires_in": panel_token_ttl,
