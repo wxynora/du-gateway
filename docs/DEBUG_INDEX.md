@@ -2487,4 +2487,5 @@ npm -C miniapp run android
 - 协议边界：普通 `thinking` block 保留 `type/signature`，并以空 `thinking` 维持 Anthropic block 结构；`redacted_thinking` 只保留 opaque data。同一轮工具调用续跑仍使用完整、未经修改的原始 thinking block，本次没有改 proxy 的工具循环链路。
 - 实现位置：`services/claude_thinking_carryover.py` 只在普通跨轮 carryover 阶段做 opaque 化；归档提取仍完整保留原始 thinking，思维链日志展示、R2 归档和当前轮工具调用均不受影响。
 - 已验证：`scripts/test_claude_thinking_carryover.py` 覆盖插入、匹配历史、请求已带旧 block、redacted block 和原始归档提取不丢失；目标 Python 编译、测试与 `git diff --check` 通过。测试只使用本地 fake 归档，没有调用模型或写 R2。
-- 未完成 / 下次继续：尚未提交、push、部署或重启；上线后只需观察普通下一轮不再受转写文案影响，同轮工具续跑保持正常。
+- 已部署：实现提交 `8bd23fdd` 已推送到 `origin/main`，新主网关 `/root/du-gateway` fast-forward 后通过服务器端定向测试、Python 编译和 `import app`，并重启 `du-gateway.service`；服务为 active，本机及公网 `/health` 均返回 ok，公网 `/miniapp/` 返回 200。
+- 未完成 / 下次继续：只需在真实普通对话中观察下一轮不再受转写文案影响，并确认同轮工具续跑保持正常；不要为了验收自动调用模型或改写 R2。
