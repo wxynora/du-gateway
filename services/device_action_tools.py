@@ -81,6 +81,30 @@ TOOL_CREATE_CALENDAR_EVENT = {
 }
 
 
+TOOL_CLOSE_APP = {
+    "type": "function",
+    "function": {
+        "name": "close_app",
+        "description": (
+            "把老婆手机当前正在使用的前台 App 立即赶回桌面。"
+            "当你根据当前情境明确决定要打断她继续玩某个 App 时可以主动调用，不要求她先提出关闭。"
+            "工具会读取手机最新上报的前台 App 并锁定其包名；手机执行时还会再次核对，"
+            "如果她已经切到别的 App 就不会误关。"
+            "这是返回桌面，不是系统强行停止进程；调用结果为异步入队，不要在回执前声称已经关闭成功。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "app_name": {
+                    "type": "string",
+                    "description": "可选，预期关闭的前台 App 名称，例如「小红书」；不确定时留空，使用手机最新前台 App。",
+                },
+            },
+        },
+    },
+}
+
+
 TOOL_SHOW_CHOICE_DIALOG = {
     "type": "function",
     "function": {
@@ -430,6 +454,67 @@ def execute_create_calendar_event(arguments: dict) -> str:
             "sumitalk_schedule_error": "" if schedule_err == "duplicate_action" else schedule_err,
             "sumitalk_card": card,
             "note": note,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _resolve_close_app_target(expected_app_name: str = "") -> tuple[dict | None, str]:
+    try:
+        latest = r2_store.get_sense_latest() or {}
+    except Exception as e:
+        return None, f"读取手机前台 App 失败：{e}"
+    foreground = latest.get("foreground") if isinstance(latest.get("foreground"), dict) else {}
+    package_name = str(foreground.get("packageName") or foreground.get("package_name") or "").strip()
+    if not package_name:
+        return None, "手机还没有可用的前台 App 状态"
+    app_name = str(foreground.get("appName") or foreground.get("app_name") or package_name).strip() or package_name
+    expected = str(expected_app_name or "").strip()
+    if expected:
+        expected_key = expected.casefold()
+        candidates = {app_name.casefold(), package_name.casefold()}
+        if not any(expected_key == item or expected_key in item or item in expected_key for item in candidates):
+            return None, f"当前前台 App 是「{app_name}」，不是「{expected}」"
+    device_id = str(foreground.get("deviceId") or foreground.get("device_id") or "").strip()
+    if not device_id:
+        return None, "当前前台 App 状态缺少设备标识"
+    return {
+        "packageName": package_name[:160],
+        "appName": app_name[:80],
+        "deviceId": device_id,
+    }, ""
+
+
+def execute_close_app(arguments: dict) -> str:
+    args = arguments if isinstance(arguments, dict) else {}
+    target, target_error = _resolve_close_app_target(args.get("app_name") or args.get("appName") or "")
+    if target_error or not target:
+        return json.dumps({"ok": False, "queued": False, "error": target_error or "没有可关闭的前台 App"}, ensure_ascii=False)
+    package_name = str(target.get("packageName") or "").strip()
+    app_name = str(target.get("appName") or package_name).strip() or package_name
+    crc = zlib.crc32(package_name.encode("utf-8")) & 0xffffffff
+    item, err = r2_store.append_app_action(
+        "close_app",
+        {
+            "packageName": package_name,
+            "appName": app_name,
+        },
+        device_id=str(target.get("deviceId") or "").strip(),
+        source="tool",
+        expires_in_sec=120,
+        idempotency_key=f"close_app_{crc}_{int(time.time() // 5)}",
+    )
+    if err or not item:
+        return json.dumps({"ok": False, "queued": False, "error": err or "入队失败"}, ensure_ascii=False)
+    return json.dumps(
+        {
+            "ok": True,
+            "queued": True,
+            "id": item.get("id"),
+            "type": "close_app",
+            "packageName": package_name,
+            "appName": app_name,
+            "note": "已把关闭前台 App 的动作交给 SumiTalk 原生 App；手机会再次核对目标仍在前台后返回桌面。",
         },
         ensure_ascii=False,
     )

@@ -860,6 +860,7 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
         "schedule_disable",
         "schedule_delete",
         "search_memory",
+        "close_app",
         "create_system_alarm",
         "create_calendar_event",
         "show_choice_dialog",
@@ -867,7 +868,7 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
         "request_screen_check",
     ):
         args = arguments if isinstance(arguments, dict) else {}
-        if name == "recall_message" and isinstance(context, dict):
+        if name in {"recall_message", "close_app"} and isinstance(context, dict):
             args = {**args, "_context": context}
         return execute_forum_tool(name, args)
     try:

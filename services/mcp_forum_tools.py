@@ -10,11 +10,13 @@ from services.forum_mcp_client import (
     forum_mcp_enabled,
 )
 from services.device_action_tools import (
+    TOOL_CLOSE_APP,
     TOOL_CREATE_CALENDAR_EVENT,
     TOOL_CREATE_SYSTEM_ALARM,
     TOOL_RECALL_MESSAGE,
     TOOL_REQUEST_SCREEN_CHECK,
     TOOL_SHOW_CHOICE_DIALOG,
+    execute_close_app,
     execute_create_calendar_event,
     execute_create_system_alarm,
     execute_recall_message,
@@ -228,6 +230,7 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
         TOOL_SCHEDULE_ENABLE,
         TOOL_SCHEDULE_DISABLE,
         TOOL_SCHEDULE_DELETE,
+        TOOL_CLOSE_APP,
         TOOL_CREATE_SYSTEM_ALARM,
         TOOL_CREATE_CALENDAR_EVENT,
         TOOL_SHOW_CHOICE_DIALOG,
@@ -497,6 +500,8 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
 
     if name == "create_system_alarm":
         return execute_create_system_alarm(args)
+    if name == "close_app":
+        return execute_close_app(args)
     if name == "create_calendar_event":
         return execute_create_calendar_event(args)
     if name == "show_choice_dialog":

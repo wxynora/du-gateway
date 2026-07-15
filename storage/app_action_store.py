@@ -14,6 +14,7 @@ R2_KEY_APP_ACTION_QUEUE = "sumitalk/app_actions.json"
 _APP_ACTION_ALLOWLIST = {
     "create_system_alarm",
     "create_calendar_event",
+    "close_app",
     "show_choice_dialog",
     "show_system_notification",
     "request_screen_check",
@@ -386,6 +387,8 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         return _normalize_recall_message_payload(payload)
     if action_type == "deliver_chat_message":
         return _normalize_deliver_chat_message_payload(payload)
+    if action_type == "close_app":
+        return _normalize_close_app_payload(payload)
     if action_type != "create_system_alarm":
         return None, f"不支持的 app action: {action_type}"
     src = payload if isinstance(payload, dict) else {}
@@ -412,6 +415,18 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         "title": title,
         "skipUi": skip_ui,
         "notify": notify,
+    }, None
+
+
+def _normalize_close_app_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    src = payload if isinstance(payload, dict) else {}
+    package_name = str(src.get("packageName") or src.get("package_name") or "").strip()
+    if not package_name:
+        return None, "close_app 缺少 packageName"
+    app_name = str(src.get("appName") or src.get("app_name") or package_name).strip() or package_name
+    return {
+        "packageName": package_name[:160],
+        "appName": app_name[:80],
     }, None
 
 

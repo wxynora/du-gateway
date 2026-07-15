@@ -2467,3 +2467,10 @@ npm -C miniapp run android
 - 已验证：Real 开关、注入顺序、幂等、Pioneer 断点和 Claude OAuth Proxy 的 OpenAI -> Anthropic 转换均有聚焦回归；Python 编译、`import app`、MiniApp `tsc --noEmit`、Vite 正式构建、Node 语法和目标 diff check 通过。验证未请求真实模型、未读写 R2。
 - 已部署：实现提交 `0960cb65` 已推送并由新主网关 `/root/du-gateway` fast-forward 拉取；`du-gateway.service` 与 `du-sumitalk-chat-worker.service` 均为 active，本机 `/health`、公开 `/health`、公开 `/miniapp/` 和新静态主包均返回 200。
 - 未完成 / 下次继续：代码链路已闭环，剩余只需在 App 中分别用 Real 开 / 关各发一条消息做真实交互验收；不要为验收自动调用模型或改写共享 R2。
+
+当前状态（2026-07-15 渡远程关闭前台 App）：
+- 已完成：日常工具面新增 `close_app`。渡调用时读取最新 `foreground` 快照，按可选 `app_name` 校验后锁定 `packageName/appName/deviceId`，通过现有 native device-action WebSocket + HTTP fallback 队列异步下发。
+- 防误关：动作只投递给上报该前台状态的设备；原生 App 执行前还会核对目标包仍在前台，不一致则失败，不会关闭后来切换到的 App。
+- 边界：本轮只新增单次 `close_app`，没有修改凌晨催睡提示、主动决策策略、持续封禁、定时限制或 R2；返回桌面不等于系统强停进程。
+- 已验证：`scripts/test_close_app_device_action.py` 覆盖前台目标解析、名称不符拒绝、定向设备队列和日常工具注册；既有主动私聊契约、目标 Python 编译、`import app` 与目标 diff check 均通过。测试使用临时 SQLite 和 fake 前台快照，没有调用真实模型、R2 或手机。
+- 发布边界：本提交只包含上述工具链与索引；VPS 拉取代码后仍需另行重启相关服务才会在线生效。
