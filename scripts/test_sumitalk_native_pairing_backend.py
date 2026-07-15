@@ -41,6 +41,7 @@ class NativePairingBackendTest(unittest.TestCase):
         bp = Blueprint("native_pairing_test", __name__, url_prefix="/miniapp-api")
         register_routes(bp)
         app.register_blueprint(bp)
+        self.app = app
         self.client = app.test_client()
 
     def tearDown(self):
@@ -86,6 +87,43 @@ class NativePairingBackendTest(unittest.TestCase):
         self.assertEqual(403, response.status_code)
         self.assertEqual("device_revoked", response.get_json()["code"])
         self.assertFalse(miniapp_panel_store.is_trusted_device("device_native_install_001"))
+
+    def test_missing_native_device_record_is_recoverable_for_installed_app(self):
+        token, _ = miniapp_panel_auth.issue_panel_token(
+            subject="device:device_native_install_001",
+            device_id="device_native_install_001",
+        )
+
+        with self.app.test_request_context(
+            "/miniapp-api/upstreams",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "SumiTalk Native Android",
+            },
+        ):
+            response, status = miniapp_panel_auth.enforce_panel_token()
+
+        self.assertEqual(401, status)
+        self.assertEqual("not_trusted", response.get_json()["code"])
+        self.assertEqual("原生设备未配对，请重新连接", response.get_json()["error"])
+
+    def test_missing_browser_record_stays_revoked_for_web_client(self):
+        token, _ = miniapp_panel_auth.issue_panel_token(
+            subject="device:browser_001",
+            device_id="browser_001",
+        )
+
+        with self.app.test_request_context(
+            "/miniapp-api/upstreams",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "Mozilla/5.0",
+            },
+        ):
+            response, status = miniapp_panel_auth.enforce_panel_token()
+
+        self.assertEqual(403, status)
+        self.assertEqual("这个浏览器已被撤销，请重新验证", response.get_json()["error"])
 
 
 if __name__ == "__main__":

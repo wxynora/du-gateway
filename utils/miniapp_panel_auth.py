@@ -108,10 +108,11 @@ def verify_panel_token(token: str) -> tuple[bool, dict | None, str]:
 
 
 def panel_auth_error(code: str, status: int):
+    native_android = (request.headers.get("User-Agent") or "").strip().startswith("SumiTalk Native Android")
     messages = {
         "panel_token_missing": "请先输入面板密码",
         "panel_token_invalid": "登录已失效，请重新输入密码",
-        "not_trusted": "这个浏览器已被撤销，请重新验证",
+        "not_trusted": "原生设备未配对，请重新连接" if native_android else "这个浏览器已被撤销，请重新验证",
         "panel_auth_misconfigured": "服务端未完成面板密码配置",
     }
     return jsonify({"ok": False, "code": code, "error": messages.get(code, code)}), status
@@ -124,5 +125,8 @@ def enforce_panel_token():
     if ok:
         request.environ["miniapp_panel_payload"] = payload or {}
         return None
-    status = 503 if code == "panel_auth_misconfigured" else (403 if code == "not_trusted" else 401)
+    native_android = (request.headers.get("User-Agent") or "").strip().startswith("SumiTalk Native Android")
+    status = 503 if code == "panel_auth_misconfigured" else (
+        401 if code == "not_trusted" and native_android else (403 if code == "not_trusted" else 401)
+    )
     return panel_auth_error(code, status)
