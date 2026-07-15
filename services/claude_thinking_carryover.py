@@ -68,6 +68,30 @@ def extract_claude_thinking_blocks(msg: dict) -> list[dict]:
     return _normalized_thinking_blocks(msg.get("reasoning_details"))
 
 
+def _opaque_thinking_blocks(value: Any) -> list[dict]:
+    """把跨轮 thinking 压成仅含验证材料的结构，不把可见转写带入下一轮。"""
+    opaque: list[dict] = []
+    for block in _normalized_thinking_blocks(value):
+        btype = block.get("type")
+        if btype == "thinking":
+            opaque.append(
+                {
+                    "type": "thinking",
+                    "thinking": "",
+                    "signature": copy.deepcopy(block.get("signature")),
+                }
+            )
+            continue
+
+        redacted = {"type": "redacted_thinking"}
+        for key in ("data", "signature", "redacted_thinking"):
+            if block.get(key):
+                redacted[key] = copy.deepcopy(block.get(key))
+                break
+        opaque.append(redacted)
+    return opaque
+
+
 def _latest_round_for_carryover(window_id: str) -> tuple[dict | None, str]:
     window = str(window_id or "").strip()
     rounds = r2_store.get_conversation_rounds(window, last_n=1) or []
@@ -102,11 +126,18 @@ def _last_user_index(messages: list[dict]) -> int | None:
     return None
 
 
-def _already_has_thinking_before(messages: list[dict], idx: int) -> bool:
+def _make_existing_thinking_opaque_before(messages: list[dict], idx: int) -> bool:
+    found = False
     for msg in messages[:idx]:
-        if isinstance(msg, dict) and _role(msg) == "assistant" and extract_claude_thinking_blocks(msg):
-            return True
-    return False
+        if not isinstance(msg, dict) or _role(msg) != "assistant":
+            continue
+        blocks = extract_claude_thinking_blocks(msg)
+        if not blocks:
+            continue
+        msg["thinking_blocks"] = _opaque_thinking_blocks(blocks)
+        msg.pop("reasoning_details", None)
+        found = True
+    return found
 
 
 def _attach_to_matching_assistant(messages: list[dict], idx: int, assistant_msg: dict, blocks: list[dict]) -> bool:
@@ -126,9 +157,9 @@ def _attach_to_matching_assistant(messages: list[dict], idx: int, assistant_msg:
 
 def inject_previous_claude_thinking_blocks(body: dict, window_id: str) -> dict:
     """
-    对服务端回环地址 Claude OAuth proxy 请求，把上一轮 assistant 的原始 thinking blocks 随上一轮消息回传。
+    普通跨轮请求只把上一轮 assistant thinking 的 opaque signature/data 随上一轮消息回传。
 
-    这些块只作为 Anthropic thinking block 结构化字段进入 proxy，不写入可见 last4 文本。
+    可见的官方摘要/转写不会进入下一轮；同一轮工具续跑使用完整原始 block 的链路不在这里。
     """
     if not isinstance(body, dict):
         return body
@@ -141,15 +172,17 @@ def inject_previous_claude_thinking_blocks(body: dict, window_id: str) -> dict:
     prev_user, prev_assistant = _round_user_and_assistant(round_obj)
     if not prev_user or not prev_assistant:
         return body
-    blocks = extract_claude_thinking_blocks(prev_assistant)
-    if not blocks:
+    archived_blocks = extract_claude_thinking_blocks(prev_assistant)
+    if not archived_blocks:
         return body
+    blocks = _opaque_thinking_blocks(archived_blocks)
     body = copy.deepcopy(body)
     messages = list(body.get("messages") or [])
     idx = _last_user_index(messages)
     if idx is None:
         return body
-    if _already_has_thinking_before(messages, idx):
+    if _make_existing_thinking_opaque_before(messages, idx):
+        body["messages"] = messages
         return body
     if _attach_to_matching_assistant(messages, idx, prev_assistant, blocks):
         body["messages"] = messages

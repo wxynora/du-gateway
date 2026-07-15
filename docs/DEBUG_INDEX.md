@@ -2481,3 +2481,10 @@ npm -C miniapp run android
 - 边界：本轮只新增单次 `close_app`，没有修改凌晨催睡提示、主动决策策略、持续封禁、定时限制或 R2；返回桌面不等于系统强停进程。
 - 已验证：`scripts/test_close_app_device_action.py` 覆盖前台目标解析、名称不符拒绝、定向设备队列和日常工具注册；既有主动私聊契约、目标 Python 编译、`import app` 与目标 diff check 均通过。测试使用临时 SQLite 和 fake 前台快照，没有调用真实模型、R2 或手机。
 - 发布边界：本提交只包含上述工具链与索引；VPS 拉取代码后仍需另行重启相关服务才会在线生效。
+
+当前状态（2026-07-16 Claude 普通跨轮仅回传 thinking signature）：
+- 设计决策：普通对话的跨轮连续性只回传上一轮 thinking 的 opaque signature；不把官方摘要或小模型转写文字带进下一轮上下文，避免转写中“用户”等措辞反向影响渡后续的称呼与思路。这是刻意设计，不是 thinking 字段遗漏。
+- 协议边界：普通 `thinking` block 保留 `type/signature`，并以空 `thinking` 维持 Anthropic block 结构；`redacted_thinking` 只保留 opaque data。同一轮工具调用续跑仍使用完整、未经修改的原始 thinking block，本次没有改 proxy 的工具循环链路。
+- 实现位置：`services/claude_thinking_carryover.py` 只在普通跨轮 carryover 阶段做 opaque 化；归档提取仍完整保留原始 thinking，思维链日志展示、R2 归档和当前轮工具调用均不受影响。
+- 已验证：`scripts/test_claude_thinking_carryover.py` 覆盖插入、匹配历史、请求已带旧 block、redacted block 和原始归档提取不丢失；目标 Python 编译、测试与 `git diff --check` 通过。测试只使用本地 fake 归档，没有调用模型或写 R2。
+- 未完成 / 下次继续：尚未提交、push、部署或重启；上线后只需观察普通下一轮不再受转写文案影响，同轮工具续跑保持正常。
