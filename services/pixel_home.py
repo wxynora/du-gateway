@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from services.hidden_blocks import HiddenBlockParser
+from services.pixel_home_garden import build_garden_state, record_garden_actions
+from services.pixel_home_weather import build_virtual_home_weather
 from storage import r2_store
 from storage.pixel_home_store import get_pixel_home_state, save_pixel_home_state
 from utils.log import get_logger
@@ -83,6 +85,7 @@ SPOT_LABELS: dict[str, str] = {
     "study": "书房",
     "sofa": "客厅沙发",
     "kitchen": "厨房",
+    "garden": "花园",
     "away": "离家出走",
     "out": "外出",
 }
@@ -104,6 +107,10 @@ SPOT_ALIASES: dict[str, str] = {
     "客厅沙发": "sofa",
     "kitchen": "kitchen",
     "厨房": "kitchen",
+    "garden": "garden",
+    "花园": "garden",
+    "院子": "garden",
+    "花圃": "garden",
     "away": "away",
     "home": "away",
     "离家出走": "away",
@@ -2093,6 +2100,9 @@ def build_pixel_home_state() -> dict:
     mode_state["du_dynamics"] = _normalize_du_dynamics(stored.get("du_dynamics"), reference_spot=str(xinyue.get("spot") or ""))
     mode_state["du_vitals"] = r2_store.get_du_vitals_latest() or {}
     mode_state["du_body_state"] = _du_body_state_public(stored.get("du_body_state"), mode_state["du_vitals"])
+    weather = build_virtual_home_weather()
+    mode_state["weather"] = weather
+    mode_state["garden"] = build_garden_state(stored.get("garden"), weather)
     mode_state["spots"] = SPOT_OPTIONS
     return mode_state
 
@@ -2205,6 +2215,12 @@ def save_actor_state(actor_key: str, spot: Any, activity: Any, *, source: str = 
         reference_spot=reference_spot,
     )
     current[key] = actor
+    current, _ = record_garden_actions(
+        current,
+        actor=key,
+        spot=actor.get("spot"),
+        activity=actor.get("activity"),
+    )
     if key == "du":
         current["du_dynamics"] = _append_du_dynamic(current, actor, reference_spot=reference_spot)
         xinyue_follow = _infer_xinyue_follow_state_from_du(actor)
@@ -2325,11 +2341,17 @@ def format_state_block() -> str:
     stored = _stored_state()
     du = state.get("du") if isinstance(state.get("du"), dict) else {}
     xinyue = state.get("xinyue") if isinstance(state.get("xinyue"), dict) else {}
+    garden = state.get("garden") if isinstance(state.get("garden"), dict) else {}
     du_label = spot_label(du.get("spot"))
     xinyue_label = spot_label(xinyue.get("spot"))
     block = (
         "【小家状态】\n"
         f"当前小家状态：{mode_label(state.get('mode'))}。\n"
+        f"小家天气：{str((state.get('weather') or {}).get('label') or '晴天')}，"
+        f"{str((state.get('weather') or {}).get('description') or '院子里很安静')}。\n"
+        f"花园：{str(garden.get('plant_name') or '花')}，{str(garden.get('flower_status') or '长势很好')}；"
+        f"{str(garden.get('watering_label') or '今日还未浇水')}，土壤{str(garden.get('soil_status') or '微干')}，"
+        f"{str(garden.get('loosen_label') or '可以松松土')}。\n"
         f"你的位置：{du_label}，{_format_activity_for_prompt(str(du.get('activity') or '待着'))}。\n"
         f"小玥的位置：{xinyue_label}，{_format_activity_for_prompt(str(xinyue.get('activity') or '待着'))}。"
     )
@@ -2346,6 +2368,7 @@ def format_rule_block() -> str:
     return (
         "【小家状态写入规则】\n"
         "这是你和小玥的赛博小家状态，并非现实定位或真实房间。\n"
+        "小家的天气由独立虚构天气引擎生成，与现实城市、定位和真实天气无关。花园里的花有自己的季节和养护习性；你想去浇花、松土时可以主动行动，不需要等小玥先提出。先看当前花朵、土壤和天气状态再决定，例如下雨或土壤偏湿时不要机械重复浇花；做完后照常更新小家短隐藏标记，网关会从 garden 位置和 activity 自动记录养护结果。\n"
         "如果需要移动去别的房间做什么事，可以在回复正文之后、DU_FOLLOWUP 之前附加一行小家短隐藏标记：\n"
         f"{PIXEL_HOME_SHORT_MARKER}\n"
         "写小家标记时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅/走回客厅/站到沙发旁边”，不要继续写 study，要写最终到达的房间，没有明确房间就写 away。\n"

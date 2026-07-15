@@ -339,6 +339,16 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 .venv/bin/python -m py_compile services/telegram_proactive.py services/conversation_followup.py
 ```
 
+## 原生 App 小家花园 / 虚构天气
+
+当前状态（2026-07-15 原生花园规则引擎，本地未部署）：
+- 已完成：共享 PixelHome 后端新增稳定位置 `garden / 花园`，兼容“院子 / 花圃”自然语言；渡沿用既有 `PIXEL_HOME` 隐藏状态链主动进入花园并记录“浇花 / 松土”，没有新增工具协议，也没有改 MiniApp 前端。
+- 已完成：`services/pixel_home_weather.py` 使用现实日期和月份判断春夏秋冬，但不查询现实城市、定位或天气 API；每 4 小时按季节化自然轨迹生成晴天、多云、小雨、下雨、暴雨、微风、轻雾或小雪，同一时段重复读取稳定不跳变。
+- 已完成：`services/pixel_home_garden.py` 按现实季节选择樱花、绣球、菊花或梅花，并根据各自浇水间隔、耐湿程度、松土周期、近 24 小时虚构降水及真实养护时间计算“今日是否浇水 / 土壤状态 / 花朵状态 / 是否需要松土”。派生状态只读计算，只有实际出现浇花或松土动作时才在现有 PixelHome 状态内更新时间。
+- 已完成：当前虚构天气和花园状态分别进入 `/pixel-home-state` 的 `weather` / `garden` 响应字段；花园状态进入动态 system，养护规则留在静态 system。规则要求渡先看花况、土壤和天气再自主照料，例如下雨或土壤偏湿时不机械重复浇花。
+- 已验证：`scripts.test_pixel_home_weather + scripts.test_pixel_home_garden` 9/9 通过，覆盖季节、雨水补给、缺水、浇花/松土记录、渡隐藏标记既有保存链和真实注入位置；相关 `py_compile`、`import app` 与 `git diff --check` 通过。测试只使用纯计算和 mock 保存，没有读写真实 R2。
+- 未完成 / 下次继续：本轮尚未部署或重启；原生 App 需与后端一起发布，并在设备上视觉验收花园栏目。
+
 ## MiniApp 小家 / 生活互动
 
 当前状态（2026-06-01 赛博小家接聊天链路）：
