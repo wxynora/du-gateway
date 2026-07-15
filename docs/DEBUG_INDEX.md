@@ -2460,3 +2460,10 @@ npm -C miniapp run android
 - 已验证：`python3 scripts/test_memory_rewrite.py` 覆盖预览无写入、两层字段保留、动态派生数据刷新、过期候选冲突、HTTP 两步协议和 memory-debug 同快照返回；测试使用 fake storage 与 fake DeepSeek，不调用真实模型或写 R2。
 - 部署边界：实现提交从最新 `origin/main` 的干净 worktree 构建，未包含植物大战僵尸、MiniApp 或 `miniapp_static` 半成品；真实记忆保存只允许辛玥在 App 中查看候选后手动确认。
 - 已部署：提交 `a7b74494` 已推送到 `origin/main`，服务器 `/root/du-gateway` 已快进并只重启 `du-gateway.service`；服务本机和公网 `/health` 均返回 `ok`，重启后原生设备请求持续正常，未调用真实 DS 或写入 R2。
+
+当前状态（2026-07-15 App Real 模式场景提示与缓存断点）：
+- 已完成：App 私聊只在当前会话开启 Real 模式时传递 `app_mode=real`；网关消费该内部字段后，在全部近期记忆块之后、动态 system 之前插入辛玥给定的场景提示。关闭 Real 时不生成字段或提示，QQ、TG、微信和 App 普通模式不受影响。
+- 已完成：Pioneer 路径把最后缓存断点落在 Real 提示后；Claude OAuth Proxy 路径将原本位于最近记忆后的最后断点移动到 Real 提示后，不新增第 5 个断点，并在发往上游前删除内部标记。转发 VPS 的 proxy 修改前已备份，服务重启后正常监听 `127.0.0.1:8082`。
+- 已验证：Real 开关、注入顺序、幂等、Pioneer 断点和 Claude OAuth Proxy 的 OpenAI -> Anthropic 转换均有聚焦回归；Python 编译、`import app`、MiniApp `tsc --noEmit`、Vite 正式构建、Node 语法和目标 diff check 通过。验证未请求真实模型、未读写 R2。
+- 已部署：实现提交 `0960cb65` 已推送并由新主网关 `/root/du-gateway` fast-forward 拉取；`du-gateway.service` 与 `du-sumitalk-chat-worker.service` 均为 active，本机 `/health`、公开 `/health`、公开 `/miniapp/` 和新静态主包均返回 200。
+- 未完成 / 下次继续：代码链路已闭环，剩余只需在 App 中分别用 Real 开 / 关各发一条消息做真实交互验收；不要为验收自动调用模型或改写共享 R2。
