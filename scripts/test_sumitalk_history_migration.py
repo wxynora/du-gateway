@@ -44,14 +44,16 @@ def test_migration_groups_legacy_rows_and_reports_final_counts() -> None:
 
     old_device_id = "android-old"
     new_device_id = "device-native"
-    group_messages = [
-        {
+    group_messages = []
+    for index in range(90):
+        colliding = index in {80, 81, 82}
+        group_messages.append({
             **message(index),
-            "id": f"group-{index:03d}",
+            "id": "group-collision" if colliding else f"group-{index:03d}",
+            "role": "benben" if colliding else ("user" if index % 2 == 0 else "assistant"),
             "content": f"group-content-{index}",
-        }
-        for index in range(90)
-    ]
+            "createdAt": "2026-07-15T08:00:00+08:00" if colliding else message(index)["createdAt"],
+        })
     state = {
         old_device_id: {
             "device_id": old_device_id,
@@ -83,6 +85,17 @@ def test_migration_groups_legacy_rows_and_reports_final_counts() -> None:
                     "createdAt": "2026-07-15T10:00:00+08:00",
                 },
             ],
+        },
+        f"{new_device_id}::sumitalk-group": {
+            "device_id": new_device_id,
+            "window_id": "sumitalk-group",
+            "updated_at": "2026-07-12T10:01:00+08:00",
+            "messages": [{
+                "id": "group-collision",
+                "role": "benben",
+                "content": "stale-collision-copy",
+                "createdAt": "2026-07-15T08:00:00+08:00",
+            }],
         },
     }
 
@@ -132,13 +145,24 @@ def test_migration_groups_legacy_rows_and_reports_final_counts() -> None:
     assert_equal(payload["source_rows"], 3, "response should report physical source rows")
     assert_equal(payload["rows"], 2, "legacy and canonical main rows must map to one target row")
     assert_equal(payload["source_count"], 240, "source count should use logical message ids")
-    assert_equal(payload["existing_count"], 2, "existing destination count should be exact")
+    assert_equal(payload["existing_count"], 3, "existing destination count should be exact")
     assert_equal(payload["count"], 241, "count should equal final messages stored across target windows")
 
     target_main = state[f"{new_device_id}::sumitalk-main"]["messages"]
     target_group = state[f"{new_device_id}::sumitalk-group"]["messages"]
     assert_equal(len(target_main), 151, "main history must retain the full source union plus destination-only messages")
     assert_equal(len(target_group), 90, "group history must not be truncated")
+    assert_equal(len({item["id"] for item in target_group}), 90, "legacy id collisions must receive stable distinct ids")
+    assert_equal(
+        sum(str(item["id"]).startswith("group-collision~") for item in target_group),
+        3,
+        "every conflicting legacy message should use a derived id",
+    )
+    assert_equal(
+        sum(item["id"] == "group-collision" for item in target_group),
+        0,
+        "stale destination copy with the collided raw id must be removed",
+    )
     by_id = {item["id"]: item for item in target_main}
     assert_equal(by_id["message-075"]["content"], "canonical-75", "canonical source must repair a partial legacy copy")
     assert_equal(len(state[old_device_id]["messages"]), 100, "legacy source row must remain untouched")

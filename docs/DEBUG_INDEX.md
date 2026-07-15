@@ -606,7 +606,8 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 
 当前状态（2026-07-15 云端历史无损迁移）：
 - 已完成：`routes/miniapp/sumitalk_history.py` 取消每个窗口 80 条消息的截断；保留 `SUMITALK_HISTORY_MAX_ROWS` / `SUMITALK_HISTORY_TTL_DAYS` 对设备窗口行的文件级收口，不改变 Android SQLite 主存储、手动上传或恢复边界。
-- 已完成：消息按稳定 `id` 合并，显式窗口记录覆盖旧版无 `window_id` 的同消息旧副本；迁移按目标窗口一次性合并，旧格式主会话和 `sumitalk-main` 不再互相覆盖。
+- 已完成：消息按稳定 `id` 合并，显式窗口记录覆盖旧版无 `window_id` 的同消息旧副本；旧群聊同批次内若有多条不同正文错误复用同一 ID，则按正文和展示部件生成稳定派生 ID，避免原生 SQLite 主键去重时吞消息。
+- 已完成：迁移按目标窗口一次性合并，旧格式主会话和 `sumitalk-main` 不再互相覆盖；源消息拥有的原始 ID 和派生 ID 会替换目标端的旧迁移副本，目标端独有消息仍保留。
 - 已完成：迁移响应的 `count` 表示目标窗口最终实际保存的消息总数，并单独返回 `source_rows`、`source_count`、`existing_count`；源设备历史行加入迁移时的保留集合，不因本次迁移被修剪。
 - 验证入口：`.venv/bin/python scripts/test_sumitalk_history_migration.py`，覆盖超过 80 条、同 ID 版本优先级、旧/新主会话归并、准确计数和源数据保留。
 

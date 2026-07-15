@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -232,7 +233,41 @@ def _normalize_sumitalk_messages(items: list[dict]) -> list[dict]:
         if display_parts:
             row["displayParts"] = display_parts
         out.append(row)
-    return out
+
+    id_counts: dict[str, int] = {}
+    for row in out:
+        message_id = str(row.get("id") or "").strip()
+        id_counts[message_id] = id_counts.get(message_id, 0) + 1
+
+    normalized: list[dict] = []
+    seen_variant_ids: set[str] = set()
+    for row in out:
+        message_id = str(row.get("id") or "").strip()
+        if id_counts.get(message_id, 0) > 1:
+            # Some legacy group-chat batches reused one id for several
+            # different Benben messages created in the same turn. Native
+            # SQLite uses the id as its identity, so derive a deterministic id
+            # for every conflicting variant instead of silently dropping it.
+            fingerprint = json.dumps(
+                {
+                    "role": row.get("role"),
+                    "createdAt": row.get("createdAt"),
+                    "content": row.get("content"),
+                    "displayParts": row.get("displayParts") or [],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            digest = hashlib.sha1(fingerprint.encode("utf-8", errors="ignore")).hexdigest()[:12]
+            variant_id = f"{message_id}~{digest}"
+            if variant_id in seen_variant_ids:
+                continue
+            row = dict(row)
+            row["id"] = variant_id
+            seen_variant_ids.add(variant_id)
+        normalized.append(row)
+    return normalized
 
 
 def _merge_sumitalk_messages(*groups: list[dict]) -> list[dict]:
@@ -560,9 +595,21 @@ def register_routes(bp) -> None:
                 source_groups = [(row.get("messages") or []) for _, row in source_rows]
                 source_messages = _merge_sumitalk_messages(*source_groups)
                 existing_messages = _merge_sumitalk_messages((new_row or {}).get("messages") or [])
+                source_raw_ids = {
+                    str(item.get("id") or "").strip()
+                    for group in source_groups
+                    for item in group
+                    if isinstance(item, dict) and str(item.get("id") or "").strip()
+                }
+                source_ids = {str(item.get("id") or "").strip() for item in source_messages}
+                destination_only_messages = [
+                    item for item in existing_messages
+                    if str(item.get("id") or "").strip() not in source_raw_ids
+                    and str(item.get("id") or "").strip() not in source_ids
+                ]
                 merged_messages = _merge_sumitalk_messages(
-                    existing_messages,
-                    *source_groups,
+                    destination_only_messages,
+                    source_messages,
                 )
                 payload = {
                     "device_id": new_device_id,
