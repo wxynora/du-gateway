@@ -2422,6 +2422,16 @@ _SLEEP_INTENT_RE = re.compile(
     r"|(?:去睡|去睡觉|睡觉去了|上床睡觉|躺床睡)"
     r"|^(?:我)?睡了(?:[。.!！~～啦咯喽]*)$"
 )
+_MEAL_QUESTION_RE = re.compile(
+    r"(?:吃没吃饭|有没有吃饭|吃饭了?没|吃饭了?吗|吃过饭了?吗|吃过饭没|没吃饭吗|吃不吃饭|要不要吃饭|要吃饭吗|吃饭没)"
+)
+_MEAL_NEGATION_RE = re.compile(r"(?:不是|没说|没有说|不想|不准备|不要|别).{0,8}(?:吃饭|做饭|点外卖|拿外卖|干饭)")
+_MEAL_INTENT_RE = re.compile(
+    r"(?:我要|我去|我准备|我先|我打算|我该|该|准备|先|马上|现在|正在|我在|在|开始|继续)(?:吃饭|做饭|点外卖|拿外卖|干饭)"
+    r"|(?:我)?(?:吃饭|做饭|干饭)(?:了|啦|去|去了|中|一下|ing)"
+    r"|(?:我)?(?:点了|点个|点份|点好|点|拿了|取了|去拿|准备拿)(?:外卖)"
+    r"|(?:外卖到了|外卖到啦|外卖到喽)"
+)
 _TEXT_SPOT_ALIASES = sorted(
     ((alias, spot) for alias, spot in SPOT_ALIASES.items() if alias and not alias.isascii() and spot != "home"),
     key=lambda item: len(item[0]),
@@ -2449,7 +2459,7 @@ def infer_xinyue_state_from_text(text: str) -> dict | None:
         return {"spot": "study", "activity": "工作", "source": "chat_infer"}
     if re.search(r"(我要|我去|我准备|我先|我打算|去)?洗澡(了|啦|一下|去)?", compact):
         return {"spot": "bath", "activity": "洗澡", "source": "chat_infer"}
-    if re.search(r"(我要|我去|我准备|我先|我打算|去)?(吃饭|做饭|点外卖|拿外卖|干饭)", compact):
+    if _MEAL_INTENT_RE.search(compact) and not _MEAL_QUESTION_RE.search(compact) and not _MEAL_NEGATION_RE.search(compact):
         return {"spot": "kitchen", "activity": "吃饭", "source": "chat_infer"}
     if _SLEEP_INTENT_RE.search(compact) and not _SLEEP_RECAP_RE.search(compact) and not _SLEEP_NEGATION_RE.search(compact):
         return {"spot": "bed", "activity": "睡觉", "source": "chat_infer"}
