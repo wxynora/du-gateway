@@ -10,6 +10,7 @@ from flask import jsonify, request
 from services.game_tool_runtime import (
     GAME_ID_CAPTIVITY_SIMULATOR,
     execute_game_command,
+    get_random_imitator_td_spectator_view,
     list_game_tools,
     normalize_game_id,
 )
@@ -2299,6 +2300,10 @@ def register_routes(bp) -> None:
     @bp.route("/game-tools", methods=["GET"])
     def miniapp_game_tools_list():
         return jsonify({"ok": True, "games": list_game_tools()})
+
+    @bp.route("/game-tools/random_imitator_td/view", methods=["GET"])
+    def miniapp_random_imitator_td_view():
+        return jsonify(get_random_imitator_td_spectator_view()), 200
 
     @bp.route("/game-tools/private_board/sync-du", methods=["POST"])
     def miniapp_private_board_sync_du():

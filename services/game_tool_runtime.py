@@ -223,6 +223,14 @@ def _random_imitator_single_save_id() -> str:
     return RANDOM_IMITATOR_SINGLE_SAVE_ID
 
 
+def get_random_imitator_td_spectator_view(*, save_root: Path | None = None) -> dict[str, Any]:
+    root = Path(save_root) if save_root is not None else GAME_SAVE_ROOTS[GAME_ID_RANDOM_IMITATOR_TD]
+    save_path = _save_path(root, RANDOM_IMITATOR_SINGLE_SAVE_ID)
+    from services.random_imitator_td_spectator import build_random_imitator_td_spectator_view
+
+    return build_random_imitator_td_spectator_view(save_path)
+
+
 def list_game_tools() -> list[dict[str, Any]]:
     _ensure_builtin_games_registered()
     return [
