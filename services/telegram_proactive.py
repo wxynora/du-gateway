@@ -61,6 +61,7 @@ from services.proactive_prompt_templates import (
     RANDOM_PROACTIVE_DECISION_SECTION_ID,
     RANDOM_PROACTIVE_DECISION_TEMPLATE,
 )
+from services.reply_channel_context import resolve_recent_reply_context
 
 logger = get_logger(__name__)
 _GATEWAY_DYNAMIC_SYSTEM_MARKER = "__dynamic__"
@@ -677,7 +678,22 @@ def _format_proactive_decision_memory_for_system() -> str:
 
 
 def _available_channels() -> list[str]:
-    """返回当前已配置的主动消息入口；SumiTalk 暂时不参与主动投递。"""
+    """优先返回最近真实聊天入口；没有记录时再使用旧主动入口顺序。"""
+    try:
+        context = resolve_recent_reply_context() or {}
+        meta = context.get("meta") if isinstance(context.get("meta"), dict) else {}
+        recent_channel = str(meta.get("channel") or "").strip().lower()
+    except Exception:
+        recent_channel = ""
+    if recent_channel == "sumitalk":
+        return ["sumitalk"]
+    if recent_channel == "wechat" and WECHAT_PROACTIVE_PUSH_URL:
+        return ["wechat"]
+    if recent_channel == "qq":
+        return ["qq"]
+    if recent_channel == "tg" and TELEGRAM_BOT_TOKEN and TELEGRAM_PROACTIVE_TARGET_USER_ID:
+        return ["tg"]
+
     channels = []
     if WECHAT_PROACTIVE_PUSH_URL:
         channels.append("wechat")
@@ -768,6 +784,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         "wechat": "微信（国内直连，更稳定）",
         "qq": "QQ",
         "tg": "Telegram",
+        "sumitalk": "SumiTalk App",
     }
     channel_lines = "\n".join(
         f'  - "{ch}"：{channel_desc_map.get(ch, ch)}' for ch in channels
@@ -1143,6 +1160,16 @@ def _dispatch_send(channel: str, text: str, split: bool = True, target_user_id: 
         return _send_via_qq(text, split=split)
     if channel == "tg":
         return _send_via_tg(text, target_user_id=target_user_id)
+    if channel == "sumitalk":
+        try:
+            context = resolve_recent_reply_context()
+            target = str((context or {}).get("target") or "").strip()
+            from services.conversation_followup import _dispatch_followup
+
+            return _dispatch_followup("sumitalk", target, text, split=split, created_at=now_beijing_iso())
+        except Exception as e:
+            logger.warning("SumiTalk 主动发送异常: %s", e, exc_info=True)
+            return False
     logger.warning("主动消息发送入口不可用 channel=%s", channel)
     return False
 
