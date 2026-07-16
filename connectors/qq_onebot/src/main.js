@@ -729,7 +729,7 @@ const logGroupEvents = envBool("QQ_GROUP_EVENT_LOG", true);
 const ownerQqUserId = Number(envStr("QQ_OWNER_USER_ID", "1336091712") || 0);
 const ownerQqDisplayName = envStr("QQ_OWNER_DISPLAY_NAME", "辛玥");
 const reportGroupActivityEnabled = envBool("QQ_GROUP_ACTIVITY_REPORT_ENABLED", true);
-const groupActivityContextLimit = Math.max(1, envInt("QQ_GROUP_ACTIVITY_CONTEXT_MESSAGES", 6));
+const groupActivityContextLimit = Math.max(1, envInt("QQ_GROUP_ACTIVITY_CONTEXT_MESSAGES", 20));
 
 async function sendQqPrivateRichReply(userId, reply, options = {}) {
   const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));

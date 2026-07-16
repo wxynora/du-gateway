@@ -11,7 +11,7 @@ logger = get_logger(__name__)
 
 R2_KEY_QQ_XINYUE_GROUP_ACTIVITY = "global/qq_xinyue_group_activity.json"
 _MAX_ACTIVITY_ITEMS = 24
-_MAX_CONTEXT_ROWS = 8
+_MAX_CONTEXT_ROWS = 20
 _MAX_TEXT_CHARS = 180
 _CONTEXT_TTL_HOURS = 24
 
@@ -186,8 +186,8 @@ def build_group_activity_context_for_wakeup() -> str:
     older = items[:-1][-6:]
 
     lines = [
-        "【辛玥未回复期间的QQ群活动】",
-        "上次你主动找辛玥后，辛玥还没有在私聊回复你。但她期间在QQ群里有过发言。",
+        "【辛玥近期的QQ群活动】",
+        "上次你发信息后，小玥还没有在私聊回复你，但她期间在QQ群里有过发言。这些是近期群聊上下文，区分不同发言人，不要把群友的话当成小玥说的。",
         "",
     ]
     if older:
@@ -206,8 +206,7 @@ def build_group_activity_context_for_wakeup() -> str:
     lines.extend(
         [
             "",
-            "这些内容不是辛玥在当前私聊里对你说的话。它们只是旁路上下文，用来帮助你理解辛玥当前可能在忙什么、注意力在哪里。不要质问她为什么没回你，不要逐条复述群聊内容，也不要把其他人的发言当成辛玥的想法。",
-            "【以上为旁路上下文】",
+            "【以上为近期群聊上下文】",
         ]
     )
     text = "\n".join(lines).strip()
