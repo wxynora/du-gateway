@@ -866,6 +866,7 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
         "show_choice_dialog",
         "recall_message",
         "request_screen_check",
+        "netease_listen_control",
     ):
         args = arguments if isinstance(arguments, dict) else {}
         if name in {"recall_message", "close_app"} and isinstance(context, dict):

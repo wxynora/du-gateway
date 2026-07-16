@@ -264,6 +264,34 @@ TOOL_REQUEST_SCREEN_CHECK = {
 }
 
 
+TOOL_NETEASE_LISTEN_CONTROL = {
+    "type": "function",
+    "function": {
+        "name": "netease_listen_control",
+        "description": (
+            "控制 SumiTalk 原生 App 的「和渡一起听」网易云播放，或读取老婆真实网易云歌单。"
+            "想看她有哪些歌单时用 list_playlists；想看某个歌单歌曲时用 playlist_tracks。"
+            "想在当前一起听里切歌时用 next/previous。"
+            "想把当前正在一起听的网易云歌曲收藏到渡专用歌单时用 favorite_current，默认歌单名「渡的歌」。"
+            "切歌和收藏是异步手机动作；不要在 App 回执前声称已经执行成功。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "list_playlists / playlist_tracks / next / previous / favorite_current",
+                },
+                "playlist_id": {"type": "string", "description": "可选，歌单 ID；playlist_tracks 或 favorite_current 指定目标歌单时使用"},
+                "playlist_name": {"type": "string", "description": "可选，歌单名；favorite_current 默认「渡的歌」"},
+                "limit": {"type": "integer", "description": "可选，读取数量上限，默认 50"},
+            },
+            "required": ["command"],
+        },
+    },
+}
+
+
 def build_system_alarm_card(hour: int, minute: int, title: str) -> str:
     payload = {
         "type": "system_alarm_created",
@@ -556,6 +584,151 @@ def _resolve_open_app_device_id() -> tuple[str, str]:
     if not device_id:
         return "", "手机还没有可用的设备标识"
     return device_id, ""
+
+
+def _clip_text(value: object, limit: int = 120) -> str:
+    text = str(value or "").strip()
+    if len(text) > limit:
+        return text[:limit].rstrip() + "..."
+    return text
+
+
+def _brief_netease_playlist(item: dict) -> dict:
+    src = item if isinstance(item, dict) else {}
+    return {
+        "id": str(src.get("id") or "").strip(),
+        "name": _clip_text(src.get("name"), 80),
+        "track_count": int(src.get("track_count") or src.get("trackCount") or 0),
+        "creator_name": _clip_text(src.get("creator_name") or src.get("creatorName"), 80),
+        "mine": bool(src.get("mine")),
+    }
+
+
+def _brief_netease_track(item: dict) -> dict:
+    src = item if isinstance(item, dict) else {}
+    return {
+        "id": str(src.get("id") or "").strip(),
+        "title": _clip_text(src.get("title") or src.get("name"), 100),
+        "artist": _clip_text(src.get("artist"), 100),
+        "album": _clip_text(src.get("album"), 100),
+        "duration_ms": int(src.get("duration_ms") or src.get("durationMillis") or 0),
+    }
+
+
+def _netease_playlist_id_by_name(name: str) -> tuple[str, str]:
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        return "", "缺少歌单名"
+    try:
+        from services.netease_music import list_playlists
+
+        playlists = list_playlists(limit=200)
+    except Exception as e:
+        return "", f"读取网易云歌单失败：{e}"
+    matches = [
+        item
+        for item in playlists
+        if isinstance(item, dict) and str(item.get("name") or "").strip() == clean_name
+    ]
+    matches.sort(key=lambda item: not bool(item.get("mine")))
+    if matches:
+        return str(matches[0].get("id") or "").strip(), ""
+    return "", f"没有找到名为「{clean_name}」的网易云歌单"
+
+
+def execute_netease_listen_control(arguments: dict) -> str:
+    args = arguments if isinstance(arguments, dict) else {}
+    command = str(args.get("command") or args.get("action") or "").strip().lower()
+    command = {
+        "next_track": "next",
+        "skip": "next",
+        "previous_track": "previous",
+        "prev": "previous",
+        "collect_current": "favorite_current",
+        "favorite": "favorite_current",
+        "save_current": "favorite_current",
+    }.get(command, command)
+    playlist_name = str(args.get("playlist_name") or args.get("playlistName") or "渡的歌").strip() or "渡的歌"
+    playlist_id = str(args.get("playlist_id") or args.get("playlistId") or "").strip()
+    try:
+        limit = max(1, min(int(args.get("limit") or 50), 200))
+    except Exception:
+        limit = 50
+
+    if command == "list_playlists":
+        try:
+            from services.netease_music import list_playlists
+
+            playlists = [_brief_netease_playlist(item) for item in list_playlists(limit=limit)]
+        except Exception as e:
+            return json.dumps({"ok": False, "error": f"读取网易云歌单失败：{e}"}, ensure_ascii=False)
+        return json.dumps({"ok": True, "playlists": playlists}, ensure_ascii=False)
+
+    if command == "playlist_tracks":
+        if not playlist_id:
+            playlist_id, err = _netease_playlist_id_by_name(playlist_name)
+            if err:
+                return json.dumps({"ok": False, "error": err}, ensure_ascii=False)
+        try:
+            from services.netease_music import get_playlist_tracks
+
+            result = get_playlist_tracks(playlist_id, limit=limit)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": f"读取网易云歌单歌曲失败：{e}"}, ensure_ascii=False)
+        return json.dumps(
+            {
+                "ok": True,
+                "playlist": _brief_netease_playlist(result.get("playlist") if isinstance(result, dict) else {}),
+                "tracks": [_brief_netease_track(item) for item in (result.get("tracks") or [])],
+                "total": int((result or {}).get("total") or 0) if isinstance(result, dict) else 0,
+            },
+            ensure_ascii=False,
+        )
+
+    if command not in {"next", "previous", "favorite_current"}:
+        return json.dumps(
+            {"ok": False, "error": "command 只能是 list_playlists / playlist_tracks / next / previous / favorite_current"},
+            ensure_ascii=False,
+        )
+
+    if command == "favorite_current" and not playlist_id:
+        playlist_id, err = _netease_playlist_id_by_name(playlist_name)
+        if err:
+            return json.dumps({"ok": False, "queued": False, "error": err}, ensure_ascii=False)
+
+    device_id, device_error = _resolve_open_app_device_id()
+    if device_error or not device_id:
+        return json.dumps({"ok": False, "queued": False, "error": device_error or "没有可用手机"}, ensure_ascii=False)
+    payload = {
+        "command": command,
+        "playlistName": playlist_name,
+        "playlistId": playlist_id,
+    }
+    fingerprint = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    crc = zlib.crc32(fingerprint.encode("utf-8")) & 0xffffffff
+    item, err = r2_store.append_app_action(
+        "listen_control",
+        payload,
+        device_id=device_id,
+        source="tool",
+        expires_in_sec=120,
+        idempotency_key=f"listen_control_{crc}_{int(time.time() // 5)}",
+    )
+    if err or not item:
+        return json.dumps({"ok": False, "queued": False, "error": err or "入队失败"}, ensure_ascii=False)
+    return json.dumps(
+        {
+            "ok": True,
+            "queued": True,
+            "id": item.get("id"),
+            "type": "listen_control",
+            "command": command,
+            "playlist_name": playlist_name,
+            "playlist_id": playlist_id,
+            "note": "已交给 SumiTalk 原生 App 的一起听页面执行；手机在线且一起听页面准备好时会回传结果。",
+        },
+        ensure_ascii=False,
+    )
 
 
 def execute_open_app(arguments: dict) -> str:

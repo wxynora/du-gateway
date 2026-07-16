@@ -22,6 +22,7 @@ _APP_ACTION_ALLOWLIST = {
     "voice_call_invite",
     "recall_message",
     "deliver_chat_message",
+    "listen_control",
 }
 _APP_ACTION_HISTORY_MAX = 100
 _APP_ACTION_EXPIRES_DEFAULT = 900
@@ -53,6 +54,12 @@ def _payload_log_summary(payload: Any) -> dict:
         summary["timeoutSeconds"] = payload.get("timeoutSeconds")
     if "choices" in payload and isinstance(payload.get("choices"), list):
         summary["choices"] = len(payload.get("choices") or [])
+    command = str(payload.get("command") or "").strip()
+    if command:
+        summary["command"] = command[:40]
+    playlist_name = str(payload.get("playlistName") or payload.get("playlist_name") or "").strip()
+    if playlist_name:
+        summary["playlistName"] = playlist_name[:80]
     reply_text = str(payload.get("replyText") or payload.get("reply_text") or "").strip()
     if reply_text:
         summary["reply_text_len"] = len(reply_text)
@@ -392,6 +399,8 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         return _normalize_open_app_payload(payload)
     if action_type == "close_app":
         return _normalize_close_app_payload(payload)
+    if action_type == "listen_control":
+        return _normalize_listen_control_payload(payload)
     if action_type != "create_system_alarm":
         return None, f"不支持的 app action: {action_type}"
     src = payload if isinstance(payload, dict) else {}
@@ -444,6 +453,32 @@ def _normalize_open_app_payload(payload: dict) -> tuple[Optional[dict], Optional
         "packageName": package_name[:160],
         "appName": app_name[:80],
         "url": target_url[:2048],
+    }, None
+
+
+def _normalize_listen_control_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    src = payload if isinstance(payload, dict) else {}
+    command = str(src.get("command") or src.get("action") or "").strip().lower()
+    alias = {
+        "next_track": "next",
+        "skip": "next",
+        "previous_track": "previous",
+        "prev": "previous",
+        "collect_current": "favorite_current",
+        "favorite": "favorite_current",
+        "save_current": "favorite_current",
+    }
+    command = alias.get(command, command)
+    if command not in {"next", "previous", "favorite_current"}:
+        return None, "listen_control command 只能是 next / previous / favorite_current"
+    playlist_name = str(src.get("playlistName") or src.get("playlist_name") or "渡的歌").strip() or "渡的歌"
+    playlist_id = str(src.get("playlistId") or src.get("playlist_id") or "").strip()
+    track_id = str(src.get("trackId") or src.get("track_id") or "").strip()
+    return {
+        "command": command,
+        "playlistName": playlist_name[:80],
+        "playlistId": playlist_id[:80],
+        "trackId": track_id[:80],
     }, None
 
 

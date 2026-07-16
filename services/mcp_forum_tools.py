@@ -14,6 +14,7 @@ from services.device_action_tools import (
     TOOL_OPEN_APP,
     TOOL_CREATE_CALENDAR_EVENT,
     TOOL_CREATE_SYSTEM_ALARM,
+    TOOL_NETEASE_LISTEN_CONTROL,
     TOOL_RECALL_MESSAGE,
     TOOL_REQUEST_SCREEN_CHECK,
     TOOL_SHOW_CHOICE_DIALOG,
@@ -21,6 +22,7 @@ from services.device_action_tools import (
     execute_open_app,
     execute_create_calendar_event,
     execute_create_system_alarm,
+    execute_netease_listen_control,
     execute_recall_message,
     execute_request_screen_check,
     execute_show_choice_dialog,
@@ -239,6 +241,7 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
         TOOL_SHOW_CHOICE_DIALOG,
         TOOL_RECALL_MESSAGE,
         TOOL_REQUEST_SCREEN_CHECK,
+        TOOL_NETEASE_LISTEN_CONTROL,
     ]
     if mode == "daily":
         return schedule_tools
@@ -515,6 +518,8 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         return execute_recall_message(args)
     if name == "request_screen_check":
         return execute_request_screen_check(args)
+    if name == "netease_listen_control":
+        return execute_netease_listen_control(args)
 
     if name in FORUM_HIGH_LEVEL_TOOLS:
         return json.dumps(_execute_forum_mcp_tool(name, args), ensure_ascii=False)
