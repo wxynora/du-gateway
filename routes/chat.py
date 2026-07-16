@@ -2199,6 +2199,19 @@ def _should_record_user_interaction_side_effects() -> bool:
     return not _is_du_daily_maintenance_request() and not _is_gateway_wakeup_request()
 
 
+def _is_real_user_input_request(window_id: str, body: dict, *, reply_channel: str) -> bool:
+    if not _should_record_user_interaction_side_effects():
+        return False
+    if (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes"):
+        return True
+    return _is_cross_platform_tg_window_user_input(
+        window_id,
+        body,
+        reply_channel=reply_channel,
+        is_followup_generation=_is_followup_generation_request(),
+    )
+
+
 def _static_models_response():
     """用 GATEWAY_MODELS 拼成 OpenAI 风格的 /v1/models 响应。"""
     if not GATEWAY_MODELS:
@@ -2523,14 +2536,11 @@ def chat_completions():
             should_archive=_should_archive_followup_generation_request(),
         )
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
-    tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
-    if not tg_user_input:
-        tg_user_input = _is_cross_platform_tg_window_user_input(
-            window_id,
-            body,
-            reply_channel=reply_channel,
-            is_followup_generation=_is_followup_generation_request(),
-        )
+    tg_user_input = _is_real_user_input_request(
+        window_id,
+        body,
+        reply_channel=reply_channel,
+    )
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
     if slim_voice_call:
         body = _inject_voice_call_style_system(body)
