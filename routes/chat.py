@@ -173,6 +173,7 @@ from services.chat_tool_helpers import (
     sse_delta_chunk_bytes as _sse_delta_chunk_bytes,
 )
 from services.prompt_cache_debug import (
+    StreamCacheDebugCollector as _StreamCacheDebugCollector,
     build_cache_debug_entry as _build_cache_debug_entry,
     build_prompt_cache_profile as _build_prompt_cache_profile,
 )
@@ -1171,7 +1172,13 @@ def _attach_pioneer_session_id_header(req_headers: dict, body: dict, headers: di
     req_headers["X-Session-Id"] = _build_pioneer_session_id(body, headers)
 
 
-def _stream_forward_to_ai(body: dict, headers: dict):
+def _stream_forward_to_ai(
+    body: dict,
+    headers: dict,
+    *,
+    prompt_cache_profile: Optional[dict] = None,
+    cache_debug_sink=None,
+):
     """流式转发：上游 SSE 原样逐行 yield；不再自动 fallback。"""
     request_model = (body or {}).get("model") or ""
     targets = _get_forward_targets(request_model)
@@ -1218,6 +1225,11 @@ def _stream_forward_to_ai(body: dict, headers: dict):
             body_send = _apply_openrouter_request_policy(body_send, url)
             is_cf_anthropic = is_cloudflare_anthropic_url(target_url)
             is_pioneer_anthropic = is_pioneer_anthropic_url(target_url)
+            if not (is_cf_anthropic or is_pioneer_anthropic):
+                stream_options = body_send.get("stream_options")
+                stream_options = dict(stream_options) if isinstance(stream_options, dict) else {}
+                stream_options["include_usage"] = True
+                body_send["stream_options"] = stream_options
             if is_cf_anthropic or is_pioneer_anthropic:
                 body_send = _openai_to_anthropic_request(
                     body_send,
@@ -1230,9 +1242,17 @@ def _stream_forward_to_ai(body: dict, headers: dict):
             # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(target_url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
+                cache_debug_collector = _StreamCacheDebugCollector(
+                    body_send,
+                    target_url,
+                    prompt_cache_profile,
+                )
                 if is_cf_anthropic or is_pioneer_anthropic:
                     for chunk in _anthropic_sse_to_openai_sse(r.iter_lines(), str(body_send.get("model") or request_model)):
+                        cache_debug_collector.feed(chunk)
                         yield chunk
+                    if cache_debug_sink:
+                        cache_debug_sink(cache_debug_collector.build())
                     return
                 last_data_line = None
                 first_chunk_logged = False
@@ -1243,7 +1263,9 @@ def _stream_forward_to_ai(body: dict, headers: dict):
                             first_chunk_logged = True
                         if line.startswith(b"data: ") and b"[DONE]" not in line:
                             last_data_line = line
-                        yield line + b"\n"
+                        chunk = line + b"\n"
+                        cache_debug_collector.feed(chunk)
+                        yield chunk
                     else:
                         yield b"\n"
                 # 流正常读完时打一条：stop=正常结束，length=被 max_tokens 截断，null/没有=异常中断
@@ -1257,6 +1279,8 @@ def _stream_forward_to_ai(body: dict, headers: dict):
                             logger.debug("流式上游结束 finish_reason=null或未提供（可能异常中断）")
                     except Exception:
                         logger.debug("流式上游结束 末包解析失败，无法读取 finish_reason")
+                if cache_debug_sink:
+                    cache_debug_sink(cache_debug_collector.build())
                 return
             last_err = f"上游 HTTP {r.status_code}"
         except Exception as e:
@@ -1275,6 +1299,7 @@ def _stream_with_r2_archive(
     skip_post_archive_dynamic_memory_write: bool = False,
     skip_post_archive_body_delta: bool = False,
     du_request_id: str = "",
+    prompt_cache_profile: Optional[dict] = None,
     tool_executor=None,
     sumitalk_event_sink=None,
 ):
@@ -1288,6 +1313,7 @@ def _stream_with_r2_archive(
     reasoning_parts = []
     reasoning_details_parts: list[dict] = []
     thinking_blocks_parts: list[dict] = []
+    cache_debug_entries: list[dict] = []
     reasoning_omitted = False
     reply_channel = str(reply_channel or _reply_channel() or "").strip().lower()
     du_request_id = normalize_debug_request_id(du_request_id or (body or {}).get(DU_REQUEST_ID_BODY_KEY))
@@ -1509,7 +1535,12 @@ def _stream_with_r2_archive(
 
         def _producer():
             try:
-                for chunk in _stream_forward_to_ai(body, headers):
+                for chunk in _stream_forward_to_ai(
+                    body,
+                    headers,
+                    prompt_cache_profile=prompt_cache_profile,
+                    cache_debug_sink=cache_debug_entries.append,
+                ):
                     chunk_queue.put(chunk)
                 chunk_queue.put(None)
             except Exception as e:
@@ -1632,6 +1663,8 @@ def _stream_with_r2_archive(
                     msg["thinking_blocks"] = thinking_blocks_parts
                 if reasoning_omitted:
                     msg["reasoning_omitted"] = True
+                if cache_debug_entries:
+                    msg["cache_debug"] = list(cache_debug_entries)
                 _apply_pseudo_cot_state_and_fallback(
                     window_id,
                     msg,
@@ -1697,7 +1730,12 @@ def _stream_with_r2_archive(
 
             def _producer():
                 try:
-                    for chunk in _stream_forward_to_ai(current_body, headers):
+                    for chunk in _stream_forward_to_ai(
+                        current_body,
+                        headers,
+                        prompt_cache_profile=prompt_cache_profile,
+                        cache_debug_sink=cache_debug_entries.append,
+                    ):
                         chunk_queue.put(chunk)
                 except Exception as e:
                     logger.warning("工具流式生产异常 %s", e)
@@ -1959,6 +1997,8 @@ def _stream_with_r2_archive(
                 msg["thinking_blocks"] = final_thinking_blocks
             if reasoning_omitted:
                 msg["reasoning_omitted"] = True
+            if cache_debug_entries:
+                msg["cache_debug"] = list(cache_debug_entries)
             _apply_pseudo_cot_state_and_fallback(
                 window_id,
                 msg,
@@ -2593,6 +2633,7 @@ def chat_completions():
                 skip_post_archive_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
                 skip_post_archive_body_delta=skip_post_archive_body_delta,
                 du_request_id=du_request_id,
+                prompt_cache_profile=prompt_cache_profile,
                 tool_executor=_execute_tool_with_chat_context,
                 sumitalk_event_sink=_emit_sumitalk_chat_event if is_sumitalk_request else None,
             ),

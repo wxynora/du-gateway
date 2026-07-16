@@ -526,7 +526,7 @@ def test_rich_tool_stream_events() -> None:
         "sumitalk_card_suffix_for_stream": chat_route.sumitalk_card_suffix_for_stream,
     }
 
-    def fake_stream(body, _headers):
+    def fake_stream(body, _headers, **_kwargs):
         has_tool_result = any(message.get("role") == "tool" for message in body.get("messages") or [])
         if not has_tool_result:
             packets = [
@@ -626,7 +626,7 @@ def test_no_tool_reasoning_stream_events() -> None:
         "_is_du_daily_maintenance_request": chat_route._is_du_daily_maintenance_request,
     }
 
-    def fake_stream(_body, _headers):
+    def fake_stream(_body, _headers, **_kwargs):
         packets = [
             {"choices": [{"delta": {"reasoning_content": "先想"}}]},
             {"choices": [{"delta": {"content": "你\n"}}]},

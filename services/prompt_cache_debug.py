@@ -338,3 +338,70 @@ def build_cache_debug_entry(body_send: dict, upstream_url: str, prompt_cache_pro
         "usage": extract_prompt_cache_usage(data),
         "response": extract_upstream_response_debug(data, profile.get("model") or ""),
     }
+
+
+class StreamCacheDebugCollector:
+    """Collect the final usage/model fields from OpenAI-compatible SSE packets."""
+
+    def __init__(self, body_send: dict, upstream_url: str, prompt_cache_profile: dict | None = None):
+        self.body_send = body_send
+        self.upstream_url = upstream_url
+        self.prompt_cache_profile = prompt_cache_profile
+        self.usage: dict = {}
+        self.response: dict = {}
+        self.finish_reason = ""
+
+    @staticmethod
+    def _merge_dict(target: dict, incoming: dict) -> None:
+        for key, value in incoming.items():
+            if value is None:
+                continue
+            if isinstance(value, dict) and isinstance(target.get(key), dict):
+                StreamCacheDebugCollector._merge_dict(target[key], value)
+            else:
+                target[key] = value
+
+    def feed(self, chunk: bytes | bytearray | str) -> None:
+        text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, (bytes, bytearray)) else str(chunk or "")
+        for line in text.splitlines():
+            if not line.startswith("data:"):
+                continue
+            raw = line.split(":", 1)[1].strip()
+            if not raw or raw == "[DONE]":
+                continue
+            try:
+                packet = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(packet, dict):
+                continue
+            usage = packet.get("usage")
+            if isinstance(usage, dict):
+                self._merge_dict(self.usage, usage)
+            for key in (
+                "model",
+                "anthropic_model",
+                "requested_model",
+                "anthropic_fallback_blocks",
+            ):
+                value = packet.get(key)
+                if value is not None:
+                    self.response[key] = value
+            choices = packet.get("choices") if isinstance(packet.get("choices"), list) else []
+            first_choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+            finish_reason = str(first_choice.get("finish_reason") or "").strip()
+            if finish_reason:
+                self.finish_reason = finish_reason
+
+    def build(self) -> dict:
+        data = dict(self.response)
+        if self.usage:
+            data["usage"] = self.usage
+        if self.finish_reason:
+            data["choices"] = [{"finish_reason": self.finish_reason}]
+        return build_cache_debug_entry(
+            self.body_send,
+            self.upstream_url,
+            self.prompt_cache_profile,
+            data,
+        )
