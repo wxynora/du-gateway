@@ -19,6 +19,28 @@ class ReasoningStreamNormalizer:
         self._attempt_text = ""
         self._attempt_mode = "unknown"
         self._attempt_started = False
+        self._attempt_replaying = bool(self._text)
+
+    def _publish_candidate(
+        self,
+        candidate: str,
+        *,
+        allow_replay_prefix: bool,
+    ) -> tuple[str, str] | None:
+        if candidate == self._text:
+            self._attempt_replaying = False
+            return None
+        if allow_replay_prefix and self._attempt_replaying and self._text.startswith(candidate):
+            return None
+
+        self._attempt_replaying = False
+        if candidate.startswith(self._text):
+            suffix = candidate[len(self._text) :]
+            self._text = candidate
+            return ("delta", suffix) if suffix else None
+
+        self._text = candidate
+        return "snapshot", candidate
 
     def feed(self, fragment: str) -> tuple[str, str] | None:
         incoming = str(fragment or "")
@@ -27,32 +49,23 @@ class ReasoningStreamNormalizer:
 
         if not self._attempt_started:
             candidate = incoming
-            incoming_mode = "delta"
             self._attempt_started = True
+        elif incoming == self._attempt_text:
+            return None
         elif incoming.startswith(self._attempt_text) and len(incoming) > len(self._attempt_text):
             candidate = incoming
-            incoming_mode = "snapshot"
-            self._attempt_mode = "snapshot"
-        elif self._attempt_mode == "snapshot" and incoming == self._attempt_text:
+            self._attempt_mode = "cumulative"
+        elif self._attempt_text.startswith(incoming):
             candidate = incoming
-            incoming_mode = "snapshot"
+            self._attempt_mode = "cumulative"
+        elif self._attempt_mode == "cumulative":
+            candidate = incoming
         else:
             candidate = self._attempt_text + incoming
-            incoming_mode = "delta"
             self._attempt_mode = "delta"
 
         self._attempt_text = candidate
-        if candidate == self._text or self._text.startswith(candidate):
-            return None
-        if candidate.startswith(self._text):
-            suffix = candidate[len(self._text) :]
-            self._text = candidate
-            if incoming_mode == "snapshot":
-                return "snapshot", candidate
-            return ("delta", suffix) if suffix else None
-
-        self._text = candidate
-        return "snapshot", candidate
+        return self._publish_candidate(candidate, allow_replay_prefix=True)
 
     def reconcile_snapshot(self, text: str) -> tuple[str, str] | None:
         snapshot = str(text or "")
@@ -60,9 +73,8 @@ class ReasoningStreamNormalizer:
             return None
         self._attempt_text = snapshot
         self._attempt_started = True
-        self._attempt_mode = "snapshot"
-        self._text = snapshot
-        return "snapshot", snapshot
+        self._attempt_mode = "cumulative"
+        return self._publish_candidate(snapshot, allow_replay_prefix=False)
 
 
 def extract_thinking_from_content(content: str) -> tuple[str, str]:
@@ -163,26 +175,37 @@ def extract_reasoning_text_and_details(obj: dict) -> tuple[str, list, bool]:
 
 
 def extract_reasoning_stream_parts(obj: dict) -> tuple[str, str, list, bool]:
-    """Split streaming deltas from structured full-thinking snapshots."""
+    """Choose one canonical reasoning source for a streaming packet."""
     if not isinstance(obj, dict):
         return "", "", [], False
 
     delta_obj = dict(obj)
     snapshot_obj: dict = {}
     thinking_blocks = delta_obj.pop("thinking_blocks", None)
+    structured_present = False
     if isinstance(thinking_blocks, list):
         snapshot_obj["thinking_blocks"] = thinking_blocks
+        structured_present = any(
+            isinstance(block, dict)
+            and str(block.get("type") or "").strip() in {"thinking", "redacted_thinking"}
+            for block in thinking_blocks
+        )
     if isinstance(delta_obj.get("content"), list):
-        snapshot_obj["content"] = delta_obj.pop("content")
+        content_blocks = delta_obj.pop("content")
+        snapshot_obj["content"] = content_blocks
+        structured_present = structured_present or any(
+            isinstance(block, dict)
+            and str(block.get("type") or "").strip() in {"thinking", "redacted_thinking"}
+            for block in content_blocks
+        )
 
     delta_text, delta_details, delta_omitted = extract_reasoning_text_and_details(delta_obj)
     snapshot_text, snapshot_details, snapshot_omitted = extract_reasoning_text_and_details(snapshot_obj)
-    return (
-        delta_text,
-        snapshot_text,
-        [*delta_details, *snapshot_details],
-        bool(delta_omitted or snapshot_omitted),
-    )
+    details = [*delta_details, *snapshot_details]
+    omitted = bool(delta_omitted or snapshot_omitted)
+    if structured_present:
+        return "", snapshot_text, details, omitted
+    return delta_text, "", details, omitted
 
 
 def strip_thinking_from_response_json(resp_json: dict) -> dict:
