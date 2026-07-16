@@ -113,6 +113,9 @@ def _normalize_payload(data: Any) -> dict:
             "audio_content_type": _normalize_text(item.get("audio_content_type"), 80),
             "audio_size": int(float(item.get("audio_size") or 0)),
             "duration_seconds": float(item.get("duration_seconds") or 0),
+            "source_provider": _normalize_text(item.get("source_provider"), 40),
+            "source_track_id": _normalize_text(item.get("source_track_id"), 120),
+            "source_cover_url": _normalize_text(item.get("source_cover_url"), 500),
             "created_at": str(item.get("created_at") or "").strip(),
             "updated_at": str(item.get("updated_at") or "").strip(),
         }
@@ -242,9 +245,50 @@ def save_music_melody_entry(
             "audio_content_type": _normalize_text(audio_content_type or old.get("audio_content_type"), 80),
             "audio_size": int(float(audio_size or old.get("audio_size") or 0)),
             "duration_seconds": float(duration_seconds or old.get("duration_seconds") or 0),
+            "source_provider": _normalize_text(old.get("source_provider"), 40),
+            "source_track_id": _normalize_text(old.get("source_track_id"), 120),
+            "source_cover_url": _normalize_text(old.get("source_cover_url"), 500),
             "created_at": str(old.get("created_at") or now_ts),
             "updated_at": now_ts,
         }
+        items[cache_key] = entry
+        ok = _write_payload(payload, use_r2)
+    return entry if ok else None
+
+
+def update_music_melody_source_by_id(
+    entry_id: str,
+    *,
+    source_provider: str,
+    source_track_id: str,
+    source_cover_url: str = "",
+) -> Optional[dict]:
+    eid = str(entry_id or "").strip()
+    if not eid:
+        return None
+    now_ts = now_beijing_iso()
+    with _write_lock:
+        payload, use_r2 = _read_payload()
+        items = payload.setdefault("items", {})
+        cache_key = ""
+        for key, item in items.items():
+            if isinstance(item, dict) and (str(item.get("id") or "").strip() == eid or str(key or "").strip() == eid):
+                cache_key = str(key or "").strip()
+                break
+        if not cache_key:
+            return None
+        old = items.get(cache_key) if isinstance(items.get(cache_key), dict) else {}
+        if not old:
+            return None
+        entry = dict(old)
+        entry.update(
+            {
+                "source_provider": _normalize_text(source_provider, 40),
+                "source_track_id": _normalize_text(source_track_id, 120),
+                "source_cover_url": _normalize_text(source_cover_url, 500),
+                "updated_at": now_ts,
+            }
+        )
         items[cache_key] = entry
         ok = _write_payload(payload, use_r2)
     return entry if ok else None

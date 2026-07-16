@@ -2,12 +2,28 @@
 
 这个文件用于快速定位问题。先按“现象”找入口，再看关键文件和日志关键词。
 
+当前状态（2026-07-16 网易云一起听后端最小闭环，待部署）：
+- 已完成：基于固定提交的 PyNCM 1.8.1 增加网易云扫码登录、远端登录态校验、每日推荐、私人 FM、搜索、用户歌单、完整歌单曲目、曲目详情、歌词和 `standard/exhigh/lossless/hires` 播放源接口；登录态只写本地 `data/netease_music_session.json`，原子替换并限制为 `0600`，不进 R2。网易云明确返回登录失效时清空本地会话，要求重新扫码。
+- 分析边界：搜索、歌单、曲目详情、歌词和播放源接口绝不下载整首音频、绝不调用模型；只有显式 `POST /miniapp-api/music/netease/tracks/<id>/analyze` 才解析真实流、下载、调用现有 `analyze_music_melody` 并沿用既有分析缓存。高音质源不可用时按 `lossless -> exhigh -> standard` 降级，但始终按真实格式处理；普通播放不分析、不留存分析结果。
+- 格式边界：分析器不再相信文件名或 MIME，统一先用 `ffprobe` 检查真实 codec/container；真实 MP3 直通，AAC/M4A、FLAC、WAV 等由 `ffmpeg` 转成 44.1kHz/192kbps MP3 后交给 Gemini。网易云在线 API 返回的是实际音频流；本地 `.ncm` 属于加密缓存，不冒充普通音频，接口会明确提示改走网易云曲目分析入口。
+- 留存关联：显式分析成功后才把 `source_provider=netease`、网易云曲目 ID 和封面写进既有文字分析记录，供原生端重启后重新取得短期曲源；播放预览本身不会创建这条关联。
+- 已验证：格式归一化 6 项和网易云登录/推荐/FM/源/路由边界 14 项测试通过；PyNCM 固定提交可导入，新增推荐/FM 的底层路径与 PyNCM 装饰器契约一致，相关 Python 编译、脚本 `--help` 与 `git diff --check` 通过。测试全部使用假登录态、假曲源或本地合成音频，没有扫码真实账号、下载真实歌曲、调用 Gemini、写 R2、部署或重启。
+- 配套原生端：网易云扫码、搜索/歌单、播放/歌词、显式“分析并留存”和「渡的歌单」置顶已在独立原生 worktree 完成并通过构建；两边都尚未提交、推送、部署或真机联调。后端不会自动创建或修改网易云歌单。
+
 当前状态（2026-07-16 QQ 群近期上下文收束，待部署）：
 - 根因：主动唤醒注入曾用“未回复期间”“旁路上下文”“不要质问她为什么没回你、不要逐条复述”等措辞，模型会把防止逐条复读扩大理解成“不能自然提群里发生的事”。
 - 已修复：上下文改为“辛玥近期的 QQ 群活动”，使用定稿提示“上次你发信息后，小玥还没有在私聊回复你，但她期间在 QQ 群里有过发言。这些是近期群聊上下文，区分不同发言人，不要把群友的话当成小玥说的。”
 - 已扩容：QQ connector 默认上报最近 20 条，网关归一化后最终保留包含当前发言在内的最新 20 条；群内被 `@` 的公开上下文链路未改。
 - 已验证：`scripts/test_qq_group_activity_context.py` 覆盖最新 20 条裁剪与提示词边界；目标 Python 编译、connector `node --check` 和目标 `git diff --check` 均通过。测试只用本地假状态，没有连接或读写 R2、模型和线上服务。
 - 未完成 / 下次继续：尚未部署或重启；上线时需同步重启 `du-gateway.service` 与 `qq-connector.service`，否则 connector 仍会沿用旧进程中的上报条数。
+
+当前状态（2026-07-16 AI 农场双入口补齐，本地未部署）：
+- 已完成：把 `tutusagi/aifarm-oss@3c3246af` 的源码、内容和已构建运行包收进 `vendor/aifarm-oss/`；只加默认监听 `127.0.0.1` 的下游安全补丁，玩法、数值和文字内容未改。
+- 已完成：原生 App 通过鉴权 session API 创建或复用「渡的小农场」，在专用 WebView 打开上游低权限 `humanUrl`；渡通过与上游 MCP 同契约的常驻单工具 `farm({action, ...参数})` 私下使用 `playUrl`，两边共用同一份 sidecar 存档。
+- 安全边界：`playUrl` 只取校验后的 `/a/<agentKey>` 路径并固定请求本机 sidecar，模型和前端均拿不到 key/token，聊天工具拒绝 `new-token`；进程内锁加 `fcntl` 文件锁保证 Web 与独立 worker 并发首次进入时只建一座。
+- 已完成：新增 `scripts/install_aifarm_service.sh`，可安装并 enable 只监听 `127.0.0.1:8080` 的 `du-aifarm.service`；本轮没有实际安装、启动或改服务器。先前误接到 MiniApp 的农场 UI 已清理，只保留原生 App 入口。
+- 已验证：农场 9 项 Python 回归在干净 worktree 连续三轮通过；真实临时 sidecar 先由 6 个独立进程并发首次进入并确认只创建一个农场，再完成“种地 → 读回同一农场”。干净树 Python 编译、`import app`、shell 语法、`git diff --check` 及上游 `npm run check` 全通过。没有访问 R2、模型、生产网关或现有农场存档。
+- 未完成 / 下次继续：尚未部署网关、安装/启动 sidecar、安装原生 APK 或创建正式农场；发布前从两边远端农场分支再次复验，不能混入主工作区其它半成品。完整边界见 `docs/aifarm-app-integration.md`。
 
 当前状态（2026-07-14 囚禁模拟器开局同步根因修复）：
 - 根因：私有 `/sync-du` 曾把规则引擎明确拒绝的指令也标成 `applied_with_warning` 并返回 200；前端又把带存档的错误响应当成功，导致被囚禁路线提前进入游戏、存档却仍停在 `day_plan_choice`，普通刷新自然只能读回旧状态。
@@ -675,6 +691,9 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - MiniApp 入口：`miniapp/src/ui/ChatsHome.tsx` 的“和渡一起听”会话行，`miniapp/src/ui/AppShell.tsx` 负责全屏打开
 - API：`routes/music_melody_api.py`
 - 分析服务：`services/music_melody_analyzer.py`
+- 网易云接口：`routes/miniapp/music_netease.py`
+- 网易云登录/曲源：`services/netease_music.py`
+- 分析前置格式归一化：`services/music_audio_normalizer.py`
 - 文字缓存：`storage/music_melody_store.py`
 - 配置：`config.py` 的 `MUSIC_ANALYSIS_*` / `MUSIC_PROMPT_VERSION`
 
@@ -689,12 +708,27 @@ POST /api/music/listen/audio
 GET  /api/music/listen/audio/<entry_id>.<ext>
 POST /api/music/listen/lyrics
 POST /api/music/listen/chat
+
+POST /miniapp-api/music/netease/login/qr
+GET  /miniapp-api/music/netease/login/qr/<key>
+GET  /miniapp-api/music/netease/status
+POST /miniapp-api/music/netease/logout
+GET  /miniapp-api/music/netease/search?q=关键词
+GET  /miniapp-api/music/netease/recommendations/daily
+GET  /miniapp-api/music/netease/personal-fm
+GET  /miniapp-api/music/netease/playlists
+GET  /miniapp-api/music/netease/playlists/<playlist_id>/tracks
+GET  /miniapp-api/music/netease/tracks/<track_id>
+GET  /miniapp-api/music/netease/tracks/<track_id>/source?level=lossless
+GET  /miniapp-api/music/netease/tracks/<track_id>/lyrics
+POST /miniapp-api/music/netease/tracks/<track_id>/analyze
 ```
 
 注意：
 - 分析缓存按 `artist + title + provider + model + prompt_version` 存文字、结构化结果和可选 `lyrics`；手机一起听可额外把音频存到 R2/local，并通过 Range 播放接口供 `<audio>` 使用。
 - 默认模型为 `google/gemini-3-flash-preview`，备用 `google/gemini-2.5-flash`；Lite 下架时不要再作为默认。
 - 未命中缓存且没有上传普通音频文件时，接口会返回错误，不会自动扫描网易云/手机沙盒缓存。
+- 网易云预览播放只请求临时曲源和歌词；只有用户显式分析成功后，缓存记录才关联网易云曲目 ID，原生端可用它刷新过期曲源。
 - `/api/music/listen/analyze` 是工具分析结果，不写普通聊天归档；`/api/music/listen/chat` 会复用普通 `chat_completions` 管道，把当前歌曲/秒数/段落听感作为临时 system 上下文，最后 user 仍只存她实际输入的话，并默认跳过 post-archive 动态记忆，避免把整段音乐分析写入长期记忆。分析文字不要直接显示在一起听 UI 里。
 - 一起听背景图在「个性化」里选择，图片压缩后只存本机 `localStorage`，不上传网关。
 - 本地脚本模式用 `scripts/analyze_music_file.py --title "歌名" --artist "歌手" song.mp3`；脚本本地调 OpenRouter/Gemini，并把分析 JSON 和自动读取的同名 `.lrc` 发到网关。若已有缓存命中，脚本也会补传歌词到 `/api/music/listen/lyrics`。

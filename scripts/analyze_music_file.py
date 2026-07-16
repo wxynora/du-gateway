@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import base64
 import json
-import mimetypes
 import subprocess
 import sys
 from pathlib import Path
@@ -25,39 +24,14 @@ from config import (  # noqa: E402
     MUSIC_ANALYSIS_MODEL,
     MUSIC_ANALYSIS_PROVIDER,
     MUSIC_ANALYSIS_TIMEOUT_SECONDS,
+    MUSIC_AUDIO_MAX_BYTES,
     MUSIC_PROMPT_VERSION,
 )
+from services.music_audio_normalizer import MusicAudioNormalizationError, prepare_music_audio  # noqa: E402
 from services.music_melody_analyzer import (  # noqa: E402
-    SUPPORTED_AUDIO_FORMATS,
     build_music_melody_prompt,
     parse_music_melody_model_text,
 )
-
-
-def _audio_format(path: Path, mime_type: str = "") -> str:
-    mt = (mime_type or "").split(";", 1)[0].strip().lower()
-    by_mime = {
-        "audio/mpeg": "mp3",
-        "audio/mp3": "mp3",
-        "audio/mp4": "m4a",
-        "audio/x-m4a": "m4a",
-        "audio/wav": "wav",
-        "audio/x-wav": "wav",
-        "audio/flac": "flac",
-        "audio/aac": "aac",
-        "audio/ogg": "ogg",
-        "audio/aiff": "aiff",
-        "audio/x-aiff": "aiff",
-    }
-    if mt in by_mime:
-        return by_mime[mt]
-    guessed, _ = mimetypes.guess_type(str(path))
-    if guessed and guessed.lower() in by_mime:
-        return by_mime[guessed.lower()]
-    suffix = path.suffix.lower().lstrip(".")
-    if suffix == "mpeg":
-        return "mp3"
-    return suffix if suffix in SUPPORTED_AUDIO_FORMATS else ""
 
 
 def _probe_duration_seconds(path: Path) -> float:
@@ -146,15 +120,17 @@ def _analyze_with_openrouter(
 ) -> tuple[dict, dict]:
     if not api_key:
         raise RuntimeError("MUSIC_ANALYSIS_API_KEY 或 OPENROUTER_API_KEY 未配置")
-    audio_format = _audio_format(audio_path, mime_type)
-    if not audio_format:
-        raise RuntimeError("不支持的音频格式，请使用 mp3/m4a/wav/flac/aac/ogg/aiff")
     audio_bytes = audio_path.read_bytes()
-    if not audio_bytes:
-        raise RuntimeError("音频文件为空")
-    if len(audio_bytes) > MUSIC_ANALYSIS_MAX_AUDIO_BYTES:
-        mb = MUSIC_ANALYSIS_MAX_AUDIO_BYTES // 1024 // 1024
-        raise RuntimeError(f"音频过大，最大 {mb}MB")
+    try:
+        prepared_audio = prepare_music_audio(
+            audio_bytes,
+            max_source_bytes=MUSIC_AUDIO_MAX_BYTES,
+            max_output_bytes=MUSIC_ANALYSIS_MAX_AUDIO_BYTES,
+        )
+    except MusicAudioNormalizationError as e:
+        raise RuntimeError(str(e)) from e
+    audio_bytes = prepared_audio.audio_bytes
+    audio_format = prepared_audio.audio_format
 
     payload = {
         "model": model,

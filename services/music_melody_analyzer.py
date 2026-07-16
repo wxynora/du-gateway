@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import mimetypes
 import re
 from typing import Any, Optional
 
@@ -16,16 +15,15 @@ from config import (
     MUSIC_ANALYSIS_MODEL,
     MUSIC_ANALYSIS_PROVIDER,
     MUSIC_ANALYSIS_TIMEOUT_SECONDS,
+    MUSIC_AUDIO_MAX_BYTES,
     MUSIC_PROMPT_VERSION,
 )
+from services.music_audio_normalizer import MusicAudioNormalizationError, prepare_music_audio
 from storage.music_melody_store import get_music_melody_entry, save_music_melody_entry
 from services.music_lyrics import parse_lyrics_text
 from utils.log import get_logger
 
 logger = get_logger(__name__)
-
-SUPPORTED_AUDIO_FORMATS = {"mp3", "m4a", "wav", "flac", "aac", "ogg", "aiff"}
-
 
 class MusicMelodyError(Exception):
     pass
@@ -33,34 +31,6 @@ class MusicMelodyError(Exception):
 
 def _clean_text(value: Any, limit: int = 200) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())[:limit]
-
-
-def _audio_format(filename: str = "", mime_type: str = "") -> str:
-    mt = (mime_type or "").split(";")[0].strip().lower()
-    by_mime = {
-        "audio/mpeg": "mp3",
-        "audio/mp3": "mp3",
-        "audio/mp4": "m4a",
-        "audio/x-m4a": "m4a",
-        "audio/wav": "wav",
-        "audio/x-wav": "wav",
-        "audio/flac": "flac",
-        "audio/aac": "aac",
-        "audio/ogg": "ogg",
-        "audio/aiff": "aiff",
-        "audio/x-aiff": "aiff",
-    }
-    if mt in by_mime:
-        return by_mime[mt]
-    guessed, _ = mimetypes.guess_type(filename or "")
-    if guessed and guessed.lower() in by_mime:
-        return by_mime[guessed.lower()]
-    suffix = (filename or "").rsplit(".", 1)[-1].strip().lower() if "." in (filename or "") else ""
-    if suffix == "mpeg":
-        return "mp3"
-    if suffix in SUPPORTED_AUDIO_FORMATS:
-        return suffix
-    return ""
 
 
 def _format_duration(seconds: float) -> str:
@@ -334,11 +304,24 @@ def analyze_music_melody(
 
     if not audio_bytes:
         raise MusicMelodyError("未命中缓存，且缺少可分析音频")
-    if len(audio_bytes) > MUSIC_ANALYSIS_MAX_AUDIO_BYTES:
-        raise MusicMelodyError(f"音频过大，最大 {MUSIC_ANALYSIS_MAX_AUDIO_BYTES // 1024 // 1024}MB")
-    fmt = _audio_format(filename, mime_type)
-    if not fmt:
-        raise MusicMelodyError("不支持的音频格式，请上传 mp3/m4a/wav/flac/aac/ogg/aiff")
+    try:
+        prepared_audio = prepare_music_audio(
+            audio_bytes,
+            max_source_bytes=MUSIC_AUDIO_MAX_BYTES,
+            max_output_bytes=MUSIC_ANALYSIS_MAX_AUDIO_BYTES,
+        )
+    except MusicAudioNormalizationError as e:
+        raise MusicMelodyError(str(e)) from e
+    if prepared_audio.converted:
+        logger.info(
+            "音乐分析音频已标准化 source_codec=%s source_container=%s input_bytes=%s output_bytes=%s",
+            prepared_audio.source_codec,
+            prepared_audio.source_container,
+            len(audio_bytes),
+            len(prepared_audio.audio_bytes),
+        )
+    audio_bytes = prepared_audio.audio_bytes
+    fmt = prepared_audio.audio_format
 
     models = [use_model]
     fallback = _clean_text(MUSIC_ANALYSIS_FALLBACK_MODEL, 120)

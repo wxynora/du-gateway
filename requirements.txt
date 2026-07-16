@@ -5,6 +5,8 @@ fastapi>=0.110.0
 uvicorn>=0.29.0
 websockets>=12.0
 requests>=2.31.0
+# 网易云扫码登录、歌单、歌词和真实曲源；固定到已审阅的公开维护分支提交。
+pyncm @ git+https://github.com/sakarie9/pyncm.git@068ef52a92d120975ffe3b8e8528fdac2da27d7e
 boto3>=1.34.0
 python-dotenv>=1.0.0
 # 农历（实时层按需注入「农历节气宜忌」用；无则仅返回占位）
