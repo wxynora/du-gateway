@@ -162,6 +162,29 @@ def extract_reasoning_text_and_details(obj: dict) -> tuple[str, list, bool]:
     return "\n\n".join(deduped_parts).strip(), details, omitted
 
 
+def extract_reasoning_stream_parts(obj: dict) -> tuple[str, str, list, bool]:
+    """Split streaming deltas from structured full-thinking snapshots."""
+    if not isinstance(obj, dict):
+        return "", "", [], False
+
+    delta_obj = dict(obj)
+    snapshot_obj: dict = {}
+    thinking_blocks = delta_obj.pop("thinking_blocks", None)
+    if isinstance(thinking_blocks, list):
+        snapshot_obj["thinking_blocks"] = thinking_blocks
+    if isinstance(delta_obj.get("content"), list):
+        snapshot_obj["content"] = delta_obj.pop("content")
+
+    delta_text, delta_details, delta_omitted = extract_reasoning_text_and_details(delta_obj)
+    snapshot_text, snapshot_details, snapshot_omitted = extract_reasoning_text_and_details(snapshot_obj)
+    return (
+        delta_text,
+        snapshot_text,
+        [*delta_details, *snapshot_details],
+        bool(delta_omitted or snapshot_omitted),
+    )
+
+
 def strip_thinking_from_response_json(resp_json: dict) -> dict:
     """
     从非流式上游响应中剥离 content 里的 <think> 块和结构化 reasoning 字段，
@@ -248,9 +271,11 @@ def parse_stream_to_message(chunks: list) -> dict:
             continue
         if delta.get("content"):
             content_parts.append(delta["content"])
-        text, details, omitted = extract_reasoning_text_and_details(delta)
+        text, snapshot, details, omitted = extract_reasoning_stream_parts(delta)
         if text:
             reasoning_stream.feed(text)
+        if snapshot:
+            reasoning_stream.reconcile_snapshot(snapshot)
         if details:
             reasoning_details.extend(details)
         for block in delta.get("thinking_blocks") or []:

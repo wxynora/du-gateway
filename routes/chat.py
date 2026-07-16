@@ -185,6 +185,7 @@ from services.prompt_cache_debug import (
 from services.reasoning_utils import (
     ReasoningStreamNormalizer as _ReasoningStreamNormalizer,
     THINK_BLOCK_RE as _THINK_BLOCK_RE,
+    extract_reasoning_stream_parts as _extract_reasoning_stream_parts,
     extract_reasoning_text_and_details as _extract_reasoning_text_and_details,
     extract_thinking_from_content as _extract_thinking_from_content,
     normalize_reasoning_details as _normalize_reasoning_details,
@@ -1484,7 +1485,7 @@ def _stream_with_r2_archive(
                 _clean, in_content_thinking = _extract_thinking_from_content(raw_content)
                 if in_content_thinking:
                     event_parts.append(in_content_thinking)
-            reasoning_text, _details, omitted = _extract_reasoning_text_and_details(delta)
+            reasoning_text, reasoning_snapshot, _details, omitted = _extract_reasoning_stream_parts(delta)
             if reasoning_text:
                 event_parts.append(reasoning_text)
             if omitted:
@@ -1494,6 +1495,13 @@ def _stream_with_r2_archive(
             normalizer = state["normalizer"]
             for text in event_parts:
                 _emit_reasoning_update(normalizer.feed(text), round_no, part_id, state)
+            if reasoning_snapshot:
+                _emit_reasoning_update(
+                    normalizer.reconcile_snapshot(reasoning_snapshot),
+                    round_no,
+                    part_id,
+                    state,
+                )
         except Exception:
             return
 
@@ -1599,9 +1607,11 @@ def _stream_with_r2_archive(
                                 archive_reasoning_stream.feed(in_content_thinking)
                         else:
                             content_parts.append(raw_content)
-                    text, details, omitted = _extract_reasoning_text_and_details(delta)
+                    text, snapshot, details, omitted = _extract_reasoning_stream_parts(delta)
                     if text:
                         archive_reasoning_stream.feed(text)
+                    if snapshot:
+                        archive_reasoning_stream.reconcile_snapshot(snapshot)
                     if details:
                         reasoning_details_parts.extend(details)
                     for block in delta.get("thinking_blocks") or []:
