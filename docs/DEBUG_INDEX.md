@@ -2,6 +2,14 @@
 
 这个文件用于快速定位问题。先按“现象”找入口，再看关键文件和日志关键词。
 
+当前状态（2026-07-16 AI 农场双入口补齐，本地未部署）：
+- 已完成：把 `tutusagi/aifarm-oss@3c3246af` 的源码、内容和已构建运行包收进 `vendor/aifarm-oss/`；只加默认监听 `127.0.0.1` 的下游安全补丁，玩法、数值和文字内容未改。
+- 已完成：原生 App 通过鉴权 session API 创建或复用「渡的小农场」，在专用 WebView 打开上游低权限 `humanUrl`；渡通过与上游 MCP 同契约的常驻单工具 `farm({action, ...参数})` 私下使用 `playUrl`，两边共用同一份 sidecar 存档。
+- 安全边界：`playUrl` 只取校验后的 `/a/<agentKey>` 路径并固定请求本机 sidecar，模型和前端均拿不到 key/token，聊天工具拒绝 `new-token`；进程内锁加 `fcntl` 文件锁保证 Web 与独立 worker 并发首次进入时只建一座。
+- 已完成：新增 `scripts/install_aifarm_service.sh`，可安装并 enable 只监听 `127.0.0.1:8080` 的 `du-aifarm.service`；本轮没有实际安装、启动或改服务器。先前误接到 MiniApp 的农场 UI 已清理，只保留原生 App 入口。
+- 已验证：农场 9 项 Python 回归在干净 worktree 连续三轮通过；真实临时 sidecar 先由 6 个独立进程并发首次进入并确认只创建一个农场，再完成“种地 → 读回同一农场”。干净树 Python 编译、`import app`、shell 语法、`git diff --check` 及上游 `npm run check` 全通过。没有访问 R2、模型、生产网关或现有农场存档。
+- 未完成 / 下次继续：尚未部署网关、安装/启动 sidecar、安装原生 APK 或创建正式农场；发布前从两边远端农场分支再次复验，不能混入主工作区其它半成品。完整边界见 `docs/aifarm-app-integration.md`。
+
 当前状态（2026-07-14 囚禁模拟器开局同步根因修复）：
 - 根因：私有 `/sync-du` 曾把规则引擎明确拒绝的指令也标成 `applied_with_warning` 并返回 200；前端又把带存档的错误响应当成功，导致被囚禁路线提前进入游戏、存档却仍停在 `day_plan_choice`，普通刷新自然只能读回旧状态。
 - 已修复：拒绝指令改为 `directive_rejected` + 502；真正已有成功步骤、只缺必要后续的情况仍保留部分成功语义。前端不再吞错误 payload，被囚禁路线只在三段安排确实写入后进入游戏；囚禁方路线开局只创建本地规划器，不同步渡。刷新仍只读状态，只有明确点击重试才重新同步。
@@ -118,6 +126,7 @@ ssh du-gateway 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | Claude OAuth proxy | `scripts/claude_oauth_proxy.js`、`docs/claude_proxy_new_vps_migration_plan.md` | 自用 Claude 反代、thinking/cache/tool 格式转换；旧 VPS 继续用 `127.0.0.1:8082`，新 VPS 单独承载 Claude Code + OAuth proxy 的迁移手册 |
 | 植物大战僵尸模仿者版原型 | `du_imitator_pvz/`、`scripts/test_imitator_pvz_*.py`、`scripts/sim_imitator_pvz_balance.py`、`docs/植物大战僵尸模仿者版.md` | 纯 Python headless 随机模仿者塔防模拟器：P0/P2 合同、随机池、植物/僵尸行为、玩家回合复盘、v2 小工测试、铲子动作、僵王事件、主动重开、玩家棋盘文本视图 |
 | 随机模仿者网关私有工具 | `services/game_tool_runtime.py`、`services/random_imitator_td_tool.py`、`routes/miniapp/game_tools.py`、`routes/chat.py`、`pipeline/pipeline.py`、`services/chat_tools.py`、`scripts/test_random_imitator_td_tool.py` | du-gateway 私有游戏工具接入：`random_imitator_td` 是首个注册游戏；Prompt 开关只固定注入工具，只有专用游戏标记或工具结果自带 `game_tool_loop` 才跳过动态记忆写入与 BODY delta |
+| AI 农场 / 原生 App 双入口 | `docs/aifarm-app-integration.md`、`vendor/aifarm-oss/`、`services/aifarm_bridge.py`、`services/aifarm_tool.py`、`routes/aifarm_proxy.py`、`routes/miniapp/aifarm.py`、`scripts/install_aifarm_service.sh`；原生端见 `sumitalk-android-native` 的 `GameHallScreen.kt`、`AIFarmScreen.kt`、`GameToolsGatewayClient.kt` | 上游文字农场本地 sidecar、受限人类 UI 代理、原生游戏大厅 WebView 和渡的单工具 `farm` 操作链；`humanUrl` / `playUrl` 共用一份存档，私有 key/token 不返回前端或模型；MiniApp UI 已清理 |
 | MiniApp 游戏大厅 / 涩涩走格棋 | `miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/tabs/SeseBoardGameTab.tsx`、`routes/miniapp/game_tools.py`、`services/private_board_game.py`、`services/private_board_tool.py`、`services/game_tool_runtime.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_private_board_game.py` | 「日常 > 游戏」入口，文游显示为「无限流」；`private_board` 走走格棋后端和前端棋盘。小玥通过前端按钮/输入参与，渡通过自然语言精确首行指令参与；右上角局内聊天只发本次消息，不自带局内历史；局内回复不外发主聊天但压缩归档进同一个 `tg_*` window 的 last4；同步成功后按同步时间刷新全局最近活动时钟 |
 | 囚禁模拟器 | `docs/captivity-simulator-plan.md`、`services/captivity_simulator_game.py`、`routes/miniapp/game_tools.py`、`services/conversation_followup.py`、`routes/chat.py`、`scripts/test_captivity_simulator_game.py`、`services/game_tool_runtime.py`、`miniapp/src/ui/tabs/CaptivitySimulatorGameTab.tsx`、`miniapp/src/ui/tabs/GamesHubTab.tsx`、`miniapp/src/ui/AppShell.tsx` | 30 天本地规则模拟器：双路线、三段白天行动、过程/心情、夜间自由行动与监控、逃跑诱导及抓回后规则、物品/道具、事件回顾和固定结局；`/game-tools/captivity_simulator/sync-du` 以 dynamic system 注入当轮上下文，跳过动态记忆和 BODY delta，完整事件正文只留游戏存档 |
 
