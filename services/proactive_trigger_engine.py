@@ -188,14 +188,15 @@ def _history_screen_events(history: list[dict]) -> list[dict]:
 
 
 def _previous_screen_off(events: list[dict], at_dt: datetime) -> dict | None:
-    prev = None
-    for item in events:
+    for item in reversed(events):
         if item["at"] >= at_dt:
-            break
+            continue
         data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        if _is_screen_on(data):
+            return None
         if _is_screen_off(data):
-            prev = item
-    return prev
+            return item
+    return None
 
 
 def _latest_screen_on(events: list[dict]) -> dict | None:
@@ -620,11 +621,13 @@ def _build_events(doc: dict, history: list[dict], window_id: str, now_dt) -> lis
         prev_off = _previous_screen_off(screen_events, on_at)
         latest_on_data = latest_on.get("data") if isinstance(latest_on.get("data"), dict) else {}
         off_minutes = _screen_off_minutes(prev_off, on_at, latest_on_data)
+        user_chatted_after_screen_on = _has_normal_user_chat_after(window_id, on_at)
         event_at = on_at.strftime("%Y-%m-%dT%H:%M:%S+08:00")
         if (
             on_at.strftime("%Y-%m-%d") == now_dt.strftime("%Y-%m-%d")
             and _MORNING_START_HOUR <= on_at.hour < _MORNING_END_HOUR
             and off_minutes >= _MIN_MORNING_OFF_MINUTES
+            and not user_chatted_after_screen_on
         ):
             events.append(
                 TriggerEvent(
@@ -635,7 +638,11 @@ def _build_events(doc: dict, history: list[dict], window_id: str, now_dt) -> lis
                     event_at=event_at,
                 )
             )
-        if on_at.hour < _NIGHT_REAWAKE_END_HOUR and off_minutes >= _MIN_NIGHT_OFF_MINUTES:
+        if (
+            on_at.hour < _NIGHT_REAWAKE_END_HOUR
+            and off_minutes >= _MIN_NIGHT_OFF_MINUTES
+            and not user_chatted_after_screen_on
+        ):
             events.append(
                 TriggerEvent(
                     "night_reawake_screen_on",

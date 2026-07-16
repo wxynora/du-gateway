@@ -126,6 +126,26 @@ function stripRawReplySegments(raw) {
   return String(raw || "").replace(/\[CQ:(reply|quote),[^\]]*\]/gi, "").trim();
 }
 
+function imageUrlsFromContent(content) {
+  const out = [];
+  for (const part of normalizeUserContentToParts(content)) {
+    if (!part || part.type !== "image_url") continue;
+    const url = String(part.image_url?.url || "").trim();
+    if (/^https?:\/\//i.test(url) && !out.includes(url)) out.push(url);
+  }
+  return out;
+}
+
+function rawImageUrls(raw) {
+  const out = [];
+  for (const m of String(raw || "").matchAll(/\[CQ:image,([^\]]*)\]/gi)) {
+    const params = parseCqParams(m?.[1] || "");
+    const url = String(params.url || params.file || "").trim();
+    if (/^https?:\/\//i.test(url) && !out.includes(url)) out.push(url);
+  }
+  return out;
+}
+
 function filenameFromUrl(rawUrl, fallback = "voice") {
   try {
     const u = new URL(String(rawUrl || ""));
@@ -938,12 +958,14 @@ function rememberGroupMessage(j, content) {
   if (!groupId) return null;
   const { userId, name, isOwner } = senderLabel(j);
   const text = contentTextForGroupContext(content);
+  const images = [...new Set([...imageUrlsFromContent(content), ...rawImageUrls(j?.raw_message || "")])];
   const rows = getGroupHistory(groupId);
   const row = {
     userId,
     name,
     isOwner,
     text,
+    images,
     messageId: String(j?.message_id || ""),
     ts: Number(j?.time || 0),
   };
@@ -966,6 +988,9 @@ function rowForActivityReport(row, groupId) {
     sender_name: String(row?.name || "").trim(),
     is_owner: !!row?.isOwner,
     text: String(row?.text || "").trim(),
+    images: Array.isArray(row?.images)
+      ? row.images.map((x) => String(x || "").trim()).filter((x) => /^https?:\/\//i.test(x))
+      : [],
     message_id: String(row?.messageId || "").trim(),
     timestamp: Number(row?.ts || 0),
   };
@@ -978,6 +1003,7 @@ async function reportQqGroupActivity(j, previousRows, content) {
   const { userId, name, isOwner } = senderLabel(j);
   if (!isOwner) return;
   const text = contentTextForGroupContext(content);
+  const images = [...new Set([...imageUrlsFromContent(content), ...rawImageUrls(j?.raw_message || "")])];
   if (!text) return;
   const reportPath = envStr("QQ_GROUP_ACTIVITY_REPORT_PATH", "/api/internal/qq-group-activity");
   const url = absolutizeGatewayUrl(reportPath);
@@ -991,6 +1017,7 @@ async function reportQqGroupActivity(j, previousRows, content) {
     sender_name: name,
     is_owner: true,
     text,
+    images,
     message_id: String(j?.message_id || ""),
     timestamp: Number(j?.time || 0),
     context,

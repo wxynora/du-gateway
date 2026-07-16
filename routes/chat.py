@@ -1064,13 +1064,48 @@ def _inject_qq_group_activity_context(body: dict) -> dict:
         return body
     if (request.headers.get("X-Skip-QQ-Group-Activity") or "").strip().lower() in ("1", "true", "yes"):
         return body
-    system_text = _build_qq_group_activity_context_for_wakeup()
-    if not system_text:
+    group_context = _build_qq_group_activity_context_for_wakeup()
+    if not group_context:
+        return body
+    if isinstance(group_context, list):
+        context_parts = [dict(part) for part in group_context if isinstance(part, dict)]
+        context_text = "\n".join(str(part.get("text") or "") for part in context_parts if part.get("type") == "text")
+    else:
+        context_text = str(group_context or "")
+        context_parts = [{"type": "text", "text": context_text}] if context_text else []
+    if not context_parts:
         return body
     body = dict(body)
-    messages = body.get("messages") if isinstance(body.get("messages"), list) else []
-    body["messages"] = [{"role": "system", "content": system_text, "__dynamic__": True}] + list(messages)
-    logger.info("qq_group_activity_context_injected chars=%s", len(system_text))
+    messages = list(body.get("messages") if isinstance(body.get("messages"), list) else [])
+    target_idx = -1
+    for idx in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[idx], dict) and str(messages[idx].get("role") or "").strip().lower() == "user":
+            target_idx = idx
+            break
+    append_parts = [dict(part) for part in context_parts]
+    if append_parts and append_parts[0].get("type") == "text":
+        append_parts[0]["text"] = "\n\n" + str(append_parts[0].get("text") or "")
+    if target_idx < 0:
+        messages.append({"role": "user", "content": append_parts})
+    else:
+        msg = dict(messages[target_idx])
+        original = msg.get("content")
+        has_images = any(part.get("type") == "image_url" for part in append_parts)
+        if isinstance(original, list):
+            msg["content"] = [dict(part) if isinstance(part, dict) else part for part in original] + append_parts
+        elif has_images:
+            original_text = str(original or "").strip()
+            original_parts = [{"type": "text", "text": original_text}] if original_text else []
+            msg["content"] = original_parts + append_parts
+        else:
+            msg["content"] = (str(original or "").rstrip() + "\n\n" + context_text).strip()
+        messages[target_idx] = msg
+    body["messages"] = messages
+    logger.info(
+        "qq_group_activity_context_appended_to_user chars=%s images=%s",
+        len(context_text),
+        sum(1 for part in context_parts if part.get("type") == "image_url"),
+    )
     return body
 
 
