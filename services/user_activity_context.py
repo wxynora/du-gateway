@@ -231,6 +231,6 @@ def describe_latest_interaction(now_dt: datetime) -> str:
     if str((activity or {}).get("kind") or "") == "game":
         game_name = str((activity or {}).get("game_name") or "").strip()
         if game_name:
-            return f"老婆 {_elapsed_text(delta_seconds, spaced=True)}前和我在玩{game_name}。"
+            return f"小玥 {_elapsed_text(delta_seconds, spaced=True)}前在和你玩{game_name}。"
         return ""
     return f"她上次明确回你大约是 {delta_seconds / 3600.0:.1f} 小时前。"
