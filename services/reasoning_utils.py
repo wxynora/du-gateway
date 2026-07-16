@@ -4,6 +4,67 @@ import re
 THINK_BLOCK_RE = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL | re.IGNORECASE)
 
 
+class ReasoningStreamNormalizer:
+    """Normalize one logical reasoning part across one or more stream attempts."""
+
+    def __init__(self) -> None:
+        self._text = ""
+        self.start_attempt()
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    def start_attempt(self) -> None:
+        self._attempt_text = ""
+        self._attempt_mode = "unknown"
+        self._attempt_started = False
+
+    def feed(self, fragment: str) -> tuple[str, str] | None:
+        incoming = str(fragment or "")
+        if not incoming:
+            return None
+
+        if not self._attempt_started:
+            candidate = incoming
+            incoming_mode = "delta"
+            self._attempt_started = True
+        elif incoming.startswith(self._attempt_text) and len(incoming) > len(self._attempt_text):
+            candidate = incoming
+            incoming_mode = "snapshot"
+            self._attempt_mode = "snapshot"
+        elif self._attempt_mode == "snapshot" and incoming == self._attempt_text:
+            candidate = incoming
+            incoming_mode = "snapshot"
+        else:
+            candidate = self._attempt_text + incoming
+            incoming_mode = "delta"
+            self._attempt_mode = "delta"
+
+        self._attempt_text = candidate
+        if candidate == self._text or self._text.startswith(candidate):
+            return None
+        if candidate.startswith(self._text):
+            suffix = candidate[len(self._text) :]
+            self._text = candidate
+            if incoming_mode == "snapshot":
+                return "snapshot", candidate
+            return ("delta", suffix) if suffix else None
+
+        self._text = candidate
+        return "snapshot", candidate
+
+    def reconcile_snapshot(self, text: str) -> tuple[str, str] | None:
+        snapshot = str(text or "")
+        if not snapshot or snapshot == self._text:
+            return None
+        self._attempt_text = snapshot
+        self._attempt_started = True
+        self._attempt_mode = "snapshot"
+        self._text = snapshot
+        return "snapshot", snapshot
+
+
 def extract_thinking_from_content(content: str) -> tuple[str, str]:
     """
     把 content 里的 <think>...</think> / <thinking>...</thinking> 块提取出来。
@@ -168,7 +229,7 @@ def parse_stream_to_message(chunks: list) -> dict:
     返回 {"content": str, "tool_calls": list or None, "reasoning": str|None, ...}。
     """
     content_parts = []
-    reasoning_parts = []
+    reasoning_stream = ReasoningStreamNormalizer()
     reasoning_details: list[dict] = []
     thinking_blocks: list[dict] = []
     reasoning_omitted = False
@@ -189,7 +250,7 @@ def parse_stream_to_message(chunks: list) -> dict:
             content_parts.append(delta["content"])
         text, details, omitted = extract_reasoning_text_and_details(delta)
         if text:
-            reasoning_parts.append(text)
+            reasoning_stream.feed(text)
         if details:
             reasoning_details.extend(details)
         for block in delta.get("thinking_blocks") or []:
@@ -217,7 +278,7 @@ def parse_stream_to_message(chunks: list) -> dict:
     return {
         "content": "".join(content_parts),
         "tool_calls": sorted_tcs if sorted_tcs else None,
-        "reasoning": "".join(reasoning_parts).strip() or None,
+        "reasoning": reasoning_stream.text.strip() or None,
         "thinking_blocks": thinking_blocks or None,
         "reasoning_details": reasoning_details or None,
         "reasoning_omitted": reasoning_omitted,

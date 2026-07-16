@@ -542,7 +542,10 @@ def _choice_dialog_delivery_channels(preferred_channel: str, available_channels:
 
 
 def _stable_proactive_wakeup_channel(default: str = "") -> str:
-    """主动硬触发固定用一个入口生成，避免入口风格 system 在 TG/QQ 间抖动。"""
+    """主动唤醒沿用最近真实聊天入口；没有记录时才使用旧入口兜底。"""
+    recent = _normalize_reply_channel(default, default="", allow_tg=True)
+    if recent:
+        return recent
     if QQ_PROACTIVE_PUSH_URL:
         return "qq"
     if WECHAT_PROACTIVE_PUSH_URL:
