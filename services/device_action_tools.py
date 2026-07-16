@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import time
 import zlib
@@ -100,6 +101,30 @@ TOOL_CLOSE_APP = {
                     "description": "可选，预期关闭的前台 App 名称，例如「小红书」；不确定时留空，使用手机最新前台 App。",
                 },
             },
+        },
+    },
+}
+
+
+TOOL_OPEN_APP = {
+    "type": "function",
+    "function": {
+        "name": "open_app",
+        "description": (
+            "在老婆手机上打开指定 App 或该 App 支持的具体页面。"
+            "只需要使用日常应用名称，不要填写 Android 包名。"
+            "打开 QQ 时默认直接进入与渡的私聊；只有明确要求 QQ 首页时才传 page=首页。"
+            "如果已有具体内容链接，可通过 url 交给目标 App 打开。"
+            "调用结果为异步入队，不要在手机回执前声称已经打开成功。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "app_name": {"type": "string", "description": "应用名称，例如「QQ」「小红书」"},
+                "page": {"type": "string", "description": "可选页面名称；QQ 默认是「渡」，传「首页」则仅打开 QQ 首页"},
+                "url": {"type": "string", "description": "可选，目标 App 支持的网页链接或 Deep Link"},
+            },
+            "required": ["app_name"],
         },
     },
 }
@@ -483,6 +508,88 @@ def _resolve_close_app_target(expected_app_name: str = "") -> tuple[dict | None,
         "appName": app_name[:80],
         "deviceId": device_id,
     }, ""
+
+
+def _normalize_app_alias(value: str) -> str:
+    return re.sub(r"[\s._-]+", "", str(value or "").strip()).casefold()
+
+
+def _resolve_open_app_target(arguments: dict) -> tuple[dict | None, str]:
+    args = arguments if isinstance(arguments, dict) else {}
+    requested_name = str(args.get("app_name") or args.get("appName") or "").strip()
+    if not requested_name:
+        return None, "请告诉我要打开哪个 App"
+    page = str(args.get("page") or "").strip()
+    target_url = str(args.get("url") or args.get("uri") or "").strip()
+    package_name = ""
+    app_name = requested_name
+    app_key = _normalize_app_alias(requested_name)
+    if app_key in {"qq", "腾讯qq"}:
+        package_name = "com.tencent.mobileqq"
+        app_name = "QQ"
+        page_key = _normalize_app_alias(page)
+        if not target_url and page_key not in {"首页", "home"}:
+            du_qq = str(os.environ.get("QQ_BOT_USER_ID") or "3195570280").strip()
+            if not du_qq.isdigit():
+                return None, "QQ 中渡的账号配置不可用"
+            target_url = f"mqqwpa://im/chat?chat_type=wpa&uin={du_qq}&version=1&src_type=web"
+    return {
+        "packageName": package_name,
+        "appName": app_name,
+        "url": target_url,
+    }, ""
+
+
+def _resolve_open_app_device_id() -> tuple[str, str]:
+    try:
+        latest = r2_store.get_sense_latest() or {}
+    except Exception as e:
+        return "", f"读取手机状态失败：{e}"
+    foreground = latest.get("foreground") if isinstance(latest.get("foreground"), dict) else {}
+    device_id = str(
+        foreground.get("deviceId")
+        or foreground.get("device_id")
+        or latest.get("deviceId")
+        or latest.get("device_id")
+        or ""
+    ).strip()
+    if not device_id:
+        return "", "手机还没有可用的设备标识"
+    return device_id, ""
+
+
+def execute_open_app(arguments: dict) -> str:
+    target, target_error = _resolve_open_app_target(arguments)
+    if target_error or not target:
+        return json.dumps({"ok": False, "queued": False, "error": target_error or "目标 App 不可用"}, ensure_ascii=False)
+    device_id, device_error = _resolve_open_app_device_id()
+    if device_error or not device_id:
+        return json.dumps({"ok": False, "queued": False, "error": device_error or "没有可用手机"}, ensure_ascii=False)
+    fingerprint = json.dumps(target, ensure_ascii=False, sort_keys=True)
+    crc = zlib.crc32(fingerprint.encode("utf-8")) & 0xffffffff
+    item, err = r2_store.append_app_action(
+        "open_app",
+        target,
+        device_id=device_id,
+        source="tool",
+        expires_in_sec=120,
+        idempotency_key=f"open_app_{crc}_{int(time.time() // 5)}",
+    )
+    if err or not item:
+        return json.dumps({"ok": False, "queued": False, "error": err or "入队失败"}, ensure_ascii=False)
+    return json.dumps(
+        {
+            "ok": True,
+            "queued": True,
+            "id": item.get("id"),
+            "type": "open_app",
+            "packageName": target.get("packageName") or "",
+            "appName": target.get("appName") or "",
+            "target": "deep_link" if target.get("url") else "home",
+            "note": "已把打开 App 的动作交给 SumiTalk 原生 App。",
+        },
+        ensure_ascii=False,
+    )
 
 
 def execute_close_app(arguments: dict) -> str:

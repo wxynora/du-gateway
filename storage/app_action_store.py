@@ -14,6 +14,7 @@ R2_KEY_APP_ACTION_QUEUE = "sumitalk/app_actions.json"
 _APP_ACTION_ALLOWLIST = {
     "create_system_alarm",
     "create_calendar_event",
+    "open_app",
     "close_app",
     "show_choice_dialog",
     "show_system_notification",
@@ -387,6 +388,8 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         return _normalize_recall_message_payload(payload)
     if action_type == "deliver_chat_message":
         return _normalize_deliver_chat_message_payload(payload)
+    if action_type == "open_app":
+        return _normalize_open_app_payload(payload)
     if action_type == "close_app":
         return _normalize_close_app_payload(payload)
     if action_type != "create_system_alarm":
@@ -427,6 +430,20 @@ def _normalize_close_app_payload(payload: dict) -> tuple[Optional[dict], Optiona
     return {
         "packageName": package_name[:160],
         "appName": app_name[:80],
+    }, None
+
+
+def _normalize_open_app_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    src = payload if isinstance(payload, dict) else {}
+    package_name = str(src.get("packageName") or src.get("package_name") or "").strip()
+    app_name = str(src.get("appName") or src.get("app_name") or "").strip()
+    if not package_name and not app_name:
+        return None, "open_app 缺少 appName"
+    target_url = str(src.get("url") or src.get("uri") or src.get("deepLink") or src.get("deep_link") or "").strip()
+    return {
+        "packageName": package_name[:160],
+        "appName": app_name[:80],
+        "url": target_url[:2048],
     }, None
 
 
