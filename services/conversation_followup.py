@@ -931,6 +931,36 @@ def send_private_draw_wakeup(
     )
 
 
+def send_listen_invite_response_wakeup(
+    window_id: str,
+    target: str,
+    event_text: str,
+    created_at: str | None = None,
+    preferred_channel: str = "",
+    preferred_meta: dict | None = None,
+) -> dict:
+    """把小玥对一起听邀请的选择作为后端事件告诉渡。"""
+    return _send_wakeup_event(
+        window_id=window_id,
+        target=target,
+        event_text=event_text,
+        created_at=created_at,
+        archive=True,
+        extra_instruction=(
+            "这是小玥对你刚才一起听邀请的选择。请按最近聊天入口的语气自然回应一两句；"
+            "不要使用工具，不要再次发起邀请，不要输出 du:listen 控制标记，也不要解释系统流程。"
+        ),
+        wakeup_kind="listen_invite_response",
+        system_event=True,
+        preferred_channel_override=preferred_channel,
+        preferred_target_override=target,
+        preferred_meta_override=preferred_meta,
+        lock_preferred_channel=bool(preferred_channel),
+        allow_followup=False,
+        system_event_user_summary="请以渡自己的口吻回应小玥的这次选择。",
+    )
+
+
 def send_private_board_wakeup(
     window_id: str,
     target: str,

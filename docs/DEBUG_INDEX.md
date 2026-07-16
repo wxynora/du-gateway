@@ -25,6 +25,11 @@
 - 已完成：新增 `scripts/install_aifarm_service.sh`，可安装并 enable 只监听 `127.0.0.1:8080` 的 `du-aifarm.service`；本轮没有实际安装、启动或改服务器。先前误接到 MiniApp 的农场 UI 已清理，只保留原生 App 入口。
 - 已验证：农场 9 项 Python 回归在干净 worktree 连续三轮通过；真实临时 sidecar 先由 6 个独立进程并发首次进入并确认只创建一个农场，再完成“种地 → 读回同一农场”。干净树 Python 编译、`import app`、shell 语法、`git diff --check` 及上游 `npm run check` 全通过。没有访问 R2、模型、生产网关或现有农场存档。
 - 未完成 / 下次继续：尚未部署网关、安装/启动 sidecar、安装原生 APK 或创建正式农场；发布前从两边远端农场分支再次复验，不能混入主工作区其它半成品。完整边界见 `docs/aifarm-app-integration.md`。
+当前状态（2026-07-16 SumiTalk 原生一起听双向邀请后端）：
+- 已完成：SumiTalk 聊天注入隐藏 `du:listen invite/join/refuse` 协议；渡可主动邀请，小玥发出邀请卡时渡必须明确接受或拒绝。流式与非流式响应都会在隐藏标记剥离前生成 `listen_invite_action` 事件，客户端正文和流式增量均不泄漏控制标记。
+- 已完成：原生 App 的接受/拒绝回执走鉴权 `/miniapp-api/music/listen/invite/respond`，按最近 SumiTalk 回复入口向渡发送一次系统事件；当前一起听歌曲上下文也会进入 SumiTalk 临时 system，不新增工具、不写死渡的选择。
+- 已验证：邀请协议单测、相关 Python 编译、`import app` 与 `git diff --check` 通过；测试使用假上下文和 mock wakeup，未调用模型、未读写 R2、未部署或重启。
+- 当前状态：实现已隔离到干净分支；原生邀请主链已在原生仓库远端，剩余背景/模糊映射与短屏测试另行提交。
 
 当前状态（2026-07-14 囚禁模拟器开局同步根因修复）：
 - 根因：私有 `/sync-du` 曾把规则引擎明确拒绝的指令也标成 `applied_with_warning` 并返回 200；前端又把带存档的错误响应当成功，导致被囚禁路线提前进入游戏、存档却仍停在 `day_plan_choice`，普通刷新自然只能读回旧状态。
@@ -115,6 +120,7 @@ ssh du-gateway 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 主聊天策略 | `services/entry_style_prompt.py`、`services/chat_prompt_injections.py`、`services/upstream_policy.py` | 入口风格 system、voice/followup/NSFW/禁言注入、active upstream 选择、OpenRouter/CPA/Claude OAuth 请求策略 |
 | 主聊天诊断/思维链 | `services/prompt_cache_debug.py`、`services/reasoning_utils.py`、`services/chat_content.py`、`routes/miniapp/reasoning.py` | prompt/cache debug、reasoning/thinking 剥离、SSE message 解析、消息字符统计；MiniApp 思维链页的 Prompt Cache 计费估算在 `routes/miniapp/reasoning.py` |
 | 主聊天响应辅助 | `services/chat_sidecars.py`、`services/chat_response_enrichers.py`、`services/chat_tool_helpers.py`、`services/chat_request_helpers.py`、`services/chat_archive_helpers.py` | 隐藏 sidecar 写入、HTML 预览/SumiTalk 卡片补全、tool 重试/SSE 小工具、入口状态/误触保护、归档后台辅助 |
+| SumiTalk 一起听邀请 | `services/listen_invite_flow.py`、`routes/chat.py`、`routes/miniapp/music_bgm.py`、`services/conversation_followup.py` | 双向隐藏邀请标记、流/非流动作事件、当前歌曲上下文和原生接受/拒绝回执；不新增模型工具。 |
 | 注入管道 | `pipeline/pipeline.py` | core prompt、summary、last4、sense、dynamic memory、tools 注入 |
 | MiniApp API | `routes/miniapp_api.py` | SumiTalk、设备、思维链、设置、贴纸、日历、上游切换等接口 |
 | 记忆整理 / DS 单条重写 | `routes/miniapp/memory_panel.py`、`services/memory_rewrite.py`、`scripts/test_memory_rewrite.py` | 原生 App 可读取动态层和核心记忆，先请求 DS 重写候选，再由辛玥确认保存；动态层保存后刷新 retrieval text、向量索引、SQLite mirror 和血缘审计，核心层刷新 pending 索引。预览不写 R2，保存会校验原文未被后台更新。 |

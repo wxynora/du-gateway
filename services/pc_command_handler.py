@@ -13,6 +13,7 @@ from services.du_daily import compute_visible_streaming as compute_daily_visible
 from services.du_vitals import compute_visible_streaming as compute_vitals_visible_streaming
 from services.dynamic_memory_citation import compute_visible_streaming as compute_memory_citation_visible_streaming
 from services.interaction_memory import compute_visible_streaming as compute_interaction_visible_streaming
+from services.listen_invite_flow import compute_visible_streaming as compute_listen_invite_visible_streaming
 from services.pending_thoughts import compute_visible_streaming as compute_pending_visible_streaming
 from services.pixel_home import compute_visible_streaming as compute_pixel_home_visible_streaming
 from services.secret_drawer import compute_visible_streaming as compute_secret_drawer_visible_streaming
@@ -228,6 +229,7 @@ class PcmdDuThoughtStreamState:
         visible = compute_visible_streaming(after_pcmd)
         visible = compute_vitals_visible_streaming(visible)
         visible = compute_interaction_visible_streaming(visible)
+        visible = compute_listen_invite_visible_streaming(visible)
         visible = compute_daily_visible_streaming(visible)
         visible = compute_pixel_home_visible_streaming(visible)
         try:

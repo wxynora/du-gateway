@@ -11,6 +11,7 @@ from services.du_vitals import normalize_vitals_payload, split_assistant_for_vit
 from services.dynamic_memory_citation import strip_assistant_memory_citations
 from services.dynamic_memory_recall_debug import normalize_debug_request_id
 from services.interaction_memory import split_assistant_for_interaction
+from services.listen_invite_flow import split_listen_invite_actions
 from services.pending_thoughts import split_and_apply_tags as split_pending_thought_tags
 from services.pc_command_handler import process_pcmd_in_assistant_text
 from services.pixel_home import save_pixel_home_hidden_block, split_assistant_for_pixel_home
@@ -152,6 +153,7 @@ def extract_and_store_hidden_sidecars(
     visible, thought = split_assistant_for_thought(visible_after_pcmd)
     visible, vitals = split_assistant_for_vitals(visible)
     visible, interaction = split_assistant_for_interaction(visible)
+    visible, _listen_invite_actions = split_listen_invite_actions(visible)
     visible, du_daily = split_assistant_for_daily(visible)
     visible, pixel_home = split_assistant_for_pixel_home(visible)
     visible, secret_drawer_blocks = split_all_assistant_for_secret_drawer(visible)
