@@ -84,6 +84,11 @@ from storage import million_plan_mode_store, random_imitator_td_mode_store, r2_s
 from storage.music_bgm_state import get_active_music_bgm_context
 from storage.music_melody_store import get_music_melody_entry_by_id
 from services.music_lyrics import normalize_lyrics_payload
+from services.listen_invite_flow import (
+    build_listen_invite_event as _build_listen_invite_event,
+    inject_listen_invite_protocol as _inject_listen_invite_protocol,
+    split_listen_invite_actions as _split_listen_invite_actions,
+)
 from services.qq_activity_context import (
     build_group_activity_context_for_wakeup as _build_qq_group_activity_context_for_wakeup,
     clear_group_activity_context as _clear_qq_group_activity_context,
@@ -553,7 +558,7 @@ def _inject_music_bgm_context(body: dict, *, reply_channel: str = "") -> dict:
         return body
     has_explicit_context = "music_bgm_context" in body or "listen_bgm_context" in body
     raw_context = body.get("music_bgm_context") or body.get("listen_bgm_context")
-    if not has_explicit_context and str(reply_channel or "").strip().lower() == "qq":
+    if not has_explicit_context and str(reply_channel or "").strip().lower() in {"qq", "sumitalk"}:
         raw_context = get_active_music_bgm_context()
     body = dict(body)
     body.pop("music_bgm_context", None)
@@ -1320,6 +1325,7 @@ def _stream_with_r2_archive(
     last_user = _last_user_message(body.get("messages") or [])
     du_daily_maintenance = _is_du_daily_maintenance_request()
     pseudo_cot_stream_enabled = _pseudo_cot_instruction_enabled(body)
+    emitted_listen_invite_actions: set[str] = set()
 
     def _emit_stream_event(kind: str, payload: dict | None = None) -> None:
         if not sumitalk_event_sink:
@@ -1328,6 +1334,19 @@ def _stream_with_r2_archive(
             sumitalk_event_sink(kind, payload or {})
         except Exception:
             logger.debug("SumiTalk 流式事件回调失败 kind=%s", kind, exc_info=True)
+
+    def _emit_listen_invite_actions(raw_text: str, messages: list[dict] | None) -> None:
+        if not sumitalk_event_sink:
+            return
+        _visible, actions = _split_listen_invite_actions(raw_text)
+        for action in actions:
+            if action in emitted_listen_invite_actions:
+                continue
+            payload = _build_listen_invite_event(action, messages=messages)
+            if not payload:
+                continue
+            emitted_listen_invite_actions.add(action)
+            _emit_stream_event("listen_invite_action", payload)
 
     def _stream_event_text_chunks(text: str):
         value = str(text or "")
@@ -1637,6 +1656,7 @@ def _stream_with_r2_archive(
             _finish_assistant_stream_event(1, assistant_part_id, assistant_event_state)
             full_content = "".join(content_parts)
             visible_source, inner_os = _split_inner_os_from_text(full_content)
+            _emit_listen_invite_actions(visible_source, body.get("messages") or [])
             visible = _extract_and_store_hidden_sidecars(
                 visible_source,
                 window_id=window_id,
@@ -1958,6 +1978,7 @@ def _stream_with_r2_archive(
     finally:
         full_content = "".join(content_parts)
         visible_source, inner_os = _split_inner_os_from_text(full_content)
+        _emit_listen_invite_actions(visible_source, current_body.get("messages") or [])
         if not inner_os and stream_inner_os_parts:
             inner_os = "\n\n".join(part for part in stream_inner_os_parts if part).strip()
         visible = _extract_and_store_hidden_sidecars(
@@ -2582,6 +2603,7 @@ def chat_completions():
     body = step_inject_reference_note(body)
     body = step_inject_du_midterm_memory(body, window_id)
     body = _inject_music_bgm_context(body, reply_channel=reply_channel)
+    body = _inject_listen_invite_protocol(body, reply_channel=reply_channel)
     body = _inject_qq_group_activity_context(body)
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
@@ -2887,6 +2909,14 @@ def chat_completions():
         pseudo_cot_response_enabled = _pseudo_cot_instruction_enabled(body)
         if pseudo_cot_response_enabled and inner_os:
             resp_json = _replace_response_reasoning_with_inner_os(resp_json, inner_os)
+        if is_sumitalk_request:
+            raw_assistant = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+            raw_assistant_text = get_assistant_content_text(raw_assistant) if isinstance(raw_assistant, dict) else ""
+            _ignored_visible, listen_invite_actions = _split_listen_invite_actions(raw_assistant_text)
+            for action in listen_invite_actions:
+                payload = _build_listen_invite_event(action, messages=body.get("messages") or [])
+                if payload:
+                    _emit_sumitalk_chat_event("listen_invite_action", payload)
         resp_json = _apply_hidden_sidecars_to_assistant_response(
             resp_json,
             window_id=window_id,
