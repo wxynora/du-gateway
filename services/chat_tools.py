@@ -812,6 +812,10 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
         return execute_secret_drawer_tool(name, arguments)
     if name in DU_PAGE_TOOL_NAMES:
         return execute_du_page_tool(name, arguments)
+    if name == "farm":
+        from services.aifarm_tool import execute_aifarm_tool
+
+        return execute_aifarm_tool(arguments if isinstance(arguments, dict) else {})
     if name in ("get_time_info", "get_weather", "get_almanac"):
         from services.weather_almanac import execute_weather_almanac_tool
         return execute_weather_almanac_tool(name, arguments)
