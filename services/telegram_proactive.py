@@ -140,13 +140,65 @@ class ProactiveDecision:
     should_send: bool
     text: str = ""
     reason: str = ""      # 技术向：contact / no_contact / gateway_status / …
-    action: str = ""      # 业务向：send_message / no_contact / diary / forum / surf / drawer / other / error / …
+    action: str = ""      # 业务向：send_message / no_contact / diary / forum / surf / drawer / game / other / error / …
     du_reason: str = ""   # 渡在 JSON 里写的理由
     channel: str = ""           # 发送入口：wechat / qq；SumiTalk 暂不参与主动消息
+    game: str = ""              # action=game 时选择的渡单机游戏 id
     executed_tools: tuple[str, ...] = ()
 
 
 _PROACTIVE_FORUM_TOOL_NAMES = frozenset({"forum_read_feed", "forum_open_thread", "cli"})
+
+_PROACTIVE_SOLO_GAMES = {
+    "random_imitator_td": {
+        "title": "植物大战丧尸随机版",
+        "tool": "random_imitator_td",
+        "instruction": (
+            '先调用 random_imitator_td，command 填“继续”，读取当前存档；'
+            "再根据工具结果调用同一个工具做至少一步实际推进。"
+        ),
+    },
+    "farm": {
+        "title": "AI 农场",
+        "tool": "farm",
+        "instruction": (
+            "先调用 farm，action 填 status、detail 填 true，看看农场当前状态；"
+            "再根据工具结果调用同一个工具做至少一件实际的农场操作。"
+        ),
+    },
+}
+
+_PROACTIVE_SOLO_GAME_ALIASES = {
+    "random-imitator-td": "random_imitator_td",
+    "imitator-pvz": "random_imitator_td",
+    "pvz": "random_imitator_td",
+    "植物大战丧尸随机版": "random_imitator_td",
+    "植物大战僵尸随机版": "random_imitator_td",
+    "ai_farm": "farm",
+    "ai-farm": "farm",
+    "aifarm": "farm",
+    "ai_农场": "farm",
+    "农场": "farm",
+}
+
+
+def _normalize_proactive_solo_game(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    normalized = raw.lower().replace(" ", "_")
+    game_id = _PROACTIVE_SOLO_GAME_ALIASES.get(normalized, normalized)
+    return game_id if game_id in _PROACTIVE_SOLO_GAMES else ""
+
+
+def _proactive_solo_game_options_prompt() -> str:
+    lines = ["如果选择玩游戏，action 填 game，并从下面仅限渡单机玩的游戏中选一个："]
+    for game_id, spec in _PROACTIVE_SOLO_GAMES.items():
+        lines.append(
+            f'- {spec["title"]}：game 填 "{game_id}"；选中后会追加执行轮，实际游玩必须调用 {spec["tool"]} 工具。'
+        )
+    lines.append("这一轮只做选择，不要提前调用游戏工具；选择共同游戏不属于这里。")
+    return "\n".join(lines)
 
 
 def _gateway_executed_tool_names(data: dict | None) -> tuple[str, ...]:
@@ -297,6 +349,7 @@ _ACTION_LABEL_CN = {
     "forum": "逛论坛",
     "surf": "随机冲浪",
     "drawer": "整理秘密抽屉",
+    "game": "玩游戏",
     "other": "其它",
     "error": "调用失败",
     "empty": "空回复",
@@ -311,6 +364,8 @@ _SELF_ACTION_TOOL_LABELS = {
     "forum_open_thread": "看了论坛帖子",
     "du_surf": "随机冲浪看了素材",
     "secret_drawer": "整理了秘密抽屉",
+    "random_imitator_td": "玩了植物大战丧尸随机版",
+    "farm": "玩了 AI 农场",
     "note_write": "写了便签",
 }
 
@@ -503,7 +558,7 @@ def _looks_like_control_json_reply(text: str) -> bool:
 def _sanitize_control_reply_for_delivery(text: str) -> str:
     """
     最后一层外发保险：控制 JSON 不能作为用户可见正文发出去。
-    send_message 只取 message；diary/forum/no_contact/surf/drawer/other 说明本轮不该发。
+    send_message 只取 message；diary/forum/no_contact/surf/drawer/game/other 说明本轮不该发。
     """
     raw = str(text or "").strip()
     if not raw:
@@ -580,6 +635,7 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
     action = str(obj.get("action") or "").strip().lower()
     du_reason = str(obj.get("reason") or "").strip()
     message = str(obj.get("message") or "").strip()
+    requested_game = str(obj.get("game") or obj.get("game_id") or "").strip()
     channel = _normalize_reply_channel(str(obj.get("channel") or default_channel), default=default_channel, allowed=channels)
     alias = {
         "send": "send_message",
@@ -601,7 +657,14 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
         "整理抽屉": "drawer",
         "秘密抽屉": "drawer",
         "翻抽屉": "drawer",
+        "play_game": "game",
+        "play-game": "game",
+        "玩游戏": "game",
+        "random_imitator_td": "game",
+        "farm": "game",
     }
+    if action in {"random_imitator_td", "farm"} and not requested_game:
+        requested_game = action
     action = alias.get(action, action)
     none_like = {"no_contact", "none", "silent", "skip"}
 
@@ -633,6 +696,26 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
         return ProactiveDecision(False, message, "surf", action="surf", du_reason=du_reason or "（未说明）", channel=channel)
     if action == "drawer":
         return ProactiveDecision(False, message, "drawer", action="drawer", du_reason=du_reason or "（未说明）", channel=channel)
+    if action == "game":
+        game_id = _normalize_proactive_solo_game(requested_game)
+        if not game_id:
+            return ProactiveDecision(
+                False,
+                "",
+                "invalid_game",
+                action="game",
+                du_reason=du_reason or "选择玩游戏但没有从单机游戏列表中选择有效游戏",
+                channel=channel,
+            )
+        return ProactiveDecision(
+            False,
+            message,
+            "game",
+            action="game",
+            du_reason=du_reason or "（未说明）",
+            channel=channel,
+            game=game_id,
+        )
     if action == "other":
         return ProactiveDecision(False, message, "other", action="other", du_reason=du_reason or "（未说明）", channel=channel)
 
@@ -807,6 +890,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         default_channel=default_channel,
         no_contact_token=no_token,
     )
+    user_prompt = f"{user_prompt.rstrip()}\n\n{_proactive_solo_game_options_prompt()}"
     dynamic_context_parts: list[str] = []
     try:
         mem = _format_proactive_decision_memory_for_system()
@@ -1501,6 +1585,126 @@ def _run_proactive_drawer_action(
         return {"ok": False, "error": str(e)[:160], "reply_preview": ""}
 
 
+def _run_proactive_game_action(
+    *,
+    window_id: str,
+    hours_since_last: float,
+    game_id: str,
+    initial_reason: str,
+    now_dt: Optional[datetime] = None,
+) -> dict:
+    """随机唤醒选择 game 时，追加一轮并要求渡用对应工具实际玩。"""
+    normalized_game = _normalize_proactive_solo_game(game_id)
+    spec = _PROACTIVE_SOLO_GAMES.get(normalized_game)
+    if not spec:
+        return {
+            "ok": False,
+            "game_id": normalized_game or str(game_id or "").strip(),
+            "error": "unsupported_game",
+            "reply_preview": "",
+        }
+
+    url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
+    channels = _available_channels()
+    default_channel = _preferred_proactive_channel(channels)
+    now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso()) or datetime.now()
+    user_prompt = (
+        f"你刚才在随机唤醒里选择了玩《{spec['title']}》。\n"
+        "现在不是重新做选择，也不要输出 JSON；请直接实际玩一会。\n"
+        f"这次只能使用 {spec['tool']} 工具来玩，不要改用其它游戏工具，也不要只用文字假装已经玩过。\n"
+        f"{spec['instruction']}\n"
+        "完成这次游玩后，用一句很短的话记录刚才做了什么；如果工具失败，也如实说明失败原因。\n"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。\n"
+        f"你刚才选择玩游戏的理由：{str(initial_reason or '').strip() or '（未说明）'}"
+    )
+    body = {
+        "model": _get_chat_model(),
+        "messages": [{"role": "user", "content": user_prompt}],
+        "stream": False,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Window-Id": window_id,
+        "X-Reply-Channel": default_channel,
+        "X-Reply-Target": str(TELEGRAM_PROACTIVE_TARGET_USER_ID or "").strip(),
+        "X-Force-Last4": "1",
+        "X-DU-GATEWAY-WAKEUP": "1",
+        "X-DU-WAKEUP-KIND": "proactive_game",
+        "X-Skip-Dynamic-Memory": "1",
+        "X-Skip-Post-Archive-Dynamic-Memory": "1",
+        "X-Skip-Post-Archive-Body-Delta": "1",
+    }
+    if normalized_game == "random_imitator_td":
+        headers["X-Random-Imitator-TD"] = "1"
+
+    try:
+        logger.info(
+            "主动玩游戏执行轮请求 window_id=%s game_id=%s tool=%s model=%s reason_chars=%s",
+            window_id,
+            normalized_game,
+            spec["tool"],
+            body.get("model") or "",
+            len(str(initial_reason or "")),
+        )
+        response = requests.post(url, headers=headers, json=body, timeout=CHAT_RESPONSE_TIMEOUT_SECONDS)
+        if response.status_code != 200:
+            logger.warning(
+                "主动玩游戏执行轮失败 game_id=%s status=%s body_preview=%s",
+                normalized_game,
+                response.status_code,
+                (response.text or "")[:300],
+            )
+            return {
+                "ok": False,
+                "game_id": normalized_game,
+                "title": spec["title"],
+                "tool": spec["tool"],
+                "error": f"http_{response.status_code}",
+                "reply_preview": (response.text or "")[:160],
+            }
+        data = response.json() if response.content else None
+        msg = (data or {}).get("choices") and (data.get("choices") or [{}])[0].get("message") or {}
+        content = msg.get("content")
+        text = (content or "").strip() if isinstance(content, str) else str(content or "").strip()
+        executed_tools = _gateway_executed_tool_names(data)
+        used_selected_tool = spec["tool"] in executed_tools
+        if not used_selected_tool:
+            logger.warning(
+                "主动玩游戏执行轮未调用所选工具 window_id=%s game_id=%s required=%s executed=%s",
+                window_id,
+                normalized_game,
+                spec["tool"],
+                ",".join(executed_tools) or "none",
+            )
+        else:
+            logger.info(
+                "主动玩游戏执行轮完成 window_id=%s game_id=%s tool=%s reply_preview=%s",
+                window_id,
+                normalized_game,
+                spec["tool"],
+                text[:120],
+            )
+        return {
+            "ok": used_selected_tool,
+            "game_id": normalized_game,
+            "title": spec["title"],
+            "tool": spec["tool"],
+            "executed_tools": list(executed_tools),
+            "reply_preview": text[:240],
+            "error": "" if used_selected_tool else "required_tool_not_called",
+        }
+    except Exception as e:
+        logger.warning("主动玩游戏执行轮异常 game_id=%s error=%s", normalized_game, e)
+        return {
+            "ok": False,
+            "game_id": normalized_game,
+            "title": spec["title"],
+            "tool": spec["tool"],
+            "error": str(e)[:160],
+            "reply_preview": "",
+        }
+
+
 def _ask_du_after_surf_result(
     *,
     window_id: str,
@@ -1530,9 +1734,10 @@ def _ask_du_after_surf_result(
         f"你刚才选择冲浪的理由：{str(initial_reason or '').strip() or '（未说明）'}\n\n"
         f"{_format_proactive_surf_result_for_du(surf_result)}\n\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
-        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "forum" | "drawer" | "other" 之一。不要再填 "surf"。\n'
+        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "forum" | "drawer" | "game" | "other" 之一。不要再填 "surf"。\n'
         '- reason：字符串，简短说明你为什么这么选（必填）。\n'
         '- message：字符串；当 action 为 send_message 时，填要发给她的正文；其它 action 时可为空或填补充说明。\n'
+        '- game：字符串；当 action 为 game 时，按下方单机游戏列表填写；其它 action 时留空。\n'
         + channel_field_desc
         + (
             f'示例：{{"action":"no_contact","reason":"素材只是自己看过就好，暂时不打扰她","message":"","channel":"{default_channel}"}}\n'
@@ -1540,6 +1745,7 @@ def _ask_du_after_surf_result(
             else f'示例：{{"action":"no_contact","reason":"当前没有可用发送入口","message":"","channel":""}}\n'
         )
     )
+    user_prompt = f"{user_prompt.rstrip()}\n\n{_proactive_solo_game_options_prompt()}"
     body = {
         "model": _get_chat_model(),
         "messages": [
@@ -1828,6 +2034,8 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     initial_diary_reason = ""
     drawer_summary = None
     initial_drawer_reason = ""
+    game_summary = None
+    initial_game_reason = ""
     if (decision.action or "").strip().lower() == "surf":
         initial_surf_reason = (decision.du_reason or decision.reason or "").strip()
         surf_summary = _run_proactive_surf_action()
@@ -1887,6 +2095,20 @@ def proactive_tick(target_user_id: int = 0) -> dict:
             out["du_initial_action"] = "drawer"
             out["du_initial_reason"] = initial_drawer_reason
         out["drawer_execution_ok"] = bool((drawer_summary or {}).get("ok"))
+    if (decision.action or "").strip().lower() == "game" and not game_summary:
+        initial_game_reason = (decision.du_reason or decision.reason or "").strip()
+        game_summary = _run_proactive_game_action(
+            window_id=window_id,
+            hours_since_last=hours,
+            game_id=decision.game,
+            initial_reason=initial_game_reason,
+            now_dt=now_dt,
+        )
+        out["game"] = game_summary
+        if not surf_summary:
+            out["du_initial_action"] = "game"
+            out["du_initial_reason"] = initial_game_reason
+        out["game_execution_ok"] = bool((game_summary or {}).get("ok"))
 
     # 随机唤醒主动决策：记下本轮决策（闹钟不走这里）
     try:
@@ -1908,6 +2130,10 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         if drawer_summary:
             drawer_act = "drawer->executed" if drawer_summary.get("ok") else "drawer->failed"
             act_store = f"surf->{drawer_act}" if surf_summary else drawer_act
+        if game_summary:
+            selected_game = str(game_summary.get("game_id") or decision.game or "unknown").strip()
+            game_act = f"game:{selected_game}->{'executed' if game_summary.get('ok') else 'failed'}"
+            act_store = f"surf->{game_act}" if surf_summary else game_act
         reason_store = (decision.du_reason or decision.reason or "").strip() or "—"
         if surf_summary:
             topic = str(surf_summary.get("topic") or "").strip()
@@ -1986,6 +2212,28 @@ def proactive_tick(target_user_id: int = 0) -> dict:
                 )
                 if surf_summary:
                     reason_store = f"先冲浪后决定整理秘密抽屉；{reason_store}"
+                if reply_preview and not pv:
+                    pv = reply_preview[:120]
+        if game_summary:
+            reply_preview = str(game_summary.get("reply_preview") or "").strip()
+            game_title = str(game_summary.get("title") or decision.game or "所选游戏").strip()
+            tool_name = str(game_summary.get("tool") or "").strip()
+            if game_summary.get("ok"):
+                reason_store = (
+                    f"最初想玩《{game_title}》：{initial_game_reason or '（未说明）'}；"
+                    f"已追加执行轮并实际调用 {tool_name} 工具。"
+                )
+                if surf_summary:
+                    reason_store = f"先冲浪后决定玩游戏；{reason_store}"
+                if reply_preview:
+                    pv = reply_preview[:120]
+            else:
+                reason_store = (
+                    f"最初想玩《{game_title}》：{initial_game_reason or '（未说明）'}；"
+                    f"追加执行轮失败：{str(game_summary.get('error') or 'unknown')[:80]}"
+                )
+                if surf_summary:
+                    reason_store = f"先冲浪后决定玩游戏；{reason_store}"
                 if reply_preview and not pv:
                     pv = reply_preview[:120]
         r2_store.append_proactive_decision_memory(
