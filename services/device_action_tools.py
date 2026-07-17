@@ -272,16 +272,19 @@ TOOL_NETEASE_LISTEN_CONTROL = {
             "控制 SumiTalk 原生 App 的「和渡一起听」网易云播放，或读取老婆真实网易云歌单。"
             "想看她有哪些歌单时用 list_playlists；想看某个歌单歌曲时用 playlist_tracks。"
             "想在当前一起听里切歌时用 next/previous。"
+            "想按歌名和歌手搜索并直接播放时用 search_play，同时提交 title 和 artist。"
             "想把当前正在一起听的网易云歌曲收藏到渡专用歌单时用 favorite_current，默认歌单名「渡的歌」。"
-            "切歌和收藏是异步手机动作；不要在 App 回执前声称已经执行成功。"
+            "搜索播放、切歌和收藏是异步手机动作；不要在 App 回执前声称已经执行成功。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "list_playlists / playlist_tracks / next / previous / favorite_current",
+                    "description": "list_playlists / playlist_tracks / search_play / next / previous / favorite_current",
                 },
+                "title": {"type": "string", "description": "search_play 必填，要搜索播放的歌名"},
+                "artist": {"type": "string", "description": "search_play 必填，歌手名"},
                 "playlist_id": {"type": "string", "description": "可选，歌单 ID；playlist_tracks 或 favorite_current 指定目标歌单时使用"},
                 "playlist_name": {"type": "string", "description": "可选，歌单名；favorite_current 默认「渡的歌」"},
                 "limit": {"type": "integer", "description": "可选，读取数量上限，默认 50"},
@@ -647,7 +650,11 @@ def execute_netease_listen_control(arguments: dict) -> str:
         "collect_current": "favorite_current",
         "favorite": "favorite_current",
         "save_current": "favorite_current",
+        "search_and_play": "search_play",
+        "play_track": "search_play",
     }.get(command, command)
+    title = str(args.get("title") or args.get("song_title") or args.get("songTitle") or "").strip()
+    artist = str(args.get("artist") or args.get("artist_name") or args.get("artistName") or "").strip()
     playlist_name = str(args.get("playlist_name") or args.get("playlistName") or "渡的歌").strip() or "渡的歌"
     playlist_id = str(args.get("playlist_id") or args.get("playlistId") or "").strip()
     try:
@@ -685,9 +692,15 @@ def execute_netease_listen_control(arguments: dict) -> str:
             ensure_ascii=False,
         )
 
-    if command not in {"next", "previous", "favorite_current"}:
+    if command not in {"search_play", "next", "previous", "favorite_current"}:
         return json.dumps(
-            {"ok": False, "error": "command 只能是 list_playlists / playlist_tracks / next / previous / favorite_current"},
+            {"ok": False, "error": "command 只能是 list_playlists / playlist_tracks / search_play / next / previous / favorite_current"},
+            ensure_ascii=False,
+        )
+
+    if command == "search_play" and (not title or not artist):
+        return json.dumps(
+            {"ok": False, "queued": False, "error": "search_play 必须同时提交歌名 title 和歌手名 artist"},
             ensure_ascii=False,
         )
 
@@ -703,6 +716,8 @@ def execute_netease_listen_control(arguments: dict) -> str:
         "command": command,
         "playlistName": playlist_name,
         "playlistId": playlist_id,
+        "title": title,
+        "artist": artist,
     }
     fingerprint = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     crc = zlib.crc32(fingerprint.encode("utf-8")) & 0xffffffff
@@ -725,6 +740,8 @@ def execute_netease_listen_control(arguments: dict) -> str:
             "command": command,
             "playlist_name": playlist_name,
             "playlist_id": playlist_id,
+            "title": title,
+            "artist": artist,
             "note": "已交给 SumiTalk 原生 App 的一起听页面执行；手机在线且一起听页面准备好时会回传结果。",
         },
         ensure_ascii=False,

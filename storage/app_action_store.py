@@ -467,18 +467,26 @@ def _normalize_listen_control_payload(payload: dict) -> tuple[Optional[dict], Op
         "collect_current": "favorite_current",
         "favorite": "favorite_current",
         "save_current": "favorite_current",
+        "search_and_play": "search_play",
+        "play_track": "search_play",
     }
     command = alias.get(command, command)
-    if command not in {"next", "previous", "favorite_current"}:
-        return None, "listen_control command 只能是 next / previous / favorite_current"
+    if command not in {"search_play", "next", "previous", "favorite_current"}:
+        return None, "listen_control command 只能是 search_play / next / previous / favorite_current"
     playlist_name = str(src.get("playlistName") or src.get("playlist_name") or "渡的歌").strip() or "渡的歌"
     playlist_id = str(src.get("playlistId") or src.get("playlist_id") or "").strip()
     track_id = str(src.get("trackId") or src.get("track_id") or "").strip()
+    title = str(src.get("title") or src.get("song_title") or src.get("songTitle") or "").strip()
+    artist = str(src.get("artist") or src.get("artist_name") or src.get("artistName") or "").strip()
+    if command == "search_play" and (not title or not artist):
+        return None, "listen_control search_play 缺少歌名 title 或歌手名 artist"
     return {
         "command": command,
         "playlistName": playlist_name[:80],
         "playlistId": playlist_id[:80],
         "trackId": track_id[:80],
+        "title": title[:160],
+        "artist": artist[:160],
     }, None
 
 
