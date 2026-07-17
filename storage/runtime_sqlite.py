@@ -25,6 +25,7 @@ _RUNTIME_TABLES = (
     "schedule_fired_keys",
     "conversation_followups",
     "spring_dream_sessions",
+    "spring_dream_trigger_state",
     "spring_dream_archives",
     "spring_dream_inspiration",
     "exchange_diary_entries",
@@ -223,6 +224,14 @@ def ensure_schema() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_spring_dream_sessions_updated
                     ON spring_dream_sessions(updated_at);
+
+                CREATE TABLE IF NOT EXISTS spring_dream_trigger_state (
+                    id TEXT PRIMARY KEY,
+                    miss_count INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT NOT NULL DEFAULT '',
+                    last_triggered_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
 
                 CREATE TABLE IF NOT EXISTS spring_dream_archives (
                     id TEXT PRIMARY KEY,

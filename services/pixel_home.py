@@ -1737,6 +1737,27 @@ def _du_body_state_public(raw: Any, vitals: dict | None = None) -> dict:
     return _du_body_state_without_hidden(state)
 
 
+def get_du_body_trigger_state(now_dt: datetime | None = None) -> dict:
+    """Return the effective body levels used by probability-based triggers."""
+    stored = _stored_state()
+    state = _normalize_du_body_state(stored.get("du_body_state"))
+    vitals = r2_store.get_du_vitals_latest() or {}
+    has_desire_value = "desire_value" in state
+    desire_level = _du_stable_desire_level(state)
+    self_control_level = _du_self_control_level(state, vitals)
+    desire_level, self_control_level, has_effective_desire = _apply_du_body_time_shift(
+        desire_level,
+        self_control_level,
+        has_desire_value=has_desire_value,
+        now_dt=now_dt,
+    )
+    return {
+        "desire_level": desire_level if has_effective_desire else 0,
+        "self_control_level": self_control_level,
+        "has_desire": has_effective_desire,
+    }
+
+
 def _stable_pick(options: list[str], seed: str) -> str:
     if not options:
         return "away"

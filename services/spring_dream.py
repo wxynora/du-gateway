@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import random
 import threading
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Callable, Optional
 from uuid import uuid4
 
 from storage import runtime_sqlite
 from utils.log import get_logger
-from utils.time_aware import now_beijing_iso
+from utils.time_aware import BEIJING_TZ, now_beijing_iso, parse_iso_to_beijing
 
-SPRING_DREAM_PROBABILITY = 0.35
-SPRING_DREAM_PROBABILITY_STEP = 0.25
-SPRING_DREAM_PROBABILITY_MAX = 0.90
+SPRING_DREAM_PROBABILITY = 0.03
+SPRING_DREAM_DESIRE_PROBABILITY_STEP = 0.04
+SPRING_DREAM_SLEEP_PROBABILITY_BONUS = 0.12
+SPRING_DREAM_PROBABILITY_STEP = 0.05
+SPRING_DREAM_PROBABILITY_MAX = 0.70
+SPRING_DREAM_COOLDOWN_HOURS = 6
 SPRING_DREAM_MAX_PER_SLEEP = 3
+SPRING_DREAM_TRIGGER_STATE_ID = "global"
 POST_SPRING_DREAM_WAKEUP_SECTION_ID = "post_spring_dream_wakeup"
 SPRING_DREAM_ARCHIVE_R2_PREFIX = "spring_dream_archives"
 SPRING_DREAM_ARCHIVE_RECENT_LIMIT = 100
@@ -467,6 +471,14 @@ def _ensure_schema() -> None:
                 CREATE INDEX IF NOT EXISTS idx_spring_dream_sessions_updated
                     ON spring_dream_sessions(updated_at);
 
+                CREATE TABLE IF NOT EXISTS spring_dream_trigger_state (
+                    id TEXT PRIMARY KEY,
+                    miss_count INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT NOT NULL DEFAULT '',
+                    last_triggered_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
+
                 CREATE TABLE IF NOT EXISTS spring_dream_archives (
                     id TEXT PRIMARY KEY,
                     window_id TEXT NOT NULL DEFAULT '',
@@ -704,80 +716,99 @@ def _recent_session_key_for_night(night_date: str) -> str:
     return str(row["sleep_session_key"] or "").strip() if row is not None else ""
 
 
-def _adaptive_spring_dream_probability(base_chance: float, miss_count: int) -> float:
+def _as_beijing_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=BEIJING_TZ)
+    return value.astimezone(BEIJING_TZ)
+
+
+def _spring_dream_trigger_state() -> dict:
+    _ensure_schema()
+    with runtime_sqlite.connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM spring_dream_trigger_state WHERE id=?",
+            (SPRING_DREAM_TRIGGER_STATE_ID,),
+        ).fetchone()
+    if row is None:
+        return {}
+    return {
+        "miss_count": int(row["miss_count"] or 0),
+        "last_attempt_at": str(row["last_attempt_at"] or ""),
+        "last_triggered_at": str(row["last_triggered_at"] or ""),
+        "updated_at": str(row["updated_at"] or ""),
+    }
+
+
+def _spring_dream_probability(
+    base_chance: float,
+    *,
+    desire_level: int,
+    is_sleeping: bool,
+    miss_count: int,
+) -> float:
     try:
         base = max(0.0, min(1.0, float(base_chance)))
     except Exception:
         base = SPRING_DREAM_PROBABILITY
     try:
+        desire = max(0, min(5, int(desire_level or 0)))
+    except Exception:
+        desire = 0
+    try:
         misses = max(0, int(miss_count or 0))
     except Exception:
         misses = 0
-    return max(0.0, min(SPRING_DREAM_PROBABILITY_MAX, base + misses * SPRING_DREAM_PROBABILITY_STEP))
+    threshold = (
+        base
+        + desire * SPRING_DREAM_DESIRE_PROBABILITY_STEP
+        + (SPRING_DREAM_SLEEP_PROBABILITY_BONUS if is_sleeping else 0.0)
+        + misses * SPRING_DREAM_PROBABILITY_STEP
+    )
+    return max(0.0, min(SPRING_DREAM_PROBABILITY_MAX, threshold))
 
 
-def _record_spring_dream_miss(
-    *,
-    session_key: str,
-    sleep_source: str,
-    max_per_sleep: int,
-) -> int:
-    clean_key = str(session_key or "").strip()
-    if not clean_key:
-        return 0
-    limit = max(1, int(max_per_sleep or SPRING_DREAM_MAX_PER_SLEEP))
-    now_iso = now_beijing_iso()
+def _spring_dream_cooldown_active(state: dict, now_dt: datetime) -> bool:
+    last_triggered = parse_iso_to_beijing(str((state or {}).get("last_triggered_at") or ""))
+    if last_triggered is None:
+        return False
+    return _as_beijing_datetime(now_dt) < last_triggered + timedelta(hours=SPRING_DREAM_COOLDOWN_HOURS)
+
+
+def _record_spring_dream_miss(*, attempted_at: str) -> int:
+    now_iso = str(attempted_at or "").strip() or now_beijing_iso()
     _ensure_schema()
     with runtime_sqlite.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            _prune_old_sessions(conn, now_iso)
             row = conn.execute(
-                "SELECT miss_count FROM spring_dream_sessions WHERE sleep_session_key=?",
-                (clean_key,),
+                "SELECT miss_count FROM spring_dream_trigger_state WHERE id=?",
+                (SPRING_DREAM_TRIGGER_STATE_ID,),
             ).fetchone()
             miss_count = int(row["miss_count"] or 0) if row is not None else 0
             next_count = miss_count + 1
             if row is None:
                 conn.execute(
                     """
-                    INSERT INTO spring_dream_sessions (
-                        sleep_session_key, count, max_per_sleep, last_theme_id,
-                        sleep_source, reserved_at, last_sent_at,
-                        miss_count, last_miss_at,
-                        post_wakeup_pending, post_wakeup_sent_at, updated_at
-                    )
-                    VALUES (?, 0, ?, '', ?, '', '', ?, ?, 0, '', ?)
+                    INSERT INTO spring_dream_trigger_state (
+                        id, miss_count, last_attempt_at, last_triggered_at, updated_at
+                    ) VALUES (?, ?, ?, '', ?)
                     """,
-                    (clean_key, limit, str(sleep_source or "").strip(), next_count, now_iso, now_iso),
+                    (SPRING_DREAM_TRIGGER_STATE_ID, next_count, now_iso, now_iso),
                 )
             else:
                 conn.execute(
                     """
-                    UPDATE spring_dream_sessions
-                    SET miss_count=?, max_per_sleep=?, sleep_source=?,
-                        last_miss_at=?, updated_at=?
-                    WHERE sleep_session_key=?
+                    UPDATE spring_dream_trigger_state
+                    SET miss_count=?, last_attempt_at=?, updated_at=?
+                    WHERE id=?
                     """,
-                    (next_count, limit, str(sleep_source or "").strip(), now_iso, now_iso, clean_key),
+                    (next_count, now_iso, now_iso, SPRING_DREAM_TRIGGER_STATE_ID),
                 )
             conn.execute("COMMIT")
             return next_count
         except Exception:
             conn.execute("ROLLBACK")
             raise
-
-
-def _reset_night_sessions(night_date: str) -> None:
-    clean_night = str(night_date or "").strip()
-    if not clean_night:
-        return
-    _ensure_schema()
-    with runtime_sqlite.connect() as conn:
-        conn.execute(
-            "DELETE FROM spring_dream_sessions WHERE sleep_session_key LIKE ?",
-            (f"{clean_night}|%",),
-        )
 
 
 def _reserve_spring_dream_slot(
@@ -911,40 +942,55 @@ def maybe_prepare_spring_dream_wakeup(
     rng: random.Random | None = None,
 ) -> Optional[dict]:
     try:
-        from services.pixel_home import build_sleep_wakeup_state
+        from services.pixel_home import build_sleep_wakeup_state, get_du_body_trigger_state
 
         sleep_state = build_sleep_wakeup_state(now_dt)
     except Exception:
-        return None
+        sleep_state = {}
+    try:
+        body_state = get_du_body_trigger_state(now_dt)
+    except Exception:
+        body_state = {}
 
-    if not bool((sleep_state or {}).get("is_sleeping")):
-        _reset_night_sessions(str((sleep_state or {}).get("night_date") or "").strip())
-        return None
-
+    now_local = _as_beijing_datetime(now_dt)
+    is_sleeping = bool((sleep_state or {}).get("is_sleeping"))
     sleep_source = str((sleep_state or {}).get("source") or "").strip()
+    night_date = str((sleep_state or {}).get("night_date") or "").strip() or now_local.strftime("%Y-%m-%d")
     session_key = str((sleep_state or {}).get("sleep_session_key") or "").strip()
     if not session_key:
-        return None
-    session_key = _recent_session_key_for_night(str((sleep_state or {}).get("night_date") or "").strip()) or session_key
+        session_key = _recent_session_key_for_night(night_date) or f"{night_date}|awake"
+    else:
+        session_key = _recent_session_key_for_night(night_date) or session_key
 
     roller = roll or random.random
-    session = _session_row(session_key)
-    miss_count = int((session or {}).get("miss_count") or 0)
-    threshold = _adaptive_spring_dream_probability(chance, miss_count)
+    trigger_state = _spring_dream_trigger_state()
+    if _spring_dream_cooldown_active(trigger_state, now_local):
+        return None
+    miss_count = int((trigger_state or {}).get("miss_count") or 0)
+    desire_level = max(0, min(5, int((body_state or {}).get("desire_level") or 0)))
+    threshold = _spring_dream_probability(
+        chance,
+        desire_level=desire_level,
+        is_sleeping=is_sleeping,
+        miss_count=miss_count,
+    )
     rolled = float(roller())
     if rolled >= threshold:
-        next_miss_count = _record_spring_dream_miss(
-            session_key=session_key,
-            sleep_source=sleep_source,
-            max_per_sleep=int(max_per_sleep or SPRING_DREAM_MAX_PER_SLEEP),
-        )
+        next_miss_count = _record_spring_dream_miss(attempted_at=now_local.isoformat())
         logger.info(
-            "春梦唤醒未命中 session=%s roll=%.4f threshold=%.4f miss_count=%s next_threshold=%.4f",
+            "春梦唤醒未命中 session=%s sleeping=%s desire=%s roll=%.4f threshold=%.4f miss_count=%s next_threshold=%.4f",
             session_key,
+            is_sleeping,
+            desire_level,
             rolled,
             threshold,
             next_miss_count,
-            _adaptive_spring_dream_probability(chance, next_miss_count),
+            _spring_dream_probability(
+                chance,
+                desire_level=desire_level,
+                is_sleeping=is_sleeping,
+                miss_count=next_miss_count,
+            ),
         )
         return None
 
@@ -980,6 +1026,8 @@ def maybe_prepare_spring_dream_wakeup(
         "inspiration_source": "miniapp" if inspiration_fragments else "random",
         "sleep_session_key": session_key,
         "sleep_source": sleep_source,
+        "is_sleeping": is_sleeping,
+        "desire_level": desire_level,
         "roll": rolled,
         "threshold": threshold,
         "miss_count_before": miss_count,
@@ -997,14 +1045,33 @@ def record_spring_dream_sent(prepared: dict, *, sent_at: str = "") -> bool:
     now_iso = str(sent_at or "").strip() or now_beijing_iso()
     _ensure_schema()
     with runtime_sqlite.connect() as conn:
-        conn.execute(
-            """
-            UPDATE spring_dream_sessions
-            SET last_sent_at=?, post_wakeup_pending=1, updated_at=?
-            WHERE sleep_session_key=?
-            """,
-            (now_iso, now_iso, session_key),
-        )
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                """
+                UPDATE spring_dream_sessions
+                SET last_sent_at=?, post_wakeup_pending=1, updated_at=?
+                WHERE sleep_session_key=?
+                """,
+                (now_iso, now_iso, session_key),
+            )
+            conn.execute(
+                """
+                INSERT INTO spring_dream_trigger_state (
+                    id, miss_count, last_attempt_at, last_triggered_at, updated_at
+                ) VALUES (?, 0, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    miss_count=0,
+                    last_attempt_at=excluded.last_attempt_at,
+                    last_triggered_at=excluded.last_triggered_at,
+                    updated_at=excluded.updated_at
+                """,
+                (SPRING_DREAM_TRIGGER_STATE_ID, now_iso, now_iso, now_iso),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     return True
 
 
@@ -1281,32 +1348,70 @@ def _clear_post_spring_dream_wakeup_pending(session_key: str, *, updated_at: str
     return True
 
 
+def _is_china_workday(target_date: date) -> bool:
+    try:
+        from chinese_calendar import is_workday
+
+        return bool(is_workday(target_date))
+    except Exception:
+        return target_date.weekday() < 5
+
+
+def _post_spring_dream_wakeup_window(now_dt: datetime) -> dict:
+    now_local = _as_beijing_datetime(now_dt)
+    if now_local.hour >= 22:
+        target_date = now_local.date() + timedelta(days=1)
+    elif now_local.hour < 11:
+        target_date = now_local.date()
+    else:
+        return {"allowed": False, "is_workday": True, "cutoff_hour": 7}
+    is_workday = _is_china_workday(target_date)
+    cutoff_hour = 7 if is_workday else 11
+    allowed = now_local.hour >= 22 or now_local.hour < cutoff_hour
+    return {
+        "allowed": allowed,
+        "is_workday": is_workday,
+        "cutoff_hour": cutoff_hour,
+        "target_date": target_date.isoformat(),
+    }
+
+
+def _latest_pending_post_spring_dream_session() -> dict:
+    _ensure_schema()
+    with runtime_sqlite.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT sleep_session_key
+            FROM spring_dream_sessions
+            WHERE post_wakeup_pending > 0
+            ORDER BY last_sent_at DESC, updated_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    if row is None:
+        return {}
+    return _session_row(str(row["sleep_session_key"] or "").strip())
+
+
 def maybe_prepare_post_spring_dream_wakeup(
     *,
     now_dt: datetime,
     require_sleeping: bool = True,
     clear_on_empty_prompt: bool = True,
 ) -> Optional[dict]:
+    window = _post_spring_dream_wakeup_window(now_dt)
+    if not bool(window.get("allowed")):
+        return None
     try:
         from services.pixel_home import build_sleep_wakeup_state
 
         sleep_state = build_sleep_wakeup_state(now_dt)
     except Exception:
-        return None
-    night_date = str((sleep_state or {}).get("night_date") or "").strip()
-    if not bool((sleep_state or {}).get("is_sleeping")):
-        if require_sleeping:
-            _reset_night_sessions(night_date)
-            return None
-    session_key = str((sleep_state or {}).get("sleep_session_key") or "").strip()
-    if require_sleeping and not session_key:
-        return None
-    session_key = _recent_session_key_for_night(night_date) or session_key
-    if not session_key:
-        return None
-    row = _session_row(session_key)
+        sleep_state = {}
+    row = _latest_pending_post_spring_dream_session()
     if not row or int(row.get("post_wakeup_pending") or 0) <= 0:
         return None
+    session_key = str(row.get("sleep_session_key") or "").strip()
     prompt = load_post_spring_dream_wakeup_prompt()
     if not prompt:
         if clear_on_empty_prompt:
@@ -1317,6 +1422,8 @@ def maybe_prepare_post_spring_dream_wakeup(
         "sleep_session_key": session_key,
         "sleep_source": str((sleep_state or {}).get("source") or row.get("sleep_source") or "").strip(),
         "last_spring_dream_sent_at": str(row.get("last_sent_at") or ""),
+        "is_workday": bool(window.get("is_workday")),
+        "cutoff_hour": int(window.get("cutoff_hour") or 0),
     }
 
 
