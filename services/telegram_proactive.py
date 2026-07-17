@@ -798,13 +798,31 @@ def _preferred_proactive_channel(channels: list[str]) -> str:
     return available[0] if available else ""
 
 
-def _available_schedule_channels() -> list[str]:
-    """闹钟/日历提醒投递入口：QQ 优先，微信/TG 兜底。"""
-    channels = ["qq"]
-    if WECHAT_PROACTIVE_PUSH_URL:
+def _available_schedule_channels(recent_channel: str = "") -> list[str]:
+    """闹钟/日历提醒优先投递到触发时最近的真实聊天入口。"""
+    recent = _normalize_reply_channel(
+        recent_channel,
+        default="",
+        allowed=["sumitalk", "qq", "wechat", "tg"],
+    )
+    channels: list[str] = []
+    if recent == "sumitalk":
+        channels.append("sumitalk")
+    elif recent == "qq":
+        channels.append("qq")
+    elif recent == "wechat" and WECHAT_PROACTIVE_PUSH_URL:
         channels.append("wechat")
-    if TELEGRAM_BOT_TOKEN and TELEGRAM_PROACTIVE_TARGET_USER_ID:
+    elif recent == "tg" and TELEGRAM_BOT_TOKEN and TELEGRAM_PROACTIVE_TARGET_USER_ID:
         channels.append("tg")
+
+    if "qq" not in channels:
+        channels.append("qq")
+    if WECHAT_PROACTIVE_PUSH_URL:
+        if "wechat" not in channels:
+            channels.append("wechat")
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_PROACTIVE_TARGET_USER_ID:
+        if "tg" not in channels:
+            channels.append("tg")
     return channels
 
 
@@ -813,6 +831,7 @@ def _generate_schedule_reply(
     user_id: int,
     prompt: str,
     preferred_channel: str = "qq",
+    reply_target: str = "",
     wakeup_kind: str = "system_alarm",
 ) -> Optional[str]:
     """用主上下文窗口生成闹钟提醒文案，但不直接发 Telegram。"""
@@ -821,17 +840,24 @@ def _generate_schedule_reply(
     if not model:
         logger.warning("闹钟提醒生成跳过：当前没有可用模型")
         return None
-    channel = _normalize_reply_channel(preferred_channel, default="qq", allowed=["qq", "wechat", "tg"])
+    channel = _normalize_reply_channel(
+        preferred_channel,
+        default="qq",
+        allowed=["sumitalk", "qq", "wechat", "tg"],
+    )
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
     }
+    header_target = str(reply_target or "").strip()
+    if not header_target and channel != "sumitalk":
+        header_target = str(user_id or "").strip()
     headers = {
         "Content-Type": "application/json",
         "X-Window-Id": str(window_id or "").strip() or f"tg_{int(user_id or 0)}",
         "X-Reply-Channel": channel,
-        "X-Reply-Target": str(user_id or "").strip(),
+        "X-Reply-Target": header_target,
         "X-Force-Last4": "1",
         "X-DU-GATEWAY-WAKEUP": "1",
         "X-DU-WAKEUP-KIND": str(wakeup_kind or "system_alarm").strip() or "system_alarm",
@@ -1114,24 +1140,52 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             f"{('备注：' + note + '。') if note else ''}"
             "请像平时聊天那样自然回复；如果有多句，请用换行分段。"
         )
-        channels = _available_schedule_channels()
+        try:
+            recent_context = resolve_recent_reply_context() or {}
+        except Exception as e:
+            logger.warning("闹钟读取最近对话入口失败，使用旧投递顺序 error=%s", e)
+            recent_context = {}
+        recent_channel = _normalize_reply_channel(
+            str((recent_context or {}).get("channel") or ""),
+            default="",
+            allowed=["sumitalk", "qq", "wechat", "tg"],
+        )
+        channels = _available_schedule_channels(recent_channel)
         generation_channel = channels[0] if channels else "qq"
+        use_recent_context = bool(recent_channel) and generation_channel == recent_channel
+        window_id = (
+            str((recent_context or {}).get("window_id") or "").strip()
+            if use_recent_context
+            else ""
+        ) or f"tg_{uid}"
+        reply_target = (
+            str((recent_context or {}).get("target") or "").strip()
+            if use_recent_context
+            else ""
+        )
+        if not reply_target and generation_channel != "sumitalk":
+            reply_target = str(uid)
         logger.info(
-            "闹钟准备触发 uid=%s item_id=%s title=%s repeat=%s occ_key=%s note_chars=%s channels=%s",
+            "闹钟准备触发 uid=%s item_id=%s title=%s repeat=%s occ_key=%s note_chars=%s "
+            "recent_channel=%s generation_channel=%s window_id=%s reply_target=%s channels=%s",
             uid,
             str(it.get("id") or ""),
             title,
             rep,
             occ_key,
             len(note),
+            recent_channel or "none",
+            generation_channel,
+            window_id,
+            reply_target or "auto",
             channels,
         )
-        window_id = f"tg_{uid}"
         reply_text = _generate_schedule_reply(
             window_id=window_id,
             user_id=uid,
             prompt=reminder_prompt,
             preferred_channel=generation_channel,
+            reply_target=reply_target,
             wakeup_kind=wakeup_kind,
         )
         if not reply_text:
@@ -1144,7 +1198,14 @@ def schedule_tick(target_user_id: int = 0) -> dict:
         ok = False
         sent_channel = ""
         for channel in channels:
-            ok = _dispatch_send(channel, text_to_send, target_user_id=uid)
+            same_context = channel == generation_channel
+            ok = _dispatch_send(
+                channel,
+                text_to_send,
+                target_user_id=uid,
+                reply_target=reply_target if same_context else "",
+                window_id=window_id if same_context else f"tg_{uid}",
+            )
             if ok:
                 sent_channel = channel
                 break
@@ -1232,7 +1293,14 @@ def _send_via_tg(text: str, target_user_id: int = 0) -> bool:
     return send_rich_message(chat_id=uid, text=text, bot_token=None)
 
 
-def _dispatch_send(channel: str, text: str, split: bool = True, target_user_id: int = 0) -> bool:
+def _dispatch_send(
+    channel: str,
+    text: str,
+    split: bool = True,
+    target_user_id: int = 0,
+    reply_target: str = "",
+    window_id: str = "",
+) -> bool:
     """根据 channel 选择发送入口，返回是否发送成功。"""
     text = _sanitize_control_reply_for_delivery(text).strip()
     if not text:
@@ -1246,9 +1314,9 @@ def _dispatch_send(channel: str, text: str, split: bool = True, target_user_id: 
         return _send_via_tg(text, target_user_id=target_user_id)
     if channel == "sumitalk":
         try:
-            context = resolve_recent_reply_context()
-            target = str((context or {}).get("target") or "").strip()
-            window_id = str((context or {}).get("window_id") or "").strip()
+            context = resolve_recent_reply_context() if not reply_target and not window_id else {}
+            target = str(reply_target or (context or {}).get("target") or "").strip()
+            delivery_window_id = str(window_id or (context or {}).get("window_id") or "").strip()
             from services.conversation_followup import _dispatch_followup
 
             return _dispatch_followup(
@@ -1257,7 +1325,7 @@ def _dispatch_send(channel: str, text: str, split: bool = True, target_user_id: 
                 text,
                 split=split,
                 created_at=now_beijing_iso(),
-                window_id=window_id,
+                window_id=delivery_window_id,
             )
         except Exception as e:
             logger.warning("SumiTalk 主动发送异常: %s", e, exc_info=True)

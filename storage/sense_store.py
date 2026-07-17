@@ -10,6 +10,14 @@ from utils.time_aware import now_beijing_iso, parse_iso_to_beijing, today_beijin
 R2_KEY_SENSE_LATEST = "sense/latest.json"
 R2_KEY_SLEEP_SUMMARY_LATEST = "sense/sleep_summary/latest.json"
 _SENSE_HISTORY_CAP = 200
+_SENSE_HISTORY_CAP_BY_TYPE = {
+    "screen": 96,
+    "foreground": 480,
+    "app_sessions": 180,
+    "health": 320,
+    "location": 64,
+    "battery": 64,
+}
 _SENSE_HISTORY_READ_DEFAULT_LIMIT = 200
 _SENSE_HISTORY_TTL_HOURS = 24
 _SLEEP_SUMMARY_TTL_HOURS = 36
@@ -112,20 +120,31 @@ def _prune_sense_history(conn, day: str = "") -> None:
     conn.execute("DELETE FROM sense_history WHERE expires_at <= ?", (now_beijing_iso(),))
     clean_day = str(day or "").strip()
     if clean_day:
-        conn.execute(
-            """
-            DELETE FROM sense_history
-            WHERE substr(at, 1, 10) = ?
-              AND id NOT IN (
-                SELECT id
-                FROM sense_history
+        rows = conn.execute(
+            "SELECT DISTINCT sense_type FROM sense_history WHERE substr(at, 1, 10) = ?",
+            (clean_day,),
+        ).fetchall()
+        for row in rows:
+            sense_type = str(row["sense_type"] or "").strip()
+            if not sense_type:
+                continue
+            cap = _SENSE_HISTORY_CAP_BY_TYPE.get(sense_type, _SENSE_HISTORY_CAP)
+            conn.execute(
+                """
+                DELETE FROM sense_history
                 WHERE substr(at, 1, 10) = ?
-                ORDER BY at DESC, id DESC
-                LIMIT ?
-              )
-            """,
-            (clean_day, clean_day, _SENSE_HISTORY_CAP),
-        )
+                  AND sense_type = ?
+                  AND id NOT IN (
+                    SELECT id
+                    FROM sense_history
+                    WHERE substr(at, 1, 10) = ?
+                      AND sense_type = ?
+                    ORDER BY at DESC, id DESC
+                    LIMIT ?
+                  )
+                """,
+                (clean_day, sense_type, clean_day, sense_type, cap),
+            )
 
 
 def _load_sense_latest_doc(conn) -> dict:
