@@ -25,7 +25,10 @@ from services.telegram_bot import (
     send_message_segmented,
 )
 from services.hidden_blocks import HiddenBlockParser
-from services.reply_channel_context import normalize_reply_channel as _shared_normalize_reply_channel
+from services.reply_channel_context import (
+    normalize_reply_channel as _shared_normalize_reply_channel,
+    resolve_recent_reply_context as _resolve_recent_reply_context,
+)
 from storage import r2_store
 from storage.miniapp_panel_store import list_trusted_devices
 from utils.log import get_logger
@@ -35,6 +38,7 @@ logger = get_logger(__name__)
 sumitalk_logger = get_logger("sumitalk")
 
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
+_SUMITALK_FALLBACK_WINDOW_ID = "sumitalk-main"
 
 FOLLOWUP_AFTER_MINUTES = 5
 FOLLOWUP_TICK_SECONDS = 60
@@ -70,6 +74,35 @@ def build_followup_system_instruction() -> str:
 
 def _normalize_reply_channel(value: str, default: str = "sumitalk", allow_tg: bool = True) -> str:
     return _shared_normalize_reply_channel(value, default=default, allow_tg=allow_tg)
+
+
+def _resolve_sumitalk_delivery_window_id(window_id: str = "", device_id: str = "") -> str:
+    explicit = str(window_id or "").strip()[:160]
+    if explicit:
+        return explicit
+    try:
+        context = _resolve_recent_reply_context(default_target=device_id) or {}
+    except Exception as e:
+        sumitalk_logger.warning(
+            "followup_window_resolve_failed device_id=%s error=%s",
+            device_id,
+            e,
+        )
+        context = {}
+    resolved = str(context.get("window_id") or "").strip()[:160]
+    if resolved:
+        sumitalk_logger.info(
+            "followup_window_resolved device_id=%s window_id=%s source=recent_context",
+            device_id,
+            resolved,
+        )
+        return resolved
+    sumitalk_logger.warning(
+        "followup_window_resolved device_id=%s window_id=%s source=fallback",
+        device_id,
+        _SUMITALK_FALLBACK_WINDOW_ID,
+    )
+    return _SUMITALK_FALLBACK_WINDOW_ID
 
 
 def _resolve_sumitalk_target_device_id(preferred: str = "") -> str:
@@ -123,12 +156,18 @@ def _post_spring_dream_prompt_override_for_trigger(wakeup_kind: str, created_at:
     return prepared
 
 
-def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, created_at: str | None = None) -> bool:
+def _append_sumitalk_assistant_message_to_device(
+    device_id: str,
+    text: str,
+    created_at: str | None = None,
+    window_id: str = "",
+) -> bool:
     from routes.miniapp.sumitalk_history import (
         _SUMITALK_HISTORY_LOCK,
         _load_sumitalk_histories,
         _merge_sumitalk_messages,
         _save_sumitalk_histories,
+        _sumitalk_history_storage_key,
     )
 
     did = _resolve_sumitalk_target_device_id(device_id)
@@ -139,6 +178,8 @@ def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, crea
     if not content:
         sumitalk_logger.warning("followup_append_skip reason=empty_content device_id=%s", did)
         return False
+    resolved_window_id = _resolve_sumitalk_delivery_window_id(window_id, did)
+    storage_key = _sumitalk_history_storage_key(did, resolved_window_id)
     now_iso = str(created_at or now_beijing_iso()).strip() or now_beijing_iso()
     message_digest = hashlib.sha256(
         f"{did}\0{now_iso}\0{content}".encode("utf-8", errors="ignore")
@@ -152,19 +193,22 @@ def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, crea
     }
     with _SUMITALK_HISTORY_LOCK:
         data = _load_sumitalk_histories()
-        current = data.get(did) if isinstance(data, dict) else None
+        current = data.get(storage_key) if isinstance(data, dict) else None
         before_count = len((current or {}).get("messages") or [])
         merged_messages = _merge_sumitalk_messages((current or {}).get("messages") or [], [message])
         payload = {
             "device_id": did,
+            "window_id": resolved_window_id,
             "updated_at": now_iso,
             "messages": merged_messages,
         }
-        data[did] = payload
+        data[storage_key] = payload
         sumitalk_logger.info(
-            "followup_append_write preferred=%s device_id=%s chars=%s before=%s after=%s created_at=%s known_devices=%s",
+            "followup_append_write preferred=%s device_id=%s window_id=%s storage_key=%s chars=%s before=%s after=%s created_at=%s known_rows=%s",
             device_id,
             did,
+            resolved_window_id,
+            storage_key,
             len(content),
             before_count,
             len(merged_messages),
@@ -173,14 +217,21 @@ def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, crea
         )
         ok = bool(_save_sumitalk_histories(data))
     if ok:
-        sumitalk_logger.info("followup_append_ok preferred=%s device_id=%s chars=%s after=%s", device_id, did, len(content), len(merged_messages))
+        sumitalk_logger.info(
+            "followup_append_ok preferred=%s device_id=%s window_id=%s chars=%s after=%s",
+            device_id,
+            did,
+            resolved_window_id,
+            len(content),
+            len(merged_messages),
+        )
         action, action_error = r2_store.append_app_action(
             "deliver_chat_message",
             {
                 "message_id": message_id,
                 "text": content,
                 "conversation_id": "du-private",
-                "window_id": "sumitalk-main",
+                "window_id": resolved_window_id,
                 "role": "assistant",
                 "sender": "渡",
                 "created_at": now_iso,
@@ -201,7 +252,7 @@ def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, crea
         try:
             from services.realtime_publish import publish_assistant_message
 
-            publish_assistant_message(did, message, window_id="sumitalk-main")
+            publish_assistant_message(did, message, window_id=resolved_window_id)
         except Exception as e:
             sumitalk_logger.debug("followup_realtime_publish_failed device_id=%s error=%s", did, e)
     else:
@@ -241,7 +292,14 @@ def _send_via_qq(text: str, split: bool = True) -> bool:
         return False
 
 
-def _dispatch_followup(channel: str, target: str, text: str, created_at: str, split: bool = True) -> bool:
+def _dispatch_followup(
+    channel: str,
+    target: str,
+    text: str,
+    created_at: str,
+    split: bool = True,
+    window_id: str = "",
+) -> bool:
     ch = _normalize_reply_channel(channel, default="sumitalk", allow_tg=True)
     try:
         from services.telegram_proactive import _sanitize_control_reply_for_delivery
@@ -270,7 +328,12 @@ def _dispatch_followup(channel: str, target: str, text: str, created_at: str, sp
             logger.warning("延迟续话发 TG 失败：target 无效 target=%s", target)
             return False
         return send_rich_message(chat_id=uid, text=text, bot_token=None)
-    return _append_sumitalk_assistant_message_to_device(target, text, created_at=created_at)
+    return _append_sumitalk_assistant_message_to_device(
+        target,
+        text,
+        created_at=created_at,
+        window_id=window_id,
+    )
 
 
 def detect_reply_channel(window_id: str, headers: dict) -> str:
@@ -555,14 +618,26 @@ def _stable_proactive_wakeup_channel(default: str = "") -> str:
     return _normalize_reply_channel(default, default="sumitalk", allow_tg=True)
 
 
-def _dispatch_choice_dialog_reply(channel: str, target: str, text: str, created_at: str | None = None) -> bool:
+def _dispatch_choice_dialog_reply(
+    channel: str,
+    target: str,
+    text: str,
+    created_at: str | None = None,
+    window_id: str = "",
+) -> bool:
     ch = _normalize_reply_channel(channel, default="", allow_tg=True)
     if ch in {"wechat", "qq"}:
         from services.telegram_proactive import _dispatch_send
 
         return _dispatch_send(ch, text, split=True)
     if ch in {"tg", "sumitalk"}:
-        return _dispatch_followup(ch, target, text, created_at or now_beijing_iso())
+        return _dispatch_followup(
+            ch,
+            target,
+            text,
+            created_at or now_beijing_iso(),
+            window_id=window_id,
+        )
     return False
 
 
@@ -810,7 +885,13 @@ def _send_wakeup_event(
         for channel in channels:
             attempted_channels.append(channel)
             send_target = preferred_target if channel == preferred_channel else str(target or "").strip()
-            if _dispatch_choice_dialog_reply(channel, send_target, outbound, created_at=created_at):
+            if _dispatch_choice_dialog_reply(
+                channel,
+                send_target,
+                outbound,
+                created_at=created_at,
+                window_id=context_window_id,
+            ):
                 archive_ok = True
                 if archive and archive_after_delivery:
                     archive_ok = _archive_wakeup_after_delivery(
@@ -1266,6 +1347,7 @@ def tick_conversation_followups() -> dict:
             target=str(item.get("reply_target") or "").strip(),
             text=text,
             created_at=now_iso,
+            window_id=window_id,
         )
         if ok:
             item["status"] = FOLLOWUP_STATUS_SENT

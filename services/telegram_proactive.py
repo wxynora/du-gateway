@@ -1164,9 +1164,17 @@ def _dispatch_send(channel: str, text: str, split: bool = True, target_user_id: 
         try:
             context = resolve_recent_reply_context()
             target = str((context or {}).get("target") or "").strip()
+            window_id = str((context or {}).get("window_id") or "").strip()
             from services.conversation_followup import _dispatch_followup
 
-            return _dispatch_followup("sumitalk", target, text, split=split, created_at=now_beijing_iso())
+            return _dispatch_followup(
+                "sumitalk",
+                target,
+                text,
+                split=split,
+                created_at=now_beijing_iso(),
+                window_id=window_id,
+            )
         except Exception as e:
             logger.warning("SumiTalk 主动发送异常: %s", e, exc_info=True)
             return False
