@@ -53,6 +53,7 @@ from pipeline.pipeline import (
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
     step_inject_sumitalk_real_mode,
+    step_inject_play_note,
     step_inject_sense_snapshot,
     step_inject_du_thought,
     step_inject_pending_thoughts,
@@ -2747,6 +2748,7 @@ def chat_completions():
     body = step_inject_humor_memes(body)
     body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
     body = step_inject_sumitalk_real_mode(body, enabled=sumitalk_real_mode)
+    body = step_inject_play_note(body)
     body = step_inject_sense_snapshot(body, window_id)
     body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
     body = step_inject_interaction_candidate(body, window_id)
@@ -2796,6 +2798,8 @@ def chat_completions():
             msg.pop("__dynamic__", None)
             msg.pop("__summary_cache__", None)
             msg.pop("__summary_recent__", None)
+            msg.pop("__sumitalk_real_mode__", None)
+            msg.pop("__play_note__", None)
     if body.get("stream"):
         if is_sumitalk_request:
             sumitalk_logger.info(

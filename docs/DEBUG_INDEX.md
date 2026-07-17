@@ -67,6 +67,8 @@
 | Claude thinking 连续性 | `services/claude_thinking_carryover.py` | 普通对话回传 opaque signature，不回灌转写 thinking 文本 |
 | Prompt Cache 诊断 | `services/prompt_cache_debug.py` | 记录静态/动态构成与上游 usage 元数据 |
 
+当前 play 小纸条由 `services/pixel_home.py` 生成，`pipeline/pipeline.py` 将它从小家动态状态中独立出来，固定放在近期记忆之后；SumiTalk Real 模式开启时放在 Real 提示词之后，并由各 Claude 缓存适配器把断点落在小纸条末尾。小纸条内容与触发条件仍沿用原逻辑。
+
 ## 4. 对话入口与异步 worker
 
 ### 4.1 SumiTalk

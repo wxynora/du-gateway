@@ -15,6 +15,7 @@ from config import (
 DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
+PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 GATEWAY_DYNAMIC_SYSTEM_HINTS = (
     "【渡的心事",
     "【渡的日常",
@@ -139,6 +140,8 @@ def _system_blocks_from_message(msg: dict) -> list[dict]:
             block[SUMMARY_CACHE_SYSTEM_MARKER] = True
         if msg.get(SUMMARY_RECENT_SYSTEM_MARKER):
             block[SUMMARY_RECENT_SYSTEM_MARKER] = True
+        if msg.get(PLAY_NOTE_SYSTEM_MARKER):
+            block[PLAY_NOTE_SYSTEM_MARKER] = True
     return text_blocks
 
 
@@ -356,10 +359,14 @@ def apply_prompt_cache(body: dict, ttl: str) -> None:
         if summary_idx > 0:
             _set_cache_control(_find_cacheable_system_before(system_blocks, summary_idx), ttl)
             _set_cache_control(system_blocks[summary_idx], ttl)
+            final_breakpoint = None
             for idx, item in enumerate(system_blocks[summary_idx + 1 :], start=summary_idx + 1):
-                if item.get(SUMMARY_RECENT_SYSTEM_MARKER) or _looks_like_recent_summary_block(item):
-                    _set_cache_control(item, ttl)
+                if item.get(PLAY_NOTE_SYSTEM_MARKER):
+                    final_breakpoint = item
                     break
+                if final_breakpoint is None and (item.get(SUMMARY_RECENT_SYSTEM_MARKER) or _looks_like_recent_summary_block(item)):
+                    final_breakpoint = item
+            _set_cache_control(final_breakpoint, ttl)
         else:
             static_system = None
             for item in system_blocks:
@@ -372,6 +379,7 @@ def apply_prompt_cache(body: dict, ttl: str) -> None:
                 item.pop(DYNAMIC_SYSTEM_MARKER, None)
                 item.pop(SUMMARY_CACHE_SYSTEM_MARKER, None)
                 item.pop(SUMMARY_RECENT_SYSTEM_MARKER, None)
+                item.pop(PLAY_NOTE_SYSTEM_MARKER, None)
 
 
 def _int_value(value) -> int:

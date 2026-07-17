@@ -24,6 +24,7 @@ _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
+_PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 
 
 def get_forward_targets(request_model: str = None):
@@ -213,6 +214,7 @@ def _append_text_blocks_without_cache(target: list, content) -> None:
         item.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         item.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
         item.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
+        item.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
         target.append(item)
 
 
@@ -248,12 +250,14 @@ def _strip_gateway_cache_markers(messages: list[dict]) -> None:
         msg.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         msg.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
         msg.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
+        msg.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
 
 
 def _strip_sumitalk_real_mode_marker(messages: list[dict]) -> None:
     for msg in messages or []:
         if isinstance(msg, dict):
             msg.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
+            msg.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
 
 
 def _append_pioneer_volatile_context_blocks(target: list[dict], content) -> None:
@@ -277,6 +281,7 @@ def _pioneer_clean_volatile_context_blocks(blocks: list[dict]) -> list[dict]:
         item.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         item.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
         item.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
+        item.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
         if str(item.get("type") or "").strip().lower() not in {"text", "input_text"}:
             continue
         if not str(item.get("text") or "").strip():
@@ -321,20 +326,24 @@ def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str
     volatile_context_blocks: list[dict] = []
     pre_summary_mark_idx = -1
     summary_mark_idx = -1
-    real_mode_before_final_breakpoint = any(
-        bool((msg or {}).get(_SUMITALK_REAL_MODE_SYSTEM_MARKER))
+    stable_tail_before_final_breakpoint = any(
+        bool((msg or {}).get(_SUMITALK_REAL_MODE_SYSTEM_MARKER) or (msg or {}).get(_PLAY_NOTE_SYSTEM_MARKER))
         for msg in leading_systems
         if isinstance(msg, dict)
     )
 
     for msg_idx, msg in enumerate(leading_systems):
         if _looks_like_recent_summary_message(msg):
-            if real_mode_before_final_breakpoint:
+            if stable_tail_before_final_breakpoint:
                 _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
             else:
                 _append_pioneer_volatile_context_blocks(volatile_context_blocks, msg.get("content"))
             continue
         if msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER):
+            _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
+            summary_mark_idx = _last_text_block_index(stable_blocks)
+            continue
+        if msg.get(_PLAY_NOTE_SYSTEM_MARKER):
             _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
             summary_mark_idx = _last_text_block_index(stable_blocks)
             continue

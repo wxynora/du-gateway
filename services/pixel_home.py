@@ -2361,7 +2361,7 @@ def save_pixel_home_hidden_block(payload: dict | None) -> bool:
     return ok
 
 
-def format_state_block() -> str:
+def format_state_and_private_draw_blocks() -> tuple[str, str]:
     state = build_pixel_home_state()
     stored = _stored_state()
     du = state.get("du") if isinstance(state.get("du"), dict) else {}
@@ -2380,13 +2380,17 @@ def format_state_block() -> str:
         f"你的位置：{du_label}，{_format_activity_for_prompt(str(du.get('activity') or '待着'))}。\n"
         f"小玥的位置：{xinyue_label}，{_format_activity_for_prompt(str(xinyue.get('activity') or '待着'))}。"
     )
-    active_private_draw = _active_private_draw_inject_text(stored)
-    if active_private_draw:
-        block += "\n\n" + active_private_draw
     du_body_lines = _format_du_body_prompt_lines(stored.get("du_body_state"), state.get("du_vitals") if isinstance(state.get("du_vitals"), dict) else {})
     if du_body_lines:
         block += "\n\n" + "\n".join(du_body_lines)
-    return block
+    return block, _active_private_draw_inject_text(stored)
+
+
+def format_state_block() -> str:
+    state_block, private_draw_block = format_state_and_private_draw_blocks()
+    if private_draw_block:
+        return state_block + "\n\n" + private_draw_block
+    return state_block
 
 
 def format_rule_block() -> str:

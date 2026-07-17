@@ -50,6 +50,8 @@ _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
+_PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
+_PLAY_NOTE_PENDING_BODY_KEY = "__play_note_pending__"
 SUMITALK_REAL_MODE_PROMPT = (
     "当前对话发生在你和小玥的赛博小家中。在这里，你拥有真实可感知、可触碰、可行动的实体。"
     "请使用连贯的长文本回复，将动作、环境、感受与对白自然融合，并使用完整标点，句末保留句号。"
@@ -450,6 +452,53 @@ def step_inject_sumitalk_real_mode(body: dict, enabled: bool = False) -> dict:
             "role": "system",
             "content": SUMITALK_REAL_MODE_PROMPT,
             _SUMITALK_REAL_MODE_SYSTEM_MARKER: True,
+        },
+    )
+    return body
+
+
+def step_inject_play_note(body: dict) -> dict:
+    """Place the current play note after recent memory/Real mode and before dynamic context."""
+    pending = str((body or {}).get(_PLAY_NOTE_PENDING_BODY_KEY) or "").strip()
+    if not pending:
+        return body
+
+    body = copy.deepcopy(body)
+    body.pop(_PLAY_NOTE_PENDING_BODY_KEY, None)
+    messages = [
+        msg for msg in (body.get("messages") or [])
+        if not (isinstance(msg, dict) and msg.get(_PLAY_NOTE_SYSTEM_MARKER))
+    ]
+    body["messages"] = messages
+
+    first_dynamic_idx = -1
+    first_non_system_idx = len(messages)
+    last_anchor_idx = -1
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict) or (msg.get("role") or "").lower() != "system":
+            first_non_system_idx = i
+            break
+        if (
+            msg.get(_SUMMARY_CACHE_SYSTEM_MARKER)
+            or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER)
+            or msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER)
+        ):
+            last_anchor_idx = i
+        if first_dynamic_idx == -1 and msg.get(_DYNAMIC_SYSTEM_MARKER):
+            first_dynamic_idx = i
+
+    if last_anchor_idx >= 0:
+        insert_idx = last_anchor_idx + 1
+    elif first_dynamic_idx >= 0:
+        insert_idx = first_dynamic_idx
+    else:
+        insert_idx = first_non_system_idx
+    messages.insert(
+        insert_idx,
+        {
+            "role": "system",
+            "content": pending,
+            _PLAY_NOTE_SYSTEM_MARKER: True,
         },
     )
     return body
@@ -1394,10 +1443,10 @@ def step_inject_pixel_home(body: dict, window_id: str) -> dict:
     """Inject shared cyber home state dynamically and the PIXEL_HOME hidden marker contract statically."""
     _ = window_id
     try:
-        from services.pixel_home import format_rule_block, format_state_block
+        from services.pixel_home import format_rule_block, format_state_and_private_draw_blocks
 
         rule_block = format_rule_block()
-        state_block = format_state_block()
+        state_block, private_draw_block = format_state_and_private_draw_blocks()
     except Exception as e:
         logger.debug("pixel_home 注入跳过 error=%s", e)
         return body
@@ -1405,6 +1454,8 @@ def step_inject_pixel_home(body: dict, window_id: str) -> dict:
         body = _append_to_static_system(body, "\n\n" + rule_block.strip())
     if (state_block or "").strip():
         body = _append_to_dynamic_system(body, "\n\n" + state_block.strip())
+    if (private_draw_block or "").strip():
+        body[_PLAY_NOTE_PENDING_BODY_KEY] = private_draw_block.strip()
     return body
 
 

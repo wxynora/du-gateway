@@ -7,6 +7,8 @@ from utils.tokens import estimate_tokens
 
 def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
     stripped = content.lstrip()
+    if msg.get("__play_note__") or stripped.startswith("【当前私密纸条】"):
+        return "play小纸条"
     if msg.get("__summary_cache__") or msg.get("__summary_recent__") or "【近期记忆】" in content:
         return "近期记忆"
     if stripped.startswith("【入口风格：QQ】"):

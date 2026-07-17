@@ -69,6 +69,7 @@ const DYNAMIC_SYSTEM_MARKER = "__dynamic__";
 const SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__";
 const SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__";
 const SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__";
+const PLAY_NOTE_SYSTEM_MARKER = "__play_note__";
 const GATEWAY_DYNAMIC_SYSTEM_HINTS = [
   "【渡的心事",
   "【渡的日常",
@@ -697,6 +698,7 @@ async function openaiToAnthropic(oai) {
         if (msg[SUMMARY_CACHE_SYSTEM_MARKER]) block[SUMMARY_CACHE_SYSTEM_MARKER] = true;
         if (msg[SUMMARY_RECENT_SYSTEM_MARKER]) block[SUMMARY_RECENT_SYSTEM_MARKER] = true;
         if (msg[SUMITALK_REAL_MODE_SYSTEM_MARKER]) block[SUMITALK_REAL_MODE_SYSTEM_MARKER] = true;
+        if (msg[PLAY_NOTE_SYSTEM_MARKER]) block[PLAY_NOTE_SYSTEM_MARKER] = true;
         systemBlocks.push(block);
       }
     } else if (msg.role === "tool" || msg.role === "function") {
@@ -1085,7 +1087,12 @@ function applyPromptCache(body) {
       const realModeIdx = body.system.findIndex(
         (item, idx) => idx > summaryIdx && item?.[SUMITALK_REAL_MODE_SYSTEM_MARKER]
       );
-      if (realModeIdx > summaryIdx) {
+      const playNoteIdx = body.system.findIndex(
+        (item, idx) => idx > summaryIdx && item?.[PLAY_NOTE_SYSTEM_MARKER]
+      );
+      if (playNoteIdx > summaryIdx) {
+        setCacheControl(body.system[playNoteIdx]);
+      } else if (realModeIdx > summaryIdx) {
         setCacheControl(body.system[realModeIdx]);
       } else if (recentIdx > summaryIdx) {
         setCacheControl(body.system[recentIdx]);
@@ -1111,6 +1118,7 @@ function applyPromptCache(body) {
         delete item[SUMMARY_CACHE_SYSTEM_MARKER];
         delete item[SUMMARY_RECENT_SYSTEM_MARKER];
         delete item[SUMITALK_REAL_MODE_SYSTEM_MARKER];
+        delete item[PLAY_NOTE_SYSTEM_MARKER];
       }
     }
   }
