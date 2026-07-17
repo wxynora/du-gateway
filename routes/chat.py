@@ -178,9 +178,9 @@ from services.prompt_cache_debug import (
     build_prompt_cache_profile as _build_prompt_cache_profile,
 )
 from services.reasoning_utils import (
-    ReasoningStreamNormalizer as _ReasoningStreamNormalizer,
+    ReasoningStreamAccumulator as _ReasoningStreamAccumulator,
     THINK_BLOCK_RE as _THINK_BLOCK_RE,
-    extract_reasoning_stream_parts as _extract_reasoning_stream_parts,
+    extract_reasoning_stream_source as _extract_reasoning_stream_source,
     extract_reasoning_text_and_details as _extract_reasoning_text_and_details,
     extract_thinking_from_content as _extract_thinking_from_content,
     normalize_reasoning_details as _normalize_reasoning_details,
@@ -1313,7 +1313,7 @@ def _stream_with_r2_archive(
     """
     content_parts = []
     reasoning_parts = []
-    archive_reasoning_stream = _ReasoningStreamNormalizer()
+    archive_reasoning_stream = _ReasoningStreamAccumulator()
     reasoning_details_parts: list[dict] = []
     thinking_blocks_parts: list[dict] = []
     cache_debug_entries: list[dict] = []
@@ -1337,21 +1337,30 @@ def _stream_with_r2_archive(
         for start in range(0, len(value), 1600):
             yield value[start : start + 1600]
 
+    def _start_reasoning_stream_event(
+        round_no: int,
+        part_id: str,
+        state: dict,
+        mode: str,
+    ) -> None:
+        if state.get("started") or state.get("finished"):
+            return
+        _emit_stream_event(
+            "reasoning_started",
+            {"part_id": part_id, "round": round_no, "mode": mode},
+        )
+        state["started"] = True
+
     def _emit_reasoning_update(
         update: tuple[str, str] | None,
         round_no: int,
         part_id: str,
         state: dict,
     ) -> None:
-        if not update:
+        if not update or state.get("finished"):
             return
         mode, text = update
-        if not state.get("started"):
-            _emit_stream_event(
-                "reasoning_started",
-                {"part_id": part_id, "round": round_no, "mode": mode},
-            )
-            state["started"] = True
+        _start_reasoning_stream_event(round_no, part_id, state, mode)
         if mode == "snapshot":
             _emit_stream_event(
                 "reasoning_delta",
@@ -1362,6 +1371,7 @@ def _stream_with_r2_archive(
                     "text": text,
                 },
             )
+            state["snapshot"] = True
             return
         for event_text in _stream_event_text_chunks(text):
             _emit_stream_event(
@@ -1374,34 +1384,6 @@ def _stream_with_r2_archive(
                 },
             )
 
-    def _emit_reasoning_snapshot(
-        text: str,
-        round_no: int,
-        state: dict,
-        *,
-        omitted: bool = False,
-        part_id: str = "",
-    ) -> None:
-        reasoning_text = str(text or "")
-        if omitted:
-            state["omitted"] = True
-        if not reasoning_text and not omitted:
-            return
-        reasoning_part_id = part_id or f"reasoning-{round_no}"
-        normalizer = state["normalizer"]
-        _emit_reasoning_update(
-            normalizer.reconcile_snapshot(reasoning_text),
-            round_no,
-            reasoning_part_id,
-            state,
-        )
-        if omitted and not state.get("started"):
-            _emit_stream_event(
-                "reasoning_started",
-                {"part_id": reasoning_part_id, "round": round_no, "mode": "snapshot"},
-            )
-            state["started"] = True
-
     def _finish_reasoning_stream_event(round_no: int, part_id: str, state: dict) -> None:
         if not state.get("started") or state.get("finished"):
             return
@@ -1410,14 +1392,47 @@ def _stream_with_r2_archive(
             {
                 "part_id": part_id,
                 "round": round_no,
-                "mode": "snapshot",
+                "mode": "snapshot" if state.get("snapshot") else "delta",
                 "omitted": bool(state.get("omitted")),
             },
         )
         state["finished"] = True
 
+    def _emit_reasoning_snapshot(
+        text: str,
+        round_no: int,
+        state: dict,
+        *,
+        omitted: bool = False,
+        part_id: str = "",
+    ) -> None:
+        if state.get("finished"):
+            return
+        reasoning_text = str(text or "")
+        if not reasoning_text and not omitted:
+            return
+        reasoning_part_id = part_id or f"reasoning-{round_no}"
+        if omitted:
+            state["omitted"] = True
+        update = state["stream"].apply("structured", reasoning_text)
+        _emit_reasoning_update(update, round_no, reasoning_part_id, state)
+        if omitted and not state.get("started"):
+            _start_reasoning_stream_event(
+                round_no,
+                reasoning_part_id,
+                state,
+                "snapshot",
+            )
+        _finish_reasoning_stream_event(
+            round_no,
+            reasoning_part_id,
+            state,
+        )
+
     def _emit_reasoning_chunk(chunk, round_no: int, part_id: str, state: dict) -> None:
         try:
+            if state.get("finished"):
+                return
             if not chunk.startswith(b"data: "):
                 return
             raw = chunk[6:].strip()
@@ -1425,29 +1440,17 @@ def _stream_with_r2_archive(
                 return
             packet = json.loads(raw.decode("utf-8", errors="ignore"))
             delta = ((packet.get("choices") or [{}])[0] or {}).get("delta") or {}
-            event_parts: list[str] = []
-            raw_content = delta.get("content") or ""
-            if isinstance(raw_content, str) and _THINK_BLOCK_RE.search(raw_content):
-                _clean, in_content_thinking = _extract_thinking_from_content(raw_content)
-                if in_content_thinking:
-                    event_parts.append(in_content_thinking)
-            reasoning_text, reasoning_snapshot, _details, omitted = _extract_reasoning_stream_parts(delta)
-            if reasoning_text:
-                event_parts.append(reasoning_text)
+            source, reasoning_text, _details, omitted = _extract_reasoning_stream_source(delta)
             if omitted:
                 state["omitted"] = True
-            if not event_parts:
+            if not source:
                 return
-            normalizer = state["normalizer"]
-            for text in event_parts:
-                _emit_reasoning_update(normalizer.feed(text), round_no, part_id, state)
-            if reasoning_snapshot:
-                _emit_reasoning_update(
-                    normalizer.reconcile_snapshot(reasoning_snapshot),
-                    round_no,
-                    part_id,
-                    state,
-                )
+            update = state["stream"].apply(source, reasoning_text)
+            _emit_reasoning_update(update, round_no, part_id, state)
+            if source == "structured":
+                if omitted and not state.get("started"):
+                    _start_reasoning_stream_event(round_no, part_id, state, "snapshot")
+                _finish_reasoning_stream_event(round_no, part_id, state)
         except Exception:
             return
 
@@ -1477,7 +1480,15 @@ def _stream_with_r2_archive(
                 },
             )
 
-    def _emit_assistant_sse_chunk(chunk, round_no: int, part_id: str, state: dict) -> None:
+    def _emit_assistant_sse_chunk(
+        chunk,
+        round_no: int,
+        part_id: str,
+        state: dict,
+        *,
+        reasoning_part_id: str = "",
+        reasoning_state: dict | None = None,
+    ) -> None:
         try:
             text = chunk.decode("utf-8") if isinstance(chunk, (bytes, bytearray)) else str(chunk or "")
             for line in text.splitlines():
@@ -1487,6 +1498,12 @@ def _stream_with_r2_archive(
                 delta = (((packet.get("choices") or [{}])[0] or {}).get("delta") or {})
                 content = delta.get("content")
                 if isinstance(content, str) and content:
+                    if reasoning_state is not None and reasoning_part_id:
+                        _finish_reasoning_stream_event(
+                            round_no,
+                            reasoning_part_id,
+                            reasoning_state,
+                        )
                     _emit_assistant_text_value(content, round_no, part_id, state)
         except Exception:
             return
@@ -1542,22 +1559,17 @@ def _stream_with_r2_archive(
                     j = json.loads(payload.decode("utf-8", errors="ignore"))
                     delta = (j.get("choices") or [{}])[0].get("delta") or {}
                     raw_content = delta.get("content") or ""
-                    if raw_content:
+                    if isinstance(raw_content, str) and raw_content:
                         # 如果 delta.content 里含有 <think> 块，提取到 reasoning_parts，
                         # 只把干净的正文放入 content_parts（对应 _strip_reasoning_from_sse_chunk 的客户端过滤）
                         if _THINK_BLOCK_RE.search(raw_content):
-                            clean, in_content_thinking = _extract_thinking_from_content(raw_content)
+                            clean, _in_content_thinking = _extract_thinking_from_content(raw_content)
                             if clean:
                                 content_parts.append(clean)
-                            if in_content_thinking:
-                                archive_reasoning_stream.feed(in_content_thinking)
                         else:
                             content_parts.append(raw_content)
-                    text, snapshot, details, omitted = _extract_reasoning_stream_parts(delta)
-                    if text:
-                        archive_reasoning_stream.feed(text)
-                    if snapshot:
-                        archive_reasoning_stream.reconcile_snapshot(snapshot)
+                    source, text, details, omitted = _extract_reasoning_stream_source(delta)
+                    archive_reasoning_stream.apply(source, text)
                     if details:
                         reasoning_details_parts.extend(details)
                     for block in delta.get("thinking_blocks") or []:
@@ -1603,9 +1615,9 @@ def _stream_with_r2_archive(
             "started": False,
             "finished": False,
             "omitted": False,
-            "normalizer": _ReasoningStreamNormalizer(),
+            "snapshot": False,
+            "stream": _ReasoningStreamAccumulator(),
         }
-        reasoning_event_state["normalizer"].start_attempt()
 
         def _prepare_no_tool_chunk(raw_chunk):
             _collect_content_from_chunk(raw_chunk)
@@ -1622,6 +1634,8 @@ def _stream_with_r2_archive(
                 1,
                 assistant_part_id,
                 assistant_event_state,
+                reasoning_part_id=reasoning_part_id,
+                reasoning_state=reasoning_event_state,
             )
             return outgoing_chunk
 
@@ -1765,10 +1779,10 @@ def _stream_with_r2_archive(
                     "started": False,
                     "finished": False,
                     "omitted": False,
-                    "normalizer": _ReasoningStreamNormalizer(),
+                    "snapshot": False,
+                    "stream": _ReasoningStreamAccumulator(),
                 },
             )
-            round_event_state["normalizer"].start_attempt()
             assistant_part_id = f"assistant-text-{event_round}-{stream_attempt_no}"
             assistant_event_state = {"started": False, "finished": False}
             assistant_du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
@@ -1814,9 +1828,15 @@ def _stream_with_r2_archive(
                     event_round,
                     assistant_part_id,
                     assistant_event_state,
+                    reasoning_part_id=reasoning_part_id,
+                    reasoning_state=round_event_state,
                 )
             if len(chunks) == 1 and chunks[0].startswith(b"data: ") and b"error" in chunks[0]:
-                _finish_reasoning_stream_event(event_round, reasoning_part_id, round_event_state)
+                _finish_reasoning_stream_event(
+                    event_round,
+                    reasoning_part_id,
+                    round_event_state,
+                )
                 _finish_assistant_stream_event(
                     event_round,
                     assistant_part_id,
@@ -1833,9 +1853,14 @@ def _stream_with_r2_archive(
                     omitted=bool(parsed.get("reasoning_omitted")),
                     part_id=reasoning_part_id,
                 )
+            else:
+                _finish_reasoning_stream_event(
+                    event_round,
+                    reasoning_part_id,
+                    round_event_state,
+                )
             tool_calls = parsed.get("tool_calls")
             if tool_calls and isinstance(tool_calls, list):
-                _finish_reasoning_stream_event(event_round, reasoning_part_id, round_event_state)
                 _finish_assistant_stream_event(
                     event_round,
                     assistant_part_id,
@@ -1942,7 +1967,6 @@ def _stream_with_r2_archive(
                 current_body = _inject_tool_midstream_retry_instruction(current_body)
                 tool_midstream_retry_used = True
                 continue
-            _finish_reasoning_stream_event(event_round, reasoning_part_id, round_event_state)
             du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
             pseudo_cot_state = _PseudoCotStreamState() if pseudo_cot_stream_enabled else None
             done_chunks = []

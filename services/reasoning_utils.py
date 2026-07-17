@@ -4,65 +4,25 @@ import re
 THINK_BLOCK_RE = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL | re.IGNORECASE)
 
 
-class ReasoningStreamNormalizer:
-    """Normalize one logical reasoning part across one or more stream attempts."""
+class ReasoningStreamAccumulator:
+    """Accumulate explicit reasoning deltas and structured final snapshots."""
 
     def __init__(self) -> None:
         self._text = ""
-        self.start_attempt()
 
     @property
     def text(self) -> str:
         return self._text
 
-    def start_attempt(self) -> None:
-        self._attempt_text = ""
-        self._attempt_mode = "unknown"
-        self._attempt_started = False
-
-    def feed(self, fragment: str) -> tuple[str, str] | None:
-        incoming = str(fragment or "")
-        if not incoming:
+    def apply(self, source: str, text: str) -> tuple[str, str] | None:
+        value = str(text or "")
+        if not value:
             return None
-
-        if not self._attempt_started:
-            candidate = incoming
-            incoming_mode = "delta"
-            self._attempt_started = True
-        elif incoming.startswith(self._attempt_text) and len(incoming) > len(self._attempt_text):
-            candidate = incoming
-            incoming_mode = "snapshot"
-            self._attempt_mode = "snapshot"
-        elif self._attempt_mode == "snapshot" and incoming == self._attempt_text:
-            candidate = incoming
-            incoming_mode = "snapshot"
-        else:
-            candidate = self._attempt_text + incoming
-            incoming_mode = "delta"
-            self._attempt_mode = "delta"
-
-        self._attempt_text = candidate
-        if candidate == self._text or self._text.startswith(candidate):
-            return None
-        if candidate.startswith(self._text):
-            suffix = candidate[len(self._text) :]
-            self._text = candidate
-            if incoming_mode == "snapshot":
-                return "snapshot", candidate
-            return ("delta", suffix) if suffix else None
-
-        self._text = candidate
-        return "snapshot", candidate
-
-    def reconcile_snapshot(self, text: str) -> tuple[str, str] | None:
-        snapshot = str(text or "")
-        if not snapshot or snapshot == self._text:
-            return None
-        self._attempt_text = snapshot
-        self._attempt_started = True
-        self._attempt_mode = "snapshot"
-        self._text = snapshot
-        return "snapshot", snapshot
+        if source == "structured":
+            self._text = value
+            return "snapshot", value
+        self._text += value
+        return "delta", value
 
 
 def extract_thinking_from_content(content: str) -> tuple[str, str]:
@@ -162,27 +122,59 @@ def extract_reasoning_text_and_details(obj: dict) -> tuple[str, list, bool]:
     return "\n\n".join(deduped_parts).strip(), details, omitted
 
 
-def extract_reasoning_stream_parts(obj: dict) -> tuple[str, str, list, bool]:
-    """Split streaming deltas from structured full-thinking snapshots."""
+def extract_reasoning_stream_source(obj: dict) -> tuple[str, str, list, bool]:
+    """Choose one reasoning representation from a single SSE delta packet."""
     if not isinstance(obj, dict):
         return "", "", [], False
 
-    delta_obj = dict(obj)
-    snapshot_obj: dict = {}
-    thinking_blocks = delta_obj.pop("thinking_blocks", None)
-    if isinstance(thinking_blocks, list):
-        snapshot_obj["thinking_blocks"] = thinking_blocks
-    if isinstance(delta_obj.get("content"), list):
-        snapshot_obj["content"] = delta_obj.pop("content")
-
-    delta_text, delta_details, delta_omitted = extract_reasoning_text_and_details(delta_obj)
-    snapshot_text, snapshot_details, snapshot_omitted = extract_reasoning_text_and_details(snapshot_obj)
-    return (
-        delta_text,
-        snapshot_text,
-        [*delta_details, *snapshot_details],
-        bool(delta_omitted or snapshot_omitted),
+    details = normalize_reasoning_details(obj.get("reasoning_details"))
+    _empty, _details, details_omitted = extract_reasoning_text_and_details(
+        {"reasoning_details": details}
     )
+
+    scalar_text = ""
+    for key in ("reasoning", "reasoning_content", "thinking"):
+        value = obj.get(key)
+        if isinstance(value, str) and value:
+            scalar_text = value
+            break
+
+    inline_text = ""
+    content = obj.get("content")
+    if isinstance(content, str) and THINK_BLOCK_RE.search(content):
+        _visible, inline_text = extract_thinking_from_content(content)
+
+    structured_candidates: list[tuple[str, list, bool]] = []
+    if isinstance(obj.get("thinking_blocks"), list):
+        structured_candidates.append(
+            extract_reasoning_text_and_details({"thinking_blocks": obj["thinking_blocks"]})
+        )
+    if isinstance(content, list):
+        structured_candidates.append(extract_reasoning_text_and_details({"content": content}))
+
+    structured_text = ""
+    structured_details: list = []
+    structured_omitted = False
+    for candidate_text, candidate_details, candidate_omitted in structured_candidates:
+        structured_omitted = bool(structured_omitted or candidate_omitted)
+        if candidate_text and not structured_text:
+            structured_text = candidate_text
+            structured_details = candidate_details
+    if not structured_details:
+        for _candidate_text, candidate_details, candidate_omitted in structured_candidates:
+            if candidate_details and candidate_omitted:
+                structured_details = candidate_details
+                break
+
+    omitted = bool(details_omitted or structured_omitted)
+    canonical_details = [*details, *structured_details]
+    if structured_text or structured_omitted:
+        return "structured", structured_text, canonical_details, omitted
+    if scalar_text:
+        return "scalar", scalar_text, canonical_details, omitted
+    if inline_text:
+        return "inline", inline_text, canonical_details, omitted
+    return "", "", canonical_details, omitted
 
 
 def strip_thinking_from_response_json(resp_json: dict) -> dict:
@@ -234,6 +226,17 @@ def strip_reasoning_from_sse_chunk(chunk: bytes) -> bytes:
             if rk in delta:
                 del delta[rk]
                 changed = True
+        if isinstance(delta.get("content"), list):
+            filtered_content = []
+            for block in delta["content"]:
+                if isinstance(block, dict) and str(block.get("type") or "").strip() in {
+                    "thinking",
+                    "redacted_thinking",
+                }:
+                    changed = True
+                    continue
+                filtered_content.append(block)
+            delta["content"] = filtered_content
         # 剥离 delta.content 里的 <think> 块
         if isinstance(delta.get("content"), str) and THINK_BLOCK_RE.search(delta["content"]):
             stripped, _ = extract_thinking_from_content(delta["content"])
@@ -252,7 +255,7 @@ def parse_stream_to_message(chunks: list) -> dict:
     返回 {"content": str, "tool_calls": list or None, "reasoning": str|None, ...}。
     """
     content_parts = []
-    reasoning_stream = ReasoningStreamNormalizer()
+    reasoning_stream = ReasoningStreamAccumulator()
     reasoning_details: list[dict] = []
     thinking_blocks: list[dict] = []
     reasoning_omitted = False
@@ -269,13 +272,10 @@ def parse_stream_to_message(chunks: list) -> dict:
             delta = (j.get("choices") or [{}])[0].get("delta") or {}
         except (json.JSONDecodeError, KeyError, TypeError):
             continue
-        if delta.get("content"):
+        if isinstance(delta.get("content"), str) and delta["content"]:
             content_parts.append(delta["content"])
-        text, snapshot, details, omitted = extract_reasoning_stream_parts(delta)
-        if text:
-            reasoning_stream.feed(text)
-        if snapshot:
-            reasoning_stream.reconcile_snapshot(snapshot)
+        source, text, details, omitted = extract_reasoning_stream_source(delta)
+        reasoning_stream.apply(source, text)
         if details:
             reasoning_details.extend(details)
         for block in delta.get("thinking_blocks") or []:

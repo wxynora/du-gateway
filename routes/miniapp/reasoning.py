@@ -354,12 +354,16 @@ def _build_output_stats(msg: dict, reasoning_text: str, cache_debug_items: list[
 def _extract_reasoning_text_from_message(msg: dict) -> tuple[str, bool]:
     if not isinstance(msg, dict):
         return "", False
-    parts: list[str] = []
     omitted = bool(msg.get("reasoning_omitted") or msg.get("reasoning_details"))
+
+    scalar_text = ""
     for key in ("reasoning", "reasoning_content", "thinking"):
         val = msg.get(key)
         if isinstance(val, str) and val.strip():
-            parts.append(val.strip())
+            scalar_text = val.strip()
+            break
+
+    thinking_block_parts: list[str] = []
     for block in msg.get("thinking_blocks") or []:
         if not isinstance(block, dict):
             continue
@@ -367,9 +371,11 @@ def _extract_reasoning_text_from_message(msg: dict) -> tuple[str, bool]:
         if btype == "thinking":
             val = block.get("thinking") or block.get("text")
             if isinstance(val, str) and val.strip():
-                parts.append(val.strip())
+                thinking_block_parts.append(val.strip())
         elif btype == "redacted_thinking":
             omitted = True
+
+    content_parts: list[str] = []
     content = msg.get("content")
     if isinstance(content, list):
         for block in content:
@@ -379,9 +385,18 @@ def _extract_reasoning_text_from_message(msg: dict) -> tuple[str, bool]:
             if btype == "thinking":
                 val = block.get("thinking") or block.get("text")
                 if isinstance(val, str) and val.strip():
-                    parts.append(val.strip())
+                    content_parts.append(val.strip())
             elif btype == "redacted_thinking":
                 omitted = True
+
+    # The archive may retain the same reasoning in multiple wire-format fields.
+    # Pick one canonical representation instead of concatenating aliases.
+    if scalar_text:
+        parts = [scalar_text]
+    elif thinking_block_parts:
+        parts = thinking_block_parts
+    else:
+        parts = content_parts
     deduped = dedupe_reasoning_text_parts(parts)
     text = "\n\n".join(deduped).strip()
     return text, omitted
