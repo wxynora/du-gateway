@@ -14,7 +14,6 @@ setup_logging()
 from flask import Flask, request
 from routes.chat import bp as chat_bp
 from routes.admin import bp as admin_bp
-from routes.notion_routes import bp as notion_bp
 from routes.telegram_webhook import bp as telegram_webhook_bp
 from routes.miniapp_api import bp as miniapp_api_bp
 from routes.mcp_api import bp as mcp_api_bp
@@ -37,7 +36,6 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
 app.register_blueprint(chat_bp)
 app.register_blueprint(admin_bp)
-app.register_blueprint(notion_bp)
 app.register_blueprint(telegram_webhook_bp)
 app.register_blueprint(miniapp_api_bp)
 app.register_blueprint(mcp_api_bp)

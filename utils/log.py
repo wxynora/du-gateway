@@ -17,7 +17,6 @@ LOG_NAMES = {
     "routes.chat": "Chat",
     "services.deepseek_summary": "DeepSeek",
     "services.image_desc": "ImageDesc",
-    "services.notion_client": "Notion",
     "services.dynamic_layer_ds": "DynDS",
     "routes.telegram_webhook": "TGHook",
     "services.telegram_bot": "TGBot",

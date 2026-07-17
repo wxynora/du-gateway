@@ -4,7 +4,7 @@
 
 ---
 预喂对话：只做动态层记忆，不经过聊天接口、不写窗口存档、不做窗口总结。
-把已有 N 轮对话按轮过一遍动态层 DS，只更新 dynamic_memory/current.json（及可能的 core_cache/卧室 Notion）。
+把已有 N 轮对话按轮过一遍动态层 DS，只更新 dynamic_memory/current.json（及可能的 core_cache）。
 
 省 API 方式：
 - 本地预筛：明显空轮（极短/纯嗯啊哦）不调 DS，直接跳过。
@@ -156,7 +156,6 @@ def _clear_checkpoint() -> None:
 from config import ARCHIVE_ALLOWED_MODEL_IDS
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.pipeline import _apply_one_decision
-from services.archive_notion import write_archive_entry
 from utils.time_aware import parse_iso_to_beijing
 
 def _parse_from_date(s: str):
@@ -184,7 +183,7 @@ except ImportError:
 
 
 def _round_timestamp(round_item) -> str | None:
-    """从一轮的原始数据里取时间（供小本本/归档用「每轮对话自己的时间」）。无则返回 None，归档不会把实时时间写进 Notion。"""
+    """从一轮的原始数据里取时间；无则返回 None。"""
     if isinstance(round_item, dict):
         return (
             (round_item.get("timestamp") or round_item.get("createdAt")
@@ -192,7 +191,7 @@ def _round_timestamp(round_item) -> str | None:
             or None
         )
     if isinstance(round_item, list) and len(round_item) > 0:
-        # 小本本在 assistant 里，用最后一条（assistant）的 createdAt
+        # 优先使用最后一条 assistant 消息的 createdAt。
         last = round_item[-1] if len(round_item) > 1 else round_item[0]
         if isinstance(last, dict):
             return last.get("createdAt") or last.get("created_at") or last.get("timestamp") or last.get("date") or None
@@ -277,23 +276,6 @@ def _messages_to_rounds(messages: list) -> list[dict]:
 
 # 明显无信息：总字数过少或几乎全是语气词（嗯啊哦好呃唉呀哈、标点、空格）
 _EMPTY_PATTERN = re.compile(r"^[\s\u3000\u3002\u002e\u2026\u55ef\u54c8\u597d\u5440\u5443\u5509\u54c8\u0021\uff01\u563f\u5b83]*$", re.I)
-
-# 写入 Notion 记忆库前过滤：过短或纯废话不写，避免随便什么废话都存
-_NOTION_ARCHIVE_MIN_LEN = 6
-
-
-def _is_junk_archive_content(content: str) -> bool:
-    """True 表示这条是废话/过短，不要写入 Notion 记忆库。"""
-    s = (content or "").strip()
-    if len(s) < _NOTION_ARCHIVE_MIN_LEN:
-        return True
-    s_compact = re.sub(r"\s+", "", s)
-    if len(s_compact) < _NOTION_ARCHIVE_MIN_LEN:
-        return True
-    if len(s_compact) <= 20 and _EMPTY_PATTERN.match(s_compact):
-        return True
-    return False
-
 
 def _is_likely_empty_round(messages: list) -> bool:
     """True 表示本轮极可能无信息，可本地跳过不调 DS。"""
@@ -434,7 +416,7 @@ def main():
         indices = [t[0] for t in chunk]
         rounds_batch = [t[1] for t in chunk]
         raw_items = [t[2] for t in chunk]
-        # 小本本已齐全，归档脚本不再写小本本，只做对话归档（动态层 + Notion 记忆库）
+        # 只应用动态层决策。
         try:
             current_memories = r2_store.get_dynamic_memory_list()
             current_memories, changed = r2_store.ensure_dynamic_memory_ids(current_memories)
@@ -464,33 +446,9 @@ def main():
                 round_ts = rounds_for_ds[i].get("round_timestamp") or ""
                 if round_ts:
                     decision = {**decision, "timestamp": round_ts, "last_mentioned": round_ts}
-                payload = _apply_one_decision(
+                _apply_one_decision(
                     window_id, round_index, round_cleaned, decision, current_memories
                 )
-                if payload:
-                    # 废话、过短不写 Notion，避免随便什么都被存进去
-                    if _is_junk_archive_content(payload.get("content") or ""):
-                        pass
-                    else:
-                        # 没有本轮原始时间时不要写实时时间进 Notion，否则会显示成「当前时间」
-                        promoted_at = payload.get("promoted_at") if round_ts else None
-                        # 按时间判定唯一：同一时间+同一分类只保留一行，重跑或重复数据会覆盖而非新增
-                        tag = payload["tag"]
-                        if promoted_at:
-                            dt = parse_iso_to_beijing(promoted_at)
-                            canonical_time = dt.strftime("%Y-%m-%dT%H:%M:%S") if dt else promoted_at
-                            entry_id = f"{tag}_{canonical_time}"
-                        else:
-                            entry_id = payload["entry_id"]
-                        try:
-                            write_archive_entry(
-                                tag,
-                                entry_id=entry_id,
-                                content=payload["content"],
-                                promoted_at=promoted_at,
-                            )
-                        except Exception:
-                            pass
             except Exception as e:
                 print(f"  轮 {round_index} 应用决策失败: {e}", file=sys.stderr)
         current_batch_one_based = b // batch_size + 1

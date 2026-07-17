@@ -7,7 +7,7 @@ from pathlib import Path
 
 from flask import jsonify, request
 
-from storage import blacklist_store, r2_store, whitelist_store
+from storage import r2_store, recent_window_store
 from utils.time_aware import now_beijing_iso
 
 logger = logging.getLogger(__name__)
@@ -208,17 +208,9 @@ def register_routes(bp) -> None:
         except Exception as e:
             out["notebook"] = {"ok": False, "error": str(e)}
 
-        # 白/黑名单/最近窗口
+        # 最近窗口
         try:
-            out["whitelist"] = {"ok": True, "count": len(whitelist_store.list_whitelist())}
-        except Exception as e:
-            out["whitelist"] = {"ok": False, "error": str(e)}
-        try:
-            out["blacklist"] = {"ok": True, "count": len(blacklist_store.list_blacklist())}
-        except Exception as e:
-            out["blacklist"] = {"ok": False, "error": str(e)}
-        try:
-            out["recent_windows"] = {"ok": True, "count": len(whitelist_store.list_recent_windows(limit=500))}
+            out["recent_windows"] = {"ok": True, "count": len(recent_window_store.list_recent_windows(limit=500))}
         except Exception as e:
             out["recent_windows"] = {"ok": False, "error": str(e)}
 
@@ -229,12 +221,7 @@ def register_routes(bp) -> None:
         limit = request.args.get("limit", type=int, default=50)
         if limit > 200:
             limit = 200
-        items = whitelist_store.list_recent_windows(limit=limit)
-        whitelist = set(whitelist_store.list_whitelist())
-        blacklist = set(blacklist_store.list_blacklist())
-        for w in items:
-            w["whitelisted"] = w.get("id") in whitelist
-            w["blacklisted"] = w.get("id") in blacklist
+        items = recent_window_store.list_recent_windows(limit=limit)
         return jsonify({"windows": items})
 
     @bp.route("/windows/<window_id>/rounds", methods=["GET"])
@@ -371,7 +358,7 @@ def register_routes(bp) -> None:
             if core_limit > 300:
                 core_limit = 300
             target = ""
-            recent = whitelist_store.list_recent_windows(limit=200) or []
+            recent = recent_window_store.list_recent_windows(limit=200) or []
             for w in recent:
                 wid = (w.get("id") or "").strip()
                 if wid.startswith("tg_"):

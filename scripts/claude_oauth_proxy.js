@@ -77,7 +77,6 @@ const GATEWAY_DYNAMIC_SYSTEM_HINTS = [
   "【指代提醒】",
   "老婆当前状态",
   "【当前是在 RikkaHub 和渡聊天】",
-  "【Notion 相关】",
 ];
 
 const MODEL_MAP = {

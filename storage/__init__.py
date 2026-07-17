@@ -1,4 +1,4 @@
-# 存储层：白名单、最近窗口、R2
+# 存储层：最近窗口、本地 SQLite、R2
 
 from .r2_store import (
     append_conversation_round,

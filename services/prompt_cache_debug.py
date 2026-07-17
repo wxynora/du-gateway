@@ -121,7 +121,6 @@ def _dynamic_system_label_for_marker(marker: str) -> str:
         "【当前背景音乐】": "背景音乐上下文",
         "【当前是在 RikkaHub": "RikkaHub提醒",
         "听了老婆的话，我想起来了一些之前的事": "可召回记忆",
-        "【Notion 相关】": "Notion检索",
     }
     for prefix, label in marker_map.items():
         if marker.startswith(prefix):
@@ -151,7 +150,6 @@ def _dynamic_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
         "【当前背景音乐】",
         "【当前是在 RikkaHub",
         "听了老婆的话，我想起来了一些之前的事",
-        "【Notion 相关】",
     ]
     boundaries: list[tuple[int, str]] = []
     for marker in markers:

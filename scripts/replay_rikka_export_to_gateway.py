@@ -6,7 +6,7 @@
 - 直接用现有 pipeline 的归档逻辑：
   - 清洗一轮 user+assistant → R2 对话存档；
   - 每 4 轮触发 DeepSeek 总结（实时层「渡的回忆」）；
-  - 每轮调用动态层 DS、更新 dynamic_memory / core_cache / 卧室 Notion / 小本本。
+  - 每轮调用动态层 DS，更新 dynamic_memory / core_cache。
 
 用法示例（在项目根目录）：
   python -m scripts.replay_rikka_export_to_gateway ^
@@ -167,4 +167,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

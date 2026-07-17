@@ -206,14 +206,6 @@ def build_summary_prompt(
     chunk_to_compress_to_older: object | None = None,
 ) -> str:
     """拼出实时层小段总结任务的 prompt。"""
-    from services.notebook_gateway import NOTEBOOK_EMOJI, NOTEBOOK_PHRASE
-
-    def _is_notebook_line(text: str) -> bool:
-        s = (text or "").strip()
-        if not s:
-            return False
-        return s.startswith(NOTEBOOK_EMOJI) and (NOTEBOOK_PHRASE in s)
-
     rounds_text = ""
     # 文游：帮助 DS 区分跑团虚构与真实对话
     rounds_text += (
@@ -252,9 +244,6 @@ def build_summary_prompt(
                         parts.append(str(c))
                 content = " ".join(parts)
             content = str(content or "").strip()
-            if _is_notebook_line(content):
-                # 小本本走独立存储，不参与窗口总结输入
-                continue
             content = _sanitize_co_read_section_for_summary(content)
             content = _sanitize_co_read_du_result_for_summary(content)
             # 明确角色映射，避免 DS 把 user 当成“我（渡）”来总结
@@ -333,8 +322,6 @@ _REALTIME_LAYER_PROMPT = """你是一个对话小段总结助手。
 
 技术讨论只保留结论和决定，不留排查过程。
 重复内容只保留最后结论。
-小本本内容如果出现，直接忽略，因为系统会单独存储。
-
 共读内容只总结双方围绕作品的笔记、感想、规则决定。
 不要复述书籍原文，不要把小说剧情当成现实事件。
 
@@ -1172,7 +1159,7 @@ def fetch_daily_whisper_from_summary(current_summary: str, recent_4_rounds: list
 
 def _trim_summary_to_budget(text: str, budget_tokens: int) -> str:
     """
-    按「【最近】/【稍早】/【更早】/渡的小本本」结构，从最早的内容开始一点点削，
+    按「【最近】/【稍早】/【更早】」结构，从最早的内容开始一点点削，
     始终优先保留【最近】末尾、其次【稍早】末尾，最后才动【更早】。
     """
     if not text or estimate_tokens(text) <= budget_tokens:
@@ -1190,8 +1177,6 @@ def _trim_summary_to_budget(text: str, budget_tokens: int) -> str:
     idx_recent = _find_block_idx("【最近】")
     idx_earlier = _find_block_idx("【稍早】")
     idx_oldest = _find_block_idx("【更早】")
-    idx_notebook = _find_block_idx("渡的小本本")
-
     # 若结构不完整，退回简单保留末尾一段
     if idx_recent == -1:
         s = text
@@ -1209,15 +1194,13 @@ def _trim_summary_to_budget(text: str, budget_tokens: int) -> str:
             end = n
         return lines[start:end]
 
-    recent_end = min([i for i in (idx_earlier, idx_oldest, idx_notebook) if i != -1] or [n])
-    earlier_end = min([i for i in (idx_oldest, idx_notebook) if i != -1] or [n])
-    oldest_end = idx_notebook if idx_notebook != -1 else n
+    recent_end = min([i for i in (idx_earlier, idx_oldest) if i != -1] or [n])
+    earlier_end = min([i for i in (idx_oldest,) if i != -1] or [n])
+    oldest_end = n
 
     recent_block = _block_slice(idx_recent, recent_end)
     earlier_block = _block_slice(idx_earlier, earlier_end) if idx_earlier != -1 else []
     oldest_block = _block_slice(idx_oldest, oldest_end) if idx_oldest != -1 else []
-    notebook_block = _block_slice(idx_notebook, None) if idx_notebook != -1 else []
-
     def _split_title(block: list[str]) -> tuple[list[str], list[str]]:
         if not block:
             return [], []
@@ -1237,8 +1220,6 @@ def _trim_summary_to_budget(text: str, budget_tokens: int) -> str:
             parts.extend(earlier_title + earlier_body)
         if oldest_title and oldest_body:
             parts.extend(oldest_title + oldest_body)
-        if notebook_block:
-            parts.extend(notebook_block)
         return "\n".join(parts).rstrip()
 
     summary = _compose()

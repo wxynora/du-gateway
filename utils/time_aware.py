@@ -109,7 +109,7 @@ def get_date_only(dt: Optional[datetime] = None) -> str:
 def iso_to_display_time(iso_str: Optional[str]) -> str:
     """
     把 ISO 时间（如 2026-03-07T14:41:58.912533Z）转成给人看的版本（如 2026年03月07日 14:41）。
-    用于归档写入 Notion 时存成可读时间；解析失败返回空串。
+    用于把存储时间转成前端和工具结果可读时间；解析失败返回空串。
     """
     dt = parse_iso_to_beijing(iso_str)
     if dt is None:

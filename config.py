@@ -51,16 +51,12 @@ def _env_float(name: str, default: float, min_value: float | None = None, max_va
     return value
 
 
-# 数据目录：白名单、最近窗口等
+# 数据目录：本地运行状态
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-# 白名单/黑名单/最近窗口（管理端用）
-WHITELIST_FILE = DATA_DIR / "whitelist.json"
+# 最近窗口（管理端与诊断页使用）
 RECENT_WINDOWS_FILE = DATA_DIR / "recent_windows.json"
-BLACKLIST_FILE = DATA_DIR / "blacklist.json"
-MAX_WHITELIST_SIZE = int(os.environ.get("MAX_WHITELIST_SIZE", "50"))
-WHITELIST_EXPIRE_DAYS = int(os.environ.get("WHITELIST_EXPIRE_DAYS", "14"))
 
 # 转发目标（助手端）；支持多目标 fallback：按顺序试，一个失败用下一个
 # 五个中转站示例：TARGET_AI_URLS=https://a.com/v1/chat/completions,https://b.com/...,...（逗号分隔）
@@ -276,39 +272,6 @@ R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID", "")
 R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY", "")
 R2_BUCKET_NAME = os.environ.get("R2_BUCKET_NAME", "du-gateway")
 R2_PUBLIC_URL = os.environ.get("R2_PUBLIC_URL", "")
-
-# Notion
-NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
-NOTION_VERSION = os.environ.get("NOTION_VERSION", "2022-06-28")
-# 小本本：Database 模式，表里需有「内容」标题列 + 「时间」日期列，按时间降序=最新在上。留空则小本本工具不注入。
-NOTION_NOTEBOOK_DATABASE_ID = os.environ.get("NOTION_NOTEBOOK_DATABASE_ID", "323043f2b83980e59dc7ff4fa0a0e2c8").strip()
-# 页面模式小本本已弃用，留空即可
-NOTION_NOTEBOOK_PAGE_ID = os.environ.get("NOTION_NOTEBOOK_PAGE_ID", "").strip()
-# 核心缓存待审：sync_to_notion / sync_from_notion 用的 database ID
-NOTION_CORE_CACHE_DATABASE_ID = os.environ.get("NOTION_CORE_CACHE_DATABASE_ID", "321043f2b83980d088a5c6e2f7bd77bf")
-# 日程本：渡可读正文与增改（NOTION_TOOLS_ENABLED=1 时）
-NOTION_SCHEDULE_DATABASE_ID = os.environ.get(
-    "NOTION_SCHEDULE_DATABASE_ID", "324043f2b839800e8968f92a880c0127"
-).strip()
-# 归档：① 一个数据库多分类：NOTION_ARCHIVE_DATABASE_ID 填记忆库 Database ID，表里要有 id、content、promoted_at、分类，见 docs/notion_建表傻瓜步骤.md
-# ② 四张表：NOTION_ARCHIVE_DATABASE_ID 不填，改填下面四个 ID
-NOTION_ARCHIVE_DATABASE_ID = os.environ.get("NOTION_ARCHIVE_DATABASE_ID", "323043f2b83980a48917c6495f5e2c00").strip()
-NOTION_ARCHIVE_DATABASE_ID_书房 = os.environ.get("NOTION_ARCHIVE_DATABASE_ID_书房", "").strip()
-NOTION_ARCHIVE_DATABASE_ID_客厅 = os.environ.get("NOTION_ARCHIVE_DATABASE_ID_客厅", "").strip()
-NOTION_ARCHIVE_DATABASE_ID_图书馆 = os.environ.get("NOTION_ARCHIVE_DATABASE_ID_图书馆", "").strip()
-NOTION_ARCHIVE_DATABASE_ID_卧室 = os.environ.get("NOTION_ARCHIVE_DATABASE_ID_卧室", "").strip()
-# 渡检索 Notion：用用户最后一句话搜 Notion，结果注入上下文，渡可直接引用（1/true 开启）
-NOTION_INJECT_ENABLED = os.environ.get("NOTION_INJECT_ENABLED", "").strip().lower() in ("1", "true", "yes")
-NOTION_INJECT_MAX_RESULTS = int(os.environ.get("NOTION_INJECT_MAX_RESULTS", "5"))
-# 渡通过工具调用 Notion：1/true 时注入 notion_search / notion_append_to_page 等，渡可主动检索与写入
-NOTION_TOOLS_ENABLED = os.environ.get("NOTION_TOOLS_ENABLED", "").strip().lower() in ("1", "true", "yes")
-
-# 小本本：当前逻辑为「笔记本 emoji（📓📒📔）+ 小本本更新」才触发截取，见 services/notebook_gateway.py
-# 小本本单拎：为 true 时只写 Notion 不写 R2，截取后直接存 Notion
-NOTEBOOK_SAVE_ONLY_NOTION = os.environ.get("NOTEBOOK_SAVE_ONLY_NOTION", "").strip().lower() in ("1", "true", "yes")
-# 以下保留供扩展或兼容，当前未使用
-_NOTEBOOK_KEYWORDS_STR = os.environ.get("NOTEBOOK_TRIGGER_KEYWORDS", "小本本更新")
-NOTEBOOK_TRIGGER_KEYWORDS = [k.strip() for k in _NOTEBOOK_KEYWORDS_STR.split(",") if k.strip()]
 
 # 归档初筛：只保留 assistant 的 modelId 在此列表中的轮次（RikkaHub 导出 JSON 用，逗号分隔）。留空则不按 modelId 筛
 ARCHIVE_ALLOWED_MODEL_IDS = [x.strip() for x in os.environ.get("ARCHIVE_ALLOWED_MODEL_IDS", "").strip().split(",") if x.strip()]

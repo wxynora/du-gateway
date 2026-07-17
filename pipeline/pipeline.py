@@ -2976,21 +2976,10 @@ def step_inject_random_imitator_td_tools(body: dict) -> dict:
 
 
 def step_inject_chat_tools(body: dict) -> dict:
-    """
-    注入聊天工具集合。
-    交换日记、记事本等网关原生工具不再受 NOTION_TOOLS_ENABLED 影响；
-    该开关只控制 Notion runtime 工具是否注入。
-    """
-    from config import NOTION_TOOLS_ENABLED
-
+    """注入聊天工具集合。"""
     from services.chat_tools import get_chat_tools_for_inject
 
-    active_groups: set = set()
-    tools = get_chat_tools_for_inject(
-        mode="expanded",
-        active_groups=active_groups,
-        include_notion_runtime=NOTION_TOOLS_ENABLED,
-    )
+    tools = get_chat_tools_for_inject(mode="expanded")
     if not tools:
         return body
     return _append_tool_schemas(body, tools)
@@ -2999,7 +2988,6 @@ def step_inject_chat_tools(body: dict) -> dict:
 def step_inject_forum_tools(body: dict) -> dict:
     """
     当 MCP_ENABLED=1 时，向 body 注入论坛复合工具和远端原始工具（forum_read_feed/forum_open_thread/cli/get_guide）。
-    目的：与 Notion 工具开关解耦，避免 NOTION_TOOLS_ENABLED=0 时渡看不见论坛工具。
     """
     from config import MCP_ENABLED
 
@@ -3168,61 +3156,8 @@ def step_inject_websearch_tools(body: dict) -> dict:
     return body
 
 
-def step_inject_notion_search(body: dict, window_id: str) -> dict:
-    """
-    用用户最后一句话搜 Notion，把结果注入 system，渡就能直接「看到」相关 Notion 内容并引用。
-    需开启 NOTION_INJECT_ENABLED=1。当 NOTION_TOOLS_ENABLED=1 时跳过（改用工具由渡自己检索）。
-    """
-    from config import NOTION_INJECT_ENABLED, NOTION_INJECT_MAX_RESULTS, NOTION_TOOLS_ENABLED
-
-    if NOTION_TOOLS_ENABLED or not NOTION_INJECT_ENABLED:
-        return body
-    messages = body.get("messages") or []
-    last_user_text = ""
-    for m in reversed(messages):
-        if (m.get("role") or "").lower() == "user":
-            content = m.get("content")
-            if isinstance(content, str):
-                last_user_text = (content or "").strip()
-            elif isinstance(content, list):
-                last_user_text = " ".join(
-                    c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
-                ).strip()
-            break
-    if len(last_user_text) < 2:
-        return body
-    try:
-        from services import notion_client
-        data, err = notion_client.search(query=last_user_text)
-        if err or not data or not isinstance(data.get("results"), list):
-            return body
-        results = data.get("results", [])[: NOTION_INJECT_MAX_RESULTS]
-        lines = []
-        for item in results:
-            title = ""
-            props = item.get("properties") or {}
-            for pid, prop in props.items():
-                if not isinstance(prop, dict):
-                    continue
-                if "title" in prop and isinstance(prop["title"], list):
-                    title = " ".join(
-                        t.get("plain_text", "") for t in prop["title"] if isinstance(t, dict)
-                    ).strip()
-                    break
-            url = (item.get("url") or "").strip()
-            if title or url:
-                lines.append(f"- {title or '(无标题)'} {url}")
-        if not lines:
-            return body
-        inject = "\n\n【Notion 相关】\n" + "\n".join(lines) + "\n【以上为 Notion 检索，可据此回答或让老婆点开】"
-        body = _append_to_dynamic_system(body, inject)
-    except Exception as e:
-        logger.debug("Notion 检索注入跳过 error=%s", e)
-    return body
-
-
 def _round_messages_to_raw_text(round_messages: list) -> str:
-    """尽量把一轮消息转成可读原文（不用于注入，仅用于卧室 Notion 存档）。"""
+    """尽量把一轮消息转成可读原文，供动态层判断和日志摘要使用。"""
     lines = []
     for m in round_messages or []:
         role = (m.get("role") or "unknown").lower()
@@ -3329,10 +3264,9 @@ def _apply_one_decision(
     current_memories: list,
 ) -> Optional[dict]:
     """
-    对单条 DS 决策做应用：new/merge 更新 current_memories 并写 R2、promote。
+    对单条 DS 决策做应用：new/merge 更新 current_memories、写 R2 并按需 promote。
     卧室内容正常进入动态层，但不提进 core cache。
-    不写记忆库 Notion；若调用方是批处理归档脚本，可根据返回值再写记忆库。
-    返回：若本条应写入记忆库（new/merge），返回 {"tag", "entry_id", "content", "promoted_at"}，否则 None。
+    返回：若本条产生了 new/merge，返回 {"tag", "entry_id", "content", "promoted_at"}，否则 None。
     """
     from uuid import uuid4
 
@@ -3560,17 +3494,6 @@ def _step_dynamic_layer_evolve(
     if _wenyou_round_skip_dynamic(round_messages):
         logger.info("动态层跳过：文游虚构回合 window_id=%s round_index=%s", window_id, round_index)
         return None
-    # 小本本是单独通道：只做小本本存储，不参与动态层记忆，避免污染记忆与人称错乱
-    try:
-        from services.notebook_gateway import extract_entries_from_round
-
-        if extract_entries_from_round(round_messages):
-            logger.info("动态层跳过：本轮命中小本本提取 window_id=%s round_index=%s", window_id, round_index)
-            return None
-    except Exception:
-        # 这里是保护逻辑，异常不影响主流程
-        pass
-
     from services.dynamic_layer_ds import call_dynamic_layer_ds
 
     current_memories = r2_store.get_dynamic_memory_list()
@@ -3659,14 +3582,6 @@ def step_archive_round(
         else build_round_cleaned_for_r2(last_user, assistant_message)
     )
     action_note = _build_action_note_from_tool_calls((assistant_message or {}).get("tool_calls"))
-    # 小本本：网关提前拎出，打时间戳，存 R2（按时间排序）+ Notion，不动原文
-    try:
-        from services.notebook_gateway import extract_entries_from_round, save_entry
-
-        for content in extract_entries_from_round(round_messages):
-            save_entry(content)
-    except Exception as e:
-        logger.warning("小本本提取/保存失败，不阻断本轮对话存档 window_id=%s error=%s", window_id, e, exc_info=True)
     from utils.time_aware import now_beijing_iso
 
     round_index = r2_store.get_next_round_index(window_id)

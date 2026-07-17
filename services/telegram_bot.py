@@ -15,7 +15,7 @@ import requests
 
 from services.pc_command_handler import process_pcmd_in_assistant_text
 from services.du_thought import split_assistant_for_thought
-from services.reasoning_utils import extract_reasoning_text_and_details, extract_thinking_from_content
+from services.reasoning_utils import extract_reasoning_text_and_details
 
 from config import (
     TELEGRAM_BOT_TOKEN,
@@ -176,7 +176,7 @@ def build_telegram_style_system(include_channel_hint: bool = True, *, use_prompt
 
 
 
-def _fetch_gateway_first_model() -> Optional[str]:
+def _get_saved_active_model() -> Optional[str]:
     """
     只读取当前 active upstream 的模型缓存。
     后端不主动探测 /v1/models，也不在缓存为空时猜测默认模型。
@@ -194,12 +194,10 @@ def _fetch_gateway_first_model() -> Optional[str]:
 def _resolve_chat_model() -> str:
     """
     解析 Bot 请求网关时使用的模型名。
-    优先级：
-    1) 当前 active upstream 的缓存模型
-    2) 缓存为空时补拉一次真实模型
-    3) 拉不到就返回空，不做默认兜底
+    只使用 App 明确保存的 active upstream 模型。
+    缓存为空时返回空，不探测、不猜测、不改写。
     """
-    m = _fetch_gateway_first_model()
+    m = _get_saved_active_model()
     return str(m or "").strip()
 
 
@@ -510,9 +508,7 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
     user_content 可为 str（纯文字）或 list（多模态，如 [{"type":"text","text":"..."},{"type":"image_url",...}]），与 RikkaHub 一致。
     """
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
-    # 每次请求优先拉取网关当前可用模型（与 active upstream 同步），避免模型权限不匹配。
-    # 拉取失败时再用本地解析逻辑兜底。
-    model = _fetch_gateway_first_model() or _resolve_chat_model()
+    model = _resolve_chat_model()
 
     # 上游波动时先缓存用户输入；下一次成功时一并带上，避免“我发了但丢轮次/Last4 断片”
     with _PENDING_LOCK:
@@ -551,28 +547,6 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         r = requests.post(url, headers=headers, json=body, timeout=TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS)
         if r.status_code != 200:
             preview = (r.text or "")[:500]
-            lower = preview.lower()
-
-            # 上游 403：常见原因是当前 token 没权限访问当前 model
-            # 例：This token has no access to model xxx
-            if r.status_code in (401, 403):
-                # 注意：网关 body 可能不会透出上游原始错误文本，这里改成“兜底重试一次”。
-                # 目标：当当前 model 与 active upstream 的 token 权限不匹配时，自动切到 active 可用的第一个模型。
-                should_retry = ("no access to model" in lower) or ("token has no access to model" in lower)
-                if not should_retry:
-                    should_retry = True  # 兜底：只要 401/403，就尝试拉取网关可用模型重试一次
-
-                new_model = _fetch_gateway_first_model() if should_retry else None
-                if new_model and new_model != body.get("model"):
-                    logger.warning(
-                        "网关返回 %s：尝试切换 model=%s -> %s 并重试一次 preview=%s",
-                        r.status_code,
-                        body.get("model"),
-                        new_model,
-                        preview[:220],
-                    )
-                    body["model"] = new_model
-                    r = requests.post(url, headers=headers, json=body, timeout=TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS)
             if r.status_code != 200:
                 logger.warning(
                     "网关返回非 200 status=%s model=%s user_chars=%s messages_chars=%s preview=%s body=%s",
@@ -605,18 +579,11 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         if content is None:
             return None
         reply_text = content.strip() if isinstance(content, str) else str(content).strip()
-        # 兜底：提取并去掉 <think>/<thinking> 块（网关层已处理，此处双重保险）。
-        reply_text, inline_thinking = extract_thinking_from_content(reply_text)
         reply_text, _du_thought = split_assistant_for_thought(reply_text)
         reply_text = _sanitize_reply_for_telegram(reply_text)
         # 电脑控制标签：入队并从可见正文移除（与手机/Tasker 隔离）
         reply_text, _ = process_pcmd_in_assistant_text(reply_text)
-        thinking_parts: list[str] = []
-        for part in (reasoning_text, inline_thinking):
-            compact = _compact_thinking_text(part)
-            if compact and compact not in thinking_parts:
-                thinking_parts.append(compact)
-        thinking_text = "\n\n".join(thinking_parts).strip()
+        thinking_text = _compact_thinking_text(reasoning_text)
         with _PENDING_LOCK:
             _PENDING_USER_CONTENTS[user_id] = []
         return TelegramChatReply(text=reply_text, thinking=thinking_text)

@@ -16,7 +16,7 @@ from services.dynamic_memory_recall_debug import (
     normalize_debug_request_id,
 )
 from services.reasoning_utils import dedupe_reasoning_text_parts
-from storage import r2_store, whitelist_store
+from storage import r2_store, recent_window_store
 from utils.tokens import estimate_tokens
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ def _clip_text(value, max_chars: int) -> str:
 
 
 def _resolve_primary_chat_window_id() -> str:
-    recent = whitelist_store.list_recent_windows(limit=200) or []
+    recent = recent_window_store.list_recent_windows(limit=200) or []
     for w in recent:
         wid = str((w or {}).get("id") or "").strip()
         if wid.startswith("tg_"):
@@ -796,7 +796,7 @@ def register_routes(bp) -> None:
         if target_limit > 20:
             target_limit = 20
 
-        recent = whitelist_store.list_recent_windows(limit=200) or []
+        recent = recent_window_store.list_recent_windows(limit=200) or []
         target_candidates: list[str] = []
         for w in recent:
             wid = (w.get("id") or "").strip()

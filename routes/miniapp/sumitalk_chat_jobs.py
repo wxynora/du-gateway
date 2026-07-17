@@ -3,6 +3,7 @@ import time
 
 from flask import Response, jsonify, request, stream_with_context
 
+from services.realtime_publish import subscribe_sumitalk_chat_events
 from services.sumitalk_chat_queue import (
     build_sumitalk_chat_job_payload,
     cancel_sumitalk_chat_job,
@@ -17,7 +18,7 @@ from services.sumitalk_chat_queue import (
 
 _SUMITALK_CHAT_DIRECT_WAIT_MS = 2500
 _SUMITALK_CHAT_EVENT_WAIT_MAX_MS = 25_000
-_SUMITALK_CHAT_EVENT_POLL_SECONDS = 0.15
+_SUMITALK_CHAT_EVENT_POLL_SECONDS = 0.04
 _SUMITALK_CHAT_EVENT_HEARTBEAT_SECONDS = 15.0
 _TERMINAL_EVENT_STATUS = {
     "assistant_final": "done",
@@ -257,19 +258,92 @@ def register_routes(bp) -> None:
             cursor = after_seq
             last_heartbeat = time.monotonic()
             last_state_check = 0.0
+            terminal_seen = False
+
+            # First connection and reconnect recovery read the durable log once,
+            # then the active stream switches to the realtime IPC broker.
+            while True:
+                recovery_events = list_sumitalk_chat_job_events(job_id, after_seq=cursor, limit=500)
+                if not recovery_events:
+                    break
+                for event in recovery_events:
+                    try:
+                        seq = int(event.get("seq") or 0)
+                    except Exception:
+                        continue
+                    if seq <= cursor:
+                        continue
+                    cursor = seq
+                    yield "data: " + json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+                    if str(event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
+                        terminal_seen = True
+                        break
+                if terminal_seen:
+                    return
+                if len(recovery_events) < 500:
+                    break
+
+            pending_live_event = None
+            try:
+                for event in subscribe_sumitalk_chat_events(job_id, cursor):
+                    if event is None:
+                        now = time.monotonic()
+                        if now - last_heartbeat >= _SUMITALK_CHAT_EVENT_HEARTBEAT_SECONDS:
+                            yield ": ping\n\n"
+                            last_heartbeat = now
+                        job = read_sumitalk_chat_job_state(job_id)
+                        if not job or str(job.get("status") or "").strip().lower() in {"done", "error", "cancelled"}:
+                            break
+                        continue
+                    try:
+                        seq = int(event.get("seq") or 0)
+                    except Exception:
+                        continue
+                    if seq <= cursor:
+                        continue
+                    if seq != cursor + 1:
+                        pending_live_event = event
+                        break
+                    cursor = seq
+                    yield "data: " + json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+                    if str(event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
+                        return
+            except Exception:
+                pass
+
+            # IPC unavailable or a sequence gap: use the durable log as the
+            # 40 ms compatibility fallback until this run reaches terminal.
             while True:
                 events = list_sumitalk_chat_job_events(job_id, after_seq=cursor, limit=100)
-                terminal_seen = False
                 for event in events:
                     try:
-                        cursor = max(cursor, int(event.get("seq") or 0))
+                        seq = int(event.get("seq") or 0)
                     except Exception:
-                        pass
+                        continue
+                    if seq <= cursor:
+                        continue
+                    cursor = seq
                     if str(event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
                         terminal_seen = True
                     yield "data: " + json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n\n"
                 if terminal_seen:
                     return
+
+                if pending_live_event is not None:
+                    try:
+                        pending_seq = int(pending_live_event.get("seq") or 0)
+                    except Exception:
+                        pending_seq = 0
+                    if pending_seq == cursor + 1:
+                        cursor = pending_seq
+                        yield "data: " + json.dumps(
+                            pending_live_event,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ) + "\n\n"
+                        if str(pending_live_event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
+                            return
+                        pending_live_event = None
 
                 terminal_event = get_sumitalk_chat_terminal_event(job_id) if not events else None
                 if terminal_event:

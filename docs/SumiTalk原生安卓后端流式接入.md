@@ -21,22 +21,24 @@
 - 渡的身体状态、日常状态、Pixel Home
 - 动态记忆、摘要、最近四轮、中期记忆
 - 一起看、页笺、文游及网关工具
-- Notion、论坛、地图、网页搜索
+- 论坛、地图、网页搜索
 - 音乐、QQ 群活动上下文
 - 消息裁剪、动态系统消息排序和 prompt cache
 
 不能为原生流式另造一套精简 prompt，也不能绕过原有存档和工具上下文。
 
-## 事件存储
+## 实时事件与恢复日志
 
-事件追加写入 `SUMITALK_CHAT_QUEUE_DB` 的 `sumitalk_chat_run_events`：
+Worker 生成事件后先进入现有 realtime 进程间通道，`du-realtime` 的进程内 broker 直接转给活跃 SSE；另一个独立线程再异步追加 `SUMITALK_CHAT_QUEUE_DB` 的 `sumitalk_chat_run_events`。不引入 Redis。
 
 - `(job_id, seq)` 为主键，`seq` 单调递增。
 - `event_id` 固定为 `<job_id>:<seq>`，便于客户端幂等。
 - 每个任务只允许一个终态事件。
-- job JSON 仍保留阶段、工具和终态摘要，兼容旧 MiniApp；token delta 只写 SQLite，避免每个 token 重写整份 JSON。SQLite 事件表是原生断点恢复的数据源。
+- 实时通知队列与 SQLite 落库队列彼此独立；上一条事件写库变慢时，不会卡住下一条 reasoning、正文、工具或终态事件。
+- job JSON 仍保留阶段、工具和终态摘要，兼容旧 MiniApp；token delta 只异步写 SQLite，避免每个 token 重写整份 JSON。SQLite 事件表只承担首次连接、断线重连和 sequence 缺口恢复。
 - 终态已写入但 job JSON 未及时更新时，会从终态事件恢复 JSON 摘要，避免误判超时。
 - 共用聊天路由在完成隐藏块、PCMD 和 reasoning 过滤后直接追加正文增量；worker 只聚合最终 OpenAI 响应，不再把同一段正文二次回放成事件。
+- SumiTalk 流结束后立即收口 `assistant_final`；R2 存档、摘要和动态记忆进入单一 FIFO 后台队列，不再阻塞终态到达 App，同时保持多轮归档顺序。其他平台原有流式归档时序不变。
 
 ## 原生读取接口
 
@@ -52,8 +54,8 @@
 
 `GET /miniapp-api/sumitalk-chat-jobs/<job_id>/events/stream?after_seq=0`
 
-- SSE 与轮询读取同一份持久事件日志。
-- 支持 `after_seq` 断线续传。
+- 首次连接和携带 `after_seq` 的重连先从持久事件日志补齐已有事件，随后切到 realtime broker 直接推送。
+- live 事件出现 sequence 缺口时回到持久日志补拉；realtime 通道不可用时，本地发布最多等待 150ms，失败后的 1 秒内不再让每条事件重复等待，随后使用 40ms SQLite 轮询兜底。正常活跃流不反复查询事件表。
 - 15 秒发送一次 comment heartbeat。
 - 发出终态事件后关闭连接。
 - 响应带 `X-Accel-Buffering: no` 与 `Cache-Control: no-cache, no-transform`。
@@ -76,7 +78,7 @@
 - 环境变量：`SUMITALK_CHAT_NATIVE_STREAM_ENABLED=1`，默认开启。
 - 设为 `0` 时，原生任务会退回现有非流 job 路径；终态事件和旧 job 查询仍可用。
 - OpenRouter 若由现有策略强制非流，上层仍包装成 SSE 事件，不改变原生客户端协议。
-- WebSocket/realtime 不是正确性的唯一来源；SSE 断开后可用 `/events` 从 `after_seq` 继续。
+- realtime 只负责活跃流低延迟投递，不是唯一恢复来源；SSE 断开后仍可用 `/events` 从 `after_seq` 继续。
 
 ## 共同游戏非流边界
 
@@ -127,13 +129,14 @@
 .venv/bin/python scripts/test_voice_call_stream_backend.py
 ```
 
-覆盖：原生/旧 MiniApp 模式选择、共同游戏非流与植物大战丧尸流式边界、通道头一致、共享注入链位置、SQLite 顺序和终态幂等、轮询/SSE 同源、空格换行保留、worker 流/非流结果、富事件去重、工具轮顺序、配对成功/错误密钥/已撤销设备、主动消息三路共用稳定 ID、通话可见正文 SSE，以及临时 TTS URL 的 Range、取消和无 R2 写入。
+覆盖：原生/旧 MiniApp 模式选择、共同游戏非流与植物大战丧尸流式边界、通道头一致、共享注入链位置、实时发布先于异步落库、SQLite 阻塞不拖住后续事件与 `assistant_final`、首次恢复后不在活跃 SSE 轮询事件表、sequence 顺序和终态幂等、空格换行及同轮多段 reasoning 保留、worker 流/非流结果、富事件去重、工具轮顺序、SumiTalk 终态不等待 R2/记忆处理、配对成功/错误密钥/已撤销设备、主动消息三路共用稳定 ID、通话可见正文 SSE，以及临时 TTS URL 的 Range、取消和无 R2 写入。
 
 原生仓库现有 `GatewayRunEventCodecTest`、`HttpSumiTalkChatGatewayClientTest` 与 `ChatRunEventReducerTest` 也应一起通过，用来确认事件字段、SSE/轮询降级和最终 part 对账与 App 当前实现一致。
 
 ## 当前状态
 
-- 已完成流式/非流共存、共同游戏非流边界、静默设备配对、主动消息持久投递、通话专用 SSE 与短 TTL segment TTS；原生通话已使用专用 segment TTS，主模型文本继续复用可恢复的 rich run event。
-- 未 push、未重启线上服务、未对真实模型发请求。
-- 下一步部署时要确保服务端与 APK 的配对密钥一致，同时重启 Web App 和 `du-sumitalk-chat-worker.service`，再做新安装静默配对、撤销、主动消息离线落库/通知、断网续传、多工具轮、取消和长回复实测。
+- 已部署的基础能力包括流式/非流共存、共同游戏非流边界、静默设备配对、主动消息持久投递、通话专用 SSE 与短 TTL segment TTS。
+- 本轮已在本地完成 realtime broker 直推、通知/落库双队列、40ms SQLite 兜底、`assistant_final` 与后台归档解耦，以及同轮多段 reasoning 不再被首段正文提前截断。
+- 本轮尚未 push、部署或重启，也未请求真实模型、写 R2、连接真实 App 或模拟器。
+- 部署本轮改动时必须一起重启 `du-gateway.service`、`du-realtime.service` 和 `du-sumitalk-chat-worker.service`，再实测首事件延迟、长回复、多段 reasoning、多工具轮、断线续传、realtime 不可用兜底和终态先于后台归档。
 - 当前工作区的植物大战僵尸相关源码与 `miniapp_static` 是未完成改动，不属于本次流式接入，不能混入提交。

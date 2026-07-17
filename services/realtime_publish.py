@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 from typing import Any
@@ -14,20 +15,40 @@ logger = logging.getLogger("realtime_publish")
 _PUBLISH_ENABLED = os.environ.get("REALTIME_PUBLISH_ENABLED", "1").strip().lower() in {"1", "true", "yes"}
 _PUBLISH_URL = os.environ.get("REALTIME_PUBLISH_URL", "http://127.0.0.1:5010/internal/publish").strip()
 _PUBLISH_TIMEOUT_SECONDS = max(0.1, float(os.environ.get("REALTIME_PUBLISH_TIMEOUT_SECONDS", "0.6") or "0.6"))
+_SUMITALK_PUBLISH_TIMEOUT_SECONDS = max(
+    0.05,
+    float(os.environ.get("REALTIME_SUMITALK_PUBLISH_TIMEOUT_SECONDS", "0.15") or "0.15"),
+)
+_SUMITALK_STREAM_URL = os.environ.get("REALTIME_SUMITALK_STREAM_URL", "").strip() or (
+    _PUBLISH_URL.rsplit("/", 1)[0] + "/sumitalk-chat-events/stream" if "/" in _PUBLISH_URL else ""
+)
+_SUMITALK_STREAM_CONNECT_TIMEOUT_SECONDS = max(
+    0.1,
+    float(os.environ.get("REALTIME_SUMITALK_STREAM_CONNECT_TIMEOUT_SECONDS", "0.6") or "0.6"),
+)
+_SUMITALK_STREAM_READ_TIMEOUT_SECONDS = max(
+    5.0,
+    float(os.environ.get("REALTIME_SUMITALK_STREAM_READ_TIMEOUT_SECONDS", "20") or "20"),
+)
 _INTERNAL_TOKEN = (
     os.environ.get("REALTIME_INTERNAL_TOKEN", "").strip()
     or os.environ.get("MINIAPP_PANEL_SIGNING_SECRET", "").strip()
 )
 
 
-def _post_event(payload: dict) -> bool:
+def _post_event(payload: dict, *, timeout_seconds: float | None = None) -> bool:
     if not _PUBLISH_ENABLED or not _PUBLISH_URL:
         return False
     try:
         headers = {"Content-Type": "application/json"}
         if _INTERNAL_TOKEN:
             headers["X-Realtime-Token"] = _INTERNAL_TOKEN
-        resp = requests.post(_PUBLISH_URL, headers=headers, json=payload, timeout=_PUBLISH_TIMEOUT_SECONDS)
+        resp = requests.post(
+            _PUBLISH_URL,
+            headers=headers,
+            json=payload,
+            timeout=_PUBLISH_TIMEOUT_SECONDS if timeout_seconds is None else max(0.05, float(timeout_seconds)),
+        )
         if 200 <= resp.status_code < 300:
             return True
         logger.warning(
@@ -131,10 +152,49 @@ def publish_sumitalk_chat_event(device_id: str, event: dict, window_id: str = ""
     did = str(device_id or "").strip()
     if not did or not isinstance(event, dict):
         return False
-    return _post_event({
-        "type": "sumitalk_chat_event",
-        "event_id": str(event.get("event_id") or uuid4().hex),
-        "device_id": did,
-        "window_id": str(window_id or event.get("window_id") or "").strip(),
-        "event": event,
-    })
+    return _post_event(
+        {
+            "type": "sumitalk_chat_event",
+            "event_id": str(event.get("event_id") or uuid4().hex),
+            "device_id": did,
+            "window_id": str(window_id or event.get("window_id") or "").strip(),
+            "event": event,
+        },
+        timeout_seconds=_SUMITALK_PUBLISH_TIMEOUT_SECONDS,
+    )
+
+
+def subscribe_sumitalk_chat_events(job_id: str, after_seq: int = 0):
+    clean_job_id = str(job_id or "").strip()
+    if not _PUBLISH_ENABLED or not _SUMITALK_STREAM_URL or not clean_job_id:
+        raise RuntimeError("realtime SumiTalk event stream unavailable")
+    headers = {"Accept": "text/event-stream"}
+    if _INTERNAL_TOKEN:
+        headers["X-Realtime-Token"] = _INTERNAL_TOKEN
+    response = requests.get(
+        _SUMITALK_STREAM_URL,
+        headers=headers,
+        params={"job_id": clean_job_id, "after_seq": max(0, int(after_seq or 0))},
+        stream=True,
+        timeout=(_SUMITALK_STREAM_CONNECT_TIMEOUT_SECONDS, _SUMITALK_STREAM_READ_TIMEOUT_SECONDS),
+    )
+    try:
+        if response.status_code < 200 or response.status_code >= 300:
+            raise RuntimeError(f"realtime SumiTalk event stream HTTP {response.status_code}")
+        for raw_line in response.iter_lines(decode_unicode=True):
+            line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else str(raw_line or "")
+            if not line:
+                continue
+            if line.startswith(":"):
+                yield None
+                continue
+            if not line.startswith("data:"):
+                continue
+            try:
+                event = json.loads(line[5:].strip())
+            except Exception:
+                continue
+            if isinstance(event, dict):
+                yield event
+    finally:
+        response.close()

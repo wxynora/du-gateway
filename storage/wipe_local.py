@@ -1,12 +1,10 @@
-# 一键清空本地数据（白名单、黑名单、最近窗口、上次回复时间）
+# 一键清空本地运行状态
 import json
 from pathlib import Path
 from typing import Optional
 
 from config import (
-    WHITELIST_FILE,
     RECENT_WINDOWS_FILE,
-    BLACKLIST_FILE,
     LAST_USER_REPLY_FILE,
 )
 
@@ -18,14 +16,12 @@ logger = get_logger(__name__)
 
 def wipe_local_data() -> tuple[bool, int, Optional[str]]:
     """
-    清空网关本地数据：白名单、黑名单、最近窗口、上次 user 回复时间。
+    清空网关本地数据：最近窗口、上次 user 回复时间和本地 SQLite 表。
     不删 data/emoji_mapping.json（老婆可编辑的对照表）。
     返回 (是否成功, 清空的文件数, 错误信息)。
     """
     files_and_defaults: list[tuple[Path, list | dict]] = [
-        (WHITELIST_FILE, []),
         (RECENT_WINDOWS_FILE, []),
-        (BLACKLIST_FILE, []),
         (LAST_USER_REPLY_FILE, {}),
     ]
     cleared = 0

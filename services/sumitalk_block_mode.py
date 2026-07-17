@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from config import TELEGRAM_PROACTIVE_TARGET_USER_ID
-from storage import r2_store, sumitalk_block_mode_store, whitelist_store
+from storage import r2_store, recent_window_store, sumitalk_block_mode_store
 from utils.time_aware import now_beijing_iso
 
 
@@ -19,7 +19,7 @@ def _resolve_global_archive_window_id() -> str:
     except Exception:
         pass
     try:
-        recent = whitelist_store.list_recent_windows(limit=200) or []
+        recent = recent_window_store.list_recent_windows(limit=200) or []
         for row in recent:
             wid = str((row or {}).get("id") or "").strip()
             if wid.startswith("tg_"):

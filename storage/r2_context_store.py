@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 
 
 def get_summary(window_id: str = "") -> Optional[str]:
-    """读取全局总结（白名单窗口共享）。window_id 保留参数兼容，未使用。"""
+    """读取全局共享总结。window_id 保留参数兼容，未使用。"""
     client = _s3_client()
     if not client:
         return None

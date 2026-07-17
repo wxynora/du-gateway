@@ -1,6 +1,7 @@
 # 聊天代理：统一走完整管道（清洗、注入、转发、存档），无开头过滤
 # 项目约定：主聊天禁止默认兜底模型。没传 model 就直接报错，不要偷偷补 DEFAULT_CHAT_MODEL / GATEWAY_MODELS[0] / gpt-4。
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -69,7 +70,6 @@ from pipeline.pipeline import (
     step_inject_wenyou_player_tools,
     step_inject_gateway_tools,
     step_inject_random_imitator_td_tools,
-    step_inject_notion_search,
     step_inject_chat_tools,
     step_inject_forum_tools,
     step_inject_amap_mcp_tools,
@@ -80,7 +80,7 @@ from pipeline.pipeline import (
 )
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
-from storage import million_plan_mode_store, random_imitator_td_mode_store, r2_store, upstream_store, whitelist_store
+from storage import million_plan_mode_store, random_imitator_td_mode_store, r2_store, recent_window_store, upstream_store
 from storage.music_bgm_state import get_active_music_bgm_context
 from storage.music_melody_store import get_music_melody_entry_by_id
 from services.music_lyrics import normalize_lyrics_payload
@@ -209,6 +209,54 @@ from utils.log import get_logger
 logger = get_logger(__name__)
 sumitalk_logger = get_logger("sumitalk")
 bp = Blueprint("chat", __name__)
+
+_SUMITALK_STREAM_ARCHIVE_QUEUE: queue.Queue = queue.Queue()
+_SUMITALK_STREAM_ARCHIVE_THREAD: threading.Thread | None = None
+_SUMITALK_STREAM_ARCHIVE_THREAD_LOCK = threading.Lock()
+
+
+def _run_sumitalk_stream_archive_queue() -> None:
+    while True:
+        task = _SUMITALK_STREAM_ARCHIVE_QUEUE.get()
+        try:
+            (
+                window_id,
+                request_messages,
+                assistant_message,
+                round_cleaned,
+                skip_dynamic_memory_write,
+                skip_body_delta,
+            ) = task
+            step_archive_and_maybe_summary(
+                window_id,
+                request_messages,
+                assistant_message,
+                round_cleaned_for_r2=round_cleaned,
+                skip_dynamic_memory_write=skip_dynamic_memory_write,
+                skip_body_delta=skip_body_delta,
+            )
+            logger.info("R2 SumiTalk 流式请求后台存档完成")
+        except Exception:
+            logger.exception("R2 SumiTalk 流式请求后台存档失败")
+        finally:
+            _SUMITALK_STREAM_ARCHIVE_QUEUE.task_done()
+
+
+def _enqueue_sumitalk_stream_archive(task: tuple) -> None:
+    global _SUMITALK_STREAM_ARCHIVE_THREAD
+    thread = _SUMITALK_STREAM_ARCHIVE_THREAD
+    if thread is None or not thread.is_alive():
+        with _SUMITALK_STREAM_ARCHIVE_THREAD_LOCK:
+            thread = _SUMITALK_STREAM_ARCHIVE_THREAD
+            if thread is None or not thread.is_alive():
+                thread = threading.Thread(
+                    target=_run_sumitalk_stream_archive_queue,
+                    name="sumitalk-stream-archive",
+                    daemon=True,
+                )
+                _SUMITALK_STREAM_ARCHIVE_THREAD = thread
+                thread.start()
+    _SUMITALK_STREAM_ARCHIVE_QUEUE.put(task)
 
 WINDOW_ID_DEFAULT = ""
 _NONSTREAM_FAST_RETURN_CHANNELS = {"tg", "qq", "wechat", "sumitalk", "xiaoai"}
@@ -1227,7 +1275,7 @@ def _stream_forward_to_ai(
     if not targets:
         yield (
             "data: "
-            + json.dumps({"error": _build_upstream_error_hint("TARGET_AI_URL 或 TARGET_AI_URLS 未配置")})
+            + json.dumps({"error": _build_upstream_error_hint("当前 active 上游未配置")})
             + "\n\n"
         ).encode("utf-8")
         return
@@ -1364,6 +1412,41 @@ def _stream_with_r2_archive(
     du_daily_maintenance = _is_du_daily_maintenance_request()
     pseudo_cot_stream_enabled = _pseudo_cot_instruction_enabled(body)
     emitted_listen_invite_actions: set[str] = set()
+
+    def _archive_completed_stream(
+        request_messages: list,
+        assistant_message: dict,
+        round_cleaned: list | None,
+        *,
+        skip_dynamic_memory_write: bool,
+        skip_body_delta: bool,
+    ) -> None:
+        if not sumitalk_event_sink:
+            step_archive_and_maybe_summary(
+                window_id,
+                request_messages,
+                assistant_message,
+                round_cleaned_for_r2=round_cleaned,
+                skip_dynamic_memory_write=skip_dynamic_memory_write,
+                skip_body_delta=skip_body_delta,
+            )
+            logger.info("R2 流式请求已存档")
+            return
+
+        messages_snapshot = copy.deepcopy(request_messages)
+        assistant_snapshot = copy.deepcopy(assistant_message)
+        round_snapshot = copy.deepcopy(round_cleaned)
+        _enqueue_sumitalk_stream_archive(
+            (
+                window_id,
+                messages_snapshot,
+                assistant_snapshot,
+                round_snapshot,
+                skip_dynamic_memory_write,
+                skip_body_delta,
+            )
+        )
+        logger.info("R2 SumiTalk 流式请求已交后台存档")
 
     def _emit_stream_event(kind: str, payload: dict | None = None) -> None:
         if not sumitalk_event_sink:
@@ -1543,12 +1626,6 @@ def _stream_with_r2_archive(
                 delta = (((packet.get("choices") or [{}])[0] or {}).get("delta") or {})
                 content = delta.get("content")
                 if isinstance(content, str) and content:
-                    if reasoning_state is not None and reasoning_part_id:
-                        _finish_reasoning_stream_event(
-                            round_no,
-                            reasoning_part_id,
-                            reasoning_state,
-                        )
                     _emit_assistant_text_value(content, round_no, part_id, state)
         except Exception:
             return
@@ -1781,20 +1858,13 @@ def _stream_with_r2_archive(
                     else None
                 )
                 logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
-                step_archive_and_maybe_summary(
-                    window_id,
+                _archive_completed_stream(
                     body.get("messages") or [],
                     msg,
-                    round_cleaned_for_r2=round_cleaned,
+                    round_cleaned,
                     skip_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
                     skip_body_delta=skip_post_archive_body_delta,
                 )
-                try:
-                    from services.notion_write_from_assistant import process_assistant_content_for_notion_write
-                    process_assistant_content_for_notion_write(visible)
-                except Exception:
-                    pass
-                logger.info("R2 流式请求已存档")
             elif is_failed_response(visible):
                 logger.info("R2 未存档：流式回复被判为失败，跳过")
             elif not visible.strip():
@@ -2138,20 +2208,13 @@ def _stream_with_r2_archive(
                 else None
             )
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
-            step_archive_and_maybe_summary(
-                window_id,
+            _archive_completed_stream(
                 current_body.get("messages") or [],
                 msg,
-                round_cleaned_for_r2=round_cleaned,
+                round_cleaned,
                 skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
                 skip_body_delta=archive_skip_body_delta,
             )
-            try:
-                from services.notion_write_from_assistant import process_assistant_content_for_notion_write
-                process_assistant_content_for_notion_write(visible)
-            except Exception:
-                pass
-            logger.info("R2 流式请求已存档")
 
 
 def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dict] = None):
@@ -2161,7 +2224,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
     request_model = (body or {}).get("model") or ""
     targets = _get_forward_targets(request_model)
     if not targets:
-        return None, 502, _build_upstream_error_hint("TARGET_AI_URL 或 TARGET_AI_URLS 未配置"), None
+        return None, 502, _build_upstream_error_hint("当前 active 上游未配置"), None
     last_err = None
     last_status = 502
     for i, (url, api_key) in enumerate(targets):
@@ -2174,7 +2237,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
             if request.headers.get(h):
                 req_headers[h] = request.headers.get(h)
         try:
-            # 非流式：上游返回单 JSON，便于解析、存档、追加黑名单后缀等
+            # 非流式：上游返回单 JSON，便于解析和存档。
             body_send = dict(body)
             body_send.pop(DU_REQUEST_ID_BODY_KEY, None)
             body_send["stream"] = False
@@ -2345,7 +2408,7 @@ def list_models():
     """
     targets = _get_forward_targets(None)
     if not targets:
-        return jsonify({"error": _build_upstream_error_hint("TARGET_AI_URL 或 TARGET_AI_URLS 未配置")}), 502
+        return jsonify({"error": _build_upstream_error_hint("当前 active 上游未配置")}), 502
     url, api_key = targets[0]
     if is_openrouter_url(url):
         data = openrouter_models_response()
@@ -2461,8 +2524,7 @@ def chat_completions():
         if not (is_sumitalk_request and sumitalk_job_id):
             return
         try:
-            from services.sumitalk_chat_queue import append_sumitalk_chat_job_event
-            from services.realtime_publish import publish_sumitalk_chat_event
+            from services.sumitalk_chat_queue import emit_live_sumitalk_chat_job_event
 
             normalized_payload = dict(payload or {})
             if str(kind or "").startswith("tool_"):
@@ -2471,7 +2533,7 @@ def chat_completions():
                     normalized_payload["part_id"] = f"tool-{tool_call_id}"
                 if normalized_payload.get("result_preview") is not None and normalized_payload.get("output") is None:
                     normalized_payload["output"] = normalized_payload.get("result_preview")
-            event = append_sumitalk_chat_job_event(
+            event = emit_live_sumitalk_chat_job_event(
                 sumitalk_job_id,
                 kind,
                 {
@@ -2492,8 +2554,6 @@ def chat_completions():
                     event.get("name") or "",
                     len(str(event.get("text") or "")),
                 )
-                if not str(kind or "").endswith("_delta"):
-                    publish_sumitalk_chat_event(reply_target, event, window_id=window_id)
         except Exception:
             sumitalk_logger.debug(
                 "sumitalk_chat_event_emit_failed job_id=%s kind=%s",
@@ -2519,7 +2579,7 @@ def chat_completions():
     # 记录最近窗口，供 MiniApp 思维链面板展示可选窗口列表
     try:
         wid_for_recent = window_id if (window_id or "").strip() else "__default__"
-        whitelist_store.record_recent_window(wid_for_recent)
+        recent_window_store.record_recent_window(wid_for_recent)
     except Exception:
         pass
 
@@ -2696,8 +2756,6 @@ def chat_completions():
     body = step_inject_gateway_tools(body)
     if game_tool_loop or random_imitator_td_tool_mode:
         body = step_inject_random_imitator_td_tools(body)
-    if not du_daily_maintenance:
-        body = step_inject_notion_search(body, window_id)
     body = step_inject_chat_tools(body)
     body = step_inject_forum_tools(body)
     body = step_inject_amap_mcp_tools(body)
@@ -2794,7 +2852,7 @@ def chat_completions():
                 degraded_reason="upstream_nonstream",
             )
         return jsonify(resp_json or {"error": "upstream error"}), status
-    # 非流式 + 有 Notion 工具时：若上游返回 tool_calls，执行工具并继续请求，直到无 tool_calls 或达到最大轮数
+    # 非流式工具循环：执行 tool_calls 并继续请求，直到无 tool_calls 或达到最大轮数
     # 收集中间轮次 reasoning 供 MiniApp 思维链面板使用，但不回填到返回给客户端的 resp_json，
     # 避免客户端（RikkaHub 等）把 reasoning 渲染成对话内容。
     accumulated_reasoning_parts: list[str] = []

@@ -1,38 +1,10 @@
 # 渡可用的聊天工具集合。
-#
-# 历史上这个模块叫 notion_tools，后来承载了 note_write、Stay with Du、
-# 每日气泡、天气黄历、论坛/冲浪等非 Notion 工具。先迁到中性名字；
-# 交换日记迁移完成后，再继续拆掉其中的 Notion 运行链路。
 import json
-from typing import Any, Dict, FrozenSet, List, Optional, Set
+from typing import Any, List
 
-# 关键词触发的扩展工具分组（不常驻，按用户消息关键词决定是否注入）
-NOTION_EXTENDED_GROUPS: Dict[str, Dict] = {
-    "schedule": {
-        "keywords": ("日程", "待办", "约会", "纪念日", "schedule", "安排", "行程"),
-        "names": frozenset({"notion_schedule_list", "notion_schedule_create", "notion_schedule_update"}),
-    },
-    "notion_read": {
-        "keywords": ("搜索", "检索", "查一下", "找一下", "notion里", "notion 里", "页面", "正文", "read_page", "追加到"),
-        "names": frozenset({"notion_search", "notion_read_page_body", "notion_append_to_page"}),
-    },
-}
-
-# 所有扩展工具名（用于在 expanded 逻辑里快速判断）
-_ALL_EXTENDED_NAMES: FrozenSet[str] = frozenset(
-    name for g in NOTION_EXTENDED_GROUPS.values() for name in g["names"]
-)
-
-from config import (
-    NOTION_NOTEBOOK_DATABASE_ID,
-    NOTION_NOTEBOOK_PAGE_ID,
-    NOTION_SCHEDULE_DATABASE_ID,
-    NOTION_TOOLS_ENABLED,
-)
-from services import notion_client
 from services.mcp_forum_tools import execute_forum_tool
 from utils.log import get_logger
-from utils.time_aware import iso_to_display_time, now_beijing_iso, parse_iso_to_beijing, today_beijing
+from utils.time_aware import iso_to_display_time, now_beijing_iso, today_beijing
 
 logger = get_logger(__name__)
 
@@ -75,99 +47,6 @@ def _normalize_note_write_content(raw: str) -> str:
             return ln
     # 都是重复内容时，取最后一行，至少不把整段旧内容再塞一遍
     return cleaned[-1]
-
-
-def _extract_first_nonempty_prop(page: dict, name_to_id: dict, candidates: list[str], prop_type: str) -> str:
-    """按候选列名顺序取第一个非空属性值。"""
-    for name in candidates:
-        pid = (name_to_id or {}).get(name)
-        if not pid:
-            continue
-        val = _extract_prop_from_page(page, pid, prop_type)
-        if val is None:
-            continue
-        s = str(val).strip()
-        if s:
-            return s
-    return ""
-
-
-def _collect_rich_text_props_as_body(page: dict) -> str:
-    """把页面所有 rich_text 列拼成正文兜底（用于数据库条目无 block 正文时）。"""
-    props = (page or {}).get("properties") or {}
-    parts: list[str] = []
-    for prop in props.values():
-        if not isinstance(prop, dict):
-            continue
-        if (prop.get("type") or "").strip() != "rich_text":
-            continue
-        arr = prop.get("rich_text") or []
-        text = " ".join(t.get("plain_text", "") for t in arr if isinstance(t, dict)).strip()
-        if text:
-            parts.append(text)
-    return "\n".join(parts).strip()
-
-
-def _extract_prop_from_page(page: dict, prop_id: str, prop_type: str) -> Any:
-    """从页面 properties 按 id 和类型取值。"""
-    p = (page.get("properties") or {}).get(prop_id)
-    if not p:
-        return None
-    if prop_type == "title":
-        return " ".join(t.get("plain_text", "") for t in (p.get("title") or []) if isinstance(t, dict)).strip()
-    if prop_type == "rich_text":
-        return " ".join(t.get("plain_text", "") for t in (p.get("rich_text") or []) if isinstance(t, dict)).strip()
-    if prop_type == "select":
-        s = p.get("select")
-        return s.get("name") if s else None
-    if prop_type == "number":
-        return p.get("number")
-    if prop_type == "date":
-        d = p.get("date")
-        return d.get("start") if d else None
-    if prop_type == "checkbox":
-        return p.get("checkbox")
-    if prop_type == "created_time":
-        return p.get("created_time")
-    return None
-
-
-def _prop_title(val: str) -> dict:
-    return {"title": [{"type": "text", "text": {"content": (val or "")[:NOTION_TITLE_MAX]}}]}
-
-
-def _prop_rich(val: str) -> dict:
-    if not val:
-        return {"rich_text": []}
-    return {"rich_text": [{"type": "text", "text": {"content": (val or "")[:NOTION_RICH_TEXT_MAX]}}]}
-
-
-def _prop_select(val: str) -> dict:
-    return {"select": {"name": (val or "").strip()} if (val or "").strip() else None}
-
-
-def _prop_number(val: Optional[int]) -> dict:
-    return {"number": val if val is not None else 0}
-
-
-def _prop_date(iso_str: Optional[str]) -> dict:
-    if not iso_str:
-        return {"date": None}
-    return {"date": {"start": iso_str.strip()[:50]}}
-
-
-def _prop_checkbox(val: bool) -> dict:
-    return {"checkbox": bool(val)}
-
-
-def _note_time_to_iso(note_time: str | None) -> str:
-    """把渡传的 note_time（ISO 或 YYYY-MM-DD）转成北京时间的 ISO 字符串供 Notion；无效或空则用当前时间。"""
-    if not note_time or not isinstance(note_time, str):
-        return now_beijing_iso()
-    dt = parse_iso_to_beijing(note_time.strip())
-    if dt is None:
-        return now_beijing_iso()
-    return dt.strftime("%Y-%m-%dT%H:%M:%S+08:00")
 
 
 def _tool_args(arguments: dict) -> dict:
@@ -394,95 +273,9 @@ def _execute_exchange_diary_comment_create(arguments: dict) -> str:
         f"评论数={int(item.get('comment_count') or len(comments))}"
     )
 
-NOTION_RICH_TEXT_MAX = 2000
-# Notion 标题/单段内容上限，严格 ≤2000 避免 400；留余量防编码计数差异
-NOTION_TITLE_MAX = 1990
-# 小本本 Database 模式下的属性名（需与 Notion 里建的列名一致）
-NOTEBOOK_DB_PROP_CONTENT = "内容"
-NOTEBOOK_DB_PROP_TIME = "时间"
-
-
-def write_notebook_entry_to_database(content: str, note_time: str | None = None) -> tuple[bool, str]:
-    """
-    往小本本 Database 写一条（归档脚本用）。content 为截取的小本本正文，note_time 为该条自己的时间（如 2025-03-11T07:00:00）。
-    返回 (成功, 错误信息)。
-    """
-    content = (content or "").strip()
-    if not content:
-        return False, "content 为空"
-    if not NOTION_NOTEBOOK_DATABASE_ID:
-        return False, "未配置 NOTION_NOTEBOOK_DATABASE_ID"
-    iso_time = _note_time_to_iso(note_time)
-    display_time = iso_to_display_time(iso_time) or iso_time  # 给人看：2026年03月07日 14:41
-    title_content = content[:NOTION_TITLE_MAX]
-    props = {
-        NOTEBOOK_DB_PROP_CONTENT: {"title": [{"text": {"content": title_content}}]},
-        NOTEBOOK_DB_PROP_TIME: {"rich_text": [{"type": "text", "text": {"content": display_time}}]},
-    }
-    _, err = notion_client.create_page(
-        parent={"database_id": NOTION_NOTEBOOK_DATABASE_ID},
-        properties=props,
-    )
-    if err:
-        logger.warning("小本本 Database 写入失败 err=%s", err)
-        return False, str(err)
-    return True, ""
-
-
-def get_chat_tools_for_inject(
-    mode: str = "expanded",
-    active_groups: Optional[Set[str]] = None,
-    include_notion_runtime: bool = True,
-) -> List[dict]:
+def get_chat_tools_for_inject(mode: str = "expanded") -> List[dict]:
     """返回要注入到 chat 的 tools 列表。mode=daily|expanded。"""
-    tools: List[dict] = []
-    if include_notion_runtime:
-        tools.extend([
-            {
-                "type": "function",
-                "function": {
-                    "name": "notion_search",
-                    "description": "在 Notion 中按关键词检索页面/数据库，返回匹配条目的标题与链接。需要查 Notion 里有什么内容时调用。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "搜索关键词，如「小本本」「日记」「会议」"},
-                        },
-                        "required": ["query"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "notion_read_page_body",
-                    "description": "读取指定 Notion 页面的标题和正文内容（块文本）。用于查看某页的完整内容。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "page_id": {"type": "string", "description": "Notion 页面 ID（32 位十六进制，可从链接或 notion_search 得到）"},
-                        },
-                        "required": ["page_id"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "notion_append_to_page",
-                    "description": "向指定 Notion 页面追加一段内容（段落块，带时间戳）。用于写日记、记笔记等。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "page_id": {"type": "string", "description": "Notion 页面 ID（32 位十六进制，可从页面 URL 取）"},
-                            "content": {"type": "string", "description": "要追加的正文内容"},
-                        },
-                        "required": ["page_id", "content"],
-                    },
-                },
-            },
-        ])
-    tools.extend([
+    tools: List[dict] = [
         {
             "type": "function",
             "function": {
@@ -549,79 +342,7 @@ def get_chat_tools_for_inject(
                 },
             },
         },
-    ])
-    if include_notion_runtime and NOTION_SCHEDULE_DATABASE_ID:
-        tools.extend([
-            {
-                "type": "function",
-                "function": {
-                    "name": "notion_schedule_list",
-                    "description": "列出日程本条目（待办/约会/纪念日）。可按类型筛选。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "item_type": {"type": "string", "description": "可选：待办 / 约会 / 纪念日，不传则全部"},
-                            "limit": {"type": "integer", "description": "最多返回条数，默认 30", "default": 30},
-                        },
-                        "required": [],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "notion_schedule_create",
-                    "description": "在日程本新建一条。类型必填：待办 / 约会 / 纪念日。待办可传复选框，纪念日可传纪念日日期（文本）。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "content": {"type": "string", "description": "标题/内容"},
-                            "date": {"type": "string", "description": "日期，如 2025-03-15 或 ISO"},
-                            "item_type": {"type": "string", "description": "待办 / 约会 / 纪念日"},
-                            "checked": {"type": "boolean", "description": "仅待办：是否勾选，默认 false"},
-                            "anniversary_date": {"type": "string", "description": "仅纪念日：如 每年3月15日"},
-                        },
-                        "required": ["content", "date", "item_type"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "notion_schedule_update",
-                    "description": "按 page_id 更新日程本一条（内容、日期、类型、复选框、纪念日日期）。page_id 从 notion_schedule_list 得到。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "page_id": {"type": "string", "description": "条目的页面 ID"},
-                            "content": {"type": "string", "description": "可选"},
-                            "date": {"type": "string", "description": "可选"},
-                            "item_type": {"type": "string", "description": "可选：待办/约会/纪念日"},
-                            "checked": {"type": "boolean", "description": "可选，仅待办"},
-                            "anniversary_date": {"type": "string", "description": "可选，仅纪念日"},
-                        },
-                        "required": ["page_id"],
-                    },
-                },
-            },
-        ])
-    if include_notion_runtime and (NOTION_NOTEBOOK_DATABASE_ID or NOTION_NOTEBOOK_PAGE_ID):
-        params = {
-            "content": {"type": "string", "description": "要记下的内容"},
-            "note_time": {
-                "type": "string",
-                "description": "这条记录所指的时间（用于排序），ISO 或 YYYY-MM-DD，如 2025-03-11 或 2025-03-11T14:30:00。不传则用当前时间。",
-            },
-        }
-        desc = "向网关配置的「小本本」记一条。若小本本是数据库则按 note_time 排序（最新在上）；不传 note_time 用当前时间。"
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": "notion_append_to_notebook",
-                "description": desc,
-                "parameters": {"type": "object", "properties": params, "required": ["content"]},
-            },
-        })
+    ]
     # 渡的记事本（MiniApp 可见）：写入 R2 的 du_notebook 存储
     tools.append({
         "type": "function",
@@ -720,19 +441,6 @@ def get_chat_tools_for_inject(
     tools.extend(get_weather_almanac_tools())
 
     if mode != "daily":
-        # active_groups=None 表示全量（expanded）；否则过滤掉未激活组的扩展工具
-        if active_groups is not None:
-            allowed_extended: Set[str] = frozenset(
-                name
-                for g_name, g in NOTION_EXTENDED_GROUPS.items()
-                if g_name in active_groups
-                for name in g["names"]
-            )
-            tools = [
-                t for t in tools
-                if (((t.get("function") or {}).get("name") or "") not in _ALL_EXTENDED_NAMES)
-                or (((t.get("function") or {}).get("name") or "") in allowed_extended)
-            ]
         return tools
 
     # 日常最小集：只保留高频（日记 + 报时），其余在触发词命中后走 expanded 注入
@@ -756,31 +464,8 @@ def get_chat_tools_for_inject(
     return daily_tools
 
 
-def _append_content_to_page(page_id: str, content: str, add_timestamp: bool = True) -> tuple[bool, str]:
-    """向 Notion 页面追加一段内容，返回 (成功, 说明)。"""
-    if not page_id or not content or not content.strip():
-        return False, "page_id 或 content 为空"
-    ts = now_beijing_iso()
-    line = f"[{ts}] {content.strip()}" if add_timestamp else content.strip()
-    children = []
-    rest = line
-    while rest:
-        chunk = rest[:NOTION_RICH_TEXT_MAX]
-        rest = rest[NOTION_RICH_TEXT_MAX:]
-        children.append({
-            "object": "block",
-            "type": "paragraph",
-            "paragraph": {"rich_text": [{"type": "text", "text": {"content": chunk}}]},
-        })
-    _, err = notion_client.append_block_children(page_id, children)
-    if err:
-        logger.warning("Notion append 失败 page_id=%s err=%s", page_id[:8], err)
-        return False, str(err)
-    return True, "已追加"
-
-
 def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str:
-    """执行单个工具（Notion、网关、小爱、天气、黄历等），返回给模型的字符串结果。"""
+    """执行单个聊天工具，返回给模型的字符串结果。"""
     from services.gateway_tools import (
         DU_PAGE_TOOL_NAMES,
         DU_SURF_TOOL_NAMES,
@@ -889,210 +574,6 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
         if name == "exchange_diary_comment_create":
             return _execute_exchange_diary_comment_create(arguments)
 
-        if str(name or "").strip().startswith("notion_") and not NOTION_TOOLS_ENABLED:
-            return json.dumps({"error": f"Notion 工具已关闭: {name}"}, ensure_ascii=False)
-
-        if name == "notion_search":
-            query = (arguments.get("query") or "").strip()
-            if not query:
-                return "query 不能为空"
-            data, err = notion_client.search(query=query)
-            if err:
-                return json.dumps({"error": str(err)}, ensure_ascii=False)
-            if not data or not isinstance(data.get("results"), list):
-                return "未返回结果"
-            results = data.get("results", [])[:10]
-            lines = []
-            for item in results:
-                title = ""
-                props = item.get("properties") or {}
-                for pid, prop in props.items():
-                    if not isinstance(prop, dict):
-                        continue
-                    if "title" in prop and isinstance(prop["title"], list):
-                        title = " ".join(
-                            t.get("plain_text", "") for t in prop["title"] if isinstance(t, dict)
-                        ).strip()
-                        break
-                url = (item.get("url") or "").strip()
-                lines.append(f"- {title or '(无标题)'} {url}")
-            return "\n".join(lines) if lines else "无匹配页面"
-
-        if name == "notion_read_page_body":
-            page_id = (arguments.get("page_id") or "").strip().replace("-", "")
-            if not page_id:
-                return "page_id 不能为空"
-            title, body, err = notion_client.get_page_content_as_text(page_id)
-            if err:
-                return json.dumps({"error": str(err)}, ensure_ascii=False)
-            # 数据库条目常把正文放在 rich_text 属性里，而不是 block children；为空时做属性兜底。
-            if not (body or "").strip():
-                page, page_err = notion_client.read_page(page_id)
-                if not page_err and isinstance(page, dict):
-                    body = _collect_rich_text_props_as_body(page)
-            return f"标题：{title}\n\n正文：\n{body or '(无正文)'}"
-
-        if name == "notion_append_to_page":
-            page_id = (arguments.get("page_id") or "").strip().replace("-", "")
-            content = (arguments.get("content") or "").strip()
-            ok, msg = _append_content_to_page(page_id, content)
-            return msg
-
-        if name == "notion_schedule_list":
-            if not NOTION_SCHEDULE_DATABASE_ID:
-                return "未配置日程本数据库"
-            name_to_id, _, err = notion_client.get_database_schema(NOTION_SCHEDULE_DATABASE_ID)
-            if err:
-                return json.dumps({"error": str(err)}, ensure_ascii=False)
-            limit = int(arguments.get("limit") or 30)
-            typ = (arguments.get("item_type") or arguments.get("类型") or "").strip()
-            tid = name_to_id.get("类型")
-            filt = {"property": tid, "select": {"equals": typ}} if typ and tid else None
-            data, err = notion_client.query_database(
-                NOTION_SCHEDULE_DATABASE_ID,
-                filter_obj=filt,
-                page_size=limit,
-            )
-            if err:
-                return json.dumps({"error": str(err)}, ensure_ascii=False)
-            lines = []
-            for page in (data or {}).get("results") or []:
-                pid = page.get("id")
-                content = _extract_prop_from_page(page, name_to_id.get("内容") or "", "title") if name_to_id.get("内容") else ""
-                date = _extract_prop_from_page(page, name_to_id.get("日期") or "", "date") if name_to_id.get("日期") else ""
-                typ_val = _extract_prop_from_page(page, name_to_id.get("类型") or "", "select") if name_to_id.get("类型") else ""
-                cb = _extract_prop_from_page(page, name_to_id.get("复选框") or "", "checkbox") if name_to_id.get("复选框") else None
-                ann = _extract_prop_from_page(page, name_to_id.get("纪念日日期") or "", "rich_text") if name_to_id.get("纪念日日期") else ""
-                parts = [f"page_id={pid}", f"内容={content}", f"日期={date}", f"类型={typ_val}"]
-                if cb is not None:
-                    parts.append(f"复选框={cb}")
-                if ann:
-                    parts.append(f"纪念日日期={ann}")
-                lines.append(" | ".join(parts))
-            return "\n".join(lines) if lines else "暂无日程条目。"
-
-        if name == "notion_schedule_create":
-            if not NOTION_SCHEDULE_DATABASE_ID:
-                return "未配置日程本数据库"
-            name_to_id, _, err = notion_client.get_database_schema(NOTION_SCHEDULE_DATABASE_ID)
-            if err:
-                return json.dumps({"error": str(err)}, ensure_ascii=False)
-            content = (arguments.get("content") or arguments.get("内容") or "").strip()
-            date = (arguments.get("date") or arguments.get("日期") or "").strip()
-            typ = (arguments.get("item_type") or arguments.get("类型") or "").strip()
-            if not content or not typ:
-                return "内容、类型为必填"
-            props = {}
-            if name_to_id.get("内容"):
-                props[name_to_id["内容"]] = _prop_title(content)
-            if name_to_id.get("日期"):
-                props[name_to_id["日期"]] = _prop_date(date)
-            if name_to_id.get("类型"):
-                props[name_to_id["类型"]] = _prop_select(typ)
-            checked_arg = arguments.get("checked")
-            if checked_arg is None:
-                checked_arg = arguments.get("复选框")
-            ann_arg = arguments.get("anniversary_date")
-            if ann_arg is None:
-                ann_arg = arguments.get("纪念日日期")
-            if name_to_id.get("复选框") and typ == "待办":
-                props[name_to_id["复选框"]] = _prop_checkbox(bool(checked_arg))
-            if name_to_id.get("纪念日日期") and typ == "纪念日" and ann_arg:
-                props[name_to_id["纪念日日期"]] = _prop_rich(str(ann_arg).strip())
-            _, err = notion_client.create_page(
-                parent={"database_id": NOTION_SCHEDULE_DATABASE_ID},
-                properties=props,
-            )
-            if err:
-                return json.dumps({"error": str(err)}, ensure_ascii=False)
-            return "已写入日程本。"
-
-        if name == "notion_schedule_update":
-            if not NOTION_SCHEDULE_DATABASE_ID:
-                return "未配置日程本数据库"
-            name_to_id, _, err = notion_client.get_database_schema(NOTION_SCHEDULE_DATABASE_ID)
-            if err:
-                return json.dumps({"error": str(err)}, ensure_ascii=False)
-            page_id = (arguments.get("page_id") or "").strip().replace("-", "")
-            if not page_id:
-                return "page_id 不能为空"
-            props = {}
-            content_arg = arguments.get("content")
-            if content_arg is None:
-                content_arg = arguments.get("内容")
-            date_arg = arguments.get("date")
-            if date_arg is None:
-                date_arg = arguments.get("日期")
-            type_arg = arguments.get("item_type")
-            if type_arg is None:
-                type_arg = arguments.get("类型")
-            checked_arg = arguments.get("checked")
-            if checked_arg is None:
-                checked_arg = arguments.get("复选框")
-            ann_arg = arguments.get("anniversary_date")
-            if ann_arg is None:
-                ann_arg = arguments.get("纪念日日期")
-            if "内容" in name_to_id and content_arg is not None:
-                props[name_to_id["内容"]] = _prop_title(str(content_arg).strip())
-            if "日期" in name_to_id and date_arg is not None:
-                props[name_to_id["日期"]] = _prop_date(str(date_arg).strip())
-            if "类型" in name_to_id and type_arg is not None:
-                props[name_to_id["类型"]] = _prop_select(str(type_arg).strip())
-            if "复选框" in name_to_id and checked_arg is not None:
-                props[name_to_id["复选框"]] = _prop_checkbox(bool(checked_arg))
-            if "纪念日日期" in name_to_id and ann_arg is not None:
-                props[name_to_id["纪念日日期"]] = _prop_rich(str(ann_arg).strip())
-            if not props:
-                return "未传入要更新的字段"
-            _, err = notion_client.update_page(page_id, props)
-            if err:
-                return json.dumps({"error": str(err)}, ensure_ascii=False)
-            return "已更新日程本条目。"
-
-        if name == "notion_append_to_notebook":
-            content = (arguments.get("content") or "").strip()
-            if not content:
-                return "content 为空"
-            note_time_str = (arguments.get("note_time") or "").strip() or None
-            iso_time = _note_time_to_iso(note_time_str)
-
-            if NOTION_NOTEBOOK_DATABASE_ID:
-                # Database 模式：新建一行，属性「内容」+「时间」（给人看格式），Notion 里按时间降序=最新在上
-                display_time = iso_to_display_time(iso_time) or iso_time
-                title_content = content[:NOTION_TITLE_MAX]
-                props = {
-                    NOTEBOOK_DB_PROP_CONTENT: {"title": [{"text": {"content": title_content}}]},
-                    NOTEBOOK_DB_PROP_TIME: {"rich_text": [{"type": "text", "text": {"content": display_time}}]},
-                }
-                _, err = notion_client.create_page(
-                    parent={"database_id": NOTION_NOTEBOOK_DATABASE_ID},
-                    properties=props,
-                )
-                if err:
-                    logger.warning("小本本 Database 写入失败 err=%s", err)
-                    return str(err)
-                return "已记入小本本（按时间排序，最新在上）"
-            if NOTION_NOTEBOOK_PAGE_ID:
-                # 页面模式：往页面追加块，时间用给人看格式
-                display_time = iso_to_display_time(iso_time) or iso_time
-                line = f"[{display_time}] {content}"
-                children = []
-                rest = line
-                while rest:
-                    chunk = rest[:NOTION_RICH_TEXT_MAX]
-                    rest = rest[NOTION_RICH_TEXT_MAX:]
-                    children.append({
-                        "object": "block",
-                        "type": "paragraph",
-                        "paragraph": {"rich_text": [{"type": "text", "text": {"content": chunk}}]},
-                    })
-                _, err = notion_client.append_block_children(NOTION_NOTEBOOK_PAGE_ID, children)
-                if err:
-                    logger.warning("小本本 Page 写入失败 err=%s", err)
-                    return str(err)
-                return "已追加到小本本"
-            return "未配置小本本（NOTION_NOTEBOOK_DATABASE_ID 或 NOTION_NOTEBOOK_PAGE_ID）"
-
         if name == "note_write":
             from storage import r2_store
             content = _normalize_note_write_content(arguments.get("content") or "")
@@ -1154,5 +635,5 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
 
         return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
     except Exception as e:
-        logger.exception("Notion 工具执行异常 name=%s", name)
+        logger.exception("聊天工具执行异常 name=%s", name)
         return json.dumps({"error": str(e)}, ensure_ascii=False)

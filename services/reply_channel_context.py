@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from config import TELEGRAM_PROACTIVE_TARGET_USER_ID
-from storage import r2_store, whitelist_store
+from storage import r2_store, recent_window_store
 
 
 def normalize_reply_channel(value: str, default: str = "", allow_tg: bool = True) -> str:
@@ -29,7 +29,7 @@ def resolve_primary_chat_window_id() -> str:
     if uid > 0:
         return f"tg_{uid}"
     try:
-        recent = whitelist_store.list_recent_windows(limit=200) or []
+        recent = recent_window_store.list_recent_windows(limit=200) or []
     except Exception:
         recent = []
     for item in recent:

@@ -14,9 +14,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from services import codex_group_chat
+from services.sumitalk_live_event_broker import SumiTalkRunEventBroker
 from services.sumitalk_history_file import SUMITALK_HISTORY_FILE as _SUMITALK_HISTORY_FILE
 from services.sumitalk_history_file import load_sumitalk_histories
 from storage import r2_store
@@ -113,6 +114,9 @@ class RealtimeConnectionManager:
 
 
 _connections = RealtimeConnectionManager()
+
+
+_sumitalk_run_events = SumiTalkRunEventBroker()
 
 
 def _bearer_from_header(raw: str) -> str:
@@ -504,6 +508,10 @@ async def internal_publish(request: Request, x_realtime_token: str = Header(defa
     device_id, window_id, payload = _event_payload_from_internal(body)
     if not payload.get("type"):
         return JSONResponse({"ok": False, "error": "missing_type"}, status_code=400)
+    if payload.get("type") == "sumitalk_chat_event":
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        if not await _sumitalk_run_events.publish(event):
+            return JSONResponse({"ok": False, "error": "invalid_sumitalk_chat_event"}, status_code=400)
     sent = await _connections.broadcast(payload, device_id=device_id, window_id=window_id)
     if payload.get("type") in {"device_actions", "chat_ui_device_actions"}:
         actions = payload.get("actions") if isinstance(payload.get("actions"), list) else []
@@ -518,6 +526,36 @@ async def internal_publish(request: Request, x_realtime_token: str = Header(defa
             [str((x or {}).get("type") or "") for x in actions if isinstance(x, dict)],
         )
     return {"ok": True, "sent": sent, "type": payload.get("type"), "event_id": payload.get("event_id")}
+
+
+@app.get("/internal/sumitalk-chat-events/stream")
+async def internal_sumitalk_chat_event_stream(
+    request: Request,
+    job_id: str,
+    after_seq: int = 0,
+    x_realtime_token: str = Header(default="", alias="X-Realtime-Token"),
+):
+    ok, code = _internal_publish_authorized(request, x_realtime_token)
+    if not ok:
+        return JSONResponse({"ok": False, "error": code}, status_code=403 if code == "local_only" else 401)
+    clean_job_id = str(job_id or "").strip()
+    if not clean_job_id:
+        return JSONResponse({"ok": False, "error": "missing_job_id"}, status_code=400)
+
+    async def _generate():
+        async for event in _sumitalk_run_events.subscribe(clean_job_id, max(0, int(after_seq or 0))):
+            if await request.is_disconnected():
+                return
+            if event is None:
+                yield ": ping\n\n"
+                continue
+            yield "data: " + json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/realtime/latest")

@@ -2,6 +2,7 @@ import codecs
 import json
 import logging
 import os
+import queue
 import re
 import sqlite3
 import threading
@@ -55,6 +56,16 @@ _TERMINAL_EVENT_STATUS = {
 }
 _TERMINAL_STATUS_EVENT = {value: key for key, value in _TERMINAL_EVENT_STATUS.items()}
 _SUMITALK_NONSTREAM_SHARED_GAME_IDS = frozenset({"private_board", "wenyou", "captivity_simulator"})
+_LIVE_EVENT_LOCK = threading.Lock()
+_LIVE_EVENT_CURSOR: dict[str, int] = {}
+_LIVE_EVENT_TERMINAL: dict[str, str] = {}
+_LIVE_ASSISTANT_PART: dict[str, tuple[str, int]] = {}
+_LIVE_EVENT_DISPATCH_QUEUE: queue.Queue = queue.Queue()
+_LIVE_EVENT_PERSIST_QUEUE: queue.Queue = queue.Queue()
+_LIVE_EVENT_DISPATCH_THREAD: threading.Thread | None = None
+_LIVE_EVENT_PERSIST_THREAD: threading.Thread | None = None
+_LIVE_EVENT_DISPATCH_THREAD_LOCK = threading.Lock()
+_LIVE_EVENT_PERSIST_THREAD_LOCK = threading.Lock()
 
 
 @contextmanager
@@ -419,6 +430,10 @@ def get_sumitalk_chat_terminal_event(job_id: str) -> dict | None:
 def _latest_sumitalk_chat_assistant_part(job_id: str) -> tuple[str, int] | None:
     if not valid_sumitalk_chat_job_id(job_id):
         return None
+    with _LIVE_EVENT_LOCK:
+        live_part = _LIVE_ASSISTANT_PART.get(job_id)
+    if live_part:
+        return live_part
     _ensure_schema()
     with _connect() as conn:
         row = conn.execute(
@@ -560,17 +575,277 @@ def append_sumitalk_chat_job_event(job_id: str, kind: str, payload: dict | None 
         return _append_sumitalk_chat_job_event_record(job_id, event_kind, payload or {}, current)
 
 
+def _build_sumitalk_chat_live_event(job_id: str, event_kind: str, payload: dict, seq: int) -> dict:
+    terminal = event_kind in _TERMINAL_EVENT_KINDS
+    clean_payload = _clean_chat_event_payload(
+        payload or {},
+        text_limit=_SUMITALK_CHAT_FINAL_TEXT_LIMIT if terminal else _SUMITALK_CHAT_EVENT_TEXT_LIMIT,
+        preserve_whitespace=terminal or event_kind.endswith("_delta"),
+    )
+    created_ts = time.time()
+    created_at = now_beijing_iso()
+    return {
+        **clean_payload,
+        "seq": seq,
+        "event_id": f"{job_id}:{seq}",
+        "run_id": job_id,
+        "job_id": job_id,
+        "kind": event_kind,
+        "created_at": created_at,
+        "created_ts": created_ts,
+        "payload": clean_payload,
+    }
+
+
+def _persist_sumitalk_chat_live_event(event: dict) -> None:
+    job_id = str(event.get("job_id") or "").strip()
+    event_kind = str(event.get("kind") or "").strip()
+    seq = int(event.get("seq") or 0)
+    if not valid_sumitalk_chat_job_id(job_id) or not event_kind or seq <= 0:
+        return
+    _ensure_schema()
+    with _connect() as conn:
+        try:
+            conn.execute(
+                """
+                INSERT INTO sumitalk_chat_run_events
+                    (job_id, seq, event_id, kind, event_json, created_at, created_ts, terminal)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    seq,
+                    str(event.get("event_id") or f"{job_id}:{seq}"),
+                    event_kind,
+                    json.dumps(event, ensure_ascii=False, separators=(",", ":")),
+                    str(event.get("created_at") or now_beijing_iso()),
+                    float(event.get("created_ts") or time.time()),
+                    1 if event_kind in _TERMINAL_EVENT_KINDS else 0,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            row = conn.execute(
+                "SELECT event_id FROM sumitalk_chat_run_events WHERE job_id=? AND seq=?",
+                (job_id, seq),
+            ).fetchone()
+            if not row or str(row["event_id"] or "") != str(event.get("event_id") or ""):
+                raise
+
+    if event_kind.endswith("_delta"):
+        return
+    with _sumitalk_chat_job_state_lock():
+        current = read_sumitalk_chat_job_state(job_id)
+        if not isinstance(current, dict):
+            return
+        events = [row for row in (current.get("events") or []) if isinstance(row, dict)]
+        event_id = str(event.get("event_id") or "")
+        changed = not any(str(row.get("event_id") or "") == event_id for row in events)
+        if changed:
+            events.append(event)
+            events.sort(key=lambda row: int(row.get("seq") or 0))
+            current["events"] = events[-_SUMITALK_CHAT_EVENT_LIMIT:]
+        previous_seq = int(current.get("event_seq") or 0)
+        if seq > previous_seq:
+            current["event_seq"] = seq
+            changed = True
+        if changed:
+            current["updated_ts"] = time.time()
+            current["updated_at"] = now_beijing_iso()
+            write_sumitalk_chat_job_state(current)
+
+
+def _dispatch_sumitalk_chat_live_events() -> None:
+    publish_retry_at = 0.0
+    while True:
+        item = _LIVE_EVENT_DISPATCH_QUEUE.get()
+        try:
+            if isinstance(item, threading.Event):
+                item.set()
+                continue
+            event, device_id, window_id = item
+            from services.realtime_publish import publish_sumitalk_chat_event
+
+            if time.monotonic() >= publish_retry_at:
+                try:
+                    if not publish_sumitalk_chat_event(device_id, event, window_id=window_id):
+                        publish_retry_at = time.monotonic() + 1.0
+                except Exception:
+                    publish_retry_at = time.monotonic() + 1.0
+                    sumitalk_logger.warning(
+                        "[SumiTalk] live_event_publish_failed job_id=%s seq=%s",
+                        event.get("job_id"),
+                        event.get("seq"),
+                        exc_info=True,
+                    )
+            _LIVE_EVENT_PERSIST_QUEUE.put(event)
+        finally:
+            _LIVE_EVENT_DISPATCH_QUEUE.task_done()
+
+
+def _persist_sumitalk_chat_live_events() -> None:
+    while True:
+        item = _LIVE_EVENT_PERSIST_QUEUE.get()
+        try:
+            if isinstance(item, threading.Event):
+                item.set()
+                continue
+            event = item
+
+            for attempt in range(3):
+                try:
+                    _persist_sumitalk_chat_live_event(event)
+                    break
+                except sqlite3.OperationalError:
+                    if attempt < 2:
+                        time.sleep(0.05 * (attempt + 1))
+                        continue
+                    sumitalk_logger.exception(
+                        "[SumiTalk] live_event_persist_failed job_id=%s seq=%s",
+                        event.get("job_id"),
+                        event.get("seq"),
+                    )
+                except Exception:
+                    sumitalk_logger.exception(
+                        "[SumiTalk] live_event_persist_failed job_id=%s seq=%s",
+                        event.get("job_id"),
+                        event.get("seq"),
+                    )
+                    break
+            if str(event.get("kind") or "") in _TERMINAL_EVENT_KINDS:
+                job_id = str(event.get("job_id") or "")
+                with _LIVE_EVENT_LOCK:
+                    _LIVE_EVENT_CURSOR.pop(job_id, None)
+                    _LIVE_ASSISTANT_PART.pop(job_id, None)
+        finally:
+            _LIVE_EVENT_PERSIST_QUEUE.task_done()
+
+
+def _ensure_sumitalk_chat_live_event_dispatcher() -> None:
+    global _LIVE_EVENT_DISPATCH_THREAD, _LIVE_EVENT_PERSIST_THREAD
+    thread = _LIVE_EVENT_DISPATCH_THREAD
+    if thread is None or not thread.is_alive():
+        with _LIVE_EVENT_DISPATCH_THREAD_LOCK:
+            thread = _LIVE_EVENT_DISPATCH_THREAD
+            if thread is None or not thread.is_alive():
+                thread = threading.Thread(
+                    target=_dispatch_sumitalk_chat_live_events,
+                    name="sumitalk-live-events",
+                    daemon=True,
+                )
+                _LIVE_EVENT_DISPATCH_THREAD = thread
+                thread.start()
+    persist_thread = _LIVE_EVENT_PERSIST_THREAD
+    if persist_thread is None or not persist_thread.is_alive():
+        with _LIVE_EVENT_PERSIST_THREAD_LOCK:
+            persist_thread = _LIVE_EVENT_PERSIST_THREAD
+            if persist_thread is None or not persist_thread.is_alive():
+                persist_thread = threading.Thread(
+                    target=_persist_sumitalk_chat_live_events,
+                    name="sumitalk-live-event-store",
+                    daemon=True,
+                )
+                _LIVE_EVENT_PERSIST_THREAD = persist_thread
+                persist_thread.start()
+
+
+def flush_sumitalk_chat_live_events(timeout: float = 5.0) -> bool:
+    _ensure_sumitalk_chat_live_event_dispatcher()
+    deadline = time.monotonic() + max(0.1, float(timeout or 0.1))
+    dispatch_barrier = threading.Event()
+    _LIVE_EVENT_DISPATCH_QUEUE.put(dispatch_barrier)
+    if not dispatch_barrier.wait(max(0.0, deadline - time.monotonic())):
+        return False
+    persist_barrier = threading.Event()
+    _LIVE_EVENT_PERSIST_QUEUE.put(persist_barrier)
+    return persist_barrier.wait(max(0.0, deadline - time.monotonic()))
+
+
+def emit_live_sumitalk_chat_job_event(job_id: str, kind: str, payload: dict | None = None) -> dict | None:
+    job_id = str(job_id or "").strip()
+    event_kind = re.sub(r"[^a-zA-Z0-9_.:-]", "_", str(kind or "").strip())[:80]
+    if not valid_sumitalk_chat_job_id(job_id) or not event_kind:
+        return None
+    current = read_sumitalk_chat_job_state(job_id)
+    if not isinstance(current, dict):
+        return None
+    status = str(current.get("status") or "").strip().lower()
+    if status in _TERMINAL_JOB_STATUSES:
+        return None
+    merged_payload = {
+        "job_id": job_id,
+        "window_id": str(current.get("window_id") or "").strip(),
+        **dict(payload or {}),
+    }
+    _ensure_sumitalk_chat_live_event_dispatcher()
+    with _LIVE_EVENT_LOCK:
+        if job_id in _LIVE_EVENT_TERMINAL:
+            return None
+        if job_id not in _LIVE_EVENT_CURSOR:
+            state_seq = max(0, int(current.get("event_seq") or 0))
+            _LIVE_EVENT_CURSOR[job_id] = latest_sumitalk_chat_job_event_seq(job_id) if state_seq else 0
+        seq = _LIVE_EVENT_CURSOR[job_id] + 1
+        event = _build_sumitalk_chat_live_event(job_id, event_kind, merged_payload, seq)
+        _LIVE_EVENT_CURSOR[job_id] = seq
+        if event_kind in _TERMINAL_EVENT_KINDS:
+            _LIVE_EVENT_TERMINAL[job_id] = event_kind
+        if event_kind in {"assistant_text_started", "assistant_delta", "assistant_text_finished"}:
+            part_id = str(event.get("part_id") or "").strip()
+            if part_id:
+                try:
+                    round_no = max(0, int(event.get("round") or 0))
+                except Exception:
+                    round_no = 0
+                _LIVE_ASSISTANT_PART[job_id] = (part_id, round_no)
+        _LIVE_EVENT_DISPATCH_QUEUE.put(
+            (
+                event,
+                str(current.get("reply_target") or "").strip(),
+                str(event.get("window_id") or current.get("window_id") or "").strip(),
+            )
+        )
+    return event
+
+
 def finalize_sumitalk_chat_job(
     job_id: str,
     status: str,
     *,
     state_patch: dict | None = None,
     event_payload: dict | None = None,
+    live: bool = False,
 ) -> bool:
     terminal_status = str(status or "").strip().lower()
     event_kind = _TERMINAL_STATUS_EVENT.get(terminal_status)
     if not valid_sumitalk_chat_job_id(job_id) or not event_kind:
         return False
+    if live:
+        with _sumitalk_chat_job_state_lock():
+            current = read_sumitalk_chat_job_state(job_id)
+            if not isinstance(current, dict):
+                return False
+            current_status = str(current.get("status") or "").strip().lower()
+            if current_status in _TERMINAL_JOB_STATUSES:
+                return current_status == terminal_status
+            event = emit_live_sumitalk_chat_job_event(job_id, event_kind, event_payload or {})
+            if event is None:
+                return False
+            events = [row for row in (current.get("events") or []) if isinstance(row, dict)]
+            if not any(str(row.get("event_id") or "") == str(event.get("event_id") or "") for row in events):
+                events.append(event)
+            events.sort(key=lambda row: int(row.get("seq") or 0))
+            current.update(state_patch or {})
+            current["events"] = events[-_SUMITALK_CHAT_EVENT_LIMIT:]
+            current["event_seq"] = max(int(current.get("event_seq") or 0), int(event.get("seq") or 0))
+            current["status"] = terminal_status
+            current["updated_ts"] = time.time()
+            current["updated_at"] = now_beijing_iso()
+            write_sumitalk_chat_job_state(current)
+            with _LIVE_EVENT_LOCK:
+                _LIVE_EVENT_CURSOR.pop(job_id, None)
+                _LIVE_EVENT_TERMINAL.pop(job_id, None)
+                _LIVE_ASSISTANT_PART.pop(job_id, None)
+            return True
+    publish_terminal: tuple[str, str, dict] | None = None
     with _sumitalk_chat_job_state_lock():
         current = read_sumitalk_chat_job_state(job_id)
         if not isinstance(current, dict):
@@ -583,6 +858,7 @@ def finalize_sumitalk_chat_job(
             existing_status = _TERMINAL_EVENT_STATUS.get(str(existing_terminal.get("kind") or ""))
             if existing_status != terminal_status:
                 return False
+            event = existing_terminal
         else:
             event = _append_sumitalk_chat_job_event_record(
                 job_id,
@@ -598,7 +874,29 @@ def finalize_sumitalk_chat_job(
         current["updated_ts"] = time.time()
         current["updated_at"] = now_beijing_iso()
         write_sumitalk_chat_job_state(current)
-        return True
+        if (
+            current_status not in _TERMINAL_JOB_STATUSES
+            and str(current.get("execution_mode") or "").strip().lower() == "stream"
+        ):
+            publish_terminal = (
+                str(current.get("reply_target") or "").strip(),
+                str(current.get("window_id") or "").strip(),
+                event,
+            )
+    if publish_terminal:
+        from services.realtime_publish import publish_sumitalk_chat_event
+
+        device_id, window_id, event = publish_terminal
+        try:
+            publish_sumitalk_chat_event(device_id, event, window_id=window_id)
+        except Exception:
+            sumitalk_logger.debug(
+                "[SumiTalk] persisted_terminal_publish_failed job_id=%s kind=%s",
+                job_id,
+                event_kind,
+                exc_info=True,
+            )
+    return True
 
 
 def reconcile_sumitalk_chat_job_terminal_state(job_id: str, state: dict | None = None) -> dict | None:
@@ -667,7 +965,12 @@ def cleanup_sumitalk_chat_jobs() -> None:
                 data = json.loads(path.read_text(encoding="utf-8") or "{}")
                 updated_ts = float(data.get("updated_ts") or data.get("created_ts") or 0)
                 if updated_ts and updated_ts < cutoff:
+                    job_id = str(data.get("id") or path.stem)
                     path.unlink(missing_ok=True)
+                    with _LIVE_EVENT_LOCK:
+                        _LIVE_EVENT_CURSOR.pop(job_id, None)
+                        _LIVE_EVENT_TERMINAL.pop(job_id, None)
+                        _LIVE_ASSISTANT_PART.pop(job_id, None)
             except Exception:
                 try:
                     if path.stat().st_mtime < cutoff:
@@ -1331,7 +1634,7 @@ def _consume_sumitalk_chat_stream(result, job_id: str) -> tuple[int, dict]:
             if text:
                 content_parts.append(text)
                 if not rich_events_emitted and not text_started:
-                    append_sumitalk_chat_job_event(
+                    emit_live_sumitalk_chat_job_event(
                         job_id,
                         "assistant_text_started",
                         {
@@ -1344,7 +1647,7 @@ def _consume_sumitalk_chat_stream(result, job_id: str) -> tuple[int, dict]:
                     text_started = True
                 if not rich_events_emitted:
                     for event_text in _chat_event_text_chunks(text):
-                        append_sumitalk_chat_job_event(
+                        emit_live_sumitalk_chat_job_event(
                             job_id,
                             "assistant_delta",
                             {
@@ -1369,7 +1672,7 @@ def _consume_sumitalk_chat_stream(result, job_id: str) -> tuple[int, dict]:
     if not done_seen and not finish_reason:
         return 502, {"error": "流式响应异常中断"}
     if text_started:
-        append_sumitalk_chat_job_event(
+        emit_live_sumitalk_chat_job_event(
             job_id,
             "assistant_text_finished",
             {
@@ -1599,7 +1902,8 @@ def run_sumitalk_chat_job(
     ):
         state = read_sumitalk_chat_job_state(job_id) or {}
         return str(state.get("status") or "terminal").strip().lower() or "terminal"
-    append_sumitalk_chat_job_event(
+    event_emitter = emit_live_sumitalk_chat_job_event if execution_mode == "stream" else append_sumitalk_chat_job_event
+    event_emitter(
         job_id,
         "run_started",
         {
@@ -1679,6 +1983,7 @@ def run_sumitalk_chat_job(
                     "status_code": status_code,
                     "execution_mode": execution_mode,
                 },
+                live=execution_mode == "stream",
             )
             return "error"
         _stage("reply_ready", status_code=status_code)
@@ -1702,6 +2007,7 @@ def run_sumitalk_chat_job(
                 "finish_reason": finish_reason,
                 "execution_mode": execution_mode,
             },
+            live=execution_mode == "stream",
         ):
             state = read_sumitalk_chat_job_state(job_id) or {}
             return str(state.get("status") or "terminal").strip().lower() or "terminal"

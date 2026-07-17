@@ -3,7 +3,7 @@ from flask import Blueprint, jsonify, request
 from config import (
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
 )
-from storage import whitelist_store
+from storage import recent_window_store
 from utils.ip_allowlist import enforce_ip_allowlist
 from utils.miniapp_panel_auth import (
     enforce_panel_token,
@@ -75,7 +75,7 @@ register_aifarm_routes(bp)
 
 
 def _resolve_primary_chat_window_id() -> str:
-    recent = whitelist_store.list_recent_windows(limit=200) or []
+    recent = recent_window_store.list_recent_windows(limit=200) or []
     for w in recent:
         wid = str((w or {}).get("id") or "").strip()
         if wid.startswith("tg_"):

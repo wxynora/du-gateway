@@ -2,10 +2,6 @@ import re
 from urllib.parse import urlparse
 
 from config import (
-    TARGET_AI_URL,
-    TARGET_AI_API_KEY,
-    TARGET_AI_URLS,
-    TARGET_AI_API_KEYS,
     OPENROUTER_REASONING_MAX_TOKENS,
     OPENROUTER_VERBOSITY,
     OPENROUTER_ULTRA_THINK_ENABLED,
@@ -33,7 +29,7 @@ _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
 def get_forward_targets(request_model: str = None):
     """
     仅返回一个转发目标：当前 active 上游。
-    设计目的：关闭自动 fallback，多上游不可用时让你手动在 MiniApp 切换。
+    active 未配置时直接返回空，不从环境变量猜测其他上游。
     """
     try:
         from storage.upstream_store import get_active_item
@@ -47,20 +43,6 @@ def get_forward_targets(request_model: str = None):
         k = (active.get("api_key") or "").strip()
         if u:
             return [(u, k)]
-
-    # active 不存在时：退回环境变量“第一个”配置（仍不做 fallback 链式重试）
-    if TARGET_AI_URL and TARGET_AI_URL.strip():
-        return [(TARGET_AI_URL.strip(), TARGET_AI_API_KEY or "")]
-
-    if TARGET_AI_URLS:
-        u = (TARGET_AI_URLS[0] or "").strip()
-        if u:
-            keys = list(TARGET_AI_API_KEYS or [])
-            if not keys:
-                k0 = TARGET_AI_API_KEY or ""
-            else:
-                k0 = keys[0] or ""
-            return [(u, k0)]
 
     return []
 
@@ -85,7 +67,7 @@ def build_upstream_error_hint(last_err: str) -> str:
     active_label = active_upstream_label()
     detail = (last_err or "").strip() or "未知错误"
     return (
-        "【上游不可用】请先在 MiniApp -> 上游中转站切换后重试。\n"
+        "【上游不可用】请在 App 的上游中转站检查并保存选择。\n"
         f"当前 active：{active_label}\n"
         f"错误详情：{detail}"
     )
@@ -131,10 +113,6 @@ def get_active_upstream_url() -> str:
     except Exception:
         pass
 
-    if TARGET_AI_URL and TARGET_AI_URL.strip():
-        return TARGET_AI_URL.strip()
-    if TARGET_AI_URLS:
-        return (TARGET_AI_URLS[0] or "").strip()
     return ""
 
 
