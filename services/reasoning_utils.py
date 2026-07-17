@@ -4,6 +4,27 @@ import re
 THINK_BLOCK_RE = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL | re.IGNORECASE)
 
 
+class ReasoningStreamAccumulator:
+    """Accumulate explicit reasoning deltas and structured final snapshots."""
+
+    def __init__(self) -> None:
+        self._text = ""
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    def apply(self, source: str, text: str) -> tuple[str, str] | None:
+        value = str(text or "")
+        if not value:
+            return None
+        if source == "structured":
+            self._text = value
+            return "snapshot", value
+        self._text += value
+        return "delta", value
+
+
 def extract_thinking_from_content(content: str) -> tuple[str, str]:
     """
     把 content 里的 <think>...</think> / <thinking>...</thinking> 块提取出来。
@@ -106,34 +127,54 @@ def extract_reasoning_stream_source(obj: dict) -> tuple[str, str, list, bool]:
     if not isinstance(obj, dict):
         return "", "", [], False
 
-    scalar_obj = {
-        key: obj[key]
-        for key in ("reasoning", "reasoning_content", "thinking", "reasoning_details")
-        if key in obj
-    }
-    scalar_text, scalar_details, scalar_omitted = extract_reasoning_text_and_details(scalar_obj)
+    details = normalize_reasoning_details(obj.get("reasoning_details"))
+    _empty, _details, details_omitted = extract_reasoning_text_and_details(
+        {"reasoning_details": details}
+    )
+
+    scalar_text = ""
+    for key in ("reasoning", "reasoning_content", "thinking"):
+        value = obj.get(key)
+        if isinstance(value, str) and value:
+            scalar_text = value
+            break
 
     inline_text = ""
     content = obj.get("content")
     if isinstance(content, str) and THINK_BLOCK_RE.search(content):
         _visible, inline_text = extract_thinking_from_content(content)
 
-    structured_obj: dict = {}
+    structured_candidates: list[tuple[str, list, bool]] = []
     if isinstance(obj.get("thinking_blocks"), list):
-        structured_obj["thinking_blocks"] = obj["thinking_blocks"]
+        structured_candidates.append(
+            extract_reasoning_text_and_details({"thinking_blocks": obj["thinking_blocks"]})
+        )
     if isinstance(content, list):
-        structured_obj["content"] = content
-    structured_text, structured_details, structured_omitted = extract_reasoning_text_and_details(structured_obj)
+        structured_candidates.append(extract_reasoning_text_and_details({"content": content}))
 
-    details = [*scalar_details, *structured_details]
-    omitted = bool(scalar_omitted or structured_omitted)
-    if scalar_text:
-        return "scalar", scalar_text, details, omitted
-    if inline_text:
-        return "inline", inline_text, details, omitted
+    structured_text = ""
+    structured_details: list = []
+    structured_omitted = False
+    for candidate_text, candidate_details, candidate_omitted in structured_candidates:
+        structured_omitted = bool(structured_omitted or candidate_omitted)
+        if candidate_text and not structured_text:
+            structured_text = candidate_text
+            structured_details = candidate_details
+    if not structured_details:
+        for _candidate_text, candidate_details, candidate_omitted in structured_candidates:
+            if candidate_details and candidate_omitted:
+                structured_details = candidate_details
+                break
+
+    omitted = bool(details_omitted or structured_omitted)
+    canonical_details = [*details, *structured_details]
     if structured_text or structured_omitted:
-        return "structured", structured_text, details, omitted
-    return "", "", details, omitted
+        return "structured", structured_text, canonical_details, omitted
+    if scalar_text:
+        return "scalar", scalar_text, canonical_details, omitted
+    if inline_text:
+        return "inline", inline_text, canonical_details, omitted
+    return "", "", canonical_details, omitted
 
 
 def strip_thinking_from_response_json(resp_json: dict) -> dict:
@@ -185,6 +226,17 @@ def strip_reasoning_from_sse_chunk(chunk: bytes) -> bytes:
             if rk in delta:
                 del delta[rk]
                 changed = True
+        if isinstance(delta.get("content"), list):
+            filtered_content = []
+            for block in delta["content"]:
+                if isinstance(block, dict) and str(block.get("type") or "").strip() in {
+                    "thinking",
+                    "redacted_thinking",
+                }:
+                    changed = True
+                    continue
+                filtered_content.append(block)
+            delta["content"] = filtered_content
         # 剥离 delta.content 里的 <think> 块
         if isinstance(delta.get("content"), str) and THINK_BLOCK_RE.search(delta["content"]):
             stripped, _ = extract_thinking_from_content(delta["content"])
@@ -203,8 +255,7 @@ def parse_stream_to_message(chunks: list) -> dict:
     返回 {"content": str, "tool_calls": list or None, "reasoning": str|None, ...}。
     """
     content_parts = []
-    reasoning_parts = []
-    reasoning_source = ""
+    reasoning_stream = ReasoningStreamAccumulator()
     reasoning_details: list[dict] = []
     thinking_blocks: list[dict] = []
     reasoning_omitted = False
@@ -221,13 +272,10 @@ def parse_stream_to_message(chunks: list) -> dict:
             delta = (j.get("choices") or [{}])[0].get("delta") or {}
         except (json.JSONDecodeError, KeyError, TypeError):
             continue
-        if delta.get("content"):
+        if isinstance(delta.get("content"), str) and delta["content"]:
             content_parts.append(delta["content"])
         source, text, details, omitted = extract_reasoning_stream_source(delta)
-        if text and not reasoning_source:
-            reasoning_source = source
-        if text and source == reasoning_source:
-            reasoning_parts.append(text)
+        reasoning_stream.apply(source, text)
         if details:
             reasoning_details.extend(details)
         for block in delta.get("thinking_blocks") or []:
@@ -255,7 +303,7 @@ def parse_stream_to_message(chunks: list) -> dict:
     return {
         "content": "".join(content_parts),
         "tool_calls": sorted_tcs if sorted_tcs else None,
-        "reasoning": "".join(reasoning_parts).strip() or None,
+        "reasoning": reasoning_stream.text.strip() or None,
         "thinking_blocks": thinking_blocks or None,
         "reasoning_details": reasoning_details or None,
         "reasoning_omitted": reasoning_omitted,
