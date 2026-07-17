@@ -17,6 +17,7 @@ SPRING_DREAM_PROBABILITY_STEP = 0.05
 SPRING_DREAM_PROBABILITY_MAX = 0.70
 SPRING_DREAM_COOLDOWN_HOURS = 6
 SPRING_DREAM_MAX_PER_SLEEP = 3
+POST_SPRING_DREAM_WAKEUP_MAX_AGE_HOURS = 6
 SPRING_DREAM_TRIGGER_STATE_ID = "global"
 POST_SPRING_DREAM_WAKEUP_SECTION_ID = "post_spring_dream_wakeup"
 SPRING_DREAM_ARCHIVE_R2_PREFIX = "spring_dream_archives"
@@ -959,8 +960,6 @@ def maybe_prepare_spring_dream_wakeup(
     session_key = str((sleep_state or {}).get("sleep_session_key") or "").strip()
     if not session_key:
         session_key = _recent_session_key_for_night(night_date) or f"{night_date}|awake"
-    else:
-        session_key = _recent_session_key_for_night(night_date) or session_key
 
     roller = roll or random.random
     trigger_state = _spring_dream_trigger_state()
@@ -1376,21 +1375,50 @@ def _post_spring_dream_wakeup_window(now_dt: datetime) -> dict:
     }
 
 
-def _latest_pending_post_spring_dream_session() -> dict:
+def _current_pending_post_spring_dream_session(
+    *,
+    current_session_key: str,
+    now_dt: datetime,
+) -> dict:
+    clean_current_key = str(current_session_key or "").strip()
+    now_local = _as_beijing_datetime(now_dt)
+    cutoff = now_local - timedelta(hours=POST_SPRING_DREAM_WAKEUP_MAX_AGE_HOURS)
     _ensure_schema()
     with runtime_sqlite.connect() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             """
-            SELECT sleep_session_key
+            SELECT sleep_session_key, last_sent_at
             FROM spring_dream_sessions
             WHERE post_wakeup_pending > 0
             ORDER BY last_sent_at DESC, updated_at DESC
-            LIMIT 1
             """
-        ).fetchone()
-    if row is None:
-        return {}
-    return _session_row(str(row["sleep_session_key"] or "").strip())
+        ).fetchall()
+        current_key = ""
+        stale_keys: list[str] = []
+        for row in rows:
+            session_key = str(row["sleep_session_key"] or "").strip()
+            sent_at = parse_iso_to_beijing(str(row["last_sent_at"] or ""))
+            is_current = bool(clean_current_key) and session_key == clean_current_key
+            is_fresh = sent_at is not None and cutoff <= sent_at <= now_local
+            if is_current and is_fresh and not current_key:
+                current_key = session_key
+            else:
+                stale_keys.append(session_key)
+        if stale_keys:
+            conn.executemany(
+                """
+                UPDATE spring_dream_sessions
+                SET post_wakeup_pending=0, updated_at=?
+                WHERE sleep_session_key=?
+                """,
+                [(now_local.isoformat(), key) for key in stale_keys if key],
+            )
+            logger.info(
+                "清理失效春梦后唤醒状态 current_session=%s stale_sessions=%s",
+                clean_current_key or "none",
+                ",".join(stale_keys),
+            )
+    return _session_row(current_key) if current_key else {}
 
 
 def maybe_prepare_post_spring_dream_wakeup(
@@ -1408,7 +1436,14 @@ def maybe_prepare_post_spring_dream_wakeup(
         sleep_state = build_sleep_wakeup_state(now_dt)
     except Exception:
         sleep_state = {}
-    row = _latest_pending_post_spring_dream_session()
+    is_sleeping = bool((sleep_state or {}).get("is_sleeping"))
+    current_session_key = str((sleep_state or {}).get("sleep_session_key") or "").strip()
+    if require_sleeping and not is_sleeping:
+        current_session_key = ""
+    row = _current_pending_post_spring_dream_session(
+        current_session_key=current_session_key,
+        now_dt=now_dt,
+    )
     if not row or int(row.get("post_wakeup_pending") or 0) <= 0:
         return None
     session_key = str(row.get("sleep_session_key") or "").strip()

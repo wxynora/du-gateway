@@ -91,9 +91,12 @@
 - Webhook worker：`scripts/run_telegram_webhook_worker.py`
 - 主动唤醒：`services/telegram_proactive.py`
 - 主动唤醒进程：`scripts/run_telegram_proactive.py`
+- 春梦状态与归档：`services/spring_dream.py`
 - Telegram 发送与展示：`services/telegram_bot.py`
 
 当前边界：webhook 快速入队，聚合、聊天调用和回复由独立 worker 完成；主动唤醒不依赖 Gunicorn worker 常驻。
+
+春梦后唤醒只消费当前睡眠 session 中六小时内的 pending 状态，其他旧 session 会失效清理；网关空回复时使用同一梦境重试一次，成功后仍只记录一次发送。
 
 ### 4.3 QQ 与微信
 

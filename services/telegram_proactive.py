@@ -1838,24 +1838,32 @@ def _try_spring_dream_wakeup(window_id: str, uid: int, now_dt: datetime, now_iso
         except Exception as e:
             logger.warning("春梦唤醒 prompt 为空后释放预占名额失败 session=%s error=%s", str(prepared.get("sleep_session_key") or ""), e)
         return None
-    result = send_spring_dream_wakeup(
-        window_id=window_id,
-        target=str(uid or "").strip(),
-        event_text=prompt,
-        created_at=now_iso,
-        archive_meta={
-            "sleep_session_key": str(prepared.get("sleep_session_key") or ""),
-            "theme_id": str(prepared.get("theme_id") or ""),
-            "fragments": prepared.get("fragments") or [],
-            "sleep_source": str(prepared.get("sleep_source") or ""),
-            "roll": prepared.get("roll"),
-            "threshold": prepared.get("threshold"),
-            "miss_count_before": int(prepared.get("miss_count_before") or 0),
-            "count_before": int(prepared.get("count_before") or 0),
-            "count_after": int(prepared.get("count_after") or 0),
-            "max_per_sleep": int(prepared.get("max_per_sleep") or 0),
-        },
-    )
+    archive_meta = {
+        "sleep_session_key": str(prepared.get("sleep_session_key") or ""),
+        "theme_id": str(prepared.get("theme_id") or ""),
+        "fragments": prepared.get("fragments") or [],
+        "sleep_source": str(prepared.get("sleep_source") or ""),
+        "roll": prepared.get("roll"),
+        "threshold": prepared.get("threshold"),
+        "miss_count_before": int(prepared.get("miss_count_before") or 0),
+        "count_before": int(prepared.get("count_before") or 0),
+        "count_after": int(prepared.get("count_after") or 0),
+        "max_per_sleep": int(prepared.get("max_per_sleep") or 0),
+    }
+
+    def _send_once() -> dict:
+        return send_spring_dream_wakeup(
+            window_id=window_id,
+            target=str(uid or "").strip(),
+            event_text=prompt,
+            created_at=now_iso,
+            archive_meta=archive_meta,
+        )
+
+    result = _send_once()
+    if not bool((result or {}).get("ok")) and str((result or {}).get("error") or "") == "empty_gateway_reply":
+        logger.warning("春梦唤醒空回，使用同一梦境重试一次 window_id=%s", window_id)
+        result = _send_once()
     ok = bool((result or {}).get("ok"))
     stored = False
     if not ok:
