@@ -336,6 +336,34 @@ def update_music_melody_audio(
     return entry if ok else None
 
 
+def clear_music_melody_audio_by_keys(audio_keys: list[str]) -> int:
+    keys = {str(key or "").strip() for key in audio_keys if str(key or "").strip()}
+    if not keys:
+        return 0
+    changed = 0
+    with _write_lock:
+        payload, use_r2 = _read_payload()
+        items = payload.setdefault("items", {})
+        for cache_key, old in list(items.items()):
+            if not isinstance(old, dict) or str(old.get("audio_key") or "").strip() not in keys:
+                continue
+            entry = dict(old)
+            entry.update(
+                {
+                    "audio_key": "",
+                    "audio_url": "",
+                    "audio_format": "",
+                    "audio_content_type": "",
+                    "audio_size": 0,
+                }
+            )
+            items[cache_key] = entry
+            changed += 1
+        if changed and not _write_payload(payload, use_r2):
+            return 0
+    return changed
+
+
 def update_music_melody_lyrics_by_id(entry_id: str, lyrics: dict) -> Optional[dict]:
     eid = str(entry_id or "").strip()
     if not eid:

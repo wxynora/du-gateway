@@ -735,8 +735,8 @@ GET  /api/music/listen/cache?title=歌名&artist=歌手
 POST /api/music/listen/analyze
 POST /api/music/listen/result
 GET  /api/music/listen/recent
-POST /api/music/listen/audio
-GET  /api/music/listen/audio/<entry_id>.<ext>
+POST /api/music/listen/audio  # 上传供一起听播放的临时音频
+GET  /api/music/listen/audio/<entry_id>.<ext>  # TTL 内支持 Range 播放
 POST /api/music/listen/lyrics
 POST /api/music/listen/chat
 
@@ -756,7 +756,7 @@ POST /miniapp-api/music/netease/tracks/<track_id>/analyze
 ```
 
 注意：
-- 分析缓存按 `artist + title + provider + model + prompt_version` 存文字、结构化结果和可选 `lyrics`；手机一起听可额外把音频存到 R2/local，并通过 Range 播放接口供 `<audio>` 使用。
+- 分析缓存按 `artist + title + provider + model + prompt_version` 存文字、结构化结果和可选 `lyrics`；一起听音频本体只作为临时播放缓存，默认 TTL 2 小时（`MUSIC_AUDIO_TTL_SECONDS`），过期后删除 R2/local 文件并清空分析记录中的 `audio_*` 引用。
 - 默认模型为 `google/gemini-3-flash-preview`，备用 `google/gemini-2.5-flash`；Lite 下架时不要再作为默认。
 - 未命中缓存且没有上传普通音频文件时，接口会返回错误，不会自动扫描网易云/手机沙盒缓存。
 - 网易云预览播放只请求临时曲源和歌词；只有用户显式分析成功后，缓存记录才关联网易云曲目 ID，原生端可用它刷新过期曲源。
@@ -776,6 +776,11 @@ POST /miniapp-api/music/netease/tracks/<track_id>/analyze
 - 已完成：新增 `services/music_lyrics.py` 和 `/api/music/listen/lyrics`，支持普通 LRC `[mm:ss]` 行与网易云逐行 JSON 歌词；`ListenWithDuScreen` 使用固定高度歌词轨道按播放时间平滑滚动，高亮当前歌词块；无时间轴歌词会按时长做近似分布后显示。原文/译文相邻的歌词会合并为同一块，`text` 存原文，`translation` 存译文，避免日语和译文被算作两句滚动。
 - 已验证：`.venv/bin/python -m py_compile` 覆盖 `storage/music_melody_store.py`、`storage/music_audio_store.py`、`routes/music_melody_api.py`、`services/music_melody_analyzer.py`、`scripts/analyze_music_file.py`、`app.py`；`npm -C miniapp run build` 通过并生成 `ListenWithDuScreen-CABRJoPO.js`。
 - 未完成 / 下次继续：当前先做文字聊天随歌走；若要做“语音外放/一起听时渡开口说话”，再接 MiniMax TTS 或小爱外放链路。
+
+当前状态（2026-07-17 一起听音频本体 TTL）：
+- 已完成：保留 `POST /api/music/listen/audio` 上传和 `GET /api/music/listen/audio/<entry_id>.<ext>` Range 播放协议；上传到 R2 时写过期元数据，本地回退文件使用相同 TTL，默认 2 小时。
+- 已完成：音乐缓存查询、最近列表、分析、结果写入、音频上传和音频播放入口会触发带 5 分钟节流的过期清理；只扫描 `music_listen/audio/` 前缀和 `data/music_listen_audio` 目录，不扫整个 R2 或磁盘。删除成功后只清空分析记录的 `audio_key/audio_url/audio_format/audio_content_type/audio_size`，不改分析结果时间与排序。
+- 保留：网易云临时曲源、曲目 ID、歌词、结构化分析和一起听入口均未修改；网易云分析下载仍只在内存与自动清理的 `TemporaryDirectory` 中处理。
 
 当前状态（2026-05-12）：
 - 已完成并推送：`d6ca54a Stop log page error toasts` 已到 `main`；日志页不再弹应用内 `日志报错` toast，系统通知继续走后端 `log_error_alert` -> `show_system_notification` -> 安卓壳 `FloatingBallService` 的现有通知栏链路。

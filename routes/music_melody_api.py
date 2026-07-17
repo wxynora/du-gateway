@@ -10,8 +10,14 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from services.music_melody_analyzer import MusicMelodyError, analyze_music_melody
 from services.music_lyrics import normalize_lyrics_payload, parse_lyrics_text
 from storage import upstream_store
-from storage.music_audio_store import get_music_audio, music_audio_content_type, save_music_audio
+from storage.music_audio_store import (
+    get_music_audio,
+    music_audio_content_type,
+    prune_expired_music_audio,
+    save_music_audio,
+)
 from storage.music_melody_store import (
+    clear_music_melody_audio_by_keys,
     get_music_melody_entry,
     get_music_melody_entry_by_id,
     list_music_melody_entries,
@@ -73,6 +79,15 @@ def _duration_from_entry(entry: dict) -> float:
             continue
         max_end = max(max_end, _float_value(segment.get("end")))
     return max_end
+
+
+def _prune_music_audio_cache() -> None:
+    try:
+        expired_keys = prune_expired_music_audio()
+        if expired_keys:
+            clear_music_melody_audio_by_keys(expired_keys)
+    except Exception as e:
+        current_app.logger.warning("音乐音频 TTL 清理失败，不影响本次一起听请求: %s", e)
 
 
 def _format_clock(seconds: float) -> str:
@@ -336,6 +351,7 @@ def _build_listen_context_system(entry: dict, segment: dict, current_time: float
 @bp.route("/api/music-melody/cache", methods=["GET"])
 @bp.route("/api/music/listen/cache", methods=["GET"])
 def music_melody_cache():
+    _prune_music_audio_cache()
     title, artist, provider, model, prompt_version = _cache_query_params()
     if not title:
         return jsonify({"ok": False, "error": "缺少 title"}), 400
@@ -346,6 +362,7 @@ def music_melody_cache():
 @bp.route("/api/music-melody/recent", methods=["GET"])
 @bp.route("/api/music/listen/recent", methods=["GET"])
 def music_melody_recent():
+    _prune_music_audio_cache()
     limit = int(request.args.get("limit") or 50)
     return jsonify({"ok": True, "items": list_music_melody_entries(limit=limit)})
 
@@ -353,6 +370,7 @@ def music_melody_recent():
 @bp.route("/api/music-melody/analyze", methods=["POST"])
 @bp.route("/api/music/listen/analyze", methods=["POST"])
 def music_melody_analyze():
+    _prune_music_audio_cache()
     data = _form_or_json()
     title = str(data.get("title") or "").strip()
     artist = str(data.get("artist") or "").strip()
@@ -386,6 +404,7 @@ def music_melody_analyze():
 @bp.route("/api/music-melody/result", methods=["POST"])
 @bp.route("/api/music/listen/result", methods=["POST"])
 def music_melody_result():
+    _prune_music_audio_cache()
     data = request.get_json(silent=True) or {}
     title = str(data.get("title") or "").strip()
     artist = str(data.get("artist") or "").strip()
@@ -431,6 +450,7 @@ def music_melody_result():
 @bp.route("/api/music-melody/audio", methods=["POST"])
 @bp.route("/api/music/listen/audio", methods=["POST"])
 def music_melody_audio_upload():
+    _prune_music_audio_cache()
     data = _form_or_json()
     title = str(data.get("title") or request.form.get("title") or "").strip()
     artist = str(data.get("artist") or request.form.get("artist") or "").strip()
@@ -643,6 +663,7 @@ def _audio_response(data: bytes, content_type: str, filename: str) -> Response:
 @bp.route("/api/music-melody/audio/<entry_id>.<ext>", methods=["GET"])
 @bp.route("/api/music/listen/audio/<entry_id>.<ext>", methods=["GET"])
 def music_melody_audio(entry_id: str, ext: str):
+    _prune_music_audio_cache()
     entry = get_music_melody_entry_by_id(entry_id)
     if not entry:
         return Response(b"", status=404, mimetype="text/plain; charset=utf-8")
