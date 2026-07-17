@@ -55,6 +55,24 @@ class SecretDrawerContractTests(unittest.TestCase):
         self.assertEqual(result["error"], "INVALID_TYPE")
         self.assertIn("photo", result["valid_types"])
 
+    def test_save_dream_prefers_assistant_text_then_falls_back_to_user(self) -> None:
+        item, error = secret_drawer._build_item_from_payload(
+            {"action": "save_dream"},
+            {
+                "assistant_text": "渡刚刚生成的完整梦境",
+                "user_message": {"role": "user", "content": "把这个梦存起来"},
+            },
+        )
+        self.assertEqual(error, "")
+        self.assertEqual(item["content"], "渡刚刚生成的完整梦境")
+
+        fallback, error = secret_drawer._build_item_from_payload(
+            {"action": "save_dream"},
+            {"user_message": {"role": "user", "content": "昨晚梦见下雨了"}},
+        )
+        self.assertEqual(error, "")
+        self.assertEqual(fallback["content"], "昨晚梦见下雨了")
+
 
 if __name__ == "__main__":
     unittest.main()

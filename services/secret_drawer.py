@@ -193,7 +193,7 @@ def _build_item_from_payload(payload: dict, context: dict) -> tuple[dict | None,
             return None, "当前消息里没有可保存的图片"
         content = content or str(payload.get("note") or user_text or "").strip()
     elif action == "save_dream":
-        content = content or user_text
+        content = content or assistant_text or user_text
     elif action == "save_note":
         content = content or str(payload.get("note") or "").strip()
     elif action == "save_surf" or item_type == "surf":
