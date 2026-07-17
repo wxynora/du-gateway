@@ -41,7 +41,7 @@ from services.telegram_bot import (
     _sanitize_reply_for_telegram,
     send_rich_message,
 )
-from services import wakeup_state
+from services import wakeup_event_log, wakeup_state
 from services.conversation_followup import (
     FOLLOWUP_TICK_SECONDS,
     send_post_spring_dream_wakeup,
@@ -1054,6 +1054,82 @@ def _schedule_target_dt_for_now(it: dict, now_dt: datetime) -> Optional[datetime
     return None
 
 
+def _schedule_next_target_dt(it: dict, now_dt: datetime) -> Optional[datetime]:
+    if not bool(it.get("enabled", True)):
+        return None
+    rep = str(it.get("repeat") or "once").strip().lower() or "once"
+    anchor = parse_iso_to_beijing(str(it.get("datetime") or "").strip())
+    grace = _schedule_due_grace_seconds()
+    lower_bound = now_dt - timedelta(seconds=grace)
+    if rep == "once":
+        return anchor if anchor and anchor >= lower_bound else None
+    if rep == "daily":
+        h, m = _hm_from_item(it, "daily_time", anchor)
+        target = now_dt.replace(hour=h, minute=m, second=0, microsecond=0)
+        return target if target >= lower_bound else target + timedelta(days=1)
+    if rep == "weekly":
+        try:
+            target_w = int(it.get("weekly_weekday"))
+        except Exception:
+            target_w = anchor.weekday() if anchor else 0
+        if target_w < 0 or target_w > 6:
+            target_w = 0
+        h, m = _hm_from_item(it, "weekly_time", anchor)
+        days = (target_w - now_dt.weekday()) % 7
+        target = (now_dt + timedelta(days=days)).replace(hour=h, minute=m, second=0, microsecond=0)
+        return target if target >= lower_bound else target + timedelta(days=7)
+    return None
+
+
+def _schedule_event_source_key(it: dict) -> str:
+    item_id = str(it.get("id") or "").strip()
+    if item_id:
+        return f"schedule:{item_id}"
+    return f"schedule:{str(it.get('title') or '').strip()}:{str(it.get('datetime') or '').strip()}"
+
+
+def _sync_schedule_event_plans(items: list[dict], fired: set[str], now_dt: datetime) -> None:
+    grace = _schedule_due_grace_seconds()
+    expired_before = (now_dt - timedelta(seconds=grace)).strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    wakeup_event_log.expire_active_events(
+        kind="schedule",
+        before_iso=expired_before,
+        error="提醒已错过允许的触发窗口",
+    )
+    active_sources: set[str] = set()
+    for it in items:
+        if not isinstance(it, dict) or not bool(it.get("enabled", True)):
+            continue
+        target_dt = _schedule_next_target_dt(it, now_dt)
+        if not target_dt:
+            continue
+        rep = str(it.get("repeat") or "once").strip().lower() or "once"
+        occ_key = _schedule_due_occurrence_key(it, target_dt)
+        if occ_key in fired or _item_already_fired_for_occurrence(it, occ_key):
+            if rep == "once":
+                continue
+            target_dt += timedelta(days=1 if rep == "daily" else 7)
+        source_key = _schedule_event_source_key(it)
+        active_sources.add(source_key)
+        title = str(it.get("title") or "提醒").strip() or "提醒"
+        note = str(it.get("note") or "").strip()
+        is_calendar_event = note.startswith("由渡创建系统行程")
+        wakeup_event_log.plan_event(
+            kind="schedule",
+            source_key=source_key,
+            planned_at=target_dt.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+            reason=title,
+            reason_code="calendar_event" if is_calendar_event else "system_alarm",
+            metadata={"repeat": rep},
+            replace_reason="提醒时间或设置已变更",
+        )
+    wakeup_event_log.cancel_missing_plans(
+        kind="schedule",
+        active_source_keys=active_sources,
+        reason="提醒已关闭或删除",
+    )
+
+
 def _is_schedule_due_now(it: dict, now_dt: datetime) -> bool:
     target_dt = _schedule_target_dt_for_now(it, now_dt)
     if not target_dt:
@@ -1077,6 +1153,7 @@ def schedule_tick(target_user_id: int = 0) -> dict:
 
     items = r2_store.get_schedule_items() or []
     fired = r2_store.get_schedule_fired_keys()
+    _sync_schedule_event_plans(items, fired, now_dt)
     sent = 0
     disabled_once = 0
     deleted_once_expired = 0
@@ -1140,6 +1217,15 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             f"{('备注：' + note + '。') if note else ''}"
             "请像平时聊天那样自然回复；如果有多句，请用换行分段。"
         )
+        schedule_event = wakeup_event_log.start_event(
+            kind="schedule",
+            source_key=_schedule_event_source_key(it),
+            planned_at=(_schedule_target_dt_for_now(it, now_dt) or now_dt).strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+            reason=title,
+            reason_code=wakeup_kind,
+            metadata={"repeat": rep, "occurrence_key": occ_key},
+        )
+        schedule_event_id = str(schedule_event.get("event_id") or "")
         try:
             recent_context = resolve_recent_reply_context() or {}
         except Exception as e:
@@ -1190,10 +1276,12 @@ def schedule_tick(target_user_id: int = 0) -> dict:
         )
         if not reply_text:
             logger.warning("闹钟提醒生成空回复 uid=%s item_id=%s", uid, str(it.get("id") or ""))
+            wakeup_event_log.record_attempt_error(schedule_event_id, "提醒回复为空")
             continue
         text_to_send = _sanitize_reply_for_telegram(reply_text).strip()
         if not text_to_send:
             logger.warning("闹钟提醒清洗后为空 uid=%s item_id=%s", uid, str(it.get("id") or ""))
+            wakeup_event_log.record_attempt_error(schedule_event_id, "提醒回复清洗后为空")
             continue
         ok = False
         sent_channel = ""
@@ -1211,7 +1299,14 @@ def schedule_tick(target_user_id: int = 0) -> dict:
                 break
         logger.info("闹钟触发结果 uid=%s item_id=%s channel=%s ok=%s", uid, str(it.get("id") or ""), sent_channel or "none", ok)
         if not ok:
+            wakeup_event_log.record_attempt_error(schedule_event_id, "提醒消息投递失败")
             continue
+        wakeup_event_log.finish_event(
+            schedule_event_id,
+            success=True,
+            channel=sent_channel,
+            reply_preview=text_to_send[:120],
+        )
         r2_store.add_schedule_fired_key(occ_key)
         fired.add(occ_key)
         sent += 1
@@ -2390,6 +2485,141 @@ def _ensure_scheduler_state(kind: str, source_id: str, due_at: str, payload: dic
     )
 
 
+def _random_event_source_key(source_id: str) -> str:
+    return f"random_proactive:{str(source_id or 'default').strip() or 'default'}"
+
+
+def _plan_random_event(source_id: str, planned_at: str, reason: str = "随机主动唤醒") -> dict:
+    due_at = str(planned_at or "").strip()
+    if not due_at:
+        return {}
+    return wakeup_event_log.plan_event(
+        kind="random_proactive",
+        source_key=_random_event_source_key(source_id),
+        planned_at=due_at,
+        reason=reason,
+        reason_code="random_proactive",
+        replace_reason="随机唤醒时间已重新安排",
+    )
+
+
+def _finish_random_event(event_id: str, result: dict) -> None:
+    clean_id = str(event_id or "").strip()
+    if not clean_id:
+        return
+    data = result if isinstance(result, dict) else {}
+    wake_mode = str(data.get("wake_mode") or "random_decision").strip() or "random_decision"
+    decision_reason = str(
+        data.get("du_intent_reason")
+        or data.get("du_reason")
+        or data.get("du_reason_after_surf")
+        or ""
+    ).strip()
+    if bool(data.get("sent")):
+        final_kind = {
+            "spring_dream": "spring_dream",
+            "post_spring_dream": "post_spring_dream",
+        }.get(wake_mode, "random_proactive")
+        wakeup_event_log.finish_event(
+            clean_id,
+            success=True,
+            kind=final_kind,
+            reason_code=wake_mode,
+            reason=decision_reason,
+            channel=str(data.get("channel") or ""),
+            reply_preview=str(data.get("reply_preview") or data.get("text_preview") or "")[:120],
+        )
+        return
+    error = str(data.get("error") or "").strip()
+    skip_reason = str(data.get("skip_reason") or "").strip()
+    if error or not bool(data.get("ok", False)):
+        wakeup_event_log.finish_event(
+            clean_id,
+            success=False,
+            error=error or "随机唤醒执行失败",
+            reason_code=wake_mode,
+        )
+        return
+    if skip_reason in {"no_delivery_channel", "empty_after_sanitize"}:
+        message = "没有可用发送入口" if skip_reason == "no_delivery_channel" else "回复清洗后为空"
+        wakeup_event_log.finish_event(
+            clean_id,
+            success=False,
+            error=message,
+            reason_code=wake_mode,
+        )
+        return
+    action = str(data.get("du_action") or "").strip().lower()
+    action_result_keys = {
+        "diary": "diary",
+        "forum": "forum",
+        "drawer": "drawer",
+        "game": "game",
+    }
+    if action in action_result_keys:
+        summary = data.get(action_result_keys[action])
+        summary = summary if isinstance(summary, dict) else {}
+        action_ok = bool(data.get(f"{action}_execution_ok")) or bool(summary.get("ok"))
+        if action_ok:
+            wakeup_event_log.finish_event(
+                clean_id,
+                success=True,
+                reason_code=f"action_{action}",
+                reason=decision_reason,
+                reply_preview=str(summary.get("reply_preview") or "")[:120],
+            )
+        else:
+            wakeup_event_log.finish_event(
+                clean_id,
+                success=False,
+                error=str(summary.get("error") or f"{action} 动作执行失败")[:500],
+                reason_code=f"action_{action}",
+                reason=decision_reason,
+            )
+        return
+    surf_summary = data.get("surf")
+    if isinstance(surf_summary, dict):
+        if bool(surf_summary.get("ok")):
+            wakeup_event_log.finish_event(
+                clean_id,
+                success=True,
+                reason_code="action_surf",
+                reason=decision_reason,
+                reply_preview="；".join(
+                    str(x or "").strip()
+                    for x in (surf_summary.get("titles") or [])
+                    if str(x or "").strip()
+                )[:120],
+            )
+        else:
+            wakeup_event_log.finish_event(
+                clean_id,
+                success=False,
+                error=str(surf_summary.get("error") or "surf 动作执行失败")[:500],
+                reason_code="action_surf",
+                reason=decision_reason,
+            )
+        return
+    if action in {"send_message", "empty", "error", "unknown"} or str(data.get("text_preview") or "").strip():
+        failure = {
+            "empty": "主动决策回复为空",
+            "error": "主动决策执行失败",
+            "unknown": "主动决策类型无法识别",
+        }.get(action, "主动消息投递失败")
+        wakeup_event_log.finish_event(
+            clean_id,
+            success=False,
+            error=failure,
+            reason_code=action or wake_mode,
+            reason=decision_reason,
+        )
+        return
+    if skip_reason == "recent_activity":
+        wakeup_event_log.cancel_event(clean_id, "小玥在预定时间前发来了新消息")
+        return
+    wakeup_event_log.cancel_event(clean_id, decision_reason or "渡决定这次不打扰")
+
+
 def _state_status(result: dict, fired: bool) -> str:
     if not bool((result or {}).get("ok", False)) or str((result or {}).get("error") or "").strip():
         return wakeup_state.STATUS_ERROR
@@ -2448,6 +2678,12 @@ def _ensure_scheduler_states(
             _iso_after_seconds(delay),
             {"delay_seconds": delay, "reason": "startup"},
         )
+        random_state = wakeup_state.get_state(wakeup_state.KIND_RANDOM_PROACTIVE, source_id) or {}
+        _plan_random_event(
+            source_id,
+            str(random_state.get("next_due_at") or ""),
+            reason="随机主动唤醒",
+        )
         logger.info("下一次随机主动唤醒 scheduled_in=%.1fmin", delay / 60.0)
 
 
@@ -2461,6 +2697,17 @@ def _run_due_state(kind: str, uid: int, source_id: str, schedule_interval_s: int
     }.get(kind, kind)
     next_seconds = 60
     result: dict = {"ok": False, "error": f"unknown_wakeup_state_kind:{kind}"}
+    random_event_id = ""
+    if kind == wakeup_state.KIND_RANDOM_PROACTIVE:
+        random_state = wakeup_state.get_state(kind, source_id) or {}
+        random_event = wakeup_event_log.start_event(
+            kind="random_proactive",
+            source_key=_random_event_source_key(source_id),
+            planned_at=str(random_state.get("next_due_at") or now_beijing_iso()),
+            reason="随机主动唤醒",
+            reason_code="random_proactive",
+        )
+        random_event_id = str(random_event.get("event_id") or "")
     try:
         if kind == wakeup_state.KIND_SCHEDULE:
             next_seconds = schedule_interval_s
@@ -2475,12 +2722,18 @@ def _run_due_state(kind: str, uid: int, source_id: str, schedule_interval_s: int
             result = tick_proactive_triggers(uid)
             if bool((result or {}).get("sent")):
                 post_delay = _next_post_hard_trigger_delay_seconds()
+                post_due_at = _iso_after_seconds(post_delay)
                 wakeup_state.upsert_state(
                     kind=wakeup_state.KIND_RANDOM_PROACTIVE,
                     source_id=source_id,
-                    next_due_at=_iso_after_seconds(post_delay),
+                    next_due_at=post_due_at,
                     status=wakeup_state.STATUS_SCHEDULED,
                     payload={"delay_seconds": post_delay, "reason": "after_hard_trigger"},
+                )
+                _plan_random_event(
+                    source_id,
+                    post_due_at,
+                    reason="硬触发发送后重新安排随机唤醒",
                 )
                 logger.info("硬触发已发出，下一次随机主动唤醒重排 scheduled_in=%.1fmin", post_delay / 60.0)
         elif kind == wakeup_state.KIND_DU_DAILY_SLEEP:
@@ -2496,6 +2749,8 @@ def _run_due_state(kind: str, uid: int, source_id: str, schedule_interval_s: int
     fired = _result_fired(kind, result)
     next_due_at = _iso_after_seconds(next_seconds)
     status = _state_status(result, fired)
+    if kind == wakeup_state.KIND_RANDOM_PROACTIVE:
+        _finish_random_event(random_event_id, result)
     wakeup_state.record_result(
         kind=kind,
         source_id=source_id,
@@ -2504,6 +2759,8 @@ def _run_due_state(kind: str, uid: int, source_id: str, schedule_interval_s: int
         status=status,
         fired=fired,
     )
+    if kind == wakeup_state.KIND_RANDOM_PROACTIVE:
+        _plan_random_event(source_id, next_due_at, reason="随机主动唤醒")
     logger.info("%s tick result=%s next_due_at=%s state_status=%s", label, result, next_due_at, status)
 
 

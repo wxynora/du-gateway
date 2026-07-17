@@ -221,7 +221,7 @@ class MemoryRewriteRouteTest(unittest.TestCase):
     def test_memory_debug_returns_dynamic_items_with_the_existing_snapshot(self):
         dynamic_items = [{"id": "dynamic-1", "content": "原始动态记忆", "mention_count": 2}]
         with (
-            patch("routes.miniapp.memory_panel.whitelist_store.list_recent_windows", return_value=[]),
+            patch("routes.miniapp.memory_panel.recent_window_store.list_recent_windows", return_value=[]),
             patch.object(memory_rewrite.r2_store, "get_summary", return_value="", create=True),
             patch.object(memory_rewrite.r2_store, "get_dynamic_recall_debug_events", return_value=[], create=True),
             patch.object(memory_rewrite.r2_store, "get_dynamic_ds_audit_events", return_value=[], create=True),

@@ -146,6 +146,97 @@ function rawImageUrls(raw) {
   return out;
 }
 
+function imageMimeType(rawUrl, contentType = "") {
+  const cleanType = String(contentType || "").split(";", 1)[0].trim().toLowerCase();
+  if (["image/jpeg", "image/png", "image/gif", "image/webp"].includes(cleanType)) return cleanType;
+  try {
+    const pathname = new URL(String(rawUrl || "")).pathname.toLowerCase();
+    if (pathname.endsWith(".jpg") || pathname.endsWith(".jpeg")) return "image/jpeg";
+    if (pathname.endsWith(".png")) return "image/png";
+    if (pathname.endsWith(".gif")) return "image/gif";
+    if (pathname.endsWith(".webp")) return "image/webp";
+  } catch {
+    // The caller will treat an unknown image type as a failed image.
+  }
+  return "";
+}
+
+async function imageUrlToDataUrl(rawUrl) {
+  const url = String(rawUrl || "").trim();
+  if (!/^https?:\/\//i.test(url)) throw new Error("invalid image URL");
+  const maxBytes = Math.max(256 * 1024, envInt("QQ_GROUP_ACTIVITY_IMAGE_MAX_BYTES", 8 * 1024 * 1024));
+  const timeoutMs = Math.max(1000, envInt("QQ_GROUP_ACTIVITY_IMAGE_TIMEOUT_MS", 10000));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "image/*,*/*;q=0.8" },
+      signal: controller.signal,
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const mimeType = imageMimeType(url, r.headers.get("content-type"));
+    if (!mimeType) throw new Error(`unsupported content-type: ${r.headers.get("content-type") || "unknown"}`);
+    const declaredBytes = Number(r.headers.get("content-length") || 0);
+    if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+      throw new Error(`image too large: ${declaredBytes}`);
+    }
+    const bytes = Buffer.from(await r.arrayBuffer());
+    if (!bytes.length) throw new Error("empty image");
+    if (bytes.length > maxBytes) throw new Error(`image too large: ${bytes.length}`);
+    return `data:${mimeType};base64,${bytes.toString("base64")}`;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolveGroupActivityImages(rows) {
+  const candidates = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    for (const raw of Array.isArray(row?.images) ? row.images : []) {
+      const url = String(raw || "").trim();
+      if (/^https?:\/\//i.test(url) && !candidates.includes(url)) candidates.push(url);
+    }
+  }
+  const selected = candidates.slice(-5);
+  const resolved = new Map();
+  await Promise.all(selected.map(async (url) => {
+    try {
+      resolved.set(url, { dataUrl: await imageUrlToDataUrl(url), failed: false });
+    } catch (e) {
+      resolved.set(url, { dataUrl: "", failed: true });
+      let host = "unknown";
+      try { host = new URL(url).hostname || host; } catch {}
+      console.log(`[qq-onebot] 群活动图片转 base64 失败 host=${host} error=${String(e?.message || e)}`);
+    }
+  }));
+  return resolved;
+}
+
+function activityRowWithResolvedImages(row, resolved) {
+  const imageRefs = Array.isArray(row?.images) ? row.images : [];
+  const images = [];
+  let failedCount = 0;
+  for (const raw of imageRefs) {
+    const result = resolved.get(String(raw || "").trim());
+    if (!result) {
+      failedCount += 1;
+      continue;
+    }
+    if (result.dataUrl) images.push(result.dataUrl);
+    else if (result.failed) failedCount += 1;
+  }
+  const cleanText = String(row?.text || "")
+    .replace(/\[(?:image|图片)\]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const text = [
+    cleanText,
+    ...Array.from({ length: failedCount }, () => "【图片】"),
+  ].filter(Boolean).join(" ");
+  return { ...row, text, images };
+}
+
 function filenameFromUrl(rawUrl, fallback = "voice") {
   try {
     const u = new URL(String(rawUrl || ""));
@@ -989,7 +1080,7 @@ function rowForActivityReport(row, groupId) {
     is_owner: !!row?.isOwner,
     text: String(row?.text || "").trim(),
     images: Array.isArray(row?.images)
-      ? row.images.map((x) => String(x || "").trim()).filter((x) => /^https?:\/\//i.test(x))
+      ? row.images.map((x) => String(x || "").trim()).filter((x) => /^data:image\/[a-z0-9.+-]+;base64,/i.test(x))
       : [],
     message_id: String(row?.messageId || "").trim(),
     timestamp: Number(row?.ts || 0),
@@ -1007,17 +1098,28 @@ async function reportQqGroupActivity(j, previousRows, content) {
   if (!text) return;
   const reportPath = envStr("QQ_GROUP_ACTIVITY_REPORT_PATH", "/api/internal/qq-group-activity");
   const url = absolutizeGatewayUrl(reportPath);
-  const context = (previousRows || [])
-    .slice(-groupActivityContextLimit)
-    .map((row) => rowForActivityReport(row, groupId));
+  const sourceContext = (previousRows || []).slice(-groupActivityContextLimit);
+  const currentRow = {
+    userId,
+    name,
+    isOwner: true,
+    text,
+    images,
+    messageId: String(j?.message_id || ""),
+    ts: Number(j?.time || 0),
+  };
+  const resolvedImages = await resolveGroupActivityImages([...sourceContext, currentRow]);
+  const context = sourceContext
+    .map((row) => rowForActivityReport(activityRowWithResolvedImages(row, resolvedImages), groupId));
+  const resolvedCurrent = activityRowWithResolvedImages(currentRow, resolvedImages);
   const body = {
     source: "qq_onebot",
     group_id: groupId,
     user_id: userId,
     sender_name: name,
     is_owner: true,
-    text,
-    images,
+    text: resolvedCurrent.text,
+    images: resolvedCurrent.images,
     message_id: String(j?.message_id || ""),
     timestamp: Number(j?.time || 0),
     context,

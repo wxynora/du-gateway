@@ -1137,7 +1137,7 @@ export function DreamArchiveTab({
 
   useEffect(() => {
     let cancelled = false;
-    apiJson<DreamFragmentLibraryResp>("/miniapp-api/spring-dream-fragments?limit=120")
+    apiJson<DreamFragmentLibraryResp>("/miniapp-api/spring-dream-fragments?limit=320")
       .then((res) => {
         if (cancelled) return;
         const remotePacks = normalizePacks(res.packs || [], "remote-library");

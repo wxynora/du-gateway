@@ -2684,6 +2684,8 @@ def chat_completions():
             reply_target=reply_target,
         )
 
+    # QQ 群活动图片先进入消息体，随后统一走 base64 压缩；该类上下文图不生成图片描述。
+    body = _inject_qq_group_activity_context(body)
     # 走完整管道（清洗、注入记忆/总结、转发、存档）
     body = step_clean_images_and_save_desc(body, window_id)
     body = step_clean_for_forward(body)
@@ -2764,7 +2766,6 @@ def chat_completions():
     body = step_inject_du_midterm_memory(body, window_id)
     body = _inject_music_bgm_context(body, reply_channel=reply_channel)
     body = _inject_listen_invite_protocol(body, reply_channel=reply_channel)
-    body = _inject_qq_group_activity_context(body)
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
     if (

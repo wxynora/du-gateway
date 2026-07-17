@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from config import TELEGRAM_PROACTIVE_TARGET_USER_ID
+from services import wakeup_event_log
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
@@ -719,6 +720,16 @@ def tick_proactive_triggers(target_user_id: int = 0) -> dict:
     for event in events:
         if _already_fired(state, event.dedupe_key):
             continue
+        wakeup_event = wakeup_event_log.start_event(
+            kind="hard_trigger",
+            source_key=f"hard_trigger:{event.dedupe_key}",
+            planned_at=event.event_at or now_beijing_iso(),
+            reason=event.fact,
+            reason_code=event.trigger_type,
+            target=event.device_id,
+            metadata={"window_id": window_id},
+        )
+        wakeup_event_id = str(wakeup_event.get("event_id") or "")
         try:
             from services.conversation_followup import send_proactive_trigger_wakeup
 
@@ -731,6 +742,19 @@ def tick_proactive_triggers(target_user_id: int = 0) -> dict:
         except Exception as e:
             logger.warning("主动硬触发唤醒异常 type=%s error=%s", event.trigger_type, e, exc_info=True)
             result = {"ok": False, "error": str(e)}
+        if bool(result.get("ok")):
+            wakeup_event_log.finish_event(
+                wakeup_event_id,
+                success=True,
+                channel=str(result.get("channel") or ""),
+                reply_preview=str(result.get("reply_preview") or "")[:120],
+            )
+        else:
+            wakeup_event_log.finish_event(
+                wakeup_event_id,
+                success=False,
+                error=str(result.get("error") or "主动硬触发投递失败"),
+            )
         _mark_fired_if_delivered(state, event, result)
         return {
             "ok": True,

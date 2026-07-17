@@ -97,6 +97,7 @@ def test_followup_producer_uses_one_stable_message_id() -> None:
             "device_native_001",
             "主动发来的完整正文",
             created_at="2026-07-14T12:00:00+08:00",
+            window_id="tg_8260066512",
         )
     finally:
         conversation_followup._resolve_sumitalk_target_device_id = old_resolve
@@ -106,11 +107,17 @@ def test_followup_producer_uses_one_stable_message_id() -> None:
         realtime_publish.publish_assistant_message = old_publish
 
     assert_true(ok, "followup producer should report success after history and action persist")
-    history_message = saved["device_native_001"]["messages"][-1]
+    storage_key = sumitalk_history._sumitalk_history_storage_key(
+        "device_native_001",
+        "tg_8260066512",
+    )
+    history_message = saved[storage_key]["messages"][-1]
     action_type, action_payload, action_options = queued[0]
     assert_equal(action_type, "deliver_chat_message", "producer must use persistent device action")
     assert_equal(action_payload["message_id"], history_message["id"], "history and action must share message id")
     assert_equal(published[0][1]["id"], history_message["id"], "realtime hint must share message id")
+    assert_equal(action_payload["window_id"], "tg_8260066512", "device action must use the real chat window")
+    assert_equal(published[0][2], "tg_8260066512", "realtime hint must use the real chat window")
     assert_equal(action_payload["text"], "主动发来的完整正文", "producer must not truncate message text")
     assert_equal(action_options["device_id"], "device_native_001", "action must target the paired device")
 

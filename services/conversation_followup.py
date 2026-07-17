@@ -25,6 +25,7 @@ from services.telegram_bot import (
     send_message_segmented,
 )
 from services.hidden_blocks import HiddenBlockParser
+from services import wakeup_event_log
 from services.reply_channel_context import (
     normalize_reply_channel as _shared_normalize_reply_channel,
     resolve_recent_reply_context as _resolve_recent_reply_context,
@@ -363,6 +364,10 @@ def _build_thread_key(window_id: str, channel: str, target: str) -> str:
     return f"{str(window_id or '').strip()}::{_normalize_reply_channel(channel, default='sumitalk', allow_tg=True)}::{str(target or '').strip()}"
 
 
+def _followup_event_source_key(item: dict) -> str:
+    return f"followup:{str((item or {}).get('id') or '').strip()}"
+
+
 def extract_followup_marker(text: str) -> tuple[str, Optional[dict]]:
     raw = str(text or "")
     clean, meta_raw = _FOLLOWUP_BLOCK.split(raw)
@@ -454,6 +459,7 @@ def queue_followup(window_id: str, headers: dict, assistant_text: str, created_a
     }
     items = r2_store.get_conversation_followups() or []
     changed = False
+    cancelled_old_items: list[dict] = []
     if not continue_chain:
         for old in items:
             if not isinstance(old, dict):
@@ -465,11 +471,29 @@ def queue_followup(window_id: str, headers: dict, assistant_text: str, created_a
             old["status"] = FOLLOWUP_STATUS_CANCELLED
             old["cancelled_at"] = created_iso
             old["cancel_reason"] = "superseded_by_new_reply"
+            cancelled_old_items.append(old)
             changed = True
     items.insert(0, item)
     if len(items) > 200:
         items = items[:200]
     ok = r2_store.save_conversation_followups(items)
+    if ok:
+        for old in cancelled_old_items:
+            wakeup_event_log.cancel_active_event(
+                kind="followup",
+                source_key=_followup_event_source_key(old),
+                reason="新的续话计划替代了原计划",
+            )
+        wakeup_event_log.plan_event(
+            kind="followup",
+            source_key=_followup_event_source_key(item),
+            planned_at=str(item.get("trigger_at") or ""),
+            reason=str(item.get("reason") or "延迟续话").strip() or "延迟续话",
+            reason_code="conversation_followup",
+            channel=channel,
+            target=target,
+            metadata={"window_id": context_window_id, "chain_id": chain_id, "followup_index": followup_index},
+        )
     logger.info(
         "已记录延迟续话任务 ok=%s window_id=%s channel=%s target=%s trigger_at=%s chain_id=%s index=%s cancelled_old=%s",
         ok,
@@ -1301,6 +1325,18 @@ def tick_conversation_followups() -> dict:
         if not trigger_dt:
             item["status"] = FOLLOWUP_STATUS_ERROR
             item["last_error"] = "invalid_trigger_at"
+            event = wakeup_event_log.start_event(
+                kind="followup",
+                source_key=_followup_event_source_key(item),
+                planned_at=str(item.get("trigger_at") or now_iso),
+                reason=str(item.get("reason") or "延迟续话"),
+                reason_code="conversation_followup",
+            )
+            wakeup_event_log.finish_event(
+                str(event.get("event_id") or ""),
+                success=False,
+                error="续话时间无效",
+            )
             changed = True
             continue
         if trigger_dt > now_dt:
@@ -1311,12 +1347,29 @@ def tick_conversation_followups() -> dict:
         if not window_id or not created_at:
             item["status"] = FOLLOWUP_STATUS_ERROR
             item["last_error"] = "missing_context"
+            event = wakeup_event_log.start_event(
+                kind="followup",
+                source_key=_followup_event_source_key(item),
+                planned_at=str(item.get("trigger_at") or now_iso),
+                reason=str(item.get("reason") or "延迟续话").strip() or "延迟续话",
+                reason_code="conversation_followup",
+            )
+            wakeup_event_log.finish_event(
+                str(event.get("event_id") or ""),
+                success=False,
+                error="续话上下文缺失",
+            )
             changed = True
             continue
         if _has_new_user_activity(window_id, created_at):
             item["status"] = FOLLOWUP_STATUS_CANCELLED
             item["cancelled_at"] = now_iso
             item["cancel_reason"] = "user_replied"
+            wakeup_event_log.cancel_active_event(
+                kind="followup",
+                source_key=_followup_event_source_key(item),
+                reason="小玥在预定时间前发来了新消息",
+            )
             cancelled += 1
             changed = True
             continue
@@ -1325,8 +1378,29 @@ def tick_conversation_followups() -> dict:
             item["status"] = FOLLOWUP_STATUS_EXPIRED
             item["expired_at"] = now_iso
             item["last_error"] = str(item.get("last_error") or "max_attempts_reached")
+            event = wakeup_event_log.find_active_event(
+                kind="followup",
+                source_key=_followup_event_source_key(item),
+            )
+            if event:
+                wakeup_event_log.finish_event(
+                    str(event.get("event_id") or ""),
+                    success=False,
+                    error="续话已达到最大尝试次数",
+                )
             changed = True
             continue
+        event = wakeup_event_log.start_event(
+            kind="followup",
+            source_key=_followup_event_source_key(item),
+            planned_at=str(item.get("trigger_at") or now_iso),
+            reason=str(item.get("reason") or "延迟续话").strip() or "延迟续话",
+            reason_code="conversation_followup",
+            channel=str(item.get("reply_channel") or "sumitalk"),
+            target=str(item.get("reply_target") or "").strip(),
+            metadata={"window_id": window_id, "chain_id": str(item.get("chain_id") or "")},
+        )
+        event_id = str(event.get("event_id") or "")
         text = _call_gateway_followup(
             window_id=window_id,
             channel=str(item.get("reply_channel") or "sumitalk"),
@@ -1339,6 +1413,7 @@ def tick_conversation_followups() -> dict:
         item["last_attempt_at"] = now_iso
         if not text:
             item["last_error"] = "empty_gateway_reply"
+            wakeup_event_log.record_attempt_error(event_id, "回复为空")
             changed = True
             pending += 1
             continue
@@ -1354,6 +1429,12 @@ def tick_conversation_followups() -> dict:
             item["sent_at"] = now_iso
             item["sent_preview"] = text[:120]
             sent += 1
+            wakeup_event_log.finish_event(
+                event_id,
+                success=True,
+                channel=str(item.get("reply_channel") or "sumitalk"),
+                reply_preview=text[:120],
+            )
             if _normalize_reply_channel(str(item.get("reply_channel") or "sumitalk"), default="sumitalk", allow_tg=True) == "sumitalk":
                 try:
                     from services.sumitalk_block_mode import maybe_auto_reply_after_sumitalk_assistant
@@ -1366,6 +1447,7 @@ def tick_conversation_followups() -> dict:
                     sumitalk_logger.warning("block_mode_followup_auto_reply_failed chain_id=%s error=%s", item.get("chain_id"), e)
         else:
             item["last_error"] = "dispatch_failed"
+            wakeup_event_log.record_attempt_error(event_id, "消息投递失败")
             pending += 1
         changed = True
     if changed:

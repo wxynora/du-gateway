@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timedelta
 from typing import Any
 
+from services.image_desc import compress_base64_image_for_anthropic
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import BEIJING_TZ, now_beijing_iso, parse_iso_to_beijing
@@ -29,11 +31,43 @@ def _image_urls(value: Any) -> list[str]:
     out: list[str] = []
     for raw in value if isinstance(value, list) else []:
         url = str(raw or "").strip()
-        if not url.lower().startswith(("http://", "https://")):
+        if not url.lower().startswith("data:image/") or ";base64," not in url[:100].lower():
             continue
         if url not in out:
             out.append(url)
     return out
+
+
+def _compress_image_data_urls(value: Any) -> tuple[list[str], int]:
+    out: list[str] = []
+    failed = 0
+    for data_url in _image_urls(value):
+        try:
+            head, payload = data_url.split(",", 1)
+            raw = base64.b64decode(payload, validate=True)
+            if not raw:
+                raise ValueError("empty image")
+        except Exception:
+            failed += 1
+            continue
+        mime_type = head.split(";", 1)[0].replace("data:", "").strip().lower() or "image/png"
+        compressed, output_mime, meta = compress_base64_image_for_anthropic(payload, mime_type)
+        if str(meta.get("reason") or "") in {"invalid_size", "pillow_missing", "resize_failed"}:
+            failed += 1
+            continue
+        normalized = f"data:{output_mime};base64,{compressed}"
+        if normalized not in out:
+            out.append(normalized)
+    return out, failed
+
+
+def _append_image_fallbacks(text: str, count: int, limit: int = _MAX_TEXT_CHARS) -> str:
+    if count <= 0:
+        return _clip_text(text, limit)
+    suffix = " ".join("【图片】" for _ in range(count))
+    available = max(0, int(limit) - len(suffix) - 1)
+    prefix = _clip_text(text, available).strip() if available else ""
+    return " ".join(part for part in (prefix, suffix) if part)
 
 
 def _event_iso(raw_ts: Any = None) -> str:
@@ -61,14 +95,15 @@ def _row_from_payload(raw: dict) -> dict:
     sender = str(raw.get("sender_name") or raw.get("name") or "").strip()
     if is_owner:
         sender = "辛玥"
+    images, failed_images = _compress_image_data_urls(raw.get("images"))
     return {
         "at": _event_iso(raw.get("timestamp") or raw.get("ts")),
         "group_id": str(raw.get("group_id") or "").strip(),
         "user_id": str(raw.get("user_id") or "").strip(),
         "sender_name": sender or "群友",
         "is_owner": is_owner,
-        "text": _clip_text(raw.get("text")),
-        "images": _image_urls(raw.get("images")),
+        "text": _append_image_fallbacks(str(raw.get("text") or ""), failed_images),
+        "images": images,
         "message_id": str(raw.get("message_id") or "").strip(),
     }
 
@@ -113,7 +148,7 @@ def record_group_activity(payload: dict) -> bool:
     if not isinstance(payload, dict) or not bool(payload.get("is_owner")):
         return False
     row = _row_from_payload(payload)
-    if not row.get("text"):
+    if not row.get("text") and not row.get("images"):
         return False
     msg_id = row.get("message_id") or f"{row.get('group_id')}|{row.get('user_id')}|{row.get('at')}|{row.get('text')[:40]}"
     item = {
@@ -128,6 +163,10 @@ def record_group_activity(payload: dict) -> bool:
     try:
         state = _load_state()
         items = [x for x in (state.get("items") or []) if isinstance(x, dict)]
+        for old_item in items:
+            for old_row in old_item.get("context") or []:
+                if isinstance(old_row, dict):
+                    old_row["images"] = []
         replaced = False
         for idx, old in enumerate(items):
             if str(old.get("id") or "") == msg_id:
@@ -255,5 +294,12 @@ def build_group_activity_context_for_wakeup() -> list[dict] | str:
     if not image_urls:
         return text
     content = [{"type": "text", "text": text}]
-    content.extend({"type": "image_url", "image_url": {"url": url}} for url in image_urls)
+    content.extend(
+        {
+            "type": "image_url",
+            "image_url": {"url": url},
+            "__skip_image_description": True,
+        }
+        for url in image_urls
+    )
     return content

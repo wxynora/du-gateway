@@ -18,6 +18,7 @@ from services.pixel_home import (
     save_du_body_state,
 )
 from services.spring_dream import (
+    draw_spring_dream_inspiration_pack,
     get_spring_dream_archive,
     get_spring_dream_inspiration,
     list_spring_dream_fragment_library,
@@ -462,11 +463,26 @@ def register_routes(bp) -> None:
     @bp.route("/spring-dream-fragments", methods=["GET"])
     def miniapp_spring_dream_fragments():
         try:
-            limit = int(request.args.get("limit") or 120)
+            limit = int(request.args.get("limit") or 320)
         except Exception:
-            limit = 120
+            limit = 320
         data = list_spring_dream_fragment_library(limit=limit)
         return jsonify({"ok": True, **data})
+
+    @bp.route("/spring-dream-inspiration/draw", methods=["POST"])
+    def miniapp_spring_dream_inspiration_draw():
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            data = {}
+        client_request_id = str(
+            data.get("client_request_id") or data.get("idempotency_key") or ""
+        ).strip()
+        source = str(data.get("source") or "manual").strip() or "manual"
+        saved = draw_spring_dream_inspiration_pack(
+            source=source,
+            client_request_id=client_request_id,
+        )
+        return jsonify({"ok": True, **saved})
 
     @bp.route("/spring-dream-inspiration", methods=["PUT"])
     def miniapp_spring_dream_inspiration_put():

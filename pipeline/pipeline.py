@@ -461,6 +461,14 @@ def step_clean_images_and_save_desc(body: dict, window_id: str) -> dict:
     返回新的 body（保留可读压缩图供「发给渡」用；存 R2 时用完整清洗版，图片→描述/占位符）。
     """
     body = copy.deepcopy(body)
+    skip_description_coords: set[tuple[int, int]] = set()
+    for mi, msg in enumerate(body.get("messages") or []):
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for ci, part in enumerate(content):
+            if isinstance(part, dict) and part.get("__skip_image_description"):
+                skip_description_coords.add((mi, ci))
     body, compress_stats = image_desc.compress_images_for_anthropic(body)
     for st in compress_stats:
         if not st.get("changed"):
@@ -477,8 +485,27 @@ def step_clean_images_and_save_desc(body: dict, window_id: str) -> dict:
             st.get("new_bytes"),
         )
     messages = body.get("messages") or []
+    failed_skip_coords = {
+        (int(st.get("message_index")), int(st.get("content_index")))
+        for st in compress_stats
+        if (int(st.get("message_index")), int(st.get("content_index"))) in skip_description_coords
+        and str(st.get("reason") or "") in {"invalid_size", "pillow_missing", "resize_failed"}
+    }
+    for mi, ci in skip_description_coords:
+        try:
+            part = messages[mi]["content"][ci]
+        except (IndexError, KeyError, TypeError):
+            continue
+        if not isinstance(part, dict):
+            continue
+        part.pop("__skip_image_description", None)
+        if (mi, ci) in failed_skip_coords:
+            messages[mi]["content"][ci] = {"type": "text", "text": "【图片】"}
+            logger.warning("QQ 群活动图片压缩失败，已回退占位 message=%s part=%s", mi, ci)
     images = image_desc.extract_images_from_messages(messages)
     for mi, ci, b64, mime in images:
+        if (mi, ci) in skip_description_coords:
+            continue
         image_id = image_desc.image_description_id(b64, mime)
         msg_id = f"{window_id}_{mi}_{ci}_{image_id}"
         image_desc.mark_image_description_pending(b64, mime)

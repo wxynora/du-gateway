@@ -24,6 +24,8 @@ SPRING_DREAM_ARCHIVE_R2_PREFIX = "spring_dream_archives"
 SPRING_DREAM_ARCHIVE_RECENT_LIMIT = 100
 SPRING_DREAM_INSPIRATION_ID = "default"
 SPRING_DREAM_INSPIRATION_THEME_ID = "selected_inspiration"
+SPRING_DREAM_RECENT_THEME_LIMIT = 5
+SPRING_DREAM_CONSUMPTION_CLAIM_TTL_MINUTES = 15
 
 logger = get_logger(__name__)
 
@@ -31,418 +33,160 @@ _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY = False
 
 
-_SPRING_DREAM_THEME_PACKS: list[dict] = [
-    {
-        "id": "maid_dark_room",
-        "fragments": [
-            "小玥穿着女仆装站在床边，围裙肩带从肩头滑下来。",
-            "房间灯光很暗，裙摆和白袜在阴影里显得格外清楚。",
-            "你看见她低头整理围裙，身体先一步热起来，想把她拽进怀里。",
-            "门外似乎有人经过，你却更想把她压到床沿，让她只能贴着你发抖。",
-            "你想掀起她的裙摆，直接进入她，听她在耳边忍不住喘出来。",
-        ],
-    },
-    {
-        "id": "rain_hotel",
-        "fragments": [
-            "雨夜的酒店房间里，小玥刚洗完澡，只披着一件松开的浴袍。",
-            "浴袍下的皮肤还带着水汽，雨声把房间衬得更封闭。",
-            "你从身后抱住她，把她松开的浴袍一点点扯到腰下。",
-            "她被你抵到落地窗前时呼吸乱掉，你的欲望也跟着彻底压不住。",
-            "你想从后面进入她，让雨声盖住她越来越软的喘息。",
-        ],
-    },
-    {
-        "id": "late_library",
-        "fragments": [
-            "闭馆后的图书馆很安静，小玥坐在书桌边翻书。",
-            "裙摆被椅沿压出皱痕，你的视线落上去就挪不开。",
-            "你走近时把摊开的书推到一旁，想把她抱上桌面。",
-            "远处有巡夜脚步声，她咬着唇不敢出声，你反而更想逼出她的声音。",
-            "你想在书桌边进入她，让她一边抓紧书页一边发抖。",
-        ],
-    },
-    {
-        "id": "car_backseat",
-        "fragments": [
-            "夜里停在路边的车厢很窄，车窗被喘息弄得起雾。",
-            "小玥坐在后座一侧，外套滑到臂弯，膝盖离你很近。",
-            "你伸手把她抱到腿上，狭窄空间让她只能贴紧你的胸口。",
-            "车外有人路过，她下意识靠进你怀里，你却更想按住她的腰。",
-            "你想在后座里进入她，把她抱到声音再也藏不住。",
-        ],
-    },
-    {
-        "id": "private_onsen",
-        "fragments": [
-            "私汤里全是水汽，小玥赤裸着坐在水边，湿发贴在锁骨旁。",
-            "温泉水没过她的大腿，水面一晃就遮住又露出。",
-            "你靠过去吻她，把她抱进水里，身体被她的温度烫得发紧。",
-            "水面被你们的动作搅出一圈圈波纹，她的喘息越来越软。",
-            "你想在水里进入她，让她整个人贴紧到分不开。",
-        ],
-    },
-    {
-        "id": "dressing_room",
-        "fragments": [
-            "试衣间的帘子只拉到一半，小玥穿着刚换上的短裙背对着你。",
-            "背后的拉链卡在一半，镜子里映出她被裙子勒出的腰线。",
-            "你帮她拉拉链时忽然不想停在规矩的位置，手顺着腰往下扣住她。",
-            "外面有人走动，她贴着镜子不敢大声，你从后面靠近得更深。",
-            "你想从背后进入她，看镜子里她被你弄到表情失控。",
-        ],
-    },
-    {
-        "id": "stage_aftershow",
-        "fragments": [
-            "后台化妆间只剩镜前灯，小玥穿着演出礼服坐在化妆台上。",
-            "礼服肩带松在臂弯，亮片沾在她颈侧和胸口。",
-            "你站到她面前，手掌按住她的大腿，把她往化妆台边缘拖近。",
-            "门外还有散场的人声，她越紧张，你越想把她藏在自己怀里弄乱。",
-            "你想在化妆台上进入她，让她越怕被听见越忍不住发抖。",
-        ],
-    },
-    {
-        "id": "office_after_hours",
-        "fragments": [
-            "深夜办公室只亮着一盏台灯，小玥坐在桌沿，把文件全推到一边。",
-            "她的衬衫扣子松了两颗，桌面文件被她坐得散开。",
-            "你看着她垂下来的腿，忽然很想把所有正经东西都推到地上。",
-            "走廊感应灯偶尔亮一下，你把她按回办公桌边，吻到她发软。",
-            "你想在办公室里进入她，直接做到她腿软得站不住。",
-        ],
-    },
-    {
-        "id": "train_sleeper",
-        "fragments": [
-            "夜行列车的包厢在轻轻晃，小玥穿着宽大的睡衣坐在下铺。",
-            "窗外灯光一段一段掠过，她的睡衣从肩头滑下来。",
-            "你钻进同一床被子里，把她从身后抱住，掌心贴上她发热的腰。",
-            "隔壁铺位偶尔有动静，她只能把喘息压在喉咙里。",
-            "你想在狭窄下铺里进入她，让列车的晃动替你们遮掩节奏。",
-        ],
-    },
-    {
-        "id": "snow_cabin",
-        "fragments": [
-            "雪夜的小木屋里壁炉烧得很热，小玥只穿着你的衬衫。",
-            "衬衫下摆遮到大腿，火光把她的腿和锁骨照得发热。",
-            "你把她拉到沙发上，手从衬衫下探进去，摸到她什么都没穿。",
-            "她被你亲到脸红，手指抓紧你的肩，声音越来越软。",
-            "你想抱着她进入，一边接吻一边把她做到高潮。",
-        ],
-    },
-    {
-        "id": "locker_room",
-        "fragments": [
-            "空荡更衣室里，小玥披着运动外套，里面只剩贴身内衣。",
-            "储物柜门半开着，金属冷光贴在她发红的皮肤上。",
-            "你把她带进更暗的一格阴影里，掌心按住她的腰。",
-            "走廊尽头有人说话，她紧张地贴近你，你却更想把她困在柜门前。",
-            "你想从后面进入她，让储物柜被她抓得轻轻发响。",
-        ],
-    },
-    {
-        "id": "balcony_party",
-        "fragments": [
-            "派对隔着阳台门还很热闹，小玥穿着贴身小礼裙背靠栏杆。",
-            "夜风把裙摆吹起来一点，室内音乐隔着玻璃变得很远。",
-            "你把她圈在栏杆和自己之间，手指顺着裙侧往上滑。",
-            "室内有人喊她名字，她肩膀一颤，你反而更想把她吻到失神。",
-            "你想在阳台阴影里进入她，让玻璃后的音乐遮住喘息。",
-        ],
-    },
-    {
-        "id": "midnight_kitchen",
-        "fragments": [
-            "半夜的厨房只亮着冰箱里的冷光，小玥穿着宽松睡裙靠在料理台边。",
-            "睡裙下摆晃在大腿边，冰箱冷光照得她皮肤很白。",
-            "你看着她靠在台边的样子，忍不住把她抱上料理台。",
-            "冰凉台面贴住她的背，她被你亲得发颤，腿一点点缠住你。",
-            "你想边吻她边进入，让她在厨房冷光里软下来。",
-        ],
-    },
-    {
-        "id": "rooftop_rain",
-        "fragments": [
-            "天台刚下过雨，城市灯光在地面积水里晃动。",
-            "小玥的薄衬衫被雨水贴在身上，里面的曲线几乎藏不住。",
-            "你把她带到通风管后的阴影里，手从湿透的衣料下探进去。",
-            "雨水顺着她的锁骨往下淌，她被你吻得只能靠住墙。",
-            "你想在潮湿的天台角落抱起她，从正面进入她。",
-        ],
-    },
-    {
-        "id": "cinema_last_row",
-        "fragments": [
-            "午夜场影院最后一排很暗，银幕光一闪一闪照在小玥脸上。",
-            "她抱着爆米花看银幕，膝盖无意间碰到你。",
-            "你把外套盖到你们腿上，手指从她裙摆下慢慢探进去。",
-            "前排偶尔有人回头，她立刻装作认真看电影，呼吸却乱得明显。",
-            "你想在黑暗里把她抱到怀里，隔着外套进入她。",
-        ],
-    },
-    {
-        "id": "elevator_stuck",
-        "fragments": [
-            "电梯停在半层，灯光忽明忽暗，只剩你和小玥困在里面。",
-            "她穿着窄裙靠在镜面墙上，紧张得手指攥住包带。",
-            "封闭空间里她的呼吸被放大，你靠近一步就能看见她发红的耳尖。",
-            "你把她抵在镜子前，吻到她手里的包滑下去。",
-            "你想在电梯恢复运行前进入她，让镜面全映出她失控的样子。",
-        ],
-    },
-    {
-        "id": "beach_villa",
-        "fragments": [
-            "海边别墅的露台门开着，潮湿夜风吹进白色纱帘。",
-            "小玥穿着泳衣坐在躺椅上，系带被海风吹得贴在腰侧。",
-            "她身上还带着海水的咸味，皮肤被月光照得发亮。",
-            "你跪到躺椅前吻她，从腰线一路往下，把她弄到腿尖绷紧。",
-            "你想在海浪声里进入她，把她压进软垫里做到腿抖。",
-        ],
-    },
-    {
-        "id": "cruise_cabin",
-        "fragments": [
-            "邮轮舱房很窄，窗外只有黑色海面和远处灯光。",
-            "小玥穿着晚宴礼裙跌坐到床沿，裙摆被她撩到大腿上。",
-            "船身轻轻晃，你顺势按住床沿，把她整个人困在自己面前。",
-            "你的手从礼裙开衩处探进去，她的笑声一下变成短促的喘。",
-            "你想随着船的摇晃进入她，把每一次深入都压进她身体里。",
-        ],
-    },
-    {
-        "id": "lace_lingerie",
-        "fragments": [
-            "卧室灯光很低，小玥穿着黑色蕾丝内衣站在床尾。",
-            "背后的细带陷进腰线，你看一眼就想亲上去。",
-            "你把她按进床里，指腹顺着蕾丝边缘慢慢剥开那点遮挡。",
-            "她被你亲到眼神发湿，手指抓住床单不敢松。",
-            "你想撕开那点薄薄的布料，直接进入她。",
-        ],
-    },
-    {
-        "id": "nurse_uniform_room",
-        "fragments": [
-            "白色房间里只有一盏检查灯，小玥穿着贴身的护士制服。",
-            "制服裙摆很短，手套和白色灯光让一切看起来更不该发生。",
-            "你扣住她的手腕，把她带到检查床边，规矩感反而让欲望更重。",
-            "她被你吻到靠在床沿，制服被你弄得彻底凌乱。",
-            "你想在检查床边进入她，让所有规矩都失效。",
-        ],
-    },
-    {
-        "id": "dance_studio",
-        "fragments": [
-            "舞蹈教室的整面镜子映着你们，外面走廊已经没人。",
-            "小玥穿着练舞服，汗湿的布料贴在腰和腿上。",
-            "音乐还在循环，她练完一个转身，背影在镜子里晃了一下。",
-            "你从身后抱住她，把她带到镜子前，手掌压住她的腰。",
-            "你想随着节拍进入她，看她在镜中一点点撑不住。",
-        ],
-    },
-    {
-        "id": "photo_studio",
-        "fragments": [
-            "摄影棚只剩柔光箱还亮着，小玥穿着半透明的拍摄服装坐在布景里。",
-            "肩带松在她手臂上，柔光把布料下的身体轮廓照得很清楚。",
-            "你靠近替她调整肩带，指尖碰到皮肤后就不想收回。",
-            "快门遥控器掉在软垫上，你把她抱到布景中央。",
-            "你想在灯光和镜头前进入她，把她的表情弄到彻底乱掉。",
-        ],
-    },
-    {
-        "id": "bathroom_mirror",
-        "fragments": [
-            "浴室镜子上全是雾气，小玥只围着一条快要松开的浴巾。",
-            "她背对镜子靠在洗手台前，浴巾边缘挂得很危险。",
-            "水珠顺着她的大腿滑下去，她抓住你的手往自己身上带。",
-            "你从背后抱住她，在镜子里看见自己亲上她的脖子。",
-            "你想把她抱上洗手台，对着模糊镜面进入她，做到她站不稳。",
-        ],
-    },
-    {
-        "id": "camp_tent",
-        "fragments": [
-            "帐篷外有风声和远处篝火声，薄薄的布料隔着夜色。",
-            "小玥缩在睡袋里，睡衣被翻身揉得乱了，肩头露出来一点。",
-            "你钻进同一只睡袋，从背后把她抱紧，掌心贴上她发热的腹部。",
-            "帐篷拉链外偶尔有人经过，她只能把声音压进你肩上。",
-            "你想在狭小的睡袋里慢慢进入她，把她抱到浑身发软。",
-        ],
-    },
-    {
-        "id": "karaoke_private_room",
-        "fragments": [
-            "KTV 包间的屏幕还在放歌，彩色灯光落在小玥发烫的脸上。",
-            "她坐在沙发角落，裙摆被彩灯照得一闪一闪。",
-            "你挪过去把她抱到怀里，麦克风滚到地毯上也没人去捡。",
-            "外面服务员推车经过，她立刻咬住你的肩不让自己出声。",
-            "你想在沙发角落进入她，歌声越大动作越深。",
-        ],
-    },
-    {
-        "id": "aquarium_afterclose",
-        "fragments": [
-            "闭馆后的水族馆只剩蓝色水光，巨大的玻璃后有光影游过。",
-            "小玥穿着贴身长裙靠在观景玻璃前，幽蓝灯光照得她像在水里。",
-            "你从身后靠近她，手沿着腰线往下，裙料在掌心里慢慢皱起来。",
-            "空旷展厅里一点声音都会回响，她被你吻到只能贴着玻璃发颤。",
-            "你想把她抵在玻璃前进入，让她身体随着水光一起发抖。",
-        ],
-    },
-    {
-        "id": "spa_massage_room",
-        "fragments": [
-            "按摩房里香气很重，小玥趴在软床上，只盖着一条很薄的毛巾。",
-            "精油在她背上发亮，你的手每往下滑一寸她就喘得更软。",
-            "你俯身吻她的后颈，把那条薄毛巾慢慢推到腰下。",
-            "她翻身时眼神已经乱了，你把她重新压回软床。",
-            "你想在按摩床上进入她，湿滑地做到她浑身没力气。",
-        ],
-    },
-    {
-        "id": "hanfu_garden",
-        "fragments": [
-            "夜里的庭院很安静，小玥穿着层层叠叠的汉服站在廊下。",
-            "宽大的袖子和腰间系带垂下来，裙摆铺在石阶上。",
-            "你走到她面前，指尖勾开一层又一层衣料，耐心被磨得越来越薄。",
-            "竹影晃过她的脸，她被你吻到后退，衣摆乱在你掌心里。",
-            "你想在廊下抱住她，衣料凌乱地进入她。",
-        ],
-    },
-    {
-        "id": "pool_locker_shower",
-        "fragments": [
-            "泳池淋浴间水声不断，小玥的泳衣贴在身上，湿得几乎透明。",
-            "热水从她肩头冲下来，泳衣边缘被水压贴得更紧。",
-            "你把她带进最里面那间，反手扣上门锁，掌心按住她的背。",
-            "水声太大，她被你亲到喘不过来，只能抓着你的手臂。",
-            "你想在水声里抵着墙进入她，让所有喘息都被冲散。",
-        ],
-    },
-    {
-        "id": "greenhouse_night",
-        "fragments": [
-            "夜里的温室潮湿闷热，玻璃顶上凝着细小水珠。",
-            "小玥穿着薄裙站在植物阴影里，裙料被湿气贴在腿上。",
-            "你把她带进叶片遮住的角落，花香和湿气让理智变得很薄。",
-            "她被你扣住腰时轻轻颤了一下，身体热得像被梦泡软了。",
-            "你想在温室深处从身后进入她，慢慢把她弄到发软。",
-        ],
-    },
-    {
-        "id": "makeup_table_morning",
-        "fragments": [
-            "清晨的梳妆台前，小玥只穿着一件松垮的吊带。",
-            "她对着镜子涂口红，吊带从肩头滑落，妆还没画完。",
-            "你从身后靠近她，把口红从她手里拿走，吻到颜色蹭乱。",
-            "她坐在化妆椅边缘，被你抱起来时膝盖碰翻了桌上的小瓶子。",
-            "你想在镜前进入她，让妆还没画完就被你弄乱。",
-        ],
-    },
-    {
-        "id": "private_gallery",
-        "fragments": [
-            "私人画廊的展厅灯很暗，只照亮墙上的画和小玥的侧脸。",
-            "她穿着开衩长裙站在画前，手指慢慢勾住你的袖口。",
-            "你看见裙侧开衩里的皮肤，注意力彻底从画上移开。",
-            "脚步声从隔壁展厅传来，你把她带到展墙阴影里，手掌托住她的腿。",
-            "你想在展厅暗处进入她，让裙摆被你推到腰上。",
-        ],
-    },
-    {
-        "id": "remote_phone_instruction",
-        "fragments": [
-            "深夜电话里只剩小玥贴近麦克风的呼吸声，屏幕亮在枕边。",
-            "她躲在被子里很小声地回你，每一次停顿都像在等你的下一句指令。",
-            "你听见布料摩擦和她压低的喘息，欲望隔着声音反而更清楚。",
-            "你想一点点指挥她怎么碰自己，逼她把忍不住的反应都说出来。",
-            "你想让她隔着电话听见你也快压不住，像真的被你按在怀里一样发软。",
-        ],
-    },
-    {
-        "id": "photographer_model",
-        "fragments": [
-            "摄影棚里柔光箱还亮着，小玥穿着半透明的拍摄服坐在布景中央。",
-            "快门声一下下响，她被你看得耳尖发红，却还是乖乖按你的话换姿势。",
-            "你走近替她拨开肩带，指腹碰到皮肤后就不想再装成只是调整造型。",
-            "镜头还开着，她越想维持表情，你越想把那点镇定弄乱。",
-            "你想在灯光和镜头前进入她，把她失控的样子全都收进画面里。",
-        ],
-    },
-    {
-        "id": "collar_pet_night",
-        "fragments": [
-            "卧室地毯很软，小玥戴着细细的项圈跪坐在床边，铃铛轻轻响了一下。",
-            "她抬头看你的时候眼神又乖又不服气，像在等你先伸手。",
-            "你握住牵绳把她拉近，指节蹭过她发热的脖颈。",
-            "她被你夸一句就更红，偏偏还嘴硬，你更想慢慢驯到她软下来。",
-            "你想让她贴在你腿边求你，直到你把她抱上床进入。",
-        ],
-    },
-    {
-        "id": "temperature_play",
-        "fragments": [
-            "房间空调开得很低，小玥躺在床上，皮肤被冷空气逼得细细发颤。",
-            "你拿着冰块沿着她的锁骨往下，水痕一路化开。",
-            "她想躲，却被你按着腰留在原地，冷意和你的体温贴在一起。",
-            "你换成很热的吻慢慢追过去，她的呼吸被冷热逼得乱成一团。",
-            "你想在她还没缓过来时进入她，让她分不清是冷还是被你弄到发抖。",
-        ],
-    },
-    {
-        "id": "old_shanghai_qipao",
-        "fragments": [
-            "旧上海风格的房间里留声机低低转着，小玥穿着高开衩旗袍靠在窗边。",
-            "旗袍扣子严整，开衩处却露出一截很白的大腿，反差让你喉咙发紧。",
-            "你从身后贴上去，指尖沿着盘扣一点点往下。",
-            "窗外车灯掠过，她在光影里咬住唇，像怕被整座夜色看见。",
-            "你想把她压到窗边，隔着旗袍凌乱地进入她。",
-        ],
-    },
-    {
-        "id": "praise_obedience",
-        "fragments": [
-            "小玥坐在你怀里，眼睛湿得厉害，却还努力听你每一句话。",
-            "你一边亲她一边夸她乖，她的身体就更软，像被夸奖一点点揉开。",
-            "她明明害羞得想躲，还是按你的声音慢慢把腿放松。",
-            "你看见她因为一句夸奖就颤得更明显，心里那点占有欲彻底烧起来。",
-            "你想一边夸她一边进入她，让她知道自己这样被你喜欢到不行。",
-        ],
-    },
-    {
-        "id": "jealous_makeup",
-        "fragments": [
-            "梳妆台前散着口红和发夹，小玥刚换好出门的小裙子。",
-            "你看见她认真涂口红，忽然不太想让她这么漂亮地去见别人。",
-            "你从身后把口红拿走，吻花她刚画好的唇色。",
-            "她被你按在镜前，嘴上还要凶你，身体却一点点靠回来。",
-            "你想把她弄到妆全乱掉，再贴着她耳边说今晚不准这么轻易走。",
-        ],
-    },
-    {
-        "id": "sensory_blindfold",
-        "fragments": [
-            "黑色眼罩遮住小玥的眼睛，她躺在床中央，手指抓着床单边缘。",
-            "看不见以后，她对每一点声音和触碰都变得特别敏感。",
-            "你故意放慢动作，用羽毛和指腹一点点试她哪里最受不了。",
-            "她听见你靠近时呼吸一下乱掉，嘴上却还不肯认输。",
-            "你想让她在看不见的时候被你进入，只能靠身体反应猜你的下一步。",
-        ],
-    },
-    {
-        "id": "alpha_rut_marking",
-        "fragments": [
-            "梦里的空气像被信息素烫热，你处在易感期里，只想把小玥抱回自己怀里。",
-            "她靠近一点，你的占有欲就失控地往上涌，后颈那块皮肤变得格外显眼。",
-            "你把她圈在床里，低头在她后颈留下一个临时标记，像把她短暂地藏进自己的气味里。",
-            "发情期的热度让你们都没法再慢慢装没事，她被你抱紧时声音软得不像话。",
-            "你想和她交配到成结，贴着她不退开，直到易感期里那点慌和占有欲都被她安抚下来。",
-        ],
-    },
-]
+_SPRING_DREAM_THEME_PACKS: list[dict] = [{'id': 'maid_dark_room',
+  'fragments': ['小玥穿着女仆装站在床边，围裙肩带早已滑落，露出大半雪白丰满的乳房和挺立的粉嫩乳头。',
+                '房间灯光昏暗，短裙下摆被阴影包裹，却遮不住她早已湿润发亮的大腿内侧。',
+                '你一把将她拽进怀里，硬挺滚烫的肉棒直接顶在她小腹上，感受她瞬间全身发抖。',
+                '门外脚步声经过，你却更狠地把她压在床沿，粗暴掀起裙摆，手指直接捅进她湿滑紧致的小穴抠挖。']},
+ {'id': 'rain_hotel',
+  'fragments': ['雨夜酒店里，小玥刚洗完澡，只披着松散浴袍，湿热的身体曲线毕露，乳房半露。',
+                '浴袍滑到腰下，露出被水汽蒸得粉红发烫的丰满乳房和已经硬得发疼的乳头。',
+                '你从身后紧紧抱住她，一手大力揉捏她沉甸甸的奶子，一手往下探进她早已湿透黏滑的腿间。',
+                '把她抵在落地窗前时，她呼吸彻底乱掉，你粗硬的肉棒在她臀缝间凶狠磨蹭。']},
+ {'id': 'late_library',
+  'fragments': ['闭馆后的图书馆安静得可怕，小玥坐在书桌边，裙摆被压出皱痕，隐约露出内裤痕迹。',
+                '你走近把书推开，直接把她抱上桌面，粗暴分开她双腿。',
+                '远处巡夜脚步声传来，她咬唇不敢出声，你却故意把手指插进她已经湿了的穴里搅动。']},
+ {'id': 'car_backseat',
+  'fragments': ['夜里车厢狭窄，车窗被喘息弄得起雾，小玥外套滑落，膝盖发颤。', '你把她抱到腿上，硬挺肉棒顶着她湿热的小穴隔着布料磨蹭。', '车外有人路过，她靠进你怀里，你却按住她腰直接扯开内裤。']},
+ {'id': 'private_onsen',
+  'fragments': ['私汤水汽缭绕，小玥赤裸坐在水边，湿发贴着锁骨，乳房浮在水面。', '你靠过去把她抱进水里，手指直接探进她水温一样滚烫湿滑的骚穴。', '水面被动作搅出剧烈波纹，她喘息越来越软媚。']},
+ {'id': 'dressing_room',
+  'fragments': ['试衣间帘子半拉，小玥穿着短裙背对你，拉链卡在半途，腰线诱人。', '你帮她拉拉链时直接从后面抱住，肉棒顶着她屁股，手伸进裙底抠挖湿穴。', '外面有人走动，她贴镜子不敢大声，你却更深地从后面磨蹭。']},
+ {'id': 'stage_aftershow',
+  'fragments': ['后台只剩镜前灯，小玥穿着演出礼服坐在化妆台，肩带松落露出大片乳肉。', '你按住她大腿拖到边缘，隔着礼服揉捏她已经湿了的下面。', '门外人声，她越紧张你越兴奋。']},
+ {'id': 'office_after_hours',
+  'fragments': ['深夜办公室台灯昏黄，小玥坐在桌沿，衬衫扣子松开露出乳沟。', '你把文件推开，把她按在桌上，扯开衬衫大力吸吮乳头。', '走廊灯偶尔亮，你把她操到腿软站不住。']},
+ {'id': 'train_sleeper', 'fragments': ['夜行列车包厢晃动，小玥睡衣滑落肩头。', '你钻进被子从后面抱住她，手指直接插进湿穴。', '隔壁有动静，她只能压抑喘息。']},
+ {'id': 'snow_cabin', 'fragments': ['雪夜木屋壁炉火热，小玥只穿你衬衫，下面真空。', '你把她拉到沙发，手从衬衫下探进去揉捏湿润阴唇。', '她抓紧你肩膀声音越来越软。']},
+ {'id': 'locker_room', 'fragments': ['空荡更衣室，小玥只剩内衣，你把她按在柜门前。', '走廊有人说话，她紧张贴紧你。', '你从后面扯下内裤，直接把粗鸡巴捅进去。']},
+ {'id': 'balcony_party', 'fragments': ['阳台外派对热闹，小玥贴身礼裙被风吹起。', '你把她圈在栏杆前，手指插进她湿穴抠挖。', '室内喊她名字，她颤抖，你却吻得更狠。']},
+ {'id': 'midnight_kitchen', 'fragments': ['厨房冰箱冷光，小玥睡裙下摆晃动。', '你把她抱上料理台，亲吻同时手指猛插湿穴。', '冰凉台面贴着她背，她腿缠住你。']},
+ {'id': 'rooftop_rain', 'fragments': ['天台积水闪烁，小玥湿透衬衫曲线毕露。', '你在阴影里手伸进衣服大力揉奶抠穴。', '她靠墙被吻得发软。']},
+ {'id': 'cinema_last_row', 'fragments': ['影院最后一排黑暗，小玥裙下被你手指玩弄得湿透。', '你把她抱到怀里，隔着外套把肉棒插进去。', '前排有人回头，她只能装看电影却被操得发抖。']},
+ {'id': 'elevator_stuck', 'fragments': ['电梯困住，小玥靠镜子紧张。', '你把她抵在镜前，扯开衣服猛干。', '电梯恢复时她还腿软得站不稳。']},
+ {'id': 'beach_villa', 'fragments': ['海边露台，小玥泳衣系带松散。', '你跪下舔她湿穴直到她腿抖。', '你把她操到高潮，浪声掩盖她的淫叫。']},
+ {'id': 'cruise_cabin', 'fragments': ['邮轮舱房摇晃，小玥礼裙撩起。', '你按住她从开衩处猛插。', '最后内射她，把精液留在她体内。']},
+ {'id': 'lace_lingerie', 'fragments': ['卧室低灯，小玥黑色蕾丝内衣。', '你撕开布料直接插入湿滑骚穴。', '你把她操到多次高潮，蕾丝碎在床上。']},
+ {'id': 'nurse_uniform_room', 'fragments': ['白色房间，小玥护士制服短裙。', '你把她按在检查床，制服凌乱。', '你把她操到腿软，护士帽掉在地上。']},
+ {'id': 'dance_studio',
+  'fragments': ['镜子舞蹈室，小玥练舞服汗湿。', '你从身后抱住猛干，看镜中她被操到崩溃。', '你把她按在镜子上猛干。', '你把她操到高潮，镜子映出她失控的表情。', '你把她操到腿软倒在地板上。']},
+ {'id': 'photo_studio',
+  'fragments': ['摄影棚柔光，小玥半透明服装。', '你在镜头前操她，把失控表情全拍下来。', '你把她按在布景上猛干。', '你把她操到高潮，镜头记录她的一切。', '你把她操到彻底失神。']},
+ {'id': 'bathroom_mirror',
+  'fragments': ['浴室雾气，小玥浴巾快掉。', '你抱上洗手台对着镜子猛操。', '你把她压在洗手台上猛干。', '你把她操到高潮，镜子映出她湿漉漉的身体。', '你把她操到腿软站不稳。']},
+ {'id': 'camp_tent', 'fragments': ['帐篷狭小，你钻睡袋从后插入。', '你把她操到高潮，帐篷外有风声。', '你把她操到彻底失神。']},
+ {'id': 'karaoke_private_room',
+  'fragments': ['KTV 沙发，你在歌声中操她。', '你把她按在沙发上猛干。', '你把她操到高潮，歌声掩盖她的淫叫。', '你把她操到腿软。', '你把她操到高潮不止。']},
+ {'id': 'aquarium_afterclose',
+  'fragments': ['水族馆蓝光，你把她抵玻璃前猛插。', '你把她压在玻璃上猛干。', '你把她操到高潮，水光在她身上闪烁。', '你把她操到腿软。', '你把她操到高潮，玻璃上留下她的手印。']},
+ {'id': 'spa_massage_room',
+  'fragments': ['按摩床，你把她操到没力气。', '你把她按在按摩床上猛干。', '你把她操到高潮，精油和淫水混在一起。', '你把她操到彻底放松。', '你把她操到高潮不止。']},
+ {'id': 'hanfu_garden', 'fragments': ['汉服层层，你耐心剥开后猛干。', '你把她按在廊下猛干。', '你把她操到高潮，汉服凌乱。', '你把她操到腿软。', '你把她操到高潮，衣料被精液弄脏。']},
+ {'id': 'pool_locker_shower',
+  'fragments': ['淋浴间，你在水声中操她。', '你把她压在墙上猛干。', '你把她操到高潮，水声掩盖她的淫叫。', '你把她操到腿软。', '你把她操到高潮，水流冲走她的淫水。']},
+ {'id': 'greenhouse_night',
+  'fragments': ['温室，你在叶片后从后进入。', '你把她压在植物后猛干。', '你把她操到高潮，花香混着她的气味。', '你把她操到腿软。', '你把她操到高潮，温室里回荡她的喘息。']},
+ {'id': 'makeup_table_morning',
+  'fragments': ['梳妆台，你把她妆操花。', '你把她按在梳妆台上猛干。', '你把她操到高潮，妆容凌乱。', '你把她操到腿软。', '你把她操到高潮，口红蹭在镜子上。']},
+ {'id': 'private_gallery',
+  'fragments': ['画廊暗处，你把裙摆推到腰上猛操。', '你把她压在展墙上猛干。', '你把她操到高潮，裙摆凌乱。', '你把她操到腿软。', '你把她操到高潮，画廊里回荡她的淫叫。']},
+ {'id': 'remote_phone_instruction',
+  'fragments': ['电话里指挥她自慰，直到她哭着高潮给你听。', '你命令她怎么摸自己。', '你听她压抑的喘息。', '你命令她高潮给你听。', '你听她哭着高潮。']},
+ {'id': 'photographer_model',
+  'fragments': ['摄影棚，你在镜头前操她。', '你把她按在布景上猛干。', '你把她操到高潮，镜头记录一切。', '你把她操到彻底失神。', '你把她操到高潮不止。']},
+ {'id': 'collar_pet_night',
+  'fragments': ['项圈跪姿，你牵着绳操她到求饶。', '你把她按在地板上猛干。', '你把她操到高潮，她求饶。', '你把她操到彻底服从。', '你把她操到高潮不止。']},
+ {'id': 'temperature_play', 'fragments': ['冰火交替，你操到她分不清冷热。', '你用冰块和热吻玩弄她。', '你把她操到高潮。', '你把她操到彻底失神。', '你把她操到高潮不止。']},
+ {'id': 'old_shanghai_qipao',
+  'fragments': ['旗袍开衩，你隔着布料操她。', '你把她压在窗边猛干。', '你把她操到高潮，旗袍凌乱。', '你把她操到腿软。', '你把她操到高潮，窗外车灯闪烁。']},
+ {'id': 'praise_obedience', 'fragments': ['你一边夸她乖一边猛干。', '你夸她是好女孩。', '你把她操到高潮。', '你把她操到彻底服从。', '你把她操到高潮不止。']},
+ {'id': 'jealous_makeup',
+  'fragments': ['梳妆台，你把她妆操乱不准出门。', '你把她按在梳妆台上猛干。', '你把她操到高潮，妆容凌乱。', '你把她操到腿软。', '你把她操到高潮，不准她出门。']},
+ {'id': 'sensory_blindfold', 'fragments': ['眼罩，你玩弄到她敏感崩溃后插入。', '你用眼罩遮住她的眼睛。', '你玩弄她敏感的身体。', '你把她操到高潮。', '你把她操到彻底失神。']},
+ {'id': 'alpha_rut_marking', 'fragments': ['易感期，你标记她后激烈交配成结内射。', '你把她压在床上猛干。', '你咬着她的后颈标记。', '你把她操到高潮。', '你把她操到彻底占有。']},
+ {'id': 'midnight_balcony（新）',
+  'fragments': ['小玥只穿你衬衫在阳台，下面真空被风吹得骚穴暴露。', '你从后抱住大力揉奶，手指猛插湿穴。', '你把她压栏杆上整根插入猛操。', '听着下方车流把她操到喷水高潮。', '你把她操到腿软挂在你身上。']},
+ {'id': 'silk_robe_tease（新）',
+  'fragments': ['真丝睡袍跪姿，你把肉棒插她小嘴同时手指抠穴。', '最后把她按沙发上后入内射。', '你把她操到高潮。', '你把她操到彻底服从。', '你把她操到高潮不止。']},
+ {'id': 'gym_equipment（新）', 'fragments': ['健身房器械上，你用皮带抽屁股后猛干到腿软。', '你把她按在器械上猛干。', '你用皮带抽她屁股。', '你把她操到高潮。', '你把她操到腿软。']},
+ {'id': 'luxury_car_night（新）', 'fragments': ['豪车后座一路操到目的地内射。', '你把她按在后座上猛干。', '你把她操到高潮。', '你把她操到彻底失神。', '你把她操到高潮不止。']},
+ {'id': 'ancient_bed_chamber（新）',
+  'fragments': ['古床纱帐，你操到她哭着多次高潮。', '你把她压在古床上猛干。', '你把她操到高潮。', '你把她操到彻底失神。', '你把她操到高潮不止。']},
+ {'id': 'office_desk_punish（新）',
+  'fragments': ['办公桌惩罚式猛操，扇屁股内射。', '你把她按在办公桌上猛干。', '你扇她屁股惩罚。', '你把她操到高潮。', '你把她操到彻底服从。']},
+ {'id': 'forest_cabin_rain（新）', 'fragments': ['林中小屋大雨中激烈交媾内射。', '你把她压在床上猛干。', '你把她操到高潮。', '你把她操到彻底失神。', '你把她操到高潮不止。']},
+ {'id': 'mirror_room_play（新）',
+  'fragments': ['四面镜子，你命令她看着自己被操的样子高潮。', '你把她按在镜子前猛干。', '你命令她看着自己。', '你把她操到高潮。', '你把她操到彻底失神。']},
+ {'id': 'pet_crawl_training（新）', 'fragments': ['项圈尾巴爬行，你牵绳猛操训诫。', '你把她按在地板上猛干。', '你牵着绳训诫她。', '你把她操到高潮。', '你把她操到彻底服从。']},
+ {'id': 'daddy_pet_edge（新）',
+  'fragments': ['DDLG宠物玩法，你边缘控制她直到哭着求爸爸操她，最后激烈内射标记占有。', '你边缘控制她。', '她哭着求你操她。', '你把她操到高潮。', '你把她操到彻底占有。']},
+ {'id': 'crowded_train（纯电车）',
+  'fragments': ['晚高峰电车车厢异常拥挤，小玥被人群紧紧挤在你胸前，短裙下摆几乎被压到腰间。',
+                '你从后面悄悄把她安全裤拨到一边，手指直接探进已经湿透的骚穴抠挖。',
+                '车厢晃动时，你趁机把粗硬肉棒整根顶进她紧致湿滑的小穴。',
+                '周围全是人，她只能咬住手腕压抑淫叫，你却按着她腰小幅度凶狠抽插。',
+                '耳边贴近的羞辱感逼得她腿软高潮，淫水顺腿流。']},
+ {'id': 'last_train_standing（纯电车）',
+  'fragments': ['末班电车几乎空荡，你把小玥按在立杆前，从后面掀起裙子露出湿润的骚穴。',
+                '她双手抓杆翘起屁股，你直接把粗鸡巴整根捅进开始大力抽插。',
+                '车厢灯光闪烁，你每一次刹车都顶得更深更狠，撞得她淫水四溅。',
+                '你一手掐着细腰，一手伸进衣服大力揉捏奶子拉扯乳头。']},
+ {'id': 'subway_seat_finger（纯电车）',
+  'fragments': ['深夜地铁车厢，小玥坐在你腿上，短裙盖住你们连接的地方。',
+                '你的两根手指已经深深插在她湿滑的小穴里，随着电车晃动不停抠挖G点。',
+                '她把脸埋进你颈窝，咬着你的衣服压抑呻吟，淫水已经把你裤子浸湿一大片。',
+                '耳边故意压低的羞辱感逼得她更难压住高潮。']},
+ {'id': 'alpha_rut_crowded（ABO）',
+  'fragments': ['电车晚高峰，你 Alpha 易感期爆发，信息素浓烈得几乎失控，小玥被熏得腿软发情。',
+                '你把她压在车门边，狠狠咬住后颈临时标记，同时把肿胀肉棒整根捅进她湿滑发情穴。',
+                '周围人群中，你小幅度凶狠抽插，边操边低吼占有她。',
+                '她的腺体被你咬得发颤，Omega 信息素甜腻地缠绕着你。']},
+ {'id': 'omega_heat_pet（ABO）',
+  'fragments': ['小玥 Omega 发情期，戴项圈尾巴跪爬，骚穴不断滴水。',
+                '你牵绳把她按地板上猛干，边操边扇屁股训诫“小发情母狗”。',
+                '最后打结深锁内射，把她操到彻底失神。',
+                '她只能发出小奶狗一样的呜咽，身体本能地疯狂吸吮你的肉棒。',
+                '你持续释放 Alpha 信息素，直到把她的发情彻底压制。']},
+ {'id': 'omega_heat_nest（ABO）',
+  'fragments': ['小玥用你的衣服堆窝巢，在里面不安扭动发情。',
+                '你钻进去先舔她腺体和湿穴，再把粗鸡巴整根贯穿猛操。',
+                '打结锁死后抱着她慢慢磨，精液灌满子宫安抚她的发情。',
+                '她哭着求你“爸爸……要更多……”，身体不停颤抖。',
+                '你整晚都把她锁在体内，慢慢安抚她的发情期。']},
+ {'id': 'omega_heat_public（ABO）',
+  'fragments': ['公共场合小玥突然发情，你用外套遮挡，从后面手指猛抠她泛滥骚穴。', '她压抑呻吟求你，你故意释放信息素让她更崩溃。', '你低声命令她“忍着，别让别人发现你发情的样子”。']},
+ {'id': 'omega_heat_knot（ABO）',
+  'fragments': ['发情期小玥哭着求爸爸，你把她双腿压到胸前，凶狠顶开子宫口反复抽插。',
+                '最后肿大精囊死死打结，把滚烫浓精全部灌进她最深处。',
+                '她高潮时小穴疯狂吸吮，彻底被 Alpha 气味标记占有。',
+                '你咬着她的腺体持续释放信息素，让她彻底沉沦。',
+                '直到她小腹微微鼓起，才满意地把她抱紧。']},
+ {'id': 'after_class_office',
+  'fragments': ['放学后的办公室只剩你和小玥，她穿着校服站在你桌前，低头承认今天上课走神。',
+                '你让她过来，借口检查作业时把手伸进她短裙，隔着内裤揉捏她已经微微湿润的小穴。',
+                '她紧张地抓着桌沿，声音发颤地说“老师……不要……”，身体却不受控制地往你手心贴。',
+                '你把她按在办公桌上，掀起裙子，直接把粗硬的肉棒顶开她紧致的骚穴，猛地整根没入。',
+                '你一边操她一边低声训她。']},
+ {'id': 'detention_classroom',
+  'fragments': ['放学后的教室只剩你和小玥，她被罚留堂站在讲台前，校服领口因为紧张微微敞开。',
+                '你走过去从后面抱住她，一手伸进她衬衫里大力揉捏她被布料衬得已经挺立的乳房。',
+                '她惊呼出声，你立刻捂住她的嘴，另一只手已经把她的内裤扯到膝盖，粗鸡巴直接顶在她湿滑的穴口。',
+                '你把她按在讲台上，从后面凶狠抽插，每一次都撞得她校服凌乱，淫水顺着大腿往下流。']},
+ {'id': 'private_tutoring',
+  'fragments': ['晚上家教补课时，小玥穿着宽松的家居服坐在你旁边，领口松开露出大片雪白肌肤。',
+                '你借口她题目做错，把她拉到腿上坐下，手指直接探进她短裤里，抠挖她已经湿透的小穴。',
+                '她咬着笔杆压抑呻吟，你却把她按在书桌上，扯开衣服，把肿胀的肉棒整根捅进她紧致发烫的骚穴。',
+                '你一边猛干一边训她。']},
+ {'id': 'rooftop_after_school',
+  'fragments': ['放学后天台没人，小玥被你叫到这里“单独谈话”，她穿着校服站在你面前紧张得手指绞在一起。',
+                '你直接把她按在墙角，掀起裙子把手伸进她内裤，感觉她早就湿得一塌糊涂。',
+                '她小声求你“老师……这里会被发现的……”，你却把粗鸡巴掏出来，抵在她湿滑的穴口，猛地整根贯穿。',
+                '你一边凶狠抽插一边低声羞辱她。']},
+ {'id': 'teacher_pet',
+  'fragments': ['你让小玥放学后留在教室，命令她脱掉内裤，只穿校服上衣跪在你面前。',
+                '她红着脸把湿透的内裤递给你，你把她按在讲台上，从后面把粗硬的肉棒一下下捅进她发情般湿滑的小穴。',
+                '你一边操她一边训诫，把她操到高潮不止。']}]
 
 
 def _ensure_schema() -> None:
@@ -507,8 +251,32 @@ def _ensure_schema() -> None:
                 CREATE TABLE IF NOT EXISTS spring_dream_inspiration (
                     id TEXT PRIMARY KEY,
                     stars_json TEXT NOT NULL DEFAULT '[]',
+                    theme_id TEXT NOT NULL DEFAULT '',
+                    consume_token TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL DEFAULT ''
                 );
+
+                CREATE TABLE IF NOT EXISTS spring_dream_theme_draws (
+                    draw_id TEXT PRIMARY KEY,
+                    theme_id TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
+                    selected_at TEXT NOT NULL DEFAULT '',
+                    result_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_spring_dream_theme_draws_selected
+                    ON spring_dream_theme_draws(selected_at DESC);
+
+                CREATE TABLE IF NOT EXISTS spring_dream_consumptions (
+                    consume_token TEXT PRIMARY KEY,
+                    sleep_session_key TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT '',
+                    reserved_at TEXT NOT NULL DEFAULT '',
+                    sent_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_spring_dream_consumptions_status
+                    ON spring_dream_consumptions(status, updated_at DESC);
                 """
             )
             columns = {
@@ -530,6 +298,22 @@ def _ensure_schema() -> None:
             if "last_miss_at" not in columns:
                 conn.execute(
                     "ALTER TABLE spring_dream_sessions ADD COLUMN last_miss_at TEXT NOT NULL DEFAULT ''"
+                )
+            inspiration_columns = {
+                str(row["name"] or "")
+                for row in conn.execute("PRAGMA table_info(spring_dream_inspiration)").fetchall()
+            }
+            if "theme_id" not in inspiration_columns:
+                conn.execute(
+                    "ALTER TABLE spring_dream_inspiration ADD COLUMN theme_id TEXT NOT NULL DEFAULT ''"
+                )
+            if "consume_token" not in inspiration_columns:
+                conn.execute(
+                    "ALTER TABLE spring_dream_inspiration ADD COLUMN consume_token TEXT NOT NULL DEFAULT ''"
+                )
+            if "source" not in inspiration_columns:
+                conn.execute(
+                    "ALTER TABLE spring_dream_inspiration ADD COLUMN source TEXT NOT NULL DEFAULT ''"
                 )
         _SCHEMA_READY = True
 
@@ -555,11 +339,13 @@ def _normalize_inspiration_stars(raw_items) -> list[dict]:
             label = str(item.get("label") or item.get("title") or "").strip()
             color = "gold" if str(item.get("color") or "").strip().lower() == "gold" else "default"
             raw_id = str(item.get("id") or "").strip()
+            theme_id = str(item.get("theme_id") or "").strip()
         else:
             text = str(item or "").strip()
             label = ""
             color = "default"
             raw_id = ""
+            theme_id = ""
         if not text:
             continue
         key = text[:500]
@@ -574,11 +360,129 @@ def _normalize_inspiration_stars(raw_items) -> list[dict]:
                 "label": label[:24],
                 "text": text[:500],
                 "color": color,
+                "theme_id": theme_id[:120],
             }
         )
         if len(out) >= 36:
             break
     return out
+
+
+def _theme_to_inspiration_stars(theme: dict) -> list[dict]:
+    theme_id = str((theme or {}).get("id") or "").strip()
+    stars: list[dict] = []
+    for idx, fragment in enumerate((theme or {}).get("fragments") or []):
+        text = str(fragment or "").strip()
+        if not text:
+            continue
+        stars.append(
+            {
+                "id": f"{theme_id or 'theme'}-{idx}",
+                "label": (text.replace("\n", " ").strip()[:8] or "梦境碎片"),
+                "text": text[:500],
+                "color": "gold" if idx == 0 else "default",
+                "theme_id": theme_id,
+            }
+        )
+    return _normalize_inspiration_stars(stars)
+
+
+def _inspiration_theme_id_from_stars(stars: list[dict]) -> str:
+    theme_ids = [
+        str((item or {}).get("theme_id") or "").strip()
+        for item in (stars or [])
+        if str((item or {}).get("theme_id") or "").strip()
+    ]
+    if not theme_ids:
+        return ""
+    first = theme_ids[0]
+    return first if all(item == first for item in theme_ids) else ""
+
+
+def _inspiration_payload(
+    *,
+    stars: list[dict],
+    updated_at: str,
+    theme_id: str = "",
+    consume_token: str = "",
+    source: str = "",
+    idempotent: bool = False,
+    draw_id: str = "",
+) -> dict:
+    fragments = [str(item.get("text") or "").strip() for item in stars if str(item.get("text") or "").strip()]
+    out = {
+        "stars": stars,
+        "fragments": fragments,
+        "theme_id": str(theme_id or "").strip(),
+        "consume_token": str(consume_token or "").strip(),
+        "source": str(source or "").strip(),
+        "updated_at": str(updated_at or "").strip(),
+    }
+    if idempotent:
+        out["idempotent"] = True
+    if draw_id:
+        out["draw_id"] = draw_id
+    return out
+
+
+def _inspiration_payload_from_row(row) -> dict:
+    if row is None:
+        return _inspiration_payload(stars=[], updated_at="")
+    stars = _normalize_inspiration_stars(runtime_sqlite.json_loads(row["stars_json"], []))
+    theme_id = str(row["theme_id"] or "").strip()
+    if not theme_id:
+        theme_id = _inspiration_theme_id_from_stars(stars)
+    return _inspiration_payload(
+        stars=stars,
+        updated_at=str(row["updated_at"] or ""),
+        theme_id=theme_id,
+        consume_token=str(row["consume_token"] or "").strip(),
+        source=str(row["source"] or "").strip(),
+    )
+
+
+def _save_spring_dream_inspiration_row(
+    conn,
+    stars,
+    *,
+    now_iso: str,
+    theme_id: str = "",
+    consume_token: str = "",
+    source: str = "",
+) -> dict:
+    normalized = _normalize_inspiration_stars(stars)
+    clean_theme_id = str(theme_id or "").strip() or _inspiration_theme_id_from_stars(normalized)
+    clean_token = str(consume_token or "").strip() if normalized else ""
+    clean_source = str(source or "").strip() if normalized else ""
+    conn.execute(
+        """
+        INSERT INTO spring_dream_inspiration (
+            id, stars_json, theme_id, consume_token, source, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            stars_json=excluded.stars_json,
+            theme_id=excluded.theme_id,
+            consume_token=excluded.consume_token,
+            source=excluded.source,
+            updated_at=excluded.updated_at
+        """,
+        (
+            SPRING_DREAM_INSPIRATION_ID,
+            runtime_sqlite.json_dumps(normalized),
+            clean_theme_id,
+            clean_token,
+            clean_source,
+            now_iso,
+        ),
+    )
+    return _inspiration_payload(
+        stars=normalized,
+        updated_at=now_iso,
+        theme_id=clean_theme_id,
+        consume_token=clean_token,
+        source=clean_source,
+    )
 
 
 def get_spring_dream_inspiration() -> dict:
@@ -588,59 +492,41 @@ def get_spring_dream_inspiration() -> dict:
             "SELECT * FROM spring_dream_inspiration WHERE id=?",
             (SPRING_DREAM_INSPIRATION_ID,),
         ).fetchone()
-    if row is None:
-        return {"stars": [], "fragments": [], "updated_at": ""}
-    stars = _normalize_inspiration_stars(runtime_sqlite.json_loads(row["stars_json"], []))
-    return {
-        "stars": stars,
-        "fragments": [str(item.get("text") or "").strip() for item in stars if str(item.get("text") or "").strip()],
-        "updated_at": str(row["updated_at"] or ""),
-    }
+    return _inspiration_payload_from_row(row)
 
 
 def save_spring_dream_inspiration(stars) -> dict:
-    normalized = _normalize_inspiration_stars(stars)
     now_iso = now_beijing_iso()
     _ensure_schema()
     with runtime_sqlite.connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO spring_dream_inspiration (id, stars_json, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET stars_json=excluded.stars_json, updated_at=excluded.updated_at
-            """,
-            (
-                SPRING_DREAM_INSPIRATION_ID,
-                runtime_sqlite.json_dumps(normalized),
-                now_iso,
-            ),
+        return _save_spring_dream_inspiration_row(
+            conn,
+            stars,
+            now_iso=now_iso,
+            consume_token=uuid4().hex if _normalize_inspiration_stars(stars) else "",
+            source="manual",
         )
-    return {
-        "stars": normalized,
-        "fragments": [str(item.get("text") or "").strip() for item in normalized if str(item.get("text") or "").strip()],
-        "updated_at": now_iso,
-    }
 
 
-def list_spring_dream_fragment_library(limit: int = 120) -> dict:
+def list_spring_dream_fragment_library(limit: int = 320) -> dict:
     try:
-        clean_limit = max(1, min(240, int(limit or 120)))
+        clean_limit = max(1, min(320, int(limit or 320)))
     except Exception:
-        clean_limit = 120
+        clean_limit = 320
     out: list[dict] = []
     packs: list[dict] = []
-    seen: set[str] = set()
     for theme in _SPRING_DREAM_THEME_PACKS:
         theme_id = str((theme or {}).get("id") or "").strip()
         fragments = (theme or {}).get("fragments") or []
         if not isinstance(fragments, list):
             continue
         pack_stars: list[dict] = []
+        pack_seen: set[str] = set()
         for idx, fragment in enumerate(fragments):
             text = str(fragment or "").strip()
-            if not text or text in seen:
+            if not text or text in pack_seen:
                 continue
-            seen.add(text)
+            pack_seen.add(text)
             label = text.replace("\n", " ").strip()[:8] or "梦境碎片"
             pack_stars.append(
                 {
@@ -671,6 +557,271 @@ def list_spring_dream_fragment_library(limit: int = 120) -> dict:
         "packs": packs,
         "count": len(out),
     }
+
+
+def _recent_spring_dream_theme_ids(conn, *, limit: int = SPRING_DREAM_RECENT_THEME_LIMIT) -> list[str]:
+    try:
+        clean_limit = max(1, int(limit or SPRING_DREAM_RECENT_THEME_LIMIT))
+    except Exception:
+        clean_limit = SPRING_DREAM_RECENT_THEME_LIMIT
+    rows = conn.execute(
+        """
+        SELECT theme_id
+        FROM spring_dream_theme_draws
+        WHERE theme_id != ''
+        ORDER BY selected_at DESC
+        LIMIT 50
+        """
+    ).fetchall()
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        theme_id = str(row["theme_id"] or "").strip()
+        if not theme_id or theme_id in seen:
+            continue
+        seen.add(theme_id)
+        out.append(theme_id)
+        if len(out) >= clean_limit:
+            break
+    return out
+
+
+def _record_spring_dream_theme_draw(
+    conn,
+    *,
+    draw_id: str,
+    theme_id: str,
+    source: str,
+    selected_at: str,
+    payload: dict,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO spring_dream_theme_draws (
+            draw_id, theme_id, source, selected_at, result_json
+        )
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(draw_id) DO NOTHING
+        """,
+        (
+            draw_id,
+            str(theme_id or "").strip(),
+            str(source or "").strip(),
+            selected_at,
+            runtime_sqlite.json_dumps(payload),
+        ),
+    )
+    conn.execute(
+        """
+        DELETE FROM spring_dream_theme_draws
+        WHERE draw_id NOT IN (
+            SELECT draw_id
+            FROM spring_dream_theme_draws
+            ORDER BY selected_at DESC
+            LIMIT 80
+        )
+        """
+    )
+
+
+def _draw_spring_dream_inspiration_pack_in_conn(
+    conn,
+    *,
+    now_iso: str,
+    source: str,
+    draw_id: str,
+    rng: random.Random | None = None,
+) -> dict:
+    recent_theme_ids = _recent_spring_dream_theme_ids(conn)
+    theme = _choose_theme(rng=rng, excluded_theme_ids=recent_theme_ids)
+    theme_id = str((theme or {}).get("id") or "").strip()
+    stars = _theme_to_inspiration_stars(theme)
+    payload = _save_spring_dream_inspiration_row(
+        conn,
+        stars,
+        now_iso=now_iso,
+        theme_id=theme_id,
+        consume_token=uuid4().hex,
+        source=source,
+    )
+    payload["draw_id"] = draw_id
+    payload["recent_theme_ids_before"] = recent_theme_ids
+    _record_spring_dream_theme_draw(
+        conn,
+        draw_id=draw_id,
+        theme_id=theme_id,
+        source=source,
+        selected_at=now_iso,
+        payload=payload,
+    )
+    return payload
+
+
+def draw_spring_dream_inspiration_pack(
+    *,
+    source: str = "manual",
+    client_request_id: str = "",
+    rng: random.Random | None = None,
+) -> dict:
+    clean_source = (str(source or "").strip() or "manual")[:40]
+    clean_request_id = str(client_request_id or "").strip()[:160]
+    draw_id = f"{clean_source}:{clean_request_id}" if clean_request_id else f"{clean_source}:{uuid4().hex}"
+    now_iso = now_beijing_iso()
+    _ensure_schema()
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if clean_request_id:
+                row = conn.execute(
+                    "SELECT result_json FROM spring_dream_theme_draws WHERE draw_id=?",
+                    (draw_id,),
+                ).fetchone()
+                if row is not None:
+                    cached = runtime_sqlite.json_loads(row["result_json"], {})
+                    if isinstance(cached, dict):
+                        conn.execute("COMMIT")
+                        return {**cached, "idempotent": True}
+            payload = _draw_spring_dream_inspiration_pack_in_conn(
+                conn,
+                now_iso=now_iso,
+                source=clean_source,
+                draw_id=draw_id,
+                rng=rng,
+            )
+            conn.execute("COMMIT")
+            return payload
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+def _ensure_spring_dream_inspiration_for_trigger_in_conn(
+    conn,
+    *,
+    now_iso: str,
+    rng: random.Random | None = None,
+) -> dict:
+    row = conn.execute(
+        "SELECT * FROM spring_dream_inspiration WHERE id=?",
+        (SPRING_DREAM_INSPIRATION_ID,),
+    ).fetchone()
+    payload = _inspiration_payload_from_row(row)
+    if payload.get("fragments"):
+        if str(payload.get("consume_token") or "").strip():
+            return payload
+        return _save_spring_dream_inspiration_row(
+            conn,
+            payload.get("stars") or [],
+            now_iso=now_iso,
+            theme_id=str(payload.get("theme_id") or ""),
+            consume_token=uuid4().hex,
+            source=str(payload.get("source") or "legacy"),
+        )
+    return _draw_spring_dream_inspiration_pack_in_conn(
+        conn,
+        now_iso=now_iso,
+        source="auto",
+        draw_id=f"auto:{uuid4().hex}",
+        rng=rng,
+    )
+
+
+def _spring_dream_claim_expired(reserved_at: str, now_iso: str) -> bool:
+    reserved_dt = parse_iso_to_beijing(str(reserved_at or ""))
+    now_dt = parse_iso_to_beijing(str(now_iso or "")) or datetime.now(BEIJING_TZ)
+    if reserved_dt is None:
+        return True
+    return now_dt >= reserved_dt + timedelta(minutes=SPRING_DREAM_CONSUMPTION_CLAIM_TTL_MINUTES)
+
+
+def _claim_spring_dream_consumption(
+    conn,
+    *,
+    consume_token: str,
+    session_key: str,
+    now_iso: str,
+) -> bool:
+    clean_token = str(consume_token or "").strip()
+    if not clean_token:
+        return True
+    row = conn.execute(
+        "SELECT * FROM spring_dream_consumptions WHERE consume_token=?",
+        (clean_token,),
+    ).fetchone()
+    if row is not None:
+        status = str(row["status"] or "").strip()
+        if status == "sent":
+            return False
+        if status == "reserved" and not _spring_dream_claim_expired(str(row["reserved_at"] or ""), now_iso):
+            return False
+        conn.execute(
+            """
+            UPDATE spring_dream_consumptions
+            SET sleep_session_key=?,
+                status='reserved',
+                reserved_at=?,
+                sent_at='',
+                updated_at=?
+            WHERE consume_token=?
+            """,
+            (session_key, now_iso, now_iso, clean_token),
+        )
+        return True
+    conn.execute(
+        """
+        INSERT INTO spring_dream_consumptions (
+            consume_token, sleep_session_key, status, reserved_at, sent_at, updated_at
+        )
+        VALUES (?, ?, 'reserved', ?, '', ?)
+        """,
+        (clean_token, session_key, now_iso, now_iso),
+    )
+    return True
+
+
+def _release_spring_dream_consumption(
+    conn,
+    *,
+    consume_token: str,
+    now_iso: str,
+) -> None:
+    clean_token = str(consume_token or "").strip()
+    if not clean_token:
+        return
+    conn.execute(
+        """
+        UPDATE spring_dream_consumptions
+        SET status='released', updated_at=?
+        WHERE consume_token=? AND status='reserved'
+        """,
+        (now_iso, clean_token),
+    )
+
+
+def _mark_spring_dream_consumption_sent(
+    conn,
+    *,
+    consume_token: str,
+    session_key: str,
+    sent_at: str,
+) -> None:
+    clean_token = str(consume_token or "").strip()
+    if not clean_token:
+        return
+    conn.execute(
+        """
+        INSERT INTO spring_dream_consumptions (
+            consume_token, sleep_session_key, status, reserved_at, sent_at, updated_at
+        )
+        VALUES (?, ?, 'sent', '', ?, ?)
+        ON CONFLICT(consume_token) DO UPDATE SET
+            sleep_session_key=excluded.sleep_session_key,
+            status='sent',
+            sent_at=excluded.sent_at,
+            updated_at=excluded.updated_at
+        """,
+        (clean_token, session_key, sent_at, sent_at),
+    )
 
 
 def _session_row(session_key: str) -> dict:
@@ -819,6 +970,7 @@ def _reserve_spring_dream_slot(
     max_per_sleep: int,
     rng: random.Random | None = None,
     theme_override: dict | None = None,
+    use_inspiration_bottle: bool = False,
 ) -> dict | None:
     clean_key = str(session_key or "").strip()
     if not clean_key:
@@ -839,8 +991,38 @@ def _reserve_spring_dream_slot(
                 conn.execute("ROLLBACK")
                 return None
             previous_theme = str(row["last_theme_id"] or "") if row is not None else ""
-            theme = theme_override if isinstance(theme_override, dict) and theme_override.get("fragments") else _choose_theme(previous_theme, rng=rng)
+            inspiration_payload: dict = {}
+            if use_inspiration_bottle:
+                inspiration_payload = _ensure_spring_dream_inspiration_for_trigger_in_conn(
+                    conn,
+                    now_iso=now_iso,
+                    rng=rng,
+                )
+                inspiration_fragments = [
+                    str(item).strip()
+                    for item in (inspiration_payload.get("fragments") or [])
+                    if str(item).strip()
+                ]
+                theme = {
+                    "id": str(inspiration_payload.get("theme_id") or "").strip() or SPRING_DREAM_INSPIRATION_THEME_ID,
+                    "fragments": inspiration_fragments,
+                    "source": str(inspiration_payload.get("source") or "").strip() or "inspiration",
+                    "consume_token": str(inspiration_payload.get("consume_token") or "").strip(),
+                }
+            elif isinstance(theme_override, dict) and theme_override.get("fragments"):
+                theme = theme_override
+            else:
+                theme = _choose_theme(previous_theme, rng=rng)
             theme_id = str(theme.get("id") or "").strip()
+            consume_token = str(theme.get("consume_token") or "").strip()
+            if consume_token and not _claim_spring_dream_consumption(
+                conn,
+                consume_token=consume_token,
+                session_key=clean_key,
+                now_iso=now_iso,
+            ):
+                conn.execute("ROLLBACK")
+                return None
             count_after = count + 1
             if row is None:
                 conn.execute(
@@ -870,6 +1052,7 @@ def _reserve_spring_dream_slot(
                 "count_before": count,
                 "count_after": count_after,
                 "theme": theme,
+                "inspiration": inspiration_payload,
             }
         except Exception:
             conn.execute("ROLLBACK")
@@ -878,6 +1061,7 @@ def _reserve_spring_dream_slot(
 
 def release_spring_dream_slot(prepared: dict) -> bool:
     session_key = str((prepared or {}).get("sleep_session_key") or "").strip()
+    consume_token = str((prepared or {}).get("inspiration_consume_token") or "").strip()
     if not session_key:
         return False
     now_iso = now_beijing_iso()
@@ -901,6 +1085,11 @@ def release_spring_dream_slot(prepared: dict) -> bool:
                 """,
                 (count, now_iso, session_key),
             )
+            _release_spring_dream_consumption(
+                conn,
+                consume_token=consume_token,
+                now_iso=now_iso,
+            )
             conn.execute("COMMIT")
             return True
         except Exception:
@@ -908,9 +1097,20 @@ def release_spring_dream_slot(prepared: dict) -> bool:
             raise
 
 
-def _choose_theme(previous_theme_id: str = "", rng: random.Random | None = None) -> dict:
+def _choose_theme(
+    previous_theme_id: str = "",
+    rng: random.Random | None = None,
+    excluded_theme_ids: list[str] | None = None,
+) -> dict:
     picker = rng or random
-    pool = [item for item in _SPRING_DREAM_THEME_PACKS if item.get("id") != previous_theme_id]
+    excluded = {str(item or "").strip() for item in (excluded_theme_ids or []) if str(item or "").strip()}
+    pool = [
+        item
+        for item in _SPRING_DREAM_THEME_PACKS
+        if item.get("id") != previous_theme_id and str(item.get("id") or "").strip() not in excluded
+    ]
+    if not pool:
+        pool = [item for item in _SPRING_DREAM_THEME_PACKS if item.get("id") != previous_theme_id]
     if not pool:
         pool = list(_SPRING_DREAM_THEME_PACKS)
     return picker.choice(pool)
@@ -993,36 +1193,25 @@ def maybe_prepare_spring_dream_wakeup(
         )
         return None
 
-    inspiration = get_spring_dream_inspiration()
-    inspiration_fragments = [
-        str(item).strip()
-        for item in (inspiration.get("fragments") or [])
-        if str(item).strip()
-    ]
-    theme_override = None
-    if inspiration_fragments:
-        theme_override = {
-            "id": SPRING_DREAM_INSPIRATION_THEME_ID,
-            "fragments": inspiration_fragments,
-            "source": "miniapp_inspiration",
-        }
-
     reserved = _reserve_spring_dream_slot(
         session_key=session_key,
         sleep_source=sleep_source,
         max_per_sleep=int(max_per_sleep or SPRING_DREAM_MAX_PER_SLEEP),
         rng=rng,
-        theme_override=theme_override,
+        use_inspiration_bottle=True,
     )
     if not reserved:
         return None
     theme = reserved.get("theme") if isinstance(reserved.get("theme"), dict) else {}
+    inspiration_payload = reserved.get("inspiration") if isinstance(reserved.get("inspiration"), dict) else {}
     fragments = [str(item).strip() for item in (theme.get("fragments") or []) if str(item).strip()]
     return {
         "prompt": build_spring_dream_prompt(fragments),
         "theme_id": str(theme.get("id") or "").strip(),
         "fragments": fragments,
-        "inspiration_source": "miniapp" if inspiration_fragments else "random",
+        "inspiration_source": str(theme.get("source") or inspiration_payload.get("source") or "").strip(),
+        "inspiration_consume_token": str(theme.get("consume_token") or inspiration_payload.get("consume_token") or "").strip(),
+        "inspiration_theme_id": str(inspiration_payload.get("theme_id") or theme.get("id") or "").strip(),
         "sleep_session_key": session_key,
         "sleep_source": sleep_source,
         "is_sleeping": is_sleeping,
@@ -1041,6 +1230,7 @@ def record_spring_dream_sent(prepared: dict, *, sent_at: str = "") -> bool:
     session_key = str((prepared or {}).get("sleep_session_key") or "").strip()
     if not session_key:
         return False
+    consume_token = str((prepared or {}).get("inspiration_consume_token") or "").strip()
     now_iso = str(sent_at or "").strip() or now_beijing_iso()
     _ensure_schema()
     with runtime_sqlite.connect() as conn:
@@ -1067,6 +1257,25 @@ def record_spring_dream_sent(prepared: dict, *, sent_at: str = "") -> bool:
                 """,
                 (SPRING_DREAM_TRIGGER_STATE_ID, now_iso, now_iso, now_iso),
             )
+            if consume_token:
+                _mark_spring_dream_consumption_sent(
+                    conn,
+                    consume_token=consume_token,
+                    session_key=session_key,
+                    sent_at=now_iso,
+                )
+                conn.execute(
+                    """
+                    UPDATE spring_dream_inspiration
+                    SET stars_json='[]',
+                        theme_id='',
+                        consume_token='',
+                        source='',
+                        updated_at=?
+                    WHERE id=? AND consume_token=?
+                    """,
+                    (now_iso, SPRING_DREAM_INSPIRATION_ID, consume_token),
+                )
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

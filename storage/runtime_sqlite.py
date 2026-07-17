@@ -28,6 +28,8 @@ _RUNTIME_TABLES = (
     "spring_dream_trigger_state",
     "spring_dream_archives",
     "spring_dream_inspiration",
+    "spring_dream_theme_draws",
+    "spring_dream_consumptions",
     "exchange_diary_entries",
     "recall_message_markers",
     "recall_message_targets",
@@ -260,8 +262,32 @@ def ensure_schema() -> None:
                 CREATE TABLE IF NOT EXISTS spring_dream_inspiration (
                     id TEXT PRIMARY KEY,
                     stars_json TEXT NOT NULL DEFAULT '[]',
+                    theme_id TEXT NOT NULL DEFAULT '',
+                    consume_token TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL DEFAULT ''
                 );
+
+                CREATE TABLE IF NOT EXISTS spring_dream_theme_draws (
+                    draw_id TEXT PRIMARY KEY,
+                    theme_id TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
+                    selected_at TEXT NOT NULL DEFAULT '',
+                    result_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_spring_dream_theme_draws_selected
+                    ON spring_dream_theme_draws(selected_at DESC);
+
+                CREATE TABLE IF NOT EXISTS spring_dream_consumptions (
+                    consume_token TEXT PRIMARY KEY,
+                    sleep_session_key TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT '',
+                    reserved_at TEXT NOT NULL DEFAULT '',
+                    sent_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_spring_dream_consumptions_status
+                    ON spring_dream_consumptions(status, updated_at DESC);
 
                 CREATE TABLE IF NOT EXISTS exchange_diary_entries (
                     id TEXT PRIMARY KEY,
