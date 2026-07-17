@@ -2,12 +2,26 @@
 
 这个文件用于快速定位问题。先按“现象”找入口，再看关键文件和日志关键词。
 
-当前状态（2026-07-17 春梦概率与春梦后特殊唤醒时间窗，已提交待部署）：
+当前状态（2026-07-17 SumiTalk 主动消息窗口错位修复，已部署）：
+- 根因：主动唤醒生成与后端归档一直使用真实 `context_window_id`，但 SumiTalk 外发阶段丢失该参数；远端 history 仍写设备级旧 key，持久 `deliver_chat_message` 与 realtime `assistant_message` 又分别固定到 `sumitalk-main`，因此通知可达但正文落入错误窗口。
+- 已修复：触发所属 `window_id` 现由唤醒和延迟续话调用链传至 SumiTalk producer；history、30 天持久 action、realtime 三路使用同一个解析后的窗口和同一个原稳定 `message_id`。history 改写精确 `device_id::window_id` 行，不再把新主动消息写入设备级旧行。
+- 兜底顺序：本次触发窗口优先；缺失时复用现有 `resolve_recent_reply_context()` 解析最近设备/会话窗口；仍为空才回退 `sumitalk-main`。未写死任何具体 TG ID，Telegram、QQ、群聊和普通聊天分支未改。
+- 已验证：仅运行 `scripts/test_sumitalk_native_proactive_delivery.py` 定向回归，覆盖显式窗口三路一致、当前窗口立即读回、跨窗口隔离、稳定消息 ID、30 天 TTL、action 重试幂等、最近会话解析与最终兜底；验证使用临时 SQLite 和内存 mock，未访问 R2、生产网关或设备。
+- 已部署：运行时代码提交 `4ab4531b` 已推送 `origin/main`，服务器 `/root/du-gateway` 从 `5ad5f68c` fast-forward；同步补齐 `chinesecalendar==1.11.0` 后，服务器端 Python 编译与 `import app` 通过，`du-gateway.service`、`du-sumitalk-chat-worker.service`、`du-telegram-proactive.service` 均已重启为 active。本机及公网 `/health` 返回 `ok`，重启后三项服务 warning 级日志为空。原生 App、MiniApp、`services/realtime_publish.py` 与 `storage/app_action_store.py` 未改；定向测试和索引改动保留本地，未随运行时提交上传服务器。
+
+当前状态（2026-07-17 春梦概率与春梦后特殊唤醒时间窗，已推送待部署）：
 - 已完成：春梦本身不再限定睡眠期或固定时段，每次随机唤醒 tick 都可参与判定；概率为 `3% + 想做档位×4% + 睡眠加成12% + 连续未命中次数×5%`，最高 `70%`。未命中次数保存到本地 runtime SQLite，全局累加；实际发送成功后归零并进入 6 小时冷却，冷却期不继续累加。
 - 已完成：想做档位复用小家当前身体状态的有效 `0-5` 档（含既有深夜/早晨时段修正），睡眠状态只作为概率加成，不再作为春梦触发门槛；原随机唤醒 35-55 分钟调度、主题/灵感瓶、正文归档和发送链路未改。
 - 已完成：春梦后特殊唤醒继续单独限时。工作日允许 `22:00-次日07:00`，休息日/法定节假日允许 `22:00-次日11:00`；晚间按次日是否工作判断，使用 `chinesecalendar` 识别法定节假日和调休工作日，依赖不可用时退回普通周一至周五判断。
 - 已验证：目标 Python 文件编译和 `git diff --check` 通过；临时 SQLite + mock 身体/睡眠数据 smoke 覆盖满档睡眠首次 `35%`、满档清醒首次 `23%`、未命中每次 `+5%`、成功后归零并进入 6 小时冷却，以及工作日 `06:59/07:00`、休息日 `10:59/11:00` 和晚间 `22:00` 边界。验证未连接生产服务、未写 R2。
-- 未完成 / 下次继续：尚未部署或重启。部署时需先安装新增 Python 依赖，再观察一次春梦未命中日志中的 `sleeping / desire / threshold / miss_count`。
+- 当前状态：代码与索引已提交并 push；尚未部署或重启。部署时需先安装新增 Python 依赖，再观察一次春梦未命中日志中的 `sleeping / desire / threshold / miss_count`。
+
+当前状态（2026-07-17 主动唤醒增加渡单机游戏选项，已提交待发布）：
+- 已完成：随机主动决策新增 `action=game` 与独立 `game` 字段；无论 Prompt 管理里是否仍保存旧模板，请求末尾都会列出当前明确允许的渡单机游戏，现为「植物大战丧尸随机版 → random_imitator_td」和「AI 农场 → farm」。
+- 已完成：选择游戏后追加一轮主网关请求，要求实际调用所选工具；返回的 `du_gateway_executed_tools` 没有所选工具时按失败记录，不能只用正文假装玩过。塔防执行轮带 `X-Random-Imitator-TD` 以确保工具注入；农场复用已常驻注册的 `farm` 工具。
+- 边界：这是明确白名单，不从统一游戏注册表全量收集；`private_board`、`captivity_simulator`、文游等共同游戏不进入候选。农场虽有人类 App 入口，本轮按辛玥决定纳入渡单机候选；没有修改任何游戏工具 schema、游戏存档、R2、App 或唤醒发送策略。
+- 已验证：本地 `main` 提交 `f797c87b` 的目标 Python 文件编译与 `git diff --check` 通过；此前 mock 网关执行 smoke 覆盖两项合法选择、共同游戏拒绝、塔防专用 header、农场不误带该 header、必须实际调用所选工具。验证没有请求模型、R2 或真实游戏。
+- 未完成 / 下次继续：提交仍只在本地 `main`，尚未 push、部署或重启；真实主动唤醒要等明确发布后再观察一次日志，不要为验收人工触发线上游戏或改写存档。
 
 当前状态（2026-07-16 网易云一起听后端最小闭环，已部署）：
 - 已完成：基于固定提交的 PyNCM 1.8.1 增加网易云扫码登录、远端登录态校验、每日推荐、私人 FM、搜索、用户歌单、完整歌单曲目、曲目详情、歌词和 `standard/exhigh/lossless/hires` 播放源接口；登录态只写本地 `data/netease_music_session.json`，原子替换并限制为 `0600`，不进 R2。网易云明确返回登录失效时清空本地会话，要求重新扫码。
@@ -367,7 +381,7 @@ ssh du-gateway 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 入口风格注入：`services/entry_style_prompt.py`、`services/chat_prompt_injections.py::inject_entry_style_system`
 
 当前状态：
-- 主动唤醒生成已固定 QQ 优先，避免 `【入口风格：TG】` / `【入口风格：QQ】` 在同类唤醒里来回跳。
+- 随机唤醒、半小时硬触发与春梦唤醒统一沿用 `last_reply_channel` 记录的最近真实聊天入口：最近在 SumiTalk App 互动就生成并投递到 SumiTalk，最近在 QQ / 微信 / TG 互动就回对应入口；没有真实入口记录时才沿用旧的 QQ / 微信 / TG 可用入口兜底。
 - 随机主动决策的「近来主动联络记录」和「最近自发动作参考」已从入口风格 system 拆出，作为带 `__dynamic__` 标记的单独 system 进入动态区，避免 cache debug 把可变上下文算进 `QQ入口风格`。
 - 正常 TG/QQ 入站聊天和延迟续话仍按各自真实入口风格处理。
 - 小家事件、私密纸条、弹窗回执、查岗回执属于“手机/小家侧事件”，不更新最近真实聊天入口；生成和投递应沿用 `storage/r2_store.py::get_last_reply_channel()` 记录的最近真实聊天 channel。只有最近真实聊天本来是 SumiTalk，才回 SumiTalk。
@@ -481,7 +495,7 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：新增 `services/reply_channel_context.py` 统一解析最近真实聊天入口；`routes/miniapp/dashboard.py` 的小家状态/道具事件、`routes/miniapp/private_draw.py` 的小纸条发送，以及 `routes/miniapp/device_actions.py` 的弹窗/查岗回执都改为沿用最近真实聊天 channel，不再把小家事件来源当成 SumiTalk，也不再让小家事件固定走 QQ 主动入口；这些事件类回包解析出最近入口后会锁定该 channel，不跨到其它入口兜底。
 - 已完成：`services/conversation_followup.py` 新增 `send_pixel_home_wakeup()`；小家事件按 system event 送入网关，正文提示为“小家里的状态或道具事件，不是她在聊天框里说的话”，避免归档和生成时把它当成小玥普通聊天正文。
 - 已验证：`.venv/bin/python -m py_compile services/reply_channel_context.py services/conversation_followup.py routes/miniapp/private_draw.py routes/miniapp/dashboard.py routes/miniapp/device_actions.py`、`git diff --check -- services/reply_channel_context.py services/conversation_followup.py routes/miniapp/private_draw.py routes/miniapp/dashboard.py routes/miniapp/device_actions.py docs/DEBUG_INDEX.md` 通过；smoke 确认 `TELEGRAM_PROACTIVE_TARGET_USER_ID` 优先于 recent `tg_`，锁定投递时不会追加 QQ/微信 fallback。
-- 未完成 / 下次继续：本轮不改随机主动硬触发固定入口策略，不改普通 SumiTalk 聊天发送链路，也不改前端 UI。
+- 未完成 / 下次继续：普通 SumiTalk 聊天发送链路和前端 UI 未改；闹钟/日历提醒仍保留自己的既有投递顺序，不跟随本次主动唤醒入口策略。
 
 ## 聊天失败 / 上游不可用
 
