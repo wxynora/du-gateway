@@ -18,13 +18,13 @@
 - 已验证：`scripts/test_qq_group_activity_context.py` 覆盖最新 20 条裁剪与提示词边界；目标 Python 编译、connector `node --check` 和目标 `git diff --check` 均通过。测试只用本地假状态，没有连接或读写 R2、模型和线上服务。
 - 未完成 / 下次继续：尚未部署或重启；上线时需同步重启 `du-gateway.service` 与 `qq-connector.service`，否则 connector 仍会沿用旧进程中的上报条数。
 
-当前状态（2026-07-16 AI 农场双入口补齐，本地未部署）：
+当前状态（2026-07-17 AI 农场双入口补齐，已部署）：
 - 已完成：把 `tutusagi/aifarm-oss@3c3246af` 的源码、内容和已构建运行包收进 `vendor/aifarm-oss/`；只加默认监听 `127.0.0.1` 的下游安全补丁，玩法、数值和文字内容未改。
 - 已完成：原生 App 通过鉴权 session API 创建或复用「渡的小农场」，在专用 WebView 打开上游低权限 `humanUrl`；渡通过与上游 MCP 同契约的常驻单工具 `farm({action, ...参数})` 私下使用 `playUrl`，两边共用同一份 sidecar 存档。
 - 安全边界：`playUrl` 只取校验后的 `/a/<agentKey>` 路径并固定请求本机 sidecar，模型和前端均拿不到 key/token，聊天工具拒绝 `new-token`；进程内锁加 `fcntl` 文件锁保证 Web 与独立 worker 并发首次进入时只建一座。
-- 已完成：新增 `scripts/install_aifarm_service.sh`，可安装并 enable 只监听 `127.0.0.1:8080` 的 `du-aifarm.service`；本轮没有实际安装、启动或改服务器。先前误接到 MiniApp 的农场 UI 已清理，只保留原生 App 入口。
-- 已验证：农场 9 项 Python 回归在干净 worktree 连续三轮通过；真实临时 sidecar 先由 6 个独立进程并发首次进入并确认只创建一个农场，再完成“种地 → 读回同一农场”。干净树 Python 编译、`import app`、shell 语法、`git diff --check` 及上游 `npm run check` 全通过。没有访问 R2、模型、生产网关或现有农场存档。
-- 未完成 / 下次继续：尚未部署网关、安装/启动 sidecar、安装原生 APK 或创建正式农场；发布前从两边远端农场分支再次复验，不能混入主工作区其它半成品。完整边界见 `docs/aifarm-app-integration.md`。
+- 已部署：农场后端提交 `4f02b5b4` 已推送 `origin/main` 并由 VPS fast-forward；`du-aifarm.service` 已安装、enable 并以 Node.js 24.18.0 只监听 `127.0.0.1:8080`。`du-gateway.service` 与 `du-sumitalk-chat-worker.service` 已重启，三个服务均为 active。
+- 已验证：精确部署提交的 Python 编译、`import app`、四个农场路由、单一 `farm` 工具注入、全部 sidecar 运行 JS 语法、shell 语法、`git diff --check` 和临时 loopback 启动通过；VPS sidecar 根页面 200，公网 `/health` 与 `/miniapp/` 均 200，未鉴权农场 session 返回 401，而不存在的 API 返回 404。重启后三个服务近五分钟日志无 traceback/exception/error/failed。
+- 当前边界：发布提交未包含私有 `scripts/test_aifarm_bridge.py`。本轮没有调用模型、没有读写 R2、没有发送 session POST；线上 App 会话文件不存在，sidecar 只有上游自带 NPC，玩家农场数为 0。正式「渡的小农场」仍由原生 App 或渡第一次明确进入时创建；本次没有改原生仓库。完整边界见 `docs/aifarm-app-integration.md`。
 
 当前状态（2026-07-16 SumiTalk 原生一起听双向邀请后端）：
 - 已完成：SumiTalk 聊天注入隐藏 `du:listen invite/join/refuse` 协议；渡可主动邀请，小玥发出邀请卡时渡必须明确接受或拒绝。流式与非流式响应都会在隐藏标记剥离前生成 `listen_invite_action` 事件，客户端正文和流式增量均不泄漏控制标记。

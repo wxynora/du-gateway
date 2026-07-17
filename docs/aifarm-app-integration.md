@@ -1,6 +1,6 @@
 # AI 农场原生 App 接入
 
-当前状态（2026-07-16）：人类 `humanUrl` 与渡的 `playUrl` 双入口均已在本地接通。原生 Android 打开伴侣页面，渡通过网关常驻单工具 `farm({action, ...参数})` 操作同一份 sidecar 存档；干净 worktree 已完成临时真实 sidecar 的建档、种地和读回验证。尚未 push、部署网关、安装 APK 或创建线上 sidecar 服务。MiniApp 不显示或加载 AI 农场。
+当前状态（2026-07-17）：人类 `humanUrl` 与渡的 `playUrl` 双入口后端已通过提交 `4f02b5b4` 部署到线上。`du-aifarm.service` 只监听 `127.0.0.1:8080`，网关与 SumiTalk worker 已加载农场路由和常驻单工具 `farm({action, ...参数})`。线上尚未创建玩家农场或 App 会话；第一次由原生 App 或渡明确进入时才创建「渡的小农场」。MiniApp 不显示或加载 AI 农场。
 
 ## 目标
 
@@ -64,8 +64,7 @@ JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ANDROID_
 
 ## 未完成 / 下次继续
 
-- 线上还没有 `du-aifarm` sidecar 服务，主网关没有部署；原生 APK 也没有安装或发布。
-- 尚未用真实线上模型调用 `farm`，也未创建正式农场存档；上线后第一次由 App 或渡进入时才创建「渡的小农场」。
+- 尚未通过真实原生 App 鉴权请求验证线上 GET/POST，也未用真实线上模型调用 `farm`；第一次由 App 或渡进入时才创建「渡的小农场」。
 - 当前没有群聊专用农场编排、笨笨玩家或多农场身份切换；渡只操作本地会话绑定的这一座农场。
-- 发布前必须从两边干净目标版本分别验证网关和 APK；当前两个工作区都有其他半成品，不能整包混推。
-- 主原生工作区当前还被无关的 `ApiManagementScreen.kt` 编译错误阻塞；本阶段已在只应用农场补丁的干净 worktree 完成构建与测试，不能把主工作区当前状态说成可直接打包。
+- 本次只发布 `du-gateway` 后端，没有改动、提交或推送原生仓库；原生端状态继续由原生仓库单独确认。
+- 线上当前没有 `data/aifarm_app_session.json`，sidecar 玩家农场数为 0；不要为了探测而主动 POST session、调用模型或拿共享存档做测试。
