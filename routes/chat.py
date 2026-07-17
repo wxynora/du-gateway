@@ -184,6 +184,7 @@ from services.prompt_cache_debug import (
 )
 from services.reasoning_utils import (
     THINK_BLOCK_RE as _THINK_BLOCK_RE,
+    extract_reasoning_stream_source as _extract_reasoning_stream_source,
     extract_reasoning_text_and_details as _extract_reasoning_text_and_details,
     extract_thinking_from_content as _extract_thinking_from_content,
     normalize_reasoning_details as _normalize_reasoning_details,
@@ -1351,6 +1352,7 @@ def _stream_with_r2_archive(
     """
     content_parts = []
     reasoning_parts = []
+    archive_reasoning_source = ""
     reasoning_details_parts: list[dict] = []
     thinking_blocks_parts: list[dict] = []
     cache_debug_entries: list[dict] = []
@@ -1433,36 +1435,30 @@ def _stream_with_r2_archive(
                 return
             packet = json.loads(raw.decode("utf-8", errors="ignore"))
             delta = ((packet.get("choices") or [{}])[0] or {}).get("delta") or {}
-            event_parts: list[str] = []
-            raw_content = delta.get("content") or ""
-            if isinstance(raw_content, str) and _THINK_BLOCK_RE.search(raw_content):
-                _clean, in_content_thinking = _extract_thinking_from_content(raw_content)
-                if in_content_thinking:
-                    event_parts.append(in_content_thinking)
-            reasoning_text, _details, omitted = _extract_reasoning_text_and_details(delta)
-            if reasoning_text:
-                event_parts.append(reasoning_text)
+            source, reasoning_text, _details, omitted = _extract_reasoning_stream_source(delta)
             if omitted:
                 state["omitted"] = True
-            if not event_parts:
+            if not source or not reasoning_text:
                 return
+            if state.get("source") and state["source"] != source:
+                return
+            state["source"] = source
             if not state.get("started"):
                 _emit_stream_event(
                     "reasoning_started",
                     {"part_id": part_id, "round": round_no, "mode": "delta"},
                 )
                 state["started"] = True
-            for text in event_parts:
-                for event_text in _stream_event_text_chunks(text):
-                    _emit_stream_event(
-                        "reasoning_delta",
-                        {
-                            "part_id": part_id,
-                            "round": round_no,
-                            "mode": "delta",
-                            "text": event_text,
-                        },
-                    )
+            for event_text in _stream_event_text_chunks(reasoning_text):
+                _emit_stream_event(
+                    "reasoning_delta",
+                    {
+                        "part_id": part_id,
+                        "round": round_no,
+                        "mode": "delta",
+                        "text": event_text,
+                    },
+                )
         except Exception:
             return
 
@@ -1549,7 +1545,7 @@ def _stream_with_r2_archive(
         _emit_stream_event(kind, event_payload)
 
     def _collect_content_from_chunk(chunk):
-        nonlocal reasoning_omitted
+        nonlocal archive_reasoning_source, reasoning_omitted
         try:
             if chunk.startswith(b"data: "):
                 payload = chunk[6:].strip()
@@ -1561,15 +1557,15 @@ def _stream_with_r2_archive(
                         # 如果 delta.content 里含有 <think> 块，提取到 reasoning_parts，
                         # 只把干净的正文放入 content_parts（对应 _strip_reasoning_from_sse_chunk 的客户端过滤）
                         if _THINK_BLOCK_RE.search(raw_content):
-                            clean, in_content_thinking = _extract_thinking_from_content(raw_content)
+                            clean, _in_content_thinking = _extract_thinking_from_content(raw_content)
                             if clean:
                                 content_parts.append(clean)
-                            if in_content_thinking:
-                                reasoning_parts.append(in_content_thinking)
                         else:
                             content_parts.append(raw_content)
-                    text, details, omitted = _extract_reasoning_text_and_details(delta)
-                    if text:
+                    source, text, details, omitted = _extract_reasoning_stream_source(delta)
+                    if text and not archive_reasoning_source:
+                        archive_reasoning_source = source
+                    if text and source == archive_reasoning_source:
                         reasoning_parts.append(text)
                     if details:
                         reasoning_details_parts.extend(details)

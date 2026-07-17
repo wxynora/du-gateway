@@ -101,6 +101,41 @@ def extract_reasoning_text_and_details(obj: dict) -> tuple[str, list, bool]:
     return "\n\n".join(deduped_parts).strip(), details, omitted
 
 
+def extract_reasoning_stream_source(obj: dict) -> tuple[str, str, list, bool]:
+    """Choose one reasoning representation from a single SSE delta packet."""
+    if not isinstance(obj, dict):
+        return "", "", [], False
+
+    scalar_obj = {
+        key: obj[key]
+        for key in ("reasoning", "reasoning_content", "thinking", "reasoning_details")
+        if key in obj
+    }
+    scalar_text, scalar_details, scalar_omitted = extract_reasoning_text_and_details(scalar_obj)
+
+    inline_text = ""
+    content = obj.get("content")
+    if isinstance(content, str) and THINK_BLOCK_RE.search(content):
+        _visible, inline_text = extract_thinking_from_content(content)
+
+    structured_obj: dict = {}
+    if isinstance(obj.get("thinking_blocks"), list):
+        structured_obj["thinking_blocks"] = obj["thinking_blocks"]
+    if isinstance(content, list):
+        structured_obj["content"] = content
+    structured_text, structured_details, structured_omitted = extract_reasoning_text_and_details(structured_obj)
+
+    details = [*scalar_details, *structured_details]
+    omitted = bool(scalar_omitted or structured_omitted)
+    if scalar_text:
+        return "scalar", scalar_text, details, omitted
+    if inline_text:
+        return "inline", inline_text, details, omitted
+    if structured_text or structured_omitted:
+        return "structured", structured_text, details, omitted
+    return "", "", details, omitted
+
+
 def strip_thinking_from_response_json(resp_json: dict) -> dict:
     """
     从非流式上游响应中剥离 content 里的 <think> 块和结构化 reasoning 字段，
@@ -169,6 +204,7 @@ def parse_stream_to_message(chunks: list) -> dict:
     """
     content_parts = []
     reasoning_parts = []
+    reasoning_source = ""
     reasoning_details: list[dict] = []
     thinking_blocks: list[dict] = []
     reasoning_omitted = False
@@ -187,8 +223,10 @@ def parse_stream_to_message(chunks: list) -> dict:
             continue
         if delta.get("content"):
             content_parts.append(delta["content"])
-        text, details, omitted = extract_reasoning_text_and_details(delta)
-        if text:
+        source, text, details, omitted = extract_reasoning_stream_source(delta)
+        if text and not reasoning_source:
+            reasoning_source = source
+        if text and source == reasoning_source:
             reasoning_parts.append(text)
         if details:
             reasoning_details.extend(details)
