@@ -82,7 +82,14 @@ from pipeline.pipeline import (
 )
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
-from storage import million_plan_mode_store, random_imitator_td_mode_store, r2_store, recent_window_store, upstream_store
+from storage import (
+    million_plan_mode_store,
+    random_imitator_td_mode_store,
+    r2_store,
+    recent_window_store,
+    upstream_store,
+    wenyou_mode_store,
+)
 from storage.music_bgm_state import get_active_music_bgm_context
 from storage.music_melody_store import get_music_melody_entry_by_id
 from services.music_lyrics import normalize_lyrics_payload
@@ -359,6 +366,14 @@ def _random_imitator_td_tool_mode_enabled() -> bool:
         return bool(random_imitator_td_mode_store.is_enabled())
     except Exception as e:
         logger.warning("random_imitator_td_mode_check_failed error=%s", e)
+        return False
+
+
+def _wenyou_player_tool_mode_enabled() -> bool:
+    try:
+        return bool(wenyou_mode_store.is_enabled())
+    except Exception as e:
+        logger.warning("wenyou_mode_check_failed error=%s", e)
         return False
 
 
@@ -2489,6 +2504,7 @@ def chat_completions():
     reply_channel = _reply_channel()
     reply_target = _reply_target()
     is_sumitalk_request = reply_channel == "sumitalk"
+    wenyou_player_tools_enabled = _wenyou_player_tool_mode_enabled()
     app_mode = str(body.pop("app_mode", "") or "").strip().lower()
     sumitalk_real_mode = bool(
         is_sumitalk_request
@@ -2780,7 +2796,7 @@ def chat_completions():
         body = step_inject_rikkahub_reminder(body, window_id)
     body = step_inject_stay_with_du(body)
     body = step_inject_du_notebook(body)
-    body = step_inject_wenyou_player_tools(body)
+    body = step_inject_wenyou_player_tools(body, enabled=wenyou_player_tools_enabled)
     body = step_inject_gateway_tools(body)
     if game_tool_loop or random_imitator_td_tool_mode:
         body = step_inject_random_imitator_td_tools(body)

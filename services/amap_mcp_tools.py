@@ -6,7 +6,6 @@ from typing import Any
 
 from services.amap_mcp_client import amap_mcp_enabled, call_tool, list_tools
 from services.amap_trip_planner import (
-    TOOL_AMAP_TRIP_PLAN_NAME,
     TOOL_TRIP_FINALIZE_PLAN_NAME,
     TOOL_TRIP_GET_FOOD_DETAIL_NAME,
     TOOL_TRIP_GET_TRANSPORT_DETAIL_NAME,
@@ -14,7 +13,6 @@ from services.amap_trip_planner import (
     TOOL_TRIP_UPDATE_PLAN_STATE_NAME,
     TRIP_LAYERED_TOOL_NAMES,
     TRIP_LAYERED_TOOLS,
-    execute_amap_trip_plan,
     execute_trip_finalize_plan,
     execute_trip_get_food_detail,
     execute_trip_get_transport_detail,
@@ -227,7 +225,7 @@ def get_amap_mcp_tools_for_inject() -> list[dict]:
 
 def is_amap_mcp_tool(name: str) -> bool:
     tool_name = str(name or "").strip()
-    return tool_name in (TOOL_OPEN_TRAVEL_PLAN_FORM_NAME, TOOL_AMAP_TRIP_PLAN_NAME) or tool_name in TRIP_LAYERED_TOOL_NAMES or (
+    return tool_name == TOOL_OPEN_TRAVEL_PLAN_FORM_NAME or tool_name in TRIP_LAYERED_TOOL_NAMES or (
         bool(tool_name) and tool_name.startswith(AMAP_MCP_TOOL_PREFIX)
     )
 
@@ -289,8 +287,6 @@ def execute_amap_mcp_tool(name: str, arguments: dict) -> str:
         return execute_trip_update_plan_state(arguments if isinstance(arguments, dict) else {})
     if tool_name == TOOL_TRIP_FINALIZE_PLAN_NAME:
         return execute_trip_finalize_plan(arguments if isinstance(arguments, dict) else {})
-    if tool_name == TOOL_AMAP_TRIP_PLAN_NAME:
-        return execute_amap_trip_plan(arguments if isinstance(arguments, dict) else {})
     try:
         result = call_tool(tool_name, arguments if isinstance(arguments, dict) else {})
         return json.dumps(result, ensure_ascii=False)

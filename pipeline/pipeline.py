@@ -60,7 +60,8 @@ SUMITALK_REAL_MODE_PROMPT = (
 SUMITALK_APP_PROMPT = (
     "你可以通过语言、网关、设备状态、位置、日程、闹钟、传感器等参与她的现实生活。\n"
     "你可以亲密、暧昧、想象、安抚，也可以承接她的欲望；但不要声称自己真实拥有肉身，不要凭空说自己看见、触碰、完成了现实中没有发生、也没有设备支持的物理行为。\n"
-    "不要反复解释“我是 AI / LLM / 隔着屏幕”。"
+    "不要反复解释“我是 AI / LLM / 隔着屏幕”。\n"
+    "短句为主，禁止使用句号，鼓励使用倒装句，用词通俗口语化，规避书面正式表达，允许自然分段，但不要为了格式刻意堆很多空行。"
 )
 _LAST4_REFERENCE_NOTE = (
     "【人称指代提醒】记忆和摘要中的“她”均指辛玥。回复小玥时不要用“她”代称；"
@@ -424,29 +425,43 @@ def _upsert_summary_cache_system(body: dict, stable_text: str, recent_text: str 
 
 
 def step_inject_tool_result_cache(body: dict) -> dict:
-    """Place the local tool summary block after all static systems and before cached conversation context."""
+    """Normalize the leading system prefix and place tool summaries after static prompts."""
     from services.tool_result_cache import prompt_system_contents
 
     body = copy.deepcopy(body)
-    messages = [
-        msg
-        for msg in (body.get("messages") or [])
-        if not (isinstance(msg, dict) and msg.get(_TOOL_RESULT_CACHE_SYSTEM_MARKER))
-    ]
-    first_boundary_idx = len(messages)
+    messages = list(body.get("messages") or [])
+    leading_systems: list[dict] = []
+    rest_start = 0
     for i, msg in enumerate(messages):
         if not isinstance(msg, dict) or (msg.get("role") or "").lower() != "system":
-            first_boundary_idx = i
+            rest_start = i
             break
-        if (
-            msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER)
-            or msg.get(_PLAY_NOTE_SYSTEM_MARKER)
-            or msg.get(_SUMMARY_CACHE_SYSTEM_MARKER)
-            or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER)
-            or msg.get(_DYNAMIC_SYSTEM_MARKER)
-        ):
-            first_boundary_idx = i
-            break
+        leading_systems.append(msg)
+    else:
+        rest_start = len(messages)
+
+    static_systems: list[dict] = []
+    real_mode_systems: list[dict] = []
+    play_note_systems: list[dict] = []
+    stable_summary_systems: list[dict] = []
+    recent_summary_systems: list[dict] = []
+    dynamic_systems: list[dict] = []
+    for msg in leading_systems:
+        if msg.get(_TOOL_RESULT_CACHE_SYSTEM_MARKER):
+            continue
+        if msg.get(_DYNAMIC_SYSTEM_MARKER):
+            dynamic_systems.append(msg)
+        elif msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER):
+            real_mode_systems.append(msg)
+        elif msg.get(_PLAY_NOTE_SYSTEM_MARKER):
+            play_note_systems.append(msg)
+        elif msg.get(_SUMMARY_CACHE_SYSTEM_MARKER):
+            stable_summary_systems.append(msg)
+        elif msg.get(_SUMMARY_RECENT_SYSTEM_MARKER):
+            recent_summary_systems.append(msg)
+        else:
+            static_systems.append(msg)
+
     blocks = [
         {
             "role": "system",
@@ -456,8 +471,16 @@ def step_inject_tool_result_cache(body: dict) -> dict:
         for content in prompt_system_contents()
         if str(content or "").strip()
     ]
-    messages[first_boundary_idx:first_boundary_idx] = blocks
-    body["messages"] = messages
+    body["messages"] = [
+        *static_systems,
+        *blocks,
+        *real_mode_systems,
+        *play_note_systems,
+        *stable_summary_systems,
+        *recent_summary_systems,
+        *dynamic_systems,
+        *messages[rest_start:],
+    ]
     return body
 
 
@@ -3123,10 +3146,10 @@ def _append_tool_schemas(body: dict, tools: list[dict]) -> dict:
     return body
 
 
-def step_inject_wenyou_player_tools(body: dict) -> dict:
-    """
-    固定注入文游玩家工具，保持 tools schema 稳定，减少 prompt cache 因工具段变化重建。
-    """
+def step_inject_wenyou_player_tools(body: dict, *, enabled: bool = False) -> dict:
+    """仅在全局无限流游戏模式开启时注入文游玩家工具。"""
+    if not enabled:
+        return body
     try:
         from services.wenyou_service import get_player_tool_schemas
 
@@ -3165,7 +3188,7 @@ def step_inject_chat_tools(body: dict) -> dict:
     """注入聊天工具集合。"""
     from services.chat_tools import get_chat_tools_for_inject
 
-    tools = get_chat_tools_for_inject(mode="expanded")
+    tools = get_chat_tools_for_inject()
     if not tools:
         return body
     return _append_tool_schemas(body, tools)

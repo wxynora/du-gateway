@@ -18,7 +18,6 @@ from utils.time_aware import BEIJING_TZ, now_beijing_iso, today_beijing
 
 logger = get_logger(__name__)
 
-TOOL_AMAP_TRIP_PLAN_NAME = "amap_trip_plan"
 TOOL_TRIP_PREPARE_FACTS_NAME = "trip_prepare_facts"
 TOOL_TRIP_GET_TRANSPORT_DETAIL_NAME = "trip_get_transport_detail"
 TOOL_TRIP_GET_FOOD_DETAIL_NAME = "trip_get_food_detail"
@@ -182,66 +181,6 @@ TRIP_LAYERED_TOOL_NAMES = frozenset(
     }
 )
 
-TOOL_AMAP_TRIP_PLAN = {
-    "type": "function",
-    "function": {
-        "name": TOOL_AMAP_TRIP_PLAN_NAME,
-        "description": (
-            "网关出行规划工具。默认用于第一轮轻量总览：解析地点、顺路排序、查主要交通方式，"
-            "只返回地点顺序、每段推荐交通、大致耗时/步行/打车参考；不生成导航链接，不逐站写超细步骤，不查餐厅细节。"
-            "只有用户后续明确追问某段具体路线、详细换乘或导航链接时才传 detail_level=full/include_links=true。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "destinations": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "目的地列表，例如 [\"上海迪士尼\", \"武康路\"]。至少一个。",
-                },
-                "origin": {"type": "string", "description": "可选起点名称/地址；不传则尝试用最近定位。"},
-                "origin_lnglat": {"type": "string", "description": "可选起点坐标，格式 lng,lat，优先级高于 origin。"},
-                "city": {"type": "string", "description": "可选城市，用于缩小地点搜索范围，例如 上海。"},
-                "prefer": {"type": "string", "description": "可选：auto / transit / taxi，默认 auto。"},
-                "optimize_order": {
-                    "type": "boolean",
-                    "description": "多个目的地时是否做简单顺路排序，默认 true。",
-                },
-                "include_links": {
-                    "type": "boolean",
-                    "description": "是否生成高德导航/打车/专属地图链接。默认 false；只有明确要打开地图/导航链接时传 true。",
-                },
-                "detail_level": {
-                    "type": "string",
-                    "description": "规划细致程度：fast 或 full。默认 fast；只有明确要求很详细路线时才用 full。",
-                },
-                "compare_modes": {
-                    "type": "boolean",
-                    "description": "是否每段都同时查公交和驾车做精确比较。默认 false；full 模式默认 true。",
-                },
-                "org_name": {"type": "string", "description": "专属地图名称，默认「渡的出行规划」。"},
-            },
-            "required": ["destinations"],
-        },
-    },
-}
-
-
-def execute_amap_trip_plan(arguments: dict) -> str:
-    try:
-        result = run_in_session(
-            lambda session: _plan_trip_async(session, arguments if isinstance(arguments, dict) else {}),
-            timeout_seconds=90,
-        )
-        card = _build_trip_result_card(result)
-        if card:
-            result = {**result, "sumitalk_card": card}
-        return json.dumps(result, ensure_ascii=False)
-    except Exception as e:
-        logger.warning("amap_trip_plan failed error=%s", e)
-        return json.dumps({"ok": False, "error": str(e), "source": "amap_trip_plan"}, ensure_ascii=False)
-
-
 def execute_trip_prepare_facts(arguments: dict) -> str:
     try:
         result = run_in_session(
@@ -299,7 +238,7 @@ async def _mcp(session: ClientSession, name: str, args: dict) -> dict:
     try:
         return await call_tool_with_session(session, name, args)
     except Exception as e:
-        logger.warning("amap_trip_plan mcp call failed tool=%s error=%s", name, e)
+        logger.warning("amap trip planner mcp call failed tool=%s error=%s", name, e)
         return {"ok": False, "tool": name, "arguments": args, "error": str(e), "source": "amap_mcp"}
 
 
@@ -882,81 +821,6 @@ def _recommend(prefer: str, transit: dict, driving: dict) -> dict:
     return {"mode": "transit", "reason": "公交/地铁耗时和步行距离都还可以。"}
 
 
-async def _links_for_leg(session: ClientSession, start: dict, end: dict, include_links: bool) -> dict:
-    if not include_links:
-        return {}
-    links: dict[str, str] = {}
-    end_pair = _split_lnglat(_text(end.get("location")))
-    start_pair = _split_lnglat(_text(start.get("location")))
-    if end_pair:
-        navi = await _mcp(session, "maps_schema_navi", {"lon": str(end_pair[0]), "lat": str(end_pair[1])})
-        navi_data = _json_content(navi)
-        links["navi"] = _extract_url(navi_data)
-    if start_pair and end_pair:
-        taxi = await _mcp(
-            session,
-            "maps_schema_take_taxi",
-            {
-                "slon": str(start_pair[0]),
-                "slat": str(start_pair[1]),
-                "sname": _text(start.get("name")) or "起点",
-                "dlon": str(end_pair[0]),
-                "dlat": str(end_pair[1]),
-                "dname": _text(end.get("name")) or "终点",
-            },
-        )
-        taxi_data = _json_content(taxi)
-        links["taxi"] = _extract_url(taxi_data)
-    return {k: v for k, v in links.items() if v}
-
-
-def _extract_url(data: Any) -> str:
-    if isinstance(data, str):
-        m = re.search(r"https?://\\S+|amapuri://\\S+", data)
-        return (m.group(0) if m else data).strip()
-    if isinstance(data, dict):
-        for key in ("url", "uri", "link", "schema", "scheme"):
-            val = _text(data.get(key))
-            if val:
-                return val
-        for val in data.values():
-            found = _extract_url(val)
-            if found:
-                return found
-    if isinstance(data, list):
-        for item in data:
-            found = _extract_url(item)
-            if found:
-                return found
-    return ""
-
-
-async def _personal_map(session: ClientSession, org_name: str, destinations: list[dict], include_links: bool) -> str:
-    if not include_links or not destinations:
-        return ""
-    point_list = []
-    for place in destinations:
-        pair = _split_lnglat(_text(place.get("location")))
-        if not pair:
-            continue
-        point_list.append(
-            {
-                "name": _text(place.get("name")) or _text(place.get("input")),
-                "lon": pair[0],
-                "lat": pair[1],
-                "poiId": _text(place.get("id")),
-            }
-        )
-    if not point_list:
-        return ""
-    res = await _mcp(
-        session,
-        "maps_schema_personal_map",
-        {"orgName": org_name or "渡的出行规划", "lineList": [{"title": "行程路线", "pointInfoList": point_list}]},
-    )
-    return _extract_url(_json_content(res))
-
-
 def _leg_summary(start: dict, end: dict, transit: dict, driving: dict, rec: dict) -> list[str]:
     lines = [f"{_text(start.get('name')) or '起点'} -> {_text(end.get('name')) or '终点'}"]
     if transit.get("ok"):
@@ -1264,75 +1128,6 @@ async def _background_prefetch_async(session: ClientSession, plan_id: str) -> di
     meta["prefetch_status"] = "partial" if has_failures and (legs or foods) else "failed" if has_failures else "completed"
     _save_plan(plan)
     return {"ok": True, "plan_id": plan_id, "route_legs": len(legs), "food_places": len(foods)}
-
-
-def _build_trip_result_card(result: dict) -> str:
-    if not isinstance(result, dict) or not result.get("ok"):
-        return ""
-    full_detail = _text(result.get("detail_level")).lower() == "full"
-    transit_step_limit = 4 if full_detail else 2
-    driving_step_limit = 3 if full_detail else 0
-    legs = []
-    for leg in _as_list(result.get("legs"))[:6]:
-        if not isinstance(leg, dict):
-            continue
-        transit = leg.get("transit") if isinstance(leg.get("transit"), dict) else {}
-        driving = leg.get("driving") if isinstance(leg.get("driving"), dict) else {}
-        rec = leg.get("recommendation") if isinstance(leg.get("recommendation"), dict) else {}
-        links = leg.get("links") if isinstance(leg.get("links"), dict) else {}
-        from_place = leg.get("from") if isinstance(leg.get("from"), dict) else {}
-        to_place = leg.get("to") if isinstance(leg.get("to"), dict) else {}
-        driving_error = _text(driving.get("error"))
-        if not bool(driving.get("ok")) and not driving_error and not full_detail:
-            taxi_cost = _safe_float(transit.get("taxi_cost_yuan"))
-            driving_error = f"打车约{taxi_cost:g}元，未细查驾车路线" if taxi_cost else "快速规划未细查驾车路线"
-        legs.append(
-            {
-                "from": _text(from_place.get("name") or from_place.get("input") or "起点"),
-                "to": _text(to_place.get("name") or to_place.get("input") or "终点"),
-                "mode": _text(rec.get("mode")),
-                "reason": _text(rec.get("reason")),
-                "transit": {
-                    "ok": bool(transit.get("ok")),
-                    "duration": _text(transit.get("duration")),
-                    "walking": _text(transit.get("walking_distance")),
-                    "costYuan": _safe_float(transit.get("cost_yuan")),
-                    "taxiCostYuan": _safe_float(transit.get("taxi_cost_yuan")),
-                    "steps": [_text(x) for x in _as_list(transit.get("steps")) if _text(x)][:transit_step_limit],
-                    "error": _text(transit.get("error")),
-                },
-                "driving": {
-                    "ok": bool(driving.get("ok")),
-                    "duration": _text(driving.get("duration")),
-                    "distance": _text(driving.get("distance")),
-                    "steps": [_text(x) for x in _as_list(driving.get("steps")) if _text(x)][:driving_step_limit],
-                    "error": driving_error,
-                },
-                "links": {
-                    "navi": _text(links.get("navi")),
-                    "taxi": _text(links.get("taxi")),
-                },
-                "summary": [_text(x) for x in _as_list(leg.get("summary")) if _text(x)][:4],
-            }
-        )
-    destinations = []
-    for place in _as_list(result.get("destinations"))[:6]:
-        if isinstance(place, dict):
-            name = _text(place.get("name") or place.get("input"))
-            if name:
-                destinations.append(name)
-    origin = result.get("origin") if isinstance(result.get("origin"), dict) else {}
-    card = {
-        "type": "travel_plan_result",
-        "title": "渡安排好了",
-        "origin": _text(origin.get("name") or origin.get("input") or "起点"),
-        "destinations": destinations,
-        "optimized": bool(result.get("optimized_order")),
-        "legs": legs,
-        "personalMapUrl": _text(result.get("personal_map_url")),
-        "note": _text(result.get("note")),
-    }
-    return f"{SYSTEM_CARD_PREFIX}{json.dumps(card, ensure_ascii=False, separators=(',', ':'))}{SYSTEM_CARD_SUFFIX}"
 
 
 def _build_trip_prepare_card(result: dict) -> str:
@@ -1767,106 +1562,4 @@ def _finalize_plan(args: dict) -> dict:
         "status": status,
         "archive": archive,
         "note": "该 plan 已退出活跃上下文；后续只使用轻量归档和可沉淀偏好候选。",
-    }
-
-
-async def _plan_trip_async(session: ClientSession, args: dict) -> dict:
-    destinations_raw = _split_destinations(args.get("destinations") or args.get("destination") or args.get("places"))
-    if not destinations_raw:
-        return {"ok": False, "error": "destinations 不能为空", "source": "amap_trip_plan"}
-
-    city = _text(args.get("city") or args.get("region"))
-    origin_raw = _text(args.get("origin"))
-    origin_lnglat = _text(args.get("origin_lnglat") or args.get("originLocation") or args.get("origin_location"))
-    prefer = _text(args.get("prefer") or "auto")
-    detail_raw = _text(args.get("detail_level") or args.get("detailLevel") or "fast").lower()
-    full_detail = detail_raw in {"full", "detail", "detailed"}
-    detail_level = "full" if full_detail else "fast"
-    optimize_order = _bool_arg(args.get("optimize_order", True), True)
-    include_links = _bool_arg(args.get("include_links"), default=full_detail)
-    compare_modes = _bool_arg(args.get("compare_modes"), default=full_detail)
-    org_name = _text(args.get("org_name") or "渡的出行规划")
-
-    origin, origin_err = await _resolve_place(
-        session,
-        origin_raw,
-        city=city,
-        role="origin",
-        origin_lnglat=origin_lnglat,
-        fast=not full_detail,
-    )
-    if not origin:
-        return {"ok": False, "error": origin_err or "起点解析失败", "source": "amap_trip_plan"}
-
-    route_city = city or _text(origin.get("city"))
-    places: list[dict] = []
-    place_errors: list[dict] = []
-    for item in destinations_raw:
-        place, err = await _resolve_place(session, item, city=route_city, role="destination", fast=not full_detail)
-        if place:
-            places.append(place)
-        else:
-            place_errors.append({"input": item, "error": err})
-    if not places:
-        return {"ok": False, "error": "目的地都没解析成功", "place_errors": place_errors, "source": "amap_trip_plan"}
-
-    ordered = _order_places(origin, places, optimize=optimize_order)
-    legs: list[dict] = []
-    current = origin
-    for place in ordered:
-        pref = prefer.lower()
-        need_transit = compare_modes or pref not in {"taxi", "drive", "driving"}
-        need_driving = compare_modes or pref in {"taxi", "drive", "driving"}
-        transit = {}
-        driving = {}
-        if need_transit:
-            transit_res = await _mcp(
-                session,
-                "maps_direction_transit_integrated",
-                {
-                    "origin": _text(current.get("location")),
-                    "destination": _text(place.get("location")),
-                    "city": _text(current.get("city") or route_city),
-                    "cityd": _text(place.get("city") or route_city),
-                },
-            )
-            transit = _summarize_transit(_json_content(transit_res))
-        if need_driving:
-            driving_res = await _mcp(
-                session,
-                "maps_direction_driving",
-                {"origin": _text(current.get("location")), "destination": _text(place.get("location"))},
-            )
-            driving = _summarize_driving(_json_content(driving_res))
-        rec = _recommend(prefer, transit, driving)
-        links = await _links_for_leg(session, current, place, include_links)
-        legs.append(
-            {
-                "from": _public_place(current),
-                "to": _public_place(place),
-                "transit": transit,
-                "driving": driving,
-                "recommendation": rec,
-                "links": links,
-                "summary": _leg_summary(current, place, transit, driving, rec),
-            }
-        )
-        current = place
-
-    personal_map_url = await _personal_map(session, org_name, ordered, include_links)
-    return {
-        "ok": True,
-        "source": "amap_trip_plan",
-        "detail_level": detail_level,
-        "origin": _public_place(origin),
-        "destinations": [_public_place(x) for x in ordered],
-        "optimized_order": bool(optimize_order and len(places) > 1),
-        "place_errors": place_errors,
-        "legs": legs,
-        "personal_map_url": personal_map_url,
-        "note": (
-            "快速规划：地点、排序和主要交通建议来自高德官方 MCP；未逐段生成导航链接，实际以出发时高德地图为准。"
-            if detail_level == "fast"
-            else "地点、路线、耗时、费用和链接来自高德官方 MCP；实际以出发时高德地图为准。"
-        ),
     }

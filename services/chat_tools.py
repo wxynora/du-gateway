@@ -273,8 +273,8 @@ def _execute_exchange_diary_comment_create(arguments: dict) -> str:
         f"评论数={int(item.get('comment_count') or len(comments))}"
     )
 
-def get_chat_tools_for_inject(mode: str = "expanded") -> List[dict]:
-    """返回要注入到 chat 的 tools 列表。mode=daily|expanded。"""
+def get_chat_tools_for_inject() -> List[dict]:
+    """返回要注入到 chat 的完整工具列表。"""
     tools: List[dict] = [
         {
             "type": "function",
@@ -439,29 +439,7 @@ def get_chat_tools_for_inject(mode: str = "expanded") -> List[dict]:
     })
     from services.weather_almanac import get_weather_almanac_tools
     tools.extend(get_weather_almanac_tools())
-
-    if mode != "daily":
-        return tools
-
-    # 日常最小集：只保留高频（日记 + 报时），其余在触发词命中后走 expanded 注入
-    keep_names = {
-        "exchange_diary_create",
-        "exchange_diary_list",
-        "exchange_diary_read",
-        "exchange_diary_comment_create",
-        "get_time_info",
-        "note_write",
-        "stay_with_du_write",
-        "stay_with_du_delete",
-        "daily_whisper_write",
-    }
-    daily_tools = []
-    for t in tools:
-        fn = (t.get("function") or {}) if isinstance(t, dict) else {}
-        name = (fn.get("name") or "").strip()
-        if name in keep_names:
-            daily_tools.append(t)
-    return daily_tools
+    return tools
 
 
 def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str:
