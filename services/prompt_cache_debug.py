@@ -5,6 +5,13 @@ from services.chat_content import message_content_chars
 from utils.tokens import estimate_tokens
 
 
+def _request_body_chars(body: dict) -> int:
+    try:
+        return len(json.dumps(body or {}, ensure_ascii=False, default=str))
+    except Exception:
+        return 0
+
+
 def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
     stripped = content.lstrip()
     if msg.get("__tool_result_cache__") or stripped.startswith("【最近24小时工具使用摘要】"):
@@ -237,10 +244,12 @@ def build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
     except Exception:
         tools_chars = 0
     parsed = urlparse(str(upstream_url or "").strip())
+    selected_model = str((body or {}).get("model") or "")
     return {
         "upstream_host": parsed.hostname or "",
         "upstream_path": parsed.path or "",
-        "model": str((body or {}).get("model") or ""),
+        "model": selected_model,
+        "selected_model": selected_model,
         "messages_count": len(messages) if isinstance(messages, list) else 0,
         "tools_count": len(tools) if isinstance(tools, list) else 0,
         "static_prefix_chars": static_chars,
@@ -253,6 +262,8 @@ def build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
         "message_est_tokens": estimate_tokens("x" * total_message_chars),
         "tools_chars": tools_chars,
         "tools_est_tokens": estimate_tokens("x" * tools_chars),
+        "input_chars": total_message_chars + tools_chars,
+        "request_chars": _request_body_chars(body),
         "static_breakdown": static_breakdown,
         "dynamic_breakdown": dynamic_breakdown,
         "dynamic_marker_seen": dynamic_marker_seen,
@@ -332,7 +343,14 @@ def build_cache_debug_entry(body_send: dict, upstream_url: str, prompt_cache_pro
     parsed = urlparse(str(upstream_url or "").strip())
     profile["upstream_host"] = parsed.hostname or profile.get("upstream_host") or ""
     profile["upstream_path"] = parsed.path or profile.get("upstream_path") or ""
+    profile["selected_model"] = str(
+        profile.get("selected_model")
+        or profile.get("model")
+        or (body_send or {}).get("model")
+        or ""
+    )
     profile["model"] = str((body_send or {}).get("model") or profile.get("model") or "")
+    profile["request_chars"] = _request_body_chars(body_send)
     profile["prompt_cache_key"] = str((body_send or {}).get("prompt_cache_key") or profile.get("prompt_cache_key") or "")
     profile["prompt_cache_retention"] = str((body_send or {}).get("prompt_cache_retention") or profile.get("prompt_cache_retention") or "")
     return {

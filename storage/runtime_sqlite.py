@@ -33,6 +33,7 @@ _RUNTIME_TABLES = (
     "exchange_diary_entries",
     "recall_message_markers",
     "recall_message_targets",
+    "model_token_ratios",
     "tool_result_cache",
 )
 
@@ -120,6 +121,15 @@ def ensure_schema() -> None:
                     ON recall_message_targets(window_id, client_request_id);
                 CREATE INDEX IF NOT EXISTS idx_recall_message_targets_expires
                     ON recall_message_targets(expires_at);
+
+                CREATE TABLE IF NOT EXISTS model_token_ratios (
+                    model TEXT PRIMARY KEY,
+                    actual_model TEXT NOT NULL DEFAULT '',
+                    tokens_per_char REAL NOT NULL,
+                    sample_chars INTEGER NOT NULL,
+                    sample_input_tokens INTEGER NOT NULL,
+                    created_at REAL NOT NULL
+                );
 
                 CREATE TABLE IF NOT EXISTS tool_result_cache (
                     id TEXT PRIMARY KEY,
