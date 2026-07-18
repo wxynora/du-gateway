@@ -14,6 +14,7 @@ zhdate>=0.1
 # 中国法定节假日与调休工作日（春梦后特殊唤醒时间窗）
 chinesecalendar>=1.11.0,<2.0.0
 Pillow>=10.0.0
+# 一起看后端公开片源取帧要求系统安装 ffmpeg。
 mcp>=1.0.0
 pypdf>=4.0.0
 python-docx>=1.1.0

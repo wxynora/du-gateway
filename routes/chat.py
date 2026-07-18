@@ -198,7 +198,6 @@ from services.prompt_cache_debug import (
     build_cache_debug_entry as _build_cache_debug_entry,
     build_prompt_cache_profile as _build_prompt_cache_profile,
 )
-from services.model_token_ratio import learn_model_token_ratio as _learn_model_token_ratio
 from services.reasoning_utils import (
     ReasoningStreamAccumulator as _ReasoningStreamAccumulator,
     THINK_BLOCK_RE as _THINK_BLOCK_RE,
@@ -1367,7 +1366,6 @@ def _stream_forward_to_ai(
                         cache_debug_collector.feed(chunk)
                         yield chunk
                     cache_debug = cache_debug_collector.build()
-                    _learn_model_token_ratio(cache_debug)
                     if cache_debug_sink:
                         cache_debug_sink(cache_debug)
                     return
@@ -1397,7 +1395,6 @@ def _stream_forward_to_ai(
                     except Exception:
                         logger.debug("流式上游结束 末包解析失败，无法读取 finish_reason")
                 cache_debug = cache_debug_collector.build()
-                _learn_model_token_ratio(cache_debug)
                 if cache_debug_sink:
                     cache_debug_sink(cache_debug)
                 return
@@ -2222,7 +2219,6 @@ def _stream_with_r2_archive(
                 completed_tool_results,
                 window_id=window_id,
                 reply_channel=reply_channel,
-                model=str(current_body.get("model") or body.get("model") or ""),
             )
             logger.info(
                 "工具摘要缓存整轮写入 window_id=%s tools=%s inserted=%s",
@@ -2383,7 +2379,6 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                 if is_cf_anthropic or is_pioneer_anthropic:
                     data = _anthropic_to_openai_response(data or {}, str(body_send.get("model") or request_model))
                 cache_debug = _build_cache_debug_entry(body_send, target_url, prompt_cache_profile, data or {})
-                _learn_model_token_ratio(cache_debug)
                 usage_debug = cache_debug.get("usage") or {}
                 profile_debug = cache_debug.get("request") or {}
                 dynamic_breakdown_debug = ",".join(
@@ -3272,7 +3267,6 @@ def chat_completions():
                 completed_tool_results,
                 window_id=window_id,
                 reply_channel=reply_channel,
-                model=str(body.get("model") or ""),
             )
             logger.info(
                 "工具摘要缓存整轮写入 window_id=%s tools=%s inserted=%s",

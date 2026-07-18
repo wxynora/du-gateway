@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import re
 import time
 from datetime import datetime
@@ -12,11 +11,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from config import (
-    TOOL_RESULT_CACHE_MAX_TOKENS,
-    TOOL_RESULT_CACHE_TRIM_TO_TOKENS,
+    TOOL_RESULT_CACHE_MAX_CHARS,
+    TOOL_RESULT_CACHE_TRIM_TO_CHARS,
     TOOL_RESULT_CACHE_TTL_SECONDS,
 )
-from services.model_token_ratio import get_model_tokens_per_char
 from storage import runtime_sqlite
 from utils.log import get_logger
 
@@ -29,26 +27,10 @@ _SECRET_RE = re.compile(
     r"(?i)((?:api[_-]?key|authorization|cookie|password|passwd|secret|token|access[_-]?token|refresh[_-]?token)\s*[:=]\s*)([^,}\]\s]+)"
 )
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}")
-_ENTRY_MAX_TOKENS = 400
 _PROMPT_HEADER = (
     "【最近24小时工具使用摘要】\n"
     "以下是你已经完成的工具调用摘要，只用于记住刚才做过什么；需要最新结果时仍可重新调用工具。"
 )
-
-
-def _estimate_cache_tokens(text: str, ratio: float | None) -> int:
-    if not text or ratio is None:
-        return 0
-    return max(1, int(math.ceil(len(text) * ratio)))
-
-
-def _truncate_by_ratio(text: str, ratio: float | None, max_tokens: int) -> str:
-    if not text or ratio is None or ratio <= 0:
-        return text
-    max_chars = max(1, int(math.floor(max_tokens / ratio)))
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars].rstrip(" ，,。；;:") + "…"
 
 
 def _text(value: Any, max_chars: int = 600) -> str:
@@ -267,8 +249,6 @@ def summarize_tool_result(
     name: str,
     arguments: dict | None,
     result: Any,
-    *,
-    ratio: float | None = None,
 ) -> str:
     tool_name = _text(name, 120) or "unknown_tool"
     args = arguments if isinstance(arguments, dict) else {}
@@ -285,7 +265,7 @@ def summarize_tool_result(
         detail = _game_detail(tool_name, args, data)
     else:
         detail = _generic_detail(tool_name, args, result, data)
-    detail = _truncate_by_ratio(_text(detail, 800), ratio, _ENTRY_MAX_TOKENS).strip()
+    detail = _text(detail, 800).strip()
     return f"使用 {tool_name} 结果：{detail or '未返回可读结果'}"
 
 
@@ -295,43 +275,29 @@ def _entry_id(tool_call_id: str, tool_name: str, window_id: str) -> str:
     return f"tool_{digest}"
 
 
-def _prune(conn, now: float, model: str = "") -> None:
+def _prompt_line_chars(summary: str) -> int:
+    return len(f"【00:00 {summary}】")
+
+
+def _prune(conn, now: float) -> None:
     conn.execute("DELETE FROM tool_result_cache WHERE expires_at <= ?", (now,))
-    model_key = str(model or "").strip().lower()
-    ratio_row = (
-        conn.execute(
-            "SELECT tokens_per_char FROM model_token_ratios WHERE model = ?",
-            (model_key,),
-        ).fetchone()
-        if model_key
-        else None
-    )
-    ratio = float(ratio_row["tokens_per_char"] or 0) if ratio_row is not None else 0.0
-    if ratio <= 0:
-        return
     rows = conn.execute(
-        "SELECT id, summary, token_estimate FROM tool_result_cache ORDER BY created_at ASC, id ASC"
+        "SELECT id, summary FROM tool_result_cache ORDER BY created_at ASC, id ASC"
     ).fetchall()
-    estimates: dict[str, int] = {}
-    updates: list[tuple[int, str]] = []
-    for row in rows:
-        entry_id = str(row["id"])
-        estimate = max(1, int(math.ceil(len(f"【00:00 {row['summary']}】") * ratio)))
-        estimates[entry_id] = estimate
-        if estimate != max(0, int(row["token_estimate"] or 0)):
-            updates.append((estimate, entry_id))
-    if updates:
-        conn.executemany("UPDATE tool_result_cache SET token_estimate = ? WHERE id = ?", updates)
-    total = max(1, int(math.ceil(len(_PROMPT_HEADER) * ratio))) + sum(estimates.values())
-    if total <= TOOL_RESULT_CACHE_MAX_TOKENS:
+    sizes = {
+        str(row["id"]): _prompt_line_chars(_text(row["summary"], 900))
+        for row in rows
+    }
+    total = len(_PROMPT_HEADER) + sum(sizes.values())
+    if total <= TOOL_RESULT_CACHE_MAX_CHARS:
         return
     remove_ids: list[str] = []
     for row in rows:
-        if total <= TOOL_RESULT_CACHE_TRIM_TO_TOKENS:
+        if total <= TOOL_RESULT_CACHE_TRIM_TO_CHARS:
             break
         entry_id = str(row["id"])
         remove_ids.append(entry_id)
-        total -= estimates.get(entry_id, 0)
+        total -= sizes.get(entry_id, 0)
     if remove_ids:
         conn.executemany("DELETE FROM tool_result_cache WHERE id = ?", [(value,) for value in remove_ids])
 
@@ -341,16 +307,14 @@ def record_tool_loop(
     *,
     window_id: str = "",
     reply_channel: str = "",
-    model: str = "",
 ) -> int:
     """Write one completed tool loop atomically so its internal rounds keep a stable prompt prefix."""
-    ratio = get_model_tokens_per_char(model)
-    prepared: list[tuple[str, str, str, int]] = []
+    prepared: list[tuple[str, str, str]] = []
     for entry in entries or []:
         if not isinstance(entry, dict):
             continue
         name = str(entry.get("name") or "")
-        summary = summarize_tool_result(name, entry.get("arguments"), entry.get("result"), ratio=ratio)
+        summary = summarize_tool_result(name, entry.get("arguments"), entry.get("result"))
         if not summary:
             continue
         tool_call_id = str(entry.get("tool_call_id") or "").strip()
@@ -367,7 +331,6 @@ def record_tool_loop(
                 _entry_id(tool_call_id, name, str(window_id or "")),
                 name,
                 summary,
-                _estimate_cache_tokens(summary, ratio),
             )
         )
     if not prepared:
@@ -378,19 +341,18 @@ def record_tool_loop(
         with runtime_sqlite.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             inserted = 0
-            for index, (entry_id, name, summary, token_estimate) in enumerate(prepared):
+            for index, (entry_id, name, summary) in enumerate(prepared):
                 inserted += int(
                     conn.execute(
                         """
                         INSERT OR IGNORE INTO tool_result_cache(
-                            id, tool_name, summary, token_estimate, window_id, reply_channel, created_at, expires_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            id, tool_name, summary, window_id, reply_channel, created_at, expires_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             entry_id,
                             name,
                             summary,
-                            token_estimate,
                             str(window_id or ""),
                             str(reply_channel or ""),
                             now + index * 0.000001,
@@ -399,7 +361,7 @@ def record_tool_loop(
                     ).rowcount
                     > 0
                 )
-            _prune(conn, now, model)
+            _prune(conn, now)
             conn.execute("COMMIT")
         return inserted
     except Exception:
@@ -415,7 +377,6 @@ def record_tool_result(
     result: Any,
     window_id: str = "",
     reply_channel: str = "",
-    model: str = "",
 ) -> bool:
     return bool(
         record_tool_loop(
@@ -429,17 +390,16 @@ def record_tool_result(
             ],
             window_id=window_id,
             reply_channel=reply_channel,
-            model=model,
         )
     )
 
 
-def list_prompt_lines(model: str = "") -> list[str]:
+def list_prompt_lines() -> list[str]:
     now = time.time()
     try:
         with runtime_sqlite.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            _prune(conn, now, model)
+            _prune(conn, now)
             rows = conn.execute(
                 "SELECT summary, created_at FROM tool_result_cache ORDER BY created_at ASC, id ASC"
             ).fetchall()
@@ -459,5 +419,5 @@ def list_prompt_lines(model: str = "") -> list[str]:
     return out
 
 
-def prompt_system_contents(model: str = "") -> list[str]:
-    return [_PROMPT_HEADER, *list_prompt_lines(model)]
+def prompt_system_contents() -> list[str]:
+    return [_PROMPT_HEADER, *list_prompt_lines()]

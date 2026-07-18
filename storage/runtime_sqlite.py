@@ -33,7 +33,6 @@ _RUNTIME_TABLES = (
     "exchange_diary_entries",
     "recall_message_markers",
     "recall_message_targets",
-    "model_token_ratios",
     "tool_result_cache",
     "watch_sessions",
     "watch_timeline_sections",
@@ -43,6 +42,7 @@ _RUNTIME_TABLES = (
     "watch_analysis_samples",
     "watch_analysis_jobs",
     "watch_timeline_fingerprints",
+    "watch_story_checkpoints",
 )
 
 
@@ -130,20 +130,10 @@ def ensure_schema() -> None:
                 CREATE INDEX IF NOT EXISTS idx_recall_message_targets_expires
                     ON recall_message_targets(expires_at);
 
-                CREATE TABLE IF NOT EXISTS model_token_ratios (
-                    model TEXT PRIMARY KEY,
-                    actual_model TEXT NOT NULL DEFAULT '',
-                    tokens_per_char REAL NOT NULL,
-                    sample_chars INTEGER NOT NULL,
-                    sample_input_tokens INTEGER NOT NULL,
-                    created_at REAL NOT NULL
-                );
-
                 CREATE TABLE IF NOT EXISTS tool_result_cache (
                     id TEXT PRIMARY KEY,
                     tool_name TEXT NOT NULL DEFAULT '',
                     summary TEXT NOT NULL DEFAULT '',
-                    token_estimate INTEGER NOT NULL DEFAULT 0,
                     window_id TEXT NOT NULL DEFAULT '',
                     reply_channel TEXT NOT NULL DEFAULT '',
                     created_at REAL NOT NULL,
@@ -170,7 +160,7 @@ def ensure_schema() -> None:
                     analysis_familiarity TEXT NOT NULL DEFAULT 'pending',
                     analysis_identity TEXT NOT NULL DEFAULT '',
                     analysis_model TEXT NOT NULL DEFAULT 'google/gemini-2.5-flash',
-                    analysis_prompt_version TEXT NOT NULL DEFAULT 'watch-v1',
+                    analysis_prompt_version TEXT NOT NULL DEFAULT 'watch-v2',
                     force_unknown_analysis INTEGER NOT NULL DEFAULT 0,
                     fear_mode INTEGER NOT NULL DEFAULT 0,
                     fear_action TEXT NOT NULL DEFAULT 'warn_only',
@@ -309,6 +299,8 @@ def ensure_schema() -> None:
                     media_id TEXT NOT NULL,
                     timeline_epoch INTEGER NOT NULL DEFAULT 0,
                     purpose TEXT NOT NULL DEFAULT 'rolling',
+                    input_origin TEXT NOT NULL DEFAULT 'client_upload',
+                    planned_timestamps_json TEXT NOT NULL DEFAULT '[]',
                     range_start_ms INTEGER NOT NULL DEFAULT 0,
                     range_end_ms INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL DEFAULT 'queued',
@@ -356,6 +348,23 @@ def ensure_schema() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_watch_timeline_fingerprints_series
                     ON watch_timeline_fingerprints(series_key, kind, sample_at_ms);
+
+                CREATE TABLE IF NOT EXISTS watch_story_checkpoints (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    media_id TEXT NOT NULL,
+                    timeline_epoch INTEGER NOT NULL DEFAULT 0,
+                    through_ms INTEGER NOT NULL,
+                    summary_json TEXT NOT NULL DEFAULT '{}',
+                    story_state_json TEXT NOT NULL DEFAULT '{}',
+                    analysis_version TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES watch_sessions(id) ON DELETE CASCADE
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_watch_story_checkpoint_unique
+                    ON watch_story_checkpoints(session_id, timeline_epoch, through_ms, analysis_version);
+                CREATE INDEX IF NOT EXISTS idx_watch_story_checkpoint_lookup
+                    ON watch_story_checkpoints(session_id, timeline_epoch, through_ms DESC);
 
                 CREATE TABLE IF NOT EXISTS sense_latest (
                     sense_type TEXT PRIMARY KEY,
@@ -560,6 +569,21 @@ def ensure_schema() -> None:
                     WHERE source_notion_page_id != '';
                 """
             )
+            job_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(watch_analysis_jobs)").fetchall()
+            }
+            if "input_origin" not in job_columns:
+                conn.execute(
+                    "ALTER TABLE watch_analysis_jobs "
+                    "ADD COLUMN input_origin TEXT NOT NULL DEFAULT 'client_upload'"
+                )
+            if "planned_timestamps_json" not in job_columns:
+                conn.execute(
+                    "ALTER TABLE watch_analysis_jobs "
+                    "ADD COLUMN planned_timestamps_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            conn.execute("DROP TABLE IF EXISTS model_token_ratios")
         _SCHEMA_READY = True
 
 

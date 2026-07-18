@@ -7,6 +7,7 @@ runtime database. Nothing in this module reads from or writes to R2.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
 
@@ -16,7 +17,7 @@ from storage import runtime_sqlite
 ACTIVE_TTL = timedelta(hours=24)
 ENDED_TTL = timedelta(hours=6)
 DEFAULT_ANALYSIS_MODEL = "google/gemini-2.5-flash"
-DEFAULT_PROMPT_VERSION = "watch-v1"
+DEFAULT_PROMPT_VERSION = "watch-v2"
 
 KNOWLEDGE_MODES = {"known", "needs_summary"}
 FEAR_ACTIONS = {"warn_only", "cover_video"}
@@ -41,7 +42,6 @@ TIMELINE_SECTION_KINDS = {
     "non_story",
     "unknown",
 }
-NON_STORY_SECTION_KINDS = {"intro", "outro", "preview", "non_story"}
 RISK_FEEDBACK_TYPES = {"false_positive", "missed", "too_early", "too_late"}
 
 
@@ -95,10 +95,24 @@ def _cleanup_expired(conn, now_iso: str) -> int:
     ).fetchall()
     session_ids = [str(row["id"]) for row in rows]
     for session_id in session_ids:
+        sample_rows = conn.execute(
+            "SELECT file_path FROM watch_analysis_samples WHERE session_id = ?",
+            (session_id,),
+        ).fetchall()
+        for sample_row in sample_rows:
+            file_path = str(sample_row["file_path"] or "").strip()
+            if file_path:
+                try:
+                    Path(file_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
         conn.execute("DELETE FROM watch_risk_feedback WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM watch_risk_events WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM watch_plot_chunks WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM watch_timeline_sections WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM watch_story_checkpoints WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM watch_analysis_samples WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM watch_analysis_jobs WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM watch_sessions WHERE id = ?", (session_id,))
     return len(session_ids)
 
@@ -512,6 +526,38 @@ def replace_timeline_sections(
     with runtime_sqlite.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            active_samples = conn.execute(
+                """
+                SELECT file_path FROM watch_analysis_samples
+                 WHERE session_id = ? AND timeline_epoch = ? AND purged_at = ''
+                """,
+                (session_id, epoch),
+            ).fetchall()
+            for sample_row in active_samples:
+                file_path = str(sample_row["file_path"] or "").strip()
+                if file_path:
+                    try:
+                        Path(file_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            conn.execute(
+                """
+                UPDATE watch_analysis_samples
+                   SET file_path = '', purged_at = ?
+                 WHERE session_id = ? AND timeline_epoch = ? AND purged_at = ''
+                """,
+                (now_iso, session_id, epoch),
+            )
+            conn.execute(
+                """
+                UPDATE watch_analysis_jobs
+                   SET status = 'cancelled', error = 'timeline_sections_corrected',
+                       finished_at = ?, updated_at = ?, leased_until = '', lease_token = ''
+                 WHERE session_id = ? AND timeline_epoch = ?
+                   AND status IN ('queued', 'running')
+                """,
+                (now_iso, now_iso, session_id, epoch),
+            )
             conn.execute(
                 "DELETE FROM watch_timeline_sections WHERE session_id = ? AND timeline_epoch = ?",
                 (session_id, epoch),
@@ -529,28 +575,25 @@ def replace_timeline_sections(
                         item["end_ms"], item["source"], item["confidence"], now_iso, now_iso,
                     ),
                 )
-                if item["kind"] in NON_STORY_SECTION_KINDS:
-                    overlap = (session_id, epoch, item["end_ms"], item["start_ms"])
-                    conn.execute(
-                        """
-                        DELETE FROM watch_plot_chunks
-                         WHERE session_id = ? AND timeline_epoch = ?
-                           AND start_ms < ? AND end_ms > ?
-                        """,
-                        overlap,
-                    )
-                    conn.execute(
-                        """
-                        DELETE FROM watch_risk_events
-                         WHERE session_id = ? AND timeline_epoch = ?
-                           AND start_ms < ? AND end_ms > ?
-                        """,
-                        overlap,
-                    )
+            conn.execute(
+                "DELETE FROM watch_plot_chunks WHERE session_id = ? AND timeline_epoch = ?",
+                (session_id, epoch),
+            )
+            conn.execute(
+                "DELETE FROM watch_risk_events WHERE session_id = ? AND timeline_epoch = ?",
+                (session_id, epoch),
+            )
+            conn.execute(
+                "DELETE FROM watch_story_checkpoints WHERE session_id = ? AND timeline_epoch = ?",
+                (session_id, epoch),
+            )
             conn.execute(
                 """
                 UPDATE watch_sessions
-                   SET analysis_status = 'warming_context', analysis_error = '', updated_at = ?
+                   SET analysis_status = 'warming_context', analysis_error = '',
+                       analysis_covered_from_ms = 0, analysis_covered_until_ms = 0,
+                       story_so_far_json = '{}', analysis_story_state_json = '{}',
+                       updated_at = ?
                  WHERE id = ?
                 """,
                 (now_iso, session_id),

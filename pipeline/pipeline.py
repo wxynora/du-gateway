@@ -468,7 +468,7 @@ def step_inject_tool_result_cache(body: dict) -> dict:
             "content": content,
             _TOOL_RESULT_CACHE_SYSTEM_MARKER: True,
         }
-        for content in prompt_system_contents(str(body.get("model") or ""))
+        for content in prompt_system_contents()
         if str(content or "").strip()
     ]
     body["messages"] = [

@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from flask import jsonify, request
 
-from storage import watch_runtime_store
+from config import (
+    WATCH_ANALYSIS_API_KEY,
+    WATCH_ANALYSIS_ENABLED,
+    WATCH_ANALYSIS_MAX_REQUEST_BYTES,
+    WATCH_ANALYSIS_MODEL,
+)
+from services.watch_analysis_samples import (
+    WatchAnalysisSampleError,
+    prepare_samples,
+    purge_prepared_samples,
+)
+from services.watch_analysis_source import watch_analysis_source_health
+from storage import watch_analysis_store, watch_runtime_store
 
 
 def _json_error(error: str, code: str, status: int):
@@ -43,6 +56,35 @@ def _handle_store_error(call: Callable[[], Any]):
         return _json_error("观看会话不存在或已过期", "watch_session_not_found", 404)
     except ValueError as exc:
         return _json_error(str(exc), "watch_request_invalid", 400)
+
+
+def _analysis_upload_body() -> tuple[dict | None, Any | None]:
+    if request.content_length and request.content_length > int(WATCH_ANALYSIS_MAX_REQUEST_BYTES) + 1_000_000:
+        return None, _json_error("分析样本请求体超过大小限制", "watch_samples_too_large", 413)
+    if request.is_json:
+        return _json_body()
+    raw_metadata = str(request.form.get("metadata") or "").strip()
+    if not raw_metadata:
+        return None, _json_error("multipart 请求缺少 metadata", "watch_samples_metadata_required", 400)
+    try:
+        body = json.loads(raw_metadata)
+    except Exception:
+        return None, _json_error("metadata JSON 无效", "watch_samples_metadata_invalid", 400)
+    if not isinstance(body, dict):
+        return None, _json_error("metadata 必须是对象", "watch_samples_metadata_invalid", 400)
+    samples = body.get("samples")
+    if not isinstance(samples, list):
+        return None, _json_error("samples 必须是数组", "watch_samples_invalid", 400)
+    for index, sample in enumerate(samples):
+        if not isinstance(sample, dict):
+            continue
+        field = str(sample.get("file_field") or f"frame_{index}").strip()
+        uploaded = request.files.get(field)
+        if uploaded is None:
+            continue
+        sample["image_bytes"] = uploaded.stream.read(int(WATCH_ANALYSIS_MAX_REQUEST_BYTES) + 1)
+        sample["mime_type"] = str(sample.get("mime_type") or uploaded.mimetype or "image/jpeg")
+    return body, None
 
 
 def register_routes(bp):
@@ -106,7 +148,7 @@ def register_routes(bp):
 
     @bp.route("/watch/sessions/<session_id>/playback", methods=["PUT"])
     def miniapp_watch_session_playback(session_id: str):
-        _session, error = _owned_session(session_id)
+        previous_session, error = _owned_session(session_id)
         if error is not None:
             return error
         body, error = _json_body()
@@ -131,6 +173,21 @@ def register_routes(bp):
 
         def _update():
             session, applied, ignored_reason = watch_runtime_store.update_playback(session_id, body)
+            if applied:
+                previous_epoch = int(
+                    (previous_session.get("playback") or {}).get("timeline_epoch") or 0
+                )
+                current_epoch = int((session.get("playback") or {}).get("timeline_epoch") or 0)
+                if current_epoch != previous_epoch:
+                    watch_analysis_store.reset_for_epoch(
+                        session_id,
+                        timeline_epoch=current_epoch,
+                    )
+                watch_analysis_store.cancel_stale_jobs(
+                    session_id,
+                    current_epoch=current_epoch,
+                    reason="timeline_epoch_changed",
+                )
             return jsonify(
                 {
                     "ok": True,
@@ -150,7 +207,91 @@ def register_routes(bp):
         status = watch_runtime_store.get_status(session_id)
         if status is None:
             return _json_error("观看会话不存在或已过期", "watch_session_not_found", 404)
+        status["analysis_runtime"] = watch_analysis_store.session_job_runtime(session_id)
+        status["sample_plan"] = watch_analysis_store.build_sample_plan(_session)
         return jsonify({"ok": True, **status})
+
+    @bp.route("/watch/sessions/<session_id>/analysis/samples", methods=["POST"])
+    def miniapp_watch_analysis_samples(session_id: str):
+        session, error = _owned_session(session_id)
+        if error is not None:
+            return error
+        if not WATCH_ANALYSIS_ENABLED:
+            return _json_error("一起看分析器未启用", "watch_analysis_disabled", 503)
+        body, error = _analysis_upload_body()
+        if error is not None:
+            return error
+        purpose = str(body.get("purpose") or "rolling").strip().lower()
+        idempotency_key = str(body.get("idempotency_key") or "").strip()
+        if idempotency_key:
+            existing = watch_analysis_store.get_job_by_idempotency(idempotency_key, public=True)
+            if existing:
+                if existing.get("session_id") != session_id:
+                    return _json_error("idempotency_key 已被其他会话使用", "watch_idempotency_conflict", 409)
+                return jsonify({"ok": True, "created": False, "job": existing})
+        try:
+            requested_epoch = int(body.get("timeline_epoch"))
+        except (TypeError, ValueError):
+            return _json_error("timeline_epoch 无效", "watch_samples_epoch_invalid", 400)
+        current_epoch = int((session.get("playback") or {}).get("timeline_epoch") or 0)
+        if requested_epoch != current_epoch:
+            return _json_error("播放时间轴已经变化，请重新采样", "watch_samples_stale_epoch", 409)
+        raw_samples = body.get("samples")
+        if not isinstance(raw_samples, list):
+            return _json_error("samples 必须是数组", "watch_samples_invalid", 400)
+        prepared: list[dict] = []
+        try:
+            prepared = prepare_samples(
+                session_id=session_id,
+                media_id=str((session.get("media") or {}).get("id") or ""),
+                timeline_epoch=current_epoch,
+                duration_ms=int((session.get("media") or {}).get("duration_ms") or 0),
+                purpose=purpose,
+                raw_samples=raw_samples,
+            )
+            job, created = watch_analysis_store.enqueue_samples(
+                session=session,
+                purpose=purpose,
+                samples=prepared,
+                idempotency_key=idempotency_key,
+                priority=int(body.get("priority") or 0),
+            )
+            if not created:
+                purge_prepared_samples(prepared)
+            return jsonify({"ok": True, "created": created, "job": job}), 202 if created else 200
+        except WatchAnalysisSampleError as exc:
+            purge_prepared_samples(prepared)
+            return _json_error(str(exc), "watch_samples_invalid", 400)
+        except ValueError as exc:
+            purge_prepared_samples(prepared)
+            status = 409 if "时间轴" in str(exc) else 400
+            return _json_error(str(exc), "watch_analysis_enqueue_failed", status)
+        except Exception:
+            purge_prepared_samples(prepared)
+            raise
+
+    @bp.route("/watch/sessions/<session_id>/analysis/jobs/<job_id>", methods=["GET"])
+    def miniapp_watch_analysis_job(session_id: str, job_id: str):
+        _session, error = _owned_session(session_id)
+        if error is not None:
+            return error
+        job = watch_analysis_store.get_job(job_id, public=True)
+        if job is None or job.get("session_id") != session_id:
+            return _json_error("分析任务不存在", "watch_analysis_job_not_found", 404)
+        return jsonify({"ok": True, "job": job})
+
+    @bp.route("/watch/analysis/health", methods=["GET"])
+    def miniapp_watch_analysis_health():
+        return jsonify(
+            {
+                "ok": True,
+                "enabled": bool(WATCH_ANALYSIS_ENABLED),
+                "configured": bool(WATCH_ANALYSIS_API_KEY),
+                "model": WATCH_ANALYSIS_MODEL,
+                "source": watch_analysis_source_health(),
+                "queue": watch_analysis_store.queue_stats(),
+            }
+        )
 
     @bp.route("/watch/sessions/<session_id>/mode", methods=["PUT"])
     def miniapp_watch_session_mode(session_id: str):
@@ -225,6 +366,11 @@ def register_routes(bp):
 
         def _end():
             session = watch_runtime_store.end_session(session_id)
+            watch_analysis_store.cancel_stale_jobs(
+                session_id,
+                current_epoch=None,
+                reason="session_ended",
+            )
             return jsonify({"ok": True, "session": session})
 
         return _handle_store_error(_end)

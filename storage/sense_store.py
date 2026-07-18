@@ -841,7 +841,8 @@ def _prepare_screen_bucket_snapshot(previous: dict, patch: dict, latest_doc: dic
     if event_state == "off":
         prev_since = str(prev.get("screenOffSince") or "").strip()
         incoming_since = str(incoming.get("screenOffSince") or "").strip()
-        since = incoming_since or (prev_since if prev_state == "off" else "") or event_at
+        # Repeated screen-off events continue the same block until a real wake is accepted.
+        since = (prev_since if prev_state == "off" else "") or incoming_since or event_at
         merged["screenOffSince"] = since
         try:
             duration_ms = int(merged.get("screenOffDurationMs") or 0)

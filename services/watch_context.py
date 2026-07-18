@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from storage import watch_runtime_store
+from storage import watch_analysis_store, watch_runtime_store
 
 
 WATCH_SESSION_BODY_KEY = "watch_session_id"
@@ -68,9 +68,22 @@ def _chunk_view(chunk: dict) -> dict:
     }
 
 
-def _eligible_story_summary(session: dict, playhead_ms: int) -> dict:
+def _eligible_story_summary(
+    session: dict,
+    *,
+    session_id: str,
+    timeline_epoch: int,
+    playhead_ms: int,
+) -> dict:
     if str((session.get("mode") or {}).get("knowledge_mode") or "") != "needs_summary":
         return {}
+    checkpoint = watch_analysis_store.get_story_checkpoint(
+        session_id,
+        timeline_epoch=timeline_epoch,
+        through_ms=playhead_ms,
+    )
+    if checkpoint:
+        return checkpoint
     summary = (session.get("analysis") or {}).get("story_so_far")
     if not isinstance(summary, dict) or not summary:
         return {}
@@ -124,7 +137,12 @@ def build_watch_context(
         for item in chunks
         if playhead_ms < _int(item.get("start_ms")) <= playhead_ms + FUTURE_WINDOW_MS
     ][:8]
-    story_summary = _eligible_story_summary(session, playhead_ms)
+    story_summary = _eligible_story_summary(
+        session,
+        session_id=session_id,
+        timeline_epoch=timeline_epoch,
+        playhead_ms=playhead_ms,
+    )
     analysis = session.get("analysis") if isinstance(session.get("analysis"), dict) else {}
     mode = session.get("mode") if isinstance(session.get("mode"), dict) else {}
 
