@@ -98,6 +98,12 @@ from services.listen_invite_flow import (
     inject_listen_invite_protocol as _inject_listen_invite_protocol,
     split_listen_invite_actions as _split_listen_invite_actions,
 )
+from services.watch_action_flow import (
+    build_watch_danmaku_event as _build_watch_danmaku_event,
+    split_watch_actions as _split_watch_actions,
+    watch_action_dedup_key as _watch_action_dedup_key,
+)
+from services.watch_context import inject_watch_context as _inject_watch_context
 from services.qq_activity_context import (
     build_group_activity_context_for_wakeup as _build_qq_group_activity_context_for_wakeup,
     clear_group_activity_context as _clear_qq_group_activity_context,
@@ -1415,6 +1421,7 @@ def _stream_with_r2_archive(
     prompt_cache_profile: Optional[dict] = None,
     tool_executor=None,
     sumitalk_event_sink=None,
+    watch_action_context: Optional[dict] = None,
 ):
     """
     包装流式响应：原样转发 SSE，同时在流结束后用收集到的 content 写 R2。
@@ -1435,6 +1442,7 @@ def _stream_with_r2_archive(
     du_daily_maintenance = _is_du_daily_maintenance_request()
     pseudo_cot_stream_enabled = _pseudo_cot_instruction_enabled(body)
     emitted_listen_invite_actions: set[str] = set()
+    emitted_watch_actions: set[str] = set()
 
     def _archive_completed_stream(
         request_messages: list,
@@ -1491,6 +1499,21 @@ def _stream_with_r2_archive(
                 continue
             emitted_listen_invite_actions.add(action)
             _emit_stream_event("listen_invite_action", payload)
+
+    def _emit_watch_actions(raw_text: str) -> None:
+        if not sumitalk_event_sink or not watch_action_context:
+            return
+        _visible, actions = _split_watch_actions(raw_text)
+        for action in actions:
+            payload = _build_watch_danmaku_event(action, context=watch_action_context)
+            if not payload:
+                continue
+            dedup_key = _watch_action_dedup_key(payload)
+            if dedup_key in emitted_watch_actions:
+                continue
+            emitted_watch_actions.add(dedup_key)
+            _emit_stream_event("watch_danmaku_action", payload)
+            break
 
     def _stream_event_text_chunks(text: str):
         value = str(text or "")
@@ -1835,6 +1858,7 @@ def _stream_with_r2_archive(
             full_content = "".join(content_parts)
             visible_source, inner_os = _split_inner_os_from_text(full_content)
             _emit_listen_invite_actions(visible_source, body.get("messages") or [])
+            _emit_watch_actions(visible_source)
             visible = _extract_and_store_hidden_sidecars(
                 visible_source,
                 window_id=window_id,
@@ -2170,6 +2194,7 @@ def _stream_with_r2_archive(
         full_content = "".join(content_parts)
         visible_source, inner_os = _split_inner_os_from_text(full_content)
         _emit_listen_invite_actions(visible_source, current_body.get("messages") or [])
+        _emit_watch_actions(visible_source)
         if not inner_os and stream_inner_os_parts:
             inner_os = "\n\n".join(part for part in stream_inner_os_parts if part).strip()
         visible = _extract_and_store_hidden_sidecars(
@@ -2815,6 +2840,11 @@ def chat_completions():
     body = step_inject_du_midterm_memory(body, window_id)
     body = _inject_music_bgm_context(body, reply_channel=reply_channel)
     body = _inject_listen_invite_protocol(body, reply_channel=reply_channel)
+    body, watch_action_context = _inject_watch_context(
+        body,
+        window_id=window_id,
+        reply_channel=reply_channel,
+    )
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
     if (
@@ -2872,6 +2902,7 @@ def chat_completions():
                 prompt_cache_profile=prompt_cache_profile,
                 tool_executor=_execute_tool_with_chat_context,
                 sumitalk_event_sink=_emit_sumitalk_chat_event if is_sumitalk_request else None,
+                watch_action_context=watch_action_context,
             ),
             sumitalk_rich_events=True,
         )
@@ -3137,6 +3168,18 @@ def chat_completions():
                 payload = _build_listen_invite_event(action, messages=body.get("messages") or [])
                 if payload:
                     _emit_sumitalk_chat_event("listen_invite_action", payload)
+            _ignored_visible, watch_actions = _split_watch_actions(raw_assistant_text)
+            emitted_watch_actions: set[str] = set()
+            for action in watch_actions:
+                payload = _build_watch_danmaku_event(action, context=watch_action_context)
+                if not payload:
+                    continue
+                dedup_key = _watch_action_dedup_key(payload)
+                if dedup_key in emitted_watch_actions:
+                    continue
+                emitted_watch_actions.add(dedup_key)
+                _emit_sumitalk_chat_event("watch_danmaku_action", payload)
+                break
         resp_json = _apply_hidden_sidecars_to_assistant_response(
             resp_json,
             window_id=window_id,

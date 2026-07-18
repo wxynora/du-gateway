@@ -38,6 +38,7 @@ from routes.miniapp.sumitalk_history import register_routes as register_sumitalk
 from routes.miniapp.upstreams import register_routes as register_upstreams_routes
 from routes.miniapp.wenyou import register_routes as register_wenyou_routes
 from routes.miniapp.wakeup_events import register_routes as register_wakeup_event_routes
+from routes.miniapp.watch import register_routes as register_watch_routes
 from routes.miniapp.xiaoai import register_routes as register_xiaoai_routes
 from routes.miniapp.aifarm import register_routes as register_aifarm_routes
 
@@ -72,6 +73,7 @@ register_sumitalk_history_routes(bp)
 register_upstreams_routes(bp)
 register_wenyou_routes(bp)
 register_wakeup_event_routes(bp)
+register_watch_routes(bp)
 register_xiaoai_routes(bp)
 register_aifarm_routes(bp)
 

@@ -17,6 +17,7 @@ from services.listen_invite_flow import compute_visible_streaming as compute_lis
 from services.pending_thoughts import compute_visible_streaming as compute_pending_visible_streaming
 from services.pixel_home import compute_visible_streaming as compute_pixel_home_visible_streaming
 from services.secret_drawer import compute_visible_streaming as compute_secret_drawer_visible_streaming
+from services.watch_action_flow import compute_visible_streaming as compute_watch_action_visible_streaming
 from storage import r2_store
 from utils.log import get_logger
 
@@ -230,6 +231,7 @@ class PcmdDuThoughtStreamState:
         visible = compute_vitals_visible_streaming(visible)
         visible = compute_interaction_visible_streaming(visible)
         visible = compute_listen_invite_visible_streaming(visible)
+        visible = compute_watch_action_visible_streaming(visible)
         visible = compute_daily_visible_streaming(visible)
         visible = compute_pixel_home_visible_streaming(visible)
         try:

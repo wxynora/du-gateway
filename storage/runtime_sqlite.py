@@ -35,6 +35,14 @@ _RUNTIME_TABLES = (
     "recall_message_targets",
     "model_token_ratios",
     "tool_result_cache",
+    "watch_sessions",
+    "watch_timeline_sections",
+    "watch_plot_chunks",
+    "watch_risk_events",
+    "watch_risk_feedback",
+    "watch_analysis_samples",
+    "watch_analysis_jobs",
+    "watch_timeline_fingerprints",
 )
 
 
@@ -145,6 +153,209 @@ def ensure_schema() -> None:
                     ON tool_result_cache(created_at, id);
                 CREATE INDEX IF NOT EXISTS idx_tool_result_cache_expires
                     ON tool_result_cache(expires_at);
+
+                CREATE TABLE IF NOT EXISTS watch_sessions (
+                    id TEXT PRIMARY KEY,
+                    device_id TEXT NOT NULL DEFAULT '',
+                    window_id TEXT NOT NULL DEFAULT '',
+                    companion_id TEXT NOT NULL DEFAULT '',
+                    companion_name TEXT NOT NULL DEFAULT '',
+                    media_id TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT '',
+                    source_url TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    part_title TEXT NOT NULL DEFAULT '',
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    knowledge_mode TEXT NOT NULL DEFAULT 'known',
+                    analysis_familiarity TEXT NOT NULL DEFAULT 'pending',
+                    analysis_identity TEXT NOT NULL DEFAULT '',
+                    analysis_model TEXT NOT NULL DEFAULT 'google/gemini-2.5-flash',
+                    analysis_prompt_version TEXT NOT NULL DEFAULT 'watch-v1',
+                    force_unknown_analysis INTEGER NOT NULL DEFAULT 0,
+                    fear_mode INTEGER NOT NULL DEFAULT 0,
+                    fear_action TEXT NOT NULL DEFAULT 'warn_only',
+                    reduce_volume INTEGER NOT NULL DEFAULT 0,
+                    danmaku_enabled INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'paused',
+                    playhead_ms INTEGER NOT NULL DEFAULT 0,
+                    is_playing INTEGER NOT NULL DEFAULT 0,
+                    playback_rate REAL NOT NULL DEFAULT 1.0,
+                    timeline_epoch INTEGER NOT NULL DEFAULT 0,
+                    snapshot_seq INTEGER NOT NULL DEFAULT 0,
+                    captured_at TEXT NOT NULL DEFAULT '',
+                    analysis_status TEXT NOT NULL DEFAULT 'pending',
+                    analysis_covered_from_ms INTEGER NOT NULL DEFAULT 0,
+                    analysis_covered_until_ms INTEGER NOT NULL DEFAULT 0,
+                    analysis_error TEXT NOT NULL DEFAULT '',
+                    story_so_far_json TEXT NOT NULL DEFAULT '{}',
+                    analysis_story_state_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    ended_at TEXT NOT NULL DEFAULT '',
+                    expires_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_sessions_device_updated
+                    ON watch_sessions(device_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_watch_sessions_window_updated
+                    ON watch_sessions(window_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_watch_sessions_expires
+                    ON watch_sessions(expires_at);
+
+                CREATE TABLE IF NOT EXISTS watch_timeline_sections (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    timeline_epoch INTEGER NOT NULL DEFAULT 0,
+                    kind TEXT NOT NULL,
+                    start_ms INTEGER NOT NULL,
+                    end_ms INTEGER NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'analysis',
+                    confidence REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES watch_sessions(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_timeline_session_range
+                    ON watch_timeline_sections(session_id, timeline_epoch, start_ms, end_ms);
+
+                CREATE TABLE IF NOT EXISTS watch_plot_chunks (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    media_id TEXT NOT NULL DEFAULT '',
+                    timeline_epoch INTEGER NOT NULL DEFAULT 0,
+                    start_ms INTEGER NOT NULL,
+                    end_ms INTEGER NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    visual_description TEXT NOT NULL DEFAULT '',
+                    dialogue_summary TEXT NOT NULL DEFAULT '',
+                    characters_json TEXT NOT NULL DEFAULT '[]',
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    confidence REAL NOT NULL DEFAULT 0,
+                    analysis_version TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES watch_sessions(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_plot_session_range
+                    ON watch_plot_chunks(session_id, timeline_epoch, start_ms, end_ms);
+
+                CREATE TABLE IF NOT EXISTS watch_risk_events (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    media_id TEXT NOT NULL DEFAULT '',
+                    timeline_epoch INTEGER NOT NULL DEFAULT 0,
+                    risk_type TEXT NOT NULL DEFAULT 'high_energy',
+                    severity TEXT NOT NULL DEFAULT 'medium',
+                    start_ms INTEGER NOT NULL,
+                    end_ms INTEGER NOT NULL,
+                    warn_at_ms INTEGER NOT NULL,
+                    label TEXT NOT NULL DEFAULT '',
+                    companion_hint TEXT NOT NULL DEFAULT '',
+                    confidence REAL NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    analysis_version TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES watch_sessions(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_risk_session_warn
+                    ON watch_risk_events(session_id, timeline_epoch, warn_at_ms, end_ms);
+
+                CREATE TABLE IF NOT EXISTS watch_risk_feedback (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    risk_event_id TEXT NOT NULL DEFAULT '',
+                    feedback_type TEXT NOT NULL,
+                    playhead_ms INTEGER NOT NULL DEFAULT 0,
+                    note TEXT NOT NULL DEFAULT '',
+                    device_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES watch_sessions(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_risk_feedback_session_created
+                    ON watch_risk_feedback(session_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS watch_analysis_samples (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    media_id TEXT NOT NULL,
+                    timeline_epoch INTEGER NOT NULL DEFAULT 0,
+                    purpose TEXT NOT NULL DEFAULT 'rolling',
+                    at_ms INTEGER NOT NULL DEFAULT 0,
+                    mime_type TEXT NOT NULL DEFAULT '',
+                    file_path TEXT NOT NULL DEFAULT '',
+                    text_content TEXT NOT NULL DEFAULT '',
+                    subtitle TEXT NOT NULL DEFAULT '',
+                    sha256 TEXT NOT NULL DEFAULT '',
+                    perceptual_hash TEXT NOT NULL DEFAULT '',
+                    width INTEGER NOT NULL DEFAULT 0,
+                    height INTEGER NOT NULL DEFAULT 0,
+                    byte_size INTEGER NOT NULL DEFAULT 0,
+                    captured_at TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    consumed_at TEXT NOT NULL DEFAULT '',
+                    purged_at TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY(session_id) REFERENCES watch_sessions(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_analysis_samples_session_range
+                    ON watch_analysis_samples(session_id, timeline_epoch, purpose, at_ms);
+                CREATE INDEX IF NOT EXISTS idx_watch_analysis_samples_expires
+                    ON watch_analysis_samples(expires_at, purged_at);
+
+                CREATE TABLE IF NOT EXISTS watch_analysis_jobs (
+                    id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL DEFAULT '',
+                    session_id TEXT NOT NULL,
+                    media_id TEXT NOT NULL,
+                    timeline_epoch INTEGER NOT NULL DEFAULT 0,
+                    purpose TEXT NOT NULL DEFAULT 'rolling',
+                    range_start_ms INTEGER NOT NULL DEFAULT 0,
+                    range_end_ms INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 3,
+                    available_at TEXT NOT NULL,
+                    leased_until TEXT NOT NULL DEFAULT '',
+                    lease_token TEXT NOT NULL DEFAULT '',
+                    sample_ids_json TEXT NOT NULL DEFAULT '[]',
+                    analysis_version TEXT NOT NULL DEFAULT '',
+                    input_bytes INTEGER NOT NULL DEFAULT 0,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    cost_usd REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    started_at TEXT NOT NULL DEFAULT '',
+                    finished_at TEXT NOT NULL DEFAULT '',
+                    error TEXT NOT NULL DEFAULT '',
+                    result_json TEXT NOT NULL DEFAULT '{}',
+                    usage_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY(session_id) REFERENCES watch_sessions(id) ON DELETE CASCADE
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_watch_analysis_jobs_idempotency
+                    ON watch_analysis_jobs(idempotency_key)
+                    WHERE idempotency_key != '';
+                CREATE INDEX IF NOT EXISTS idx_watch_analysis_jobs_claim
+                    ON watch_analysis_jobs(status, available_at, priority DESC, created_at);
+                CREATE INDEX IF NOT EXISTS idx_watch_analysis_jobs_session
+                    ON watch_analysis_jobs(session_id, timeline_epoch, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS watch_timeline_fingerprints (
+                    id TEXT PRIMARY KEY,
+                    series_key TEXT NOT NULL,
+                    source_media_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    section_start_ms INTEGER NOT NULL,
+                    section_end_ms INTEGER NOT NULL,
+                    sample_at_ms INTEGER NOT NULL,
+                    perceptual_hash TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    confidence REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_timeline_fingerprints_series
+                    ON watch_timeline_fingerprints(series_key, kind, sample_at_ms);
 
                 CREATE TABLE IF NOT EXISTS sense_latest (
                     sense_type TEXT PRIMARY KEY,

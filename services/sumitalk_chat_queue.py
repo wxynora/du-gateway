@@ -26,6 +26,15 @@ from config import (
 )
 from storage import upstream_store
 from services.game_tool_runtime import normalize_game_id
+from services.sumitalk_voice_sidecar import (
+    cleanup_sumitalk_voice_sidecars,
+    discard_sumitalk_voice_stream,
+    feed_sumitalk_voice_delta,
+    finish_sumitalk_voice_part,
+    notify_sumitalk_voice_job_terminal,
+    schedule_sumitalk_voice_sidecar,
+    strip_complete_sumitalk_voice_tags,
+)
 from services.upstream_policy import extract_upstream_error_detail
 from utils.time_aware import now_beijing_iso
 
@@ -49,6 +58,7 @@ _SUMITALK_CHAT_FINAL_TEXT_LIMIT = max(
     int(os.environ.get("SUMITALK_CHAT_FINAL_TEXT_LIMIT", "500000") or "500000"),
 )
 _TERMINAL_EVENT_KINDS = {"assistant_final", "run_error", "run_cancelled"}
+_POST_TERMINAL_EVENT_KINDS = {"assistant_audio_ready", "assistant_audio_failed"}
 _TERMINAL_EVENT_STATUS = {
     "assistant_final": "done",
     "run_error": "error",
@@ -496,10 +506,12 @@ def _append_sumitalk_chat_job_event_record(
                 (job_id,),
             ).fetchone()
             if terminal_row is not None:
-                conn.execute("COMMIT")
                 if terminal and str(terminal_row["kind"] or "") == event_kind:
+                    conn.execute("COMMIT")
                     return _decode_sumitalk_chat_event_json(terminal_row["event_json"])
-                return None
+                if event_kind not in _POST_TERMINAL_EVENT_KINDS:
+                    conn.execute("COMMIT")
+                    return None
             row = conn.execute(
                 "SELECT COALESCE(MAX(seq), 0) AS seq FROM sumitalk_chat_run_events WHERE job_id=?",
                 (job_id,),
@@ -570,7 +582,11 @@ def append_sumitalk_chat_job_event(job_id: str, kind: str, payload: dict | None 
         if not isinstance(current, dict):
             return None
         status = str(current.get("status") or "").strip().lower()
-        if status in _TERMINAL_JOB_STATUSES and event_kind not in _TERMINAL_EVENT_KINDS:
+        if (
+            status in _TERMINAL_JOB_STATUSES
+            and event_kind not in _TERMINAL_EVENT_KINDS
+            and event_kind not in _POST_TERMINAL_EVENT_KINDS
+        ):
             return None
         return _append_sumitalk_chat_job_event_record(job_id, event_kind, payload or {}, current)
 
@@ -760,7 +776,7 @@ def flush_sumitalk_chat_live_events(timeout: float = 5.0) -> bool:
     return persist_barrier.wait(max(0.0, deadline - time.monotonic()))
 
 
-def emit_live_sumitalk_chat_job_event(job_id: str, kind: str, payload: dict | None = None) -> dict | None:
+def _emit_raw_live_sumitalk_chat_job_event(job_id: str, kind: str, payload: dict | None = None) -> dict | None:
     job_id = str(job_id or "").strip()
     event_kind = re.sub(r"[^a-zA-Z0-9_.:-]", "_", str(kind or "").strip())[:80]
     if not valid_sumitalk_chat_job_id(job_id) or not event_kind:
@@ -806,6 +822,49 @@ def emit_live_sumitalk_chat_job_event(job_id: str, kind: str, payload: dict | No
     return event
 
 
+def _schedule_completed_sumitalk_voices(job_id: str, part_id: str, completed) -> None:
+    for voice in completed or ():
+        transcript = str(getattr(voice, "transcript", "") or "").strip()
+        if not transcript:
+            continue
+        schedule_sumitalk_voice_sidecar(
+            job_id,
+            part_id,
+            int(getattr(voice, "voice_index", 0) or 0),
+            transcript,
+        )
+
+
+def emit_live_sumitalk_chat_job_event(job_id: str, kind: str, payload: dict | None = None) -> dict | None:
+    event_kind = str(kind or "").strip()
+    normalized_payload = dict(payload or {})
+    current = read_sumitalk_chat_job_state(job_id) or {}
+    is_stream_job = str(current.get("execution_mode") or "").strip().lower() == "stream"
+    if is_stream_job and event_kind == "assistant_delta":
+        part_id = str(normalized_payload.get("part_id") or "assistant-final").strip() or "assistant-final"
+        parsed = feed_sumitalk_voice_delta(job_id, part_id, normalized_payload.get("text") or "")
+        _schedule_completed_sumitalk_voices(job_id, part_id, parsed.completed)
+        if not parsed.visible_text:
+            return None
+        normalized_payload["text"] = parsed.visible_text
+    elif is_stream_job and event_kind == "assistant_text_finished":
+        part_id = str(normalized_payload.get("part_id") or "assistant-final").strip() or "assistant-final"
+        parsed = finish_sumitalk_voice_part(job_id, part_id)
+        _schedule_completed_sumitalk_voices(job_id, part_id, parsed.completed)
+        if parsed.visible_text:
+            _emit_raw_live_sumitalk_chat_job_event(
+                job_id,
+                "assistant_delta",
+                {
+                    **normalized_payload,
+                    "text": parsed.visible_text,
+                },
+            )
+    elif event_kind in _TERMINAL_EVENT_KINDS:
+        discard_sumitalk_voice_stream(job_id)
+    return _emit_raw_live_sumitalk_chat_job_event(job_id, event_kind, normalized_payload)
+
+
 def finalize_sumitalk_chat_job(
     job_id: str,
     status: str,
@@ -844,6 +903,7 @@ def finalize_sumitalk_chat_job(
                 _LIVE_EVENT_CURSOR.pop(job_id, None)
                 _LIVE_EVENT_TERMINAL.pop(job_id, None)
                 _LIVE_ASSISTANT_PART.pop(job_id, None)
+            notify_sumitalk_voice_job_terminal(job_id)
             return True
     publish_terminal: tuple[str, str, dict] | None = None
     with _sumitalk_chat_job_state_lock():
@@ -896,6 +956,9 @@ def finalize_sumitalk_chat_job(
                 event_kind,
                 exc_info=True,
             )
+    current_state = read_sumitalk_chat_job_state(job_id) or {}
+    if str(current_state.get("execution_mode") or "").strip().lower() == "stream":
+        notify_sumitalk_voice_job_terminal(job_id)
     return True
 
 
@@ -1002,6 +1065,7 @@ def _cleanup_sumitalk_chat_queue_rows() -> None:
                 "DELETE FROM sumitalk_chat_run_events WHERE created_ts<?",
                 (cutoff,),
             )
+        cleanup_sumitalk_voice_sidecars(cutoff)
     except Exception:
         pass
 
@@ -1682,6 +1746,7 @@ def _consume_sumitalk_chat_stream(result, job_id: str) -> tuple[int, dict]:
                 "role": role,
             },
         )
+    visible_content = strip_complete_sumitalk_voice_tags("".join(content_parts))
     data = {
         "id": response_id or f"chatcmpl-{job_id}",
         "object": "chat.completion",
@@ -1690,7 +1755,7 @@ def _consume_sumitalk_chat_stream(result, job_id: str) -> tuple[int, dict]:
                 "index": 0,
                 "message": {
                     "role": role or "assistant",
-                    "content": "".join(content_parts),
+                    "content": visible_content,
                 },
                 "finish_reason": finish_reason or "stop",
             }

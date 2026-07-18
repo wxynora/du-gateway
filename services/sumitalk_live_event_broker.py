@@ -68,5 +68,3 @@ class SumiTalkRunEventBroker:
                     continue
                 cursor = seq
                 yield event
-                if str(event.get("kind") or "") in {"assistant_final", "run_error", "run_cancelled"}:
-                    return

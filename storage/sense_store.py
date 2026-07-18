@@ -50,6 +50,7 @@ _DAY_SLEEP_INTERIOR_MARGIN_MINUTES = 3
 _AWAKE_FOREGROUND_BLOCKLIST_EXACT = {
     "android",
     "com.android.deskclock",
+    "com.android.incallui",
     "com.android.launcher",
     "com.android.launcher3",
     "com.android.systemui",
@@ -324,10 +325,10 @@ def _is_sleep_like_screen_off_block(start_dt: datetime, end_dt: datetime, durati
     minutes = _sleep_block_minutes(duration_ms)
     if minutes < _SLEEP_BLOCK_MIN_MINUTES:
         return False
+    if minutes >= 4 * 60 and _is_sleep_window(start_dt, end_dt):
+        return True
     if _is_day_sleep_candidate_window(start_dt, end_dt):
         return False
-    if minutes >= 4 * 60:
-        return True
     return minutes >= _SLEEP_CORE_BLOCK_MIN_MINUTES and _is_sleep_window(start_dt, end_dt)
 
 

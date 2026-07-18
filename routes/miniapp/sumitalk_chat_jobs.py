@@ -4,6 +4,10 @@ import time
 from flask import Response, jsonify, request, stream_with_context
 
 from services.realtime_publish import subscribe_sumitalk_chat_events
+from services.sumitalk_voice_sidecar import (
+    pending_sumitalk_voice_sidecar_count,
+    resume_sumitalk_voice_sidecars,
+)
 from services.sumitalk_chat_queue import (
     build_sumitalk_chat_job_payload,
     cancel_sumitalk_chat_job,
@@ -141,6 +145,7 @@ def _event_page(job_id: str, *, after_seq: int, limit: int) -> tuple[dict, int]:
     events = list_sumitalk_chat_job_events(job_id, after_seq=after_seq, limit=limit)
     latest_seq = latest_sumitalk_chat_job_event_seq(job_id)
     terminal_event = get_sumitalk_chat_terminal_event(job_id)
+    sidecars_pending = pending_sumitalk_voice_sidecar_count(job_id)
     status = str(job.get("status") or "running").strip().lower() or "running"
     if terminal_event:
         status = _TERMINAL_EVENT_STATUS.get(str(terminal_event.get("kind") or ""), status)
@@ -152,12 +157,7 @@ def _event_page(job_id: str, *, after_seq: int, limit: int) -> tuple[dict, int]:
             last_returned_seq = after_seq
     has_more = latest_seq > last_returned_seq
     if terminal_event and has_more:
-        try:
-            terminal_seq = int(terminal_event.get("seq") or 0)
-        except Exception:
-            terminal_seq = 0
-        if terminal_seq > last_returned_seq:
-            status = "running"
+        status = "running"
     payload = {
         "ok": status not in {"error", "cancelled"},
         "status": status,
@@ -166,6 +166,7 @@ def _event_page(job_id: str, *, after_seq: int, limit: int) -> tuple[dict, int]:
         "events": events,
         "event_seq": latest_seq,
         "has_more": has_more,
+        "sidecars_pending": sidecars_pending,
     }
     if job.get("execution_mode"):
         payload["execution_mode"] = job.get("execution_mode")
@@ -194,7 +195,10 @@ def _wait_for_sumitalk_chat_events(
         payload, http_status = _event_page(job_id, after_seq=after_seq, limit=limit)
         if http_status >= 400 or payload.get("events"):
             return payload, http_status
-        if str(payload.get("status") or "") in {"done", "error", "cancelled"}:
+        if (
+            str(payload.get("status") or "") in {"done", "error", "cancelled"}
+            and int(payload.get("sidecars_pending") or 0) <= 0
+        ):
             return payload, http_status
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -259,6 +263,7 @@ def register_routes(bp) -> None:
             last_heartbeat = time.monotonic()
             last_state_check = 0.0
             terminal_seen = False
+            resume_sumitalk_voice_sidecars(job_id)
 
             # First connection and reconnect recovery read the durable log once,
             # then the active stream switches to the realtime IPC broker.
@@ -277,11 +282,13 @@ def register_routes(bp) -> None:
                     yield "data: " + json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n\n"
                     if str(event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
                         terminal_seen = True
-                        break
-                if terminal_seen:
-                    return
                 if len(recovery_events) < 500:
                     break
+            if terminal_seen:
+                pending = pending_sumitalk_voice_sidecar_count(job_id)
+                if pending <= 0:
+                    return
+                resume_sumitalk_voice_sidecars(job_id)
 
             pending_live_event = None
             try:
@@ -292,7 +299,12 @@ def register_routes(bp) -> None:
                             yield ": ping\n\n"
                             last_heartbeat = now
                         job = read_sumitalk_chat_job_state(job_id)
-                        if not job or str(job.get("status") or "").strip().lower() in {"done", "error", "cancelled"}:
+                        if not job:
+                            return
+                        if str(job.get("status") or "").strip().lower() in {"done", "error", "cancelled"}:
+                            if pending_sumitalk_voice_sidecar_count(job_id) > 0:
+                                resume_sumitalk_voice_sidecars(job_id)
+                                continue
                             break
                         continue
                     try:
@@ -307,12 +319,14 @@ def register_routes(bp) -> None:
                     cursor = seq
                     yield "data: " + json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n\n"
                     if str(event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
+                        terminal_seen = True
+                    if terminal_seen and pending_sumitalk_voice_sidecar_count(job_id) <= 0:
                         return
             except Exception:
                 pass
 
             # IPC unavailable or a sequence gap: use the durable log as the
-            # 40 ms compatibility fallback until this run reaches terminal.
+            # 40 ms compatibility fallback until terminal sidecars are drained.
             while True:
                 events = list_sumitalk_chat_job_events(job_id, after_seq=cursor, limit=100)
                 for event in events:
@@ -326,8 +340,6 @@ def register_routes(bp) -> None:
                     if str(event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
                         terminal_seen = True
                     yield "data: " + json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n\n"
-                if terminal_seen:
-                    return
 
                 if pending_live_event is not None:
                     try:
@@ -342,7 +354,7 @@ def register_routes(bp) -> None:
                             separators=(",", ":"),
                         ) + "\n\n"
                         if str(pending_live_event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
-                            return
+                            terminal_seen = True
                         pending_live_event = None
 
                 terminal_event = get_sumitalk_chat_terminal_event(job_id) if not events else None
@@ -352,7 +364,13 @@ def register_routes(bp) -> None:
                     except Exception:
                         terminal_seq = 0
                     if terminal_seq <= cursor:
+                        terminal_seen = True
+
+                if terminal_seen:
+                    pending = pending_sumitalk_voice_sidecar_count(job_id)
+                    if pending <= 0:
                         return
+                    resume_sumitalk_voice_sidecars(job_id)
 
                 now = time.monotonic()
                 if now - last_state_check >= 2.0:
@@ -365,7 +383,8 @@ def register_routes(bp) -> None:
                         and not terminal_event
                         and not events
                     ):
-                        return
+                        if pending_sumitalk_voice_sidecar_count(job_id) > 0:
+                            resume_sumitalk_voice_sidecars(job_id)
                     last_state_check = now
                 if now - last_heartbeat >= _SUMITALK_CHAT_EVENT_HEARTBEAT_SECONDS:
                     yield ": ping\n\n"

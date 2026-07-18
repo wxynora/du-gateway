@@ -17,6 +17,7 @@ from services.pc_command_handler import process_pcmd_in_assistant_text
 from services.pixel_home import save_pixel_home_hidden_block, split_assistant_for_pixel_home
 from services.secret_drawer import save_hidden_block as save_secret_drawer_hidden_block
 from services.secret_drawer import split_all_assistant_for_secret_drawer
+from services.watch_action_flow import split_watch_actions
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
@@ -154,6 +155,7 @@ def extract_and_store_hidden_sidecars(
     visible, vitals = split_assistant_for_vitals(visible)
     visible, interaction = split_assistant_for_interaction(visible)
     visible, _listen_invite_actions = split_listen_invite_actions(visible)
+    visible, _watch_actions = split_watch_actions(visible)
     visible, du_daily = split_assistant_for_daily(visible)
     visible, pixel_home = split_assistant_for_pixel_home(visible)
     visible, secret_drawer_blocks = split_all_assistant_for_secret_drawer(visible)
