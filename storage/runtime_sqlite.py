@@ -33,6 +33,7 @@ _RUNTIME_TABLES = (
     "exchange_diary_entries",
     "recall_message_markers",
     "recall_message_targets",
+    "tool_result_cache",
 )
 
 
@@ -119,6 +120,21 @@ def ensure_schema() -> None:
                     ON recall_message_targets(window_id, client_request_id);
                 CREATE INDEX IF NOT EXISTS idx_recall_message_targets_expires
                     ON recall_message_targets(expires_at);
+
+                CREATE TABLE IF NOT EXISTS tool_result_cache (
+                    id TEXT PRIMARY KEY,
+                    tool_name TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL DEFAULT '',
+                    token_estimate INTEGER NOT NULL DEFAULT 0,
+                    window_id TEXT NOT NULL DEFAULT '',
+                    reply_channel TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_tool_result_cache_created
+                    ON tool_result_cache(created_at, id);
+                CREATE INDEX IF NOT EXISTS idx_tool_result_cache_expires
+                    ON tool_result_cache(expires_at);
 
                 CREATE TABLE IF NOT EXISTS sense_latest (
                     sense_type TEXT PRIMARY KEY,

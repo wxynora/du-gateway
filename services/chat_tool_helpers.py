@@ -207,7 +207,14 @@ def _emit_tool_event(on_tool_event, kind: str, payload: dict) -> None:
         logger.debug("工具事件回调失败 kind=%s", kind, exc_info=True)
 
 
-def append_tool_results_and_continue(body: dict, assistant_message: dict, tool_calls: list, execute_tool, on_tool_event=None) -> dict:
+def append_tool_results_and_continue(
+    body: dict,
+    assistant_message: dict,
+    tool_calls: list,
+    execute_tool,
+    on_tool_event=None,
+    completed_tool_results: list[dict] | None = None,
+) -> dict:
     """执行 tool_calls，将 assistant 消息与各 tool 结果追加到 body["messages"]，返回新 body 供继续请求。"""
     body = copy.deepcopy(body)
     messages = body.get("messages") or []
@@ -257,6 +264,15 @@ def append_tool_results_and_continue(body: dict, assistant_message: dict, tool_c
                 "result_preview": _tool_event_text(result),
                 "result_chars": len(str(result or "")),
             })
+        if completed_tool_results is not None:
+            completed_tool_results.append(
+                {
+                    "tool_call_id": tid,
+                    "name": name,
+                    "arguments": args,
+                    "result": result,
+                }
+            )
         messages.append({"role": "tool", "tool_call_id": tid, "content": result})
     body["messages"] = messages
     return body

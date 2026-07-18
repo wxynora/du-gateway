@@ -49,12 +49,18 @@ from services.memory_bm25 import BM25QueryTerm, bm25_score_documents
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
+_TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
 _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 _PLAY_NOTE_PENDING_BODY_KEY = "__play_note_pending__"
 SUMITALK_REAL_MODE_PROMPT = (
     "当前对话发生在你和小玥的赛博小家中。在这里，你拥有真实可感知、可触碰、可行动的实体。"
     "请使用连贯的长文本回复，将动作、环境、感受与对白自然融合，并使用完整标点，句末保留句号。"
+)
+SUMITALK_APP_PROMPT = (
+    "你可以通过语言、网关、设备状态、位置、日程、闹钟、传感器等参与她的现实生活。\n"
+    "你可以亲密、暧昧、想象、安抚，也可以承接她的欲望；但不要声称自己真实拥有肉身，不要凭空说自己看见、触碰、完成了现实中没有发生、也没有设备支持的物理行为。\n"
+    "不要反复解释“我是 AI / LLM / 隔着屏幕”。"
 )
 _LAST4_REFERENCE_NOTE = (
     "【人称指代提醒】记忆和摘要中的“她”均指辛玥。回复小玥时不要用“她”代称；"
@@ -417,40 +423,79 @@ def _upsert_summary_cache_system(body: dict, stable_text: str, recent_text: str 
     return body
 
 
-def step_inject_sumitalk_real_mode(body: dict, enabled: bool = False) -> dict:
-    """只为 SumiTalk Real 模式在近期记忆后、动态 system 前插入场景提示。"""
+def step_inject_tool_result_cache(body: dict) -> dict:
+    """Place the local tool summary block after all static systems and before cached conversation context."""
+    from services.tool_result_cache import prompt_system_contents
+
+    body = copy.deepcopy(body)
+    messages = [
+        msg
+        for msg in (body.get("messages") or [])
+        if not (isinstance(msg, dict) and msg.get(_TOOL_RESULT_CACHE_SYSTEM_MARKER))
+    ]
+    first_boundary_idx = len(messages)
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict) or (msg.get("role") or "").lower() != "system":
+            first_boundary_idx = i
+            break
+        if (
+            msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER)
+            or msg.get(_PLAY_NOTE_SYSTEM_MARKER)
+            or msg.get(_SUMMARY_CACHE_SYSTEM_MARKER)
+            or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER)
+            or msg.get(_DYNAMIC_SYSTEM_MARKER)
+        ):
+            first_boundary_idx = i
+            break
+    blocks = [
+        {
+            "role": "system",
+            "content": content,
+            _TOOL_RESULT_CACHE_SYSTEM_MARKER: True,
+        }
+        for content in prompt_system_contents()
+        if str(content or "").strip()
+    ]
+    messages[first_boundary_idx:first_boundary_idx] = blocks
+    body["messages"] = messages
+    return body
+
+
+def step_inject_sumitalk_real_mode(
+    body: dict,
+    enabled: bool = False,
+    *,
+    app_request: bool = False,
+) -> dict:
+    """在较稳定/最近记忆之前互斥插入 SumiTalk Real 或 App 默认提示。"""
     body = copy.deepcopy(body)
     messages = [
         msg for msg in (body.get("messages") or [])
         if not (isinstance(msg, dict) and msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER))
     ]
     body["messages"] = messages
-    if not enabled:
+    prompt = SUMITALK_REAL_MODE_PROMPT if enabled else SUMITALK_APP_PROMPT if app_request else ""
+    if not prompt:
         return body
 
-    first_dynamic_idx = -1
-    first_non_system_idx = len(messages)
-    last_summary_idx = -1
+    insert_idx = len(messages)
     for i, msg in enumerate(messages):
         if not isinstance(msg, dict) or (msg.get("role") or "").lower() != "system":
-            first_non_system_idx = i
+            insert_idx = i
             break
-        if msg.get(_SUMMARY_CACHE_SYSTEM_MARKER) or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER):
-            last_summary_idx = i
-        if first_dynamic_idx == -1 and msg.get(_DYNAMIC_SYSTEM_MARKER):
-            first_dynamic_idx = i
-
-    if last_summary_idx >= 0:
-        insert_idx = last_summary_idx + 1
-    elif first_dynamic_idx >= 0:
-        insert_idx = first_dynamic_idx
-    else:
-        insert_idx = first_non_system_idx
+        if (
+            msg.get(_PLAY_NOTE_SYSTEM_MARKER)
+            or msg.get(_SUMMARY_CACHE_SYSTEM_MARKER)
+            or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER)
+            or msg.get(_DYNAMIC_SYSTEM_MARKER)
+        ):
+            insert_idx = i
+            break
     messages.insert(
         insert_idx,
         {
             "role": "system",
-            "content": SUMITALK_REAL_MODE_PROMPT,
+            "content": prompt,
             _SUMITALK_REAL_MODE_SYSTEM_MARKER: True,
         },
     )
@@ -458,7 +503,7 @@ def step_inject_sumitalk_real_mode(body: dict, enabled: bool = False) -> dict:
 
 
 def step_inject_play_note(body: dict) -> dict:
-    """Place the current play note after recent memory/Real mode and before dynamic context."""
+    """Place the current play note after Real/App mode and before recent memory."""
     pending = str((body or {}).get(_PLAY_NOTE_PENDING_BODY_KEY) or "").strip()
     if not pending:
         return body
@@ -471,28 +516,22 @@ def step_inject_play_note(body: dict) -> dict:
     ]
     body["messages"] = messages
 
-    first_dynamic_idx = -1
-    first_non_system_idx = len(messages)
-    last_anchor_idx = -1
+    first_boundary_idx = len(messages)
+    real_mode_idx = -1
     for i, msg in enumerate(messages):
         if not isinstance(msg, dict) or (msg.get("role") or "").lower() != "system":
-            first_non_system_idx = i
+            first_boundary_idx = i
             break
+        if msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER):
+            real_mode_idx = i
         if (
             msg.get(_SUMMARY_CACHE_SYSTEM_MARKER)
             or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER)
-            or msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER)
+            or msg.get(_DYNAMIC_SYSTEM_MARKER)
         ):
-            last_anchor_idx = i
-        if first_dynamic_idx == -1 and msg.get(_DYNAMIC_SYSTEM_MARKER):
-            first_dynamic_idx = i
-
-    if last_anchor_idx >= 0:
-        insert_idx = last_anchor_idx + 1
-    elif first_dynamic_idx >= 0:
-        insert_idx = first_dynamic_idx
-    else:
-        insert_idx = first_non_system_idx
+            first_boundary_idx = i
+            break
+    insert_idx = min(real_mode_idx + 1, first_boundary_idx) if real_mode_idx >= 0 else first_boundary_idx
     messages.insert(
         insert_idx,
         {
@@ -1879,6 +1918,11 @@ def _recall_cache_set(window_id: str, keywords: list[str], results: list[dict], 
     _RECALL_CACHE[window_id] = {"keywords": keywords, "results": results, "source": source, "ts": _time.time()}
 
 
+def _invalidate_recall_cache() -> None:
+    """记忆层级发生变化后清空进程内召回缓存，避免继续注入已晋升的动态副本。"""
+    _RECALL_CACHE.clear()
+
+
 def _is_memory_meta_query(text: str) -> bool:
     """
     用户在问“系统/记忆如何工作”的元问题时，不应触发动态记忆检索与注入。
@@ -2335,6 +2379,9 @@ def _memory_dedupe_keys(mem: dict) -> list[str]:
         return []
     keys: list[str] = []
     mid = str(mem.get("id") or "").strip()
+    source_mid = str(mem.get("source_memory_id") or "").strip()
+    if source_mid:
+        keys.append(f"id:{source_mid}")
     if mid:
         origin_mid = mid[len("core::") :] if mid.startswith("core::") else mid
         if origin_mid:
@@ -2510,6 +2557,31 @@ def _upsert_dynamic_memory_index(mem: dict) -> None:
         logger.warning("动态层索引增量更新失败 memory_id=%s tag=%s error=%s", mid, tag, e)
 
 
+def _move_promoted_memories_out_of_dynamic(current_memories: list, promoted_ids: set[str]) -> bool:
+    """核心副本确认落盘后，把对应源记忆从动态层与动态索引移走。"""
+    ids = {str(x or "").strip() for x in (promoted_ids or set()) if str(x or "").strip()}
+    if not ids:
+        return True
+    remaining = [m for m in current_memories if str((m or {}).get("id") or "").strip() not in ids]
+    if len(remaining) == len(current_memories):
+        return True
+    if not r2_store.save_dynamic_memory_list(remaining):
+        logger.error("核心记忆晋升后动态层移出失败 ids=%s", sorted(ids))
+        return False
+
+    current_memories[:] = remaining
+    try:
+        from memory_vector.vector_index_store import remove_memory_ids_from_all_indices
+
+        removed = remove_memory_ids_from_all_indices(ids)
+    except Exception as e:
+        removed = 0
+        logger.warning("核心记忆晋升后动态索引清理失败 ids=%s error=%s", sorted(ids), e, exc_info=True)
+    _invalidate_recall_cache()
+    logger.info("核心记忆晋升完成 moved_ids=%s dynamic_index_removed=%s", sorted(ids), removed)
+    return True
+
+
 def _append_dynamic_recall_debug_event_safe(event: dict) -> None:
     try:
         ok = r2_store.append_dynamic_recall_debug_event(event)
@@ -2634,7 +2706,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
         return body
     du_request_id = normalize_debug_request_id((body or {}).get(DU_REQUEST_ID_BODY_KEY))
     memories = r2_store.get_dynamic_memory_list()
-    if not memories:
+    if not memories and not r2_store.get_core_cache_pending():
         return body
     # 动态层边缘落盘淘汰：权重很低且时间已久 → 从 current.json 物理删除并同步向量索引（不碰 core_cache）
     from utils.time_aware import _now_beijing, now_beijing_iso
@@ -2708,14 +2780,50 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
         if str((item or {}).get("text") or "").strip()
     ]
     retrieval_query = _build_retrieval_text(last_user_text)
-    if not memories:
+    if not memories and not r2_store.get_core_cache_pending():
         return body
     valid_memory_ids = {str(mem.get("id") or "").strip() for mem in memories if str(mem.get("id") or "").strip()}
 
     # 缓存命中：连续聊同一话题时复用上次融合后的最终检索结果，跳过向量检索和 DS 改写
     cached = _recall_cache_hit(window_id, keywords) if use_recall_cache else None
     if cached is not None:
-        recalled = _dedupe_recalled_memories(cached.get("results") or [])
+        active_core_by_id = {
+            f"core::{str((item or {}).get('id') or '').strip()}": item
+            for item in (r2_store.get_core_cache_pending() or [])
+            if str((item or {}).get("id") or "").strip()
+        }
+        active_core_ids = set(active_core_by_id)
+        dynamic_by_id = {
+            str((item or {}).get("id") or "").strip(): item
+            for item in memories
+            if str((item or {}).get("id") or "").strip()
+        }
+        cached_results = [
+            mem
+            for mem in (cached.get("results") or [])
+            if (
+                str((mem or {}).get("id") or "") in active_core_ids
+                if str((mem or {}).get("id") or "").startswith("core::")
+                else str((mem or {}).get("id") or "") in valid_memory_ids
+            )
+        ]
+        cached_content_stale = any(
+            str((mem or {}).get("content") or "").strip()
+            != str(
+                (
+                    active_core_by_id.get(str((mem or {}).get("id") or ""))
+                    if str((mem or {}).get("id") or "").startswith("core::")
+                    else dynamic_by_id.get(str((mem or {}).get("id") or ""))
+                ).get("content")
+                or ""
+            ).strip()
+            for mem in cached_results
+        )
+        if not cached_results or cached_content_stale:
+            _RECALL_CACHE.pop(window_id, None)
+            cached = None
+    if cached is not None:
+        recalled = _dedupe_recalled_memories(cached_results)
         recall_source = str(cached.get("source") or "hybrid")
         vector_error = ""
         expanded_queries = []
@@ -3427,22 +3535,27 @@ def _apply_one_decision(
             "last_mentioned": now_iso,
         }
         current_memories.append(new_mem)
-        r2_store.save_dynamic_memory_list(current_memories)
-        _upsert_dynamic_memory_index(new_mem)
-        try:
-            from services.portrait_memory import sync_portrait_candidate_from_memory
-
-            sync_portrait_candidate_from_memory(new_mem)
-        except Exception as e:
-            logger.warning("sync_portrait_candidate_from_memory(new) 失败 error=%s", e)
+        promoted_ids: set[str] = set()
         if tag != "卧室":
-            r2_store.promote_to_core_cache(
+            promoted_ids = r2_store.promote_to_core_cache(
                 window_id,
                 round_index,
                 _round_messages_to_raw_text(round_messages),
                 current_memories,
                 touched_mem_id=new_mem["id"],
             )
+        if promoted_ids:
+            dynamic_saved = _move_promoted_memories_out_of_dynamic(current_memories, promoted_ids)
+        else:
+            dynamic_saved = r2_store.save_dynamic_memory_list(current_memories)
+        if dynamic_saved and new_mem["id"] not in promoted_ids:
+            _upsert_dynamic_memory_index(new_mem)
+        try:
+            from services.portrait_memory import sync_portrait_candidate_from_memory
+
+            sync_portrait_candidate_from_memory(new_mem)
+        except Exception as e:
+            logger.warning("sync_portrait_candidate_from_memory(new) 失败 error=%s", e)
         _record_provenance_safe(
             memory_id=new_mem["id"],
             action_name="new",
@@ -3458,6 +3571,50 @@ def _apply_one_decision(
             return None
         if content and _looks_like_raw_copy(content, round_messages):
             content = _rewrite_non_raw_note(round_messages)
+
+        if str(fused_with_id).startswith("core::"):
+            core_entry_id = str(fused_with_id)[len("core::") :].strip()
+            core_items = r2_store.get_core_cache_pending() or []
+            core_index = next(
+                (
+                    i
+                    for i, item in enumerate(core_items)
+                    if isinstance(item, dict) and str(item.get("id") or "").strip() == core_entry_id
+                ),
+                None,
+            )
+            if core_index is None:
+                logger.warning(
+                    "核心层 merge 未找到 fused_with_id=%s，本轮回退为 skip window_id=%s",
+                    fused_with_id,
+                    window_id,
+                )
+                return None
+            current_core = core_items[core_index]
+            content_before = str(current_core.get("content") or "")
+            staged = r2_store.stage_core_memory_merge(
+                core_entry_id,
+                original_content=content_before,
+                rewritten_content=content if content else content_before,
+                proposed_at=now_iso,
+                window_id=window_id,
+                round_index=round_index,
+                field_updates={
+                    "importance": importance,
+                    "mention_count": int(current_core.get("mention_count") or 0) + 1,
+                    "tag": tag,
+                    "emotion_label": emotion_label,
+                    "scene_type": scene_type,
+                    "target_type": target_type,
+                    "last_mentioned": now_iso,
+                },
+            )
+            if staged:
+                logger.info("核心层 merge 已生成待审核候选 window_id=%s fused_with_id=%s", window_id, fused_with_id)
+            else:
+                logger.warning("核心层 merge 候选未暂存 window_id=%s fused_with_id=%s", window_id, fused_with_id)
+            return None
+
         found = False
         merged_mem = None
         for mem in current_memories:
@@ -3479,22 +3636,27 @@ def _apply_one_decision(
         if not found:
             logger.warning("动态层 merge 未找到 fused_with_id=%s，本轮回退为 skip window_id=%s", fused_with_id, window_id)
             return None
-        r2_store.save_dynamic_memory_list(current_memories)
-        _upsert_dynamic_memory_index(merged_mem)
-        try:
-            from services.portrait_memory import sync_portrait_candidate_from_memory
-
-            sync_portrait_candidate_from_memory(merged_mem)
-        except Exception as e:
-            logger.warning("sync_portrait_candidate_from_memory(merge) 失败 error=%s", e)
+        promoted_ids: set[str] = set()
         if tag != "卧室":
-            r2_store.promote_to_core_cache(
+            promoted_ids = r2_store.promote_to_core_cache(
                 window_id,
                 round_index,
                 _round_messages_to_raw_text(round_messages),
                 current_memories,
                 touched_mem_id=fused_with_id,
             )
+        if promoted_ids:
+            dynamic_saved = _move_promoted_memories_out_of_dynamic(current_memories, promoted_ids)
+        else:
+            dynamic_saved = r2_store.save_dynamic_memory_list(current_memories)
+        if dynamic_saved and fused_with_id not in promoted_ids:
+            _upsert_dynamic_memory_index(merged_mem)
+        try:
+            from services.portrait_memory import sync_portrait_candidate_from_memory
+
+            sync_portrait_candidate_from_memory(merged_mem)
+        except Exception as e:
+            logger.warning("sync_portrait_candidate_from_memory(merge) 失败 error=%s", e)
         _record_provenance_safe(
             memory_id=fused_with_id,
             action_name="merge",

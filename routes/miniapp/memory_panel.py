@@ -43,6 +43,7 @@ def _core_cache_items_for_debug(limit: int) -> dict:
                 "emotion_label": str(item.get("emotion_label") or "").strip(),
                 "scene_type": str(item.get("scene_type") or "").strip(),
                 "target_type": str(item.get("target_type") or "").strip(),
+                "pending_merge": item.get("pending_merge") if isinstance(item.get("pending_merge"), dict) else None,
             }
         )
     return {"count": len(rows), "visible_count": len(out), "items": out}
@@ -268,6 +269,38 @@ def register_routes(bp) -> None:
         except Exception as e:
             return jsonify({"ok": False, "error": str(e), "memories": []}), 500
 
+    @bp.route("/dynamic-memory/<memory_id>", methods=["DELETE"])
+    def miniapp_delete_dynamic_memory(memory_id: str):
+        if not memory_id:
+            return jsonify({"ok": False, "error": "缺少 memory_id"}), 400
+        ok = r2_store.delete_dynamic_memory_by_id(memory_id)
+        return jsonify({"ok": ok, "layer": "dynamic", "id": memory_id})
+
+    @bp.route("/memory-trash", methods=["GET"])
+    def miniapp_memory_trash():
+        layer = str(request.args.get("layer") or "").strip().lower()
+        if layer and layer not in {"dynamic", "core"}:
+            return jsonify({"ok": False, "error": "layer 只支持 dynamic / core"}), 400
+        items = r2_store.get_memory_trash(layer) or []
+        return jsonify(
+            {
+                "ok": True,
+                "items": items,
+                "count": len(items),
+                "ttl_days": r2_store.MEMORY_TRASH_TTL_DAYS,
+            }
+        )
+
+    @bp.route("/memory-trash/<layer>/<entry_id>/restore", methods=["POST"])
+    def miniapp_restore_memory(layer: str, entry_id: str):
+        normalized_layer = str(layer or "").strip().lower()
+        if normalized_layer not in {"dynamic", "core"}:
+            return jsonify({"ok": False, "error": "layer 只支持 dynamic / core"}), 400
+        if not entry_id:
+            return jsonify({"ok": False, "error": "缺少 entry_id"}), 400
+        ok = r2_store.restore_memory_by_id(normalized_layer, entry_id)
+        return jsonify({"ok": ok, "layer": normalized_layer, "id": entry_id})
+
     @bp.route("/memory-rewrite/preview", methods=["POST"])
     def miniapp_memory_rewrite_preview():
         from services.memory_rewrite import MemoryRewriteError, preview_memory_rewrite
@@ -300,6 +333,25 @@ def register_routes(bp) -> None:
         except Exception as e:
             logger.warning("memory rewrite apply failed: %s", e, exc_info=True)
             return jsonify({"ok": False, "error": "保存重写结果失败"}), 500
+
+    @bp.route("/memory-rewrite/reject", methods=["POST"])
+    def miniapp_memory_rewrite_reject():
+        from services.memory_rewrite import MemoryRewriteError, reject_memory_rewrite
+
+        try:
+            body = request.get_json(silent=True) or {}
+            result = reject_memory_rewrite(
+                body.get("layer"),
+                body.get("memory_id"),
+                body.get("original_content"),
+                body.get("rewritten_content"),
+            )
+            return jsonify({"ok": True, "result": result})
+        except MemoryRewriteError as e:
+            return jsonify({"ok": False, "error": str(e)}), e.status_code
+        except Exception as e:
+            logger.warning("memory rewrite reject failed: %s", e, exc_info=True)
+            return jsonify({"ok": False, "error": "拒绝重写候选失败"}), 500
 
     @bp.route("/dynamic-memory-mirror", methods=["GET"])
     def miniapp_dynamic_memory_mirror():

@@ -23,6 +23,7 @@ _CLAUDE_OPUS_46_RE = re.compile(r"claude-opus-4-6(?:\b|-|$)", re.IGNORECASE)
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
+_TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
 _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 
@@ -213,6 +214,7 @@ def _append_text_blocks_without_cache(target: list, content) -> None:
         item.pop(_DYNAMIC_SYSTEM_MARKER, None)
         item.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         item.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
+        item.pop(_TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
         item.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
         item.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
         target.append(item)
@@ -249,6 +251,7 @@ def _strip_gateway_cache_markers(messages: list[dict]) -> None:
         msg.pop(_DYNAMIC_SYSTEM_MARKER, None)
         msg.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         msg.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
+        msg.pop(_TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
         msg.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
         msg.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
 
@@ -280,6 +283,7 @@ def _pioneer_clean_volatile_context_blocks(blocks: list[dict]) -> list[dict]:
         item.pop(_DYNAMIC_SYSTEM_MARKER, None)
         item.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         item.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
+        item.pop(_TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
         item.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
         item.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
         if str(item.get("type") or "").strip().lower() not in {"text", "input_text"}:
@@ -324,36 +328,33 @@ def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str
 
     stable_blocks: list[dict] = []
     volatile_context_blocks: list[dict] = []
-    pre_summary_mark_idx = -1
-    summary_mark_idx = -1
-    stable_tail_before_final_breakpoint = any(
-        bool((msg or {}).get(_SUMITALK_REAL_MODE_SYSTEM_MARKER) or (msg or {}).get(_PLAY_NOTE_SYSTEM_MARKER))
-        for msg in leading_systems
-        if isinstance(msg, dict)
-    )
+    static_mark_idx = -1
+    tool_cache_mark_idx = -1
+    final_context_mark_idx = -1
 
     for msg_idx, msg in enumerate(leading_systems):
         if _looks_like_recent_summary_message(msg):
-            if stable_tail_before_final_breakpoint:
-                _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
-            else:
-                _append_pioneer_volatile_context_blocks(volatile_context_blocks, msg.get("content"))
+            _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
+            final_context_mark_idx = _last_text_block_index(stable_blocks)
+            continue
+        if msg.get(_TOOL_RESULT_CACHE_SYSTEM_MARKER):
+            if static_mark_idx < 0:
+                static_mark_idx = _last_text_block_index(stable_blocks)
+            _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
+            tool_cache_mark_idx = _last_text_block_index(stable_blocks)
             continue
         if msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER):
             _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
-            summary_mark_idx = _last_text_block_index(stable_blocks)
+            final_context_mark_idx = _last_text_block_index(stable_blocks)
             continue
         if msg.get(_PLAY_NOTE_SYSTEM_MARKER):
             _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
-            summary_mark_idx = _last_text_block_index(stable_blocks)
+            final_context_mark_idx = _last_text_block_index(stable_blocks)
             continue
         if _looks_like_dynamic_message(msg):
             _append_pioneer_volatile_context_blocks(volatile_context_blocks, msg.get("content"))
             continue
         if _looks_like_summary_cache_message(msg):
-            before_summary_idx = _last_text_block_index(stable_blocks)
-            if before_summary_idx >= 0:
-                pre_summary_mark_idx = before_summary_idx
             next_msg = leading_systems[msg_idx + 1] if msg_idx + 1 < len(leading_systems) else {}
             if _looks_like_recent_summary_message(next_msg):
                 stable_text, recent_text = _message_content_text(msg), ""
@@ -361,18 +362,21 @@ def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str
                 stable_text, recent_text = _split_summary_text(_message_content_text(msg))
             if stable_text:
                 stable_blocks.append({"type": "text", "text": stable_text})
-                summary_mark_idx = len(stable_blocks) - 1
+                final_context_mark_idx = len(stable_blocks) - 1
             if recent_text:
-                _append_pioneer_volatile_context_blocks(volatile_context_blocks, recent_text)
+                stable_blocks.append({"type": "text", "text": recent_text})
+                final_context_mark_idx = len(stable_blocks) - 1
             continue
         _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
 
     if stable_blocks:
-        if pre_summary_mark_idx >= 0:
-            _set_cache_control_on_block_index(stable_blocks, pre_summary_mark_idx, ttl)
-        if summary_mark_idx >= 0:
-            _set_cache_control_on_block_index(stable_blocks, summary_mark_idx, ttl)
-        elif pre_summary_mark_idx < 0:
+        if static_mark_idx >= 0:
+            _set_cache_control_on_block_index(stable_blocks, static_mark_idx, ttl)
+        if tool_cache_mark_idx >= 0:
+            _set_cache_control_on_block_index(stable_blocks, tool_cache_mark_idx, ttl)
+        if final_context_mark_idx >= 0:
+            _set_cache_control_on_block_index(stable_blocks, final_context_mark_idx, ttl)
+        elif static_mark_idx < 0 and tool_cache_mark_idx < 0:
             last_idx = _last_text_block_index(stable_blocks)
             if last_idx >= 0:
                 _set_cache_control_on_block_index(stable_blocks, last_idx, ttl)

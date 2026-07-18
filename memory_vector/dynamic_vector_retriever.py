@@ -189,6 +189,7 @@ def dynamic_vector_retrieve(
         mem_id = f"core::{cid}"
         mem = {
             "id": mem_id,
+            "source_memory_id": str((p or {}).get("source_memory_id") or "").strip(),
             "content": (p.get("content") or "").strip(),
             "importance": int(p.get("importance") or 0),
             "mention_count": int(p.get("mention_count") or 0),

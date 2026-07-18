@@ -52,6 +52,7 @@ from pipeline.pipeline import (
     step_inject_humor_memes,
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
+    step_inject_tool_result_cache,
     step_inject_sumitalk_real_mode,
     step_inject_play_note,
     step_inject_sense_snapshot,
@@ -178,6 +179,7 @@ from services.chat_tool_helpers import (
     should_retry_tool_followup as _should_retry_tool_followup,
     sse_delta_chunk_bytes as _sse_delta_chunk_bytes,
 )
+from services.tool_result_cache import record_tool_loop as _record_tool_result_loop
 from services.prompt_cache_debug import (
     StreamCacheDebugCollector as _StreamCacheDebugCollector,
     build_cache_debug_entry as _build_cache_debug_entry,
@@ -1883,6 +1885,8 @@ def _stream_with_r2_archive(
     stream_attempt_no = 0
     reasoning_event_states: dict[int, dict] = {}
     tool_visible_content_parts: list[str] = []
+    completed_tool_results: list[dict] = []
+    tool_loop_finished = False
     final_thinking_blocks: list[dict] = []
     stream_inner_os_parts: list[str] = []
     try:
@@ -1997,6 +2001,7 @@ def _stream_with_r2_archive(
                         event_round,
                         part_id=f"assistant-fallback-{stream_attempt_no}",
                     )
+                    tool_loop_finished = True
                     yield _sse_delta_chunk_bytes(fallback if sumitalk_event_sink else archived_fallback)
                     yield b"data: [DONE]\n\n"
                     break
@@ -2014,6 +2019,7 @@ def _stream_with_r2_archive(
                         event_round,
                         part_id=f"assistant-cap-{stream_attempt_no}",
                     )
+                    tool_loop_finished = True
                     yield _sse_delta_chunk_bytes(cap_hint if sumitalk_event_sink else archived_cap_hint)
                     yield b"data: [DONE]\n\n"
                     break
@@ -2044,6 +2050,7 @@ def _stream_with_r2_archive(
                         payload or {},
                         round_no,
                     ),
+                    completed_tool_results=completed_tool_results,
                 )
                 tool_rounds_used += 1
                 if _game_tool_checkpoint_from_messages(current_body.get("messages") or []):
@@ -2133,6 +2140,7 @@ def _stream_with_r2_archive(
                 assistant_part_id,
                 assistant_event_state,
             )
+            tool_loop_finished = True
             if done_chunks:
                 yield b"data: [DONE]\n\n"
             else:
@@ -2164,6 +2172,18 @@ def _stream_with_r2_archive(
             logger.error("工具续轮结束但最终正文仍为空（流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
         full_reasoning = "".join(reasoning_parts).strip()
         logger.info("本轮流式回复收集长度约 %s 字符", len(full_content))
+        if tool_loop_finished and completed_tool_results and visible.strip() and not is_failed_response(visible):
+            inserted = _record_tool_result_loop(
+                completed_tool_results,
+                window_id=window_id,
+                reply_channel=reply_channel,
+            )
+            logger.info(
+                "工具摘要缓存整轮写入 window_id=%s tools=%s inserted=%s",
+                window_id,
+                len(completed_tool_results),
+                inserted,
+            )
         if du_daily_maintenance:
             logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
         elif is_failed_response(visible):
@@ -2746,9 +2766,13 @@ def chat_completions():
     if not skip_dynamic_memory:
         body = step_inject_dynamic_memory(body, window_id)
     body = step_inject_humor_memes(body)
-    body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
-    body = step_inject_sumitalk_real_mode(body, enabled=sumitalk_real_mode)
+    body = step_inject_sumitalk_real_mode(
+        body,
+        enabled=sumitalk_real_mode,
+        app_request=is_sumitalk_request,
+    )
     body = step_inject_play_note(body)
+    body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
     body = step_inject_sense_snapshot(body, window_id)
     body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
     body = step_inject_interaction_candidate(body, window_id)
@@ -2774,6 +2798,7 @@ def chat_completions():
         _is_local_claude_oauth_proxy_url(active_upstream_url) or is_cloudflare_anthropic_url(active_upstream_url)
     ) and not _skip_claude_thinking_carryover_request():
         body = _inject_previous_claude_thinking_blocks(body, window_id)
+    body = step_inject_tool_result_cache(body)
     body = step_trim_messages_if_over_limit(body)
     body = _move_dynamic_systems_after_static_prefix(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
@@ -2798,6 +2823,7 @@ def chat_completions():
             msg.pop("__dynamic__", None)
             msg.pop("__summary_cache__", None)
             msg.pop("__summary_recent__", None)
+            msg.pop("__tool_result_cache__", None)
             msg.pop("__sumitalk_real_mode__", None)
             msg.pop("__play_note__", None)
     if body.get("stream"):
@@ -2941,6 +2967,8 @@ def chat_completions():
     max_tool_rounds = TOOL_MAX_ROUNDS
     max_processed_tool_rounds = max(0, int(max_tool_rounds))
     tool_rounds_used = 0
+    completed_tool_results: list[dict] = []
+    tool_loop_finished = False
     tool_empty_final_retry_used = False
     tool_midstream_retry_used = False
     game_checkpoint_finalizing = False
@@ -2957,8 +2985,10 @@ def chat_completions():
                     len(tool_calls),
                 )
                 resp_json = _force_game_checkpoint_final_response(resp_json)
+                tool_loop_finished = True
                 break
             if tool_rounds_used >= max_processed_tool_rounds:
+                tool_loop_finished = True
                 break
             if isinstance(msg, dict):
                 _accumulate_nonstream_reasoning(msg)
@@ -2986,6 +3016,7 @@ def chat_completions():
                         **(payload or {}),
                     },
                 ),
+                completed_tool_results=completed_tool_results,
             )
             tool_rounds_used += 1
             if _game_tool_checkpoint_from_messages(body.get("messages") or []):
@@ -3044,6 +3075,7 @@ def chat_completions():
             _accumulate_nonstream_reasoning(msg)
             if tool_rounds_used > 0:
                 _emit_sumitalk_reasoning_event(msg, tool_rounds_used + 1)
+            tool_loop_finished = True
             break
     if allow_tool_only_reply and resp_json and tool_rounds_used > 0:
         tool_trace_for_tool_only = _collect_tool_trace_from_messages(body.get("messages") or [])
@@ -3169,6 +3201,18 @@ def chat_completions():
     if resp_json and (resp_json or {}).get("choices"):
         msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
         content_text = get_assistant_content_text(msg)
+        if tool_loop_finished and completed_tool_results and content_text.strip() and not is_failed_response(content_text):
+            inserted = _record_tool_result_loop(
+                completed_tool_results,
+                window_id=window_id,
+                reply_channel=reply_channel,
+            )
+            logger.info(
+                "工具摘要缓存整轮写入 window_id=%s tools=%s inserted=%s",
+                window_id,
+                len(completed_tool_results),
+                inserted,
+            )
         if is_failed_response(content_text):
             logger.info("R2 未存档：上游回复被判为失败（长度/关键词），跳过")
         elif (

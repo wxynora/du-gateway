@@ -29,6 +29,7 @@ def _metadata_for_item(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "source": "core_pending",
         "entry_id": str((item or {}).get("id") or "").strip(),
+        "source_memory_id": str((item or {}).get("source_memory_id") or "").strip(),
         "promoted_by": str((item or {}).get("promoted_by") or "").strip(),
         "importance": int((item or {}).get("importance") or 0),
         "mention_count": int((item or {}).get("mention_count") or 0),

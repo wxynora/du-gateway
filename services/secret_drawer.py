@@ -259,6 +259,21 @@ def save_hidden_block(
     result = save_payload(payload, context)
     if not result.get("ok"):
         logger.warning("secret_drawer hidden save failed window_id=%s error=%s", window_id, result.get("error"))
+    else:
+        try:
+            from services.tool_result_cache import record_tool_result
+
+            saved = result.get("item") if isinstance(result.get("item"), dict) else {}
+            record_tool_result(
+                tool_call_id=f"secret-drawer-hidden:{saved.get('id') or ''}",
+                name="secret_drawer",
+                arguments={"action": str(payload.get("action") or "save"), "payload": payload},
+                result=result,
+                window_id=window_id,
+                reply_channel=reply_channel,
+            )
+        except Exception:
+            logger.warning("secret_drawer hidden save summary failed window_id=%s", window_id, exc_info=True)
     return result
 
 

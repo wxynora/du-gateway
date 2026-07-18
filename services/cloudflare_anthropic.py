@@ -15,6 +15,7 @@ from config import (
 DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
+TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
 PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 GATEWAY_DYNAMIC_SYSTEM_HINTS = (
     "【渡的心事",
@@ -140,6 +141,8 @@ def _system_blocks_from_message(msg: dict) -> list[dict]:
             block[SUMMARY_CACHE_SYSTEM_MARKER] = True
         if msg.get(SUMMARY_RECENT_SYSTEM_MARKER):
             block[SUMMARY_RECENT_SYSTEM_MARKER] = True
+        if msg.get(TOOL_RESULT_CACHE_SYSTEM_MARKER):
+            block[TOOL_RESULT_CACHE_SYSTEM_MARKER] = True
         if msg.get(PLAY_NOTE_SYSTEM_MARKER):
             block[PLAY_NOTE_SYSTEM_MARKER] = True
     return text_blocks
@@ -379,6 +382,7 @@ def apply_prompt_cache(body: dict, ttl: str) -> None:
                 item.pop(DYNAMIC_SYSTEM_MARKER, None)
                 item.pop(SUMMARY_CACHE_SYSTEM_MARKER, None)
                 item.pop(SUMMARY_RECENT_SYSTEM_MARKER, None)
+                item.pop(TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
                 item.pop(PLAY_NOTE_SYSTEM_MARKER, None)
 
 

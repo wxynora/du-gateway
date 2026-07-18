@@ -266,6 +266,8 @@ from storage.stay_with_du_store import (
 R2_KEY_DYNAMIC_MEMORY = "dynamic_memory/current.json"
 # 核心记忆层：动态层里「更重要」的长期记忆卡片
 R2_KEY_CORE_CACHE = "core_cache/pending.json"
+# 动态层与核心层共用的记忆回收站；回收站内容不参与任何召回。
+R2_KEY_MEMORY_TRASH = "memory/trash.json"
 # 小本本：网关拎出后按时间先后排序存储
 R2_KEY_NOTEBOOK = "notebook/entries.json"
 # MiniApp 可编辑核心 Prompt（全局注入）
@@ -312,6 +314,7 @@ logger = get_logger(__name__)
 
 LAST_USER_ACTIVITY_AUDIT_TTL_HOURS = 24
 LAST_USER_ACTIVITY_AUDIT_MAX_ITEMS = 500
+MEMORY_TRASH_TTL_DAYS = 7
 LAST_USER_ACTIVITY_ALLOWED_SOURCES = frozenset(
     {
         "telegram_text",
@@ -1193,6 +1196,62 @@ def save_core_cache_pending(pending: list) -> bool:
             return False
 
 
+def _normalize_memory_layer(layer: str) -> str:
+    normalized = str(layer or "").strip().lower()
+    return normalized if normalized in {"dynamic", "core"} else ""
+
+
+def _memory_trash_entry_id(entry: dict) -> str:
+    memory = entry.get("memory") if isinstance(entry, dict) else None
+    return str((memory or {}).get("id") or "").strip()
+
+
+def _prune_memory_trash_items(items: list) -> list:
+    from utils.time_aware import _now_beijing, parse_iso_to_beijing
+
+    cutoff = _now_beijing() - timedelta(days=MEMORY_TRASH_TTL_DAYS)
+    kept = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        if not _normalize_memory_layer(item.get("layer")) or not _memory_trash_entry_id(item):
+            continue
+        deleted_at = parse_iso_to_beijing(str(item.get("deleted_at") or ""))
+        if deleted_at is not None and deleted_at >= cutoff:
+            kept.append(item)
+    return kept
+
+
+def get_memory_trash(layer: str = "") -> list:
+    """读取统一记忆回收站；超过 7 天的条目不再可恢复并从 R2 清除。"""
+    client = _s3_client()
+    if not client:
+        return []
+    data = _read_json(client, R2_KEY_MEMORY_TRASH)
+    raw_items = data.get("items") if isinstance(data, dict) else []
+    items = [dict(x) for x in (raw_items or []) if isinstance(x, dict)]
+    kept = _prune_memory_trash_items(items)
+    if len(kept) != len(items):
+        save_memory_trash(kept)
+    normalized_layer = _normalize_memory_layer(layer)
+    if normalized_layer:
+        return [item for item in kept if item.get("layer") == normalized_layer]
+    return kept
+
+
+def save_memory_trash(items: list) -> bool:
+    client = _s3_client()
+    if not client:
+        return False
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_MEMORY_TRASH, {"items": items or []})
+            return True
+        except Exception as e:
+            logger.error("save_memory_trash 失败 error=%s", e, exc_info=True)
+            return False
+
+
 def _upsert_core_cache_pending_index_safe(items: list) -> None:
     try:
         from memory_vector.core_pending_index import upsert_core_pending_items
@@ -1211,27 +1270,71 @@ def _remove_core_cache_pending_index_safe(entry_ids: set[str]) -> None:
         logger.warning("core_cache pending 索引删除失败 error=%s", e, exc_info=True)
 
 
+def _remove_dynamic_memory_index_safe(entry_ids: set[str]) -> None:
+    try:
+        from memory_vector.vector_index_store import remove_memory_ids_from_all_indices
+
+        remove_memory_ids_from_all_indices(entry_ids)
+    except Exception as e:
+        logger.warning("动态记忆索引删除失败 ids=%s error=%s", sorted(entry_ids), e, exc_info=True)
+
+
+def _upsert_dynamic_memory_index_safe(item: dict) -> None:
+    try:
+        from pipeline.pipeline import _upsert_dynamic_memory_index
+
+        _upsert_dynamic_memory_index(item)
+    except Exception as e:
+        logger.warning("动态记忆索引恢复失败 memory_id=%s error=%s", item.get("id"), e, exc_info=True)
+
+
+def _invalidate_memory_recall_cache_safe() -> None:
+    try:
+        from pipeline.pipeline import _invalidate_recall_cache
+
+        _invalidate_recall_cache()
+    except Exception as e:
+        logger.warning("记忆召回缓存清理失败 error=%s", e, exc_info=True)
+
+
 def promote_to_core_cache(
     window_id: str,
     round_index: int,
     round_messages_text: str,
     current_memories: list,
     touched_mem_id: Optional[str] = None,
-) -> None:
+) -> set[str]:
     """
-    动态层写入/更新后调用：满足条件则加入核心记忆列表，去重（已存在 id 不重复加）。
+    动态层写入/更新后调用：满足条件则加入核心记忆列表。
+    返回已经可靠存在于核心层、应从动态层移走的源 memory id 集合。
+
+    晋升是移动，不是复制：调用方只有拿到返回值后，才可以删除对应动态记忆。
+    核心写入失败时返回空集合，确保动态层原件不会丢失。
+
     只存“动态层总结后的记忆内容”，不存 user/assistant 原始对话。
     - 条件A：本轮触及的记忆 importance>=4 → 存该记忆的 summary content，id=imp_{window_id}_{round_index}，promoted_by=importance
     - 条件B：任一条记忆 mention_count>=5 → 存该条融合版 content，id=记忆 id，promoted_by=mention_count
     """
     client = _s3_client()
     if not client:
-        return
+        return set()
     pending = get_core_cache_pending()
     existing_ids = {p.get("id") for p in pending if p.get("id")}
+    existing_source_ids = {
+        str(p.get("source_memory_id") or "").strip()
+        for p in pending
+        if str(p.get("source_memory_id") or "").strip()
+    }
+    # 旧 mention_count 核心项直接沿用了动态 id；兼容识别为同一源记忆。
+    existing_source_ids.update(
+        str(p.get("id") or "").strip()
+        for p in pending
+        if p.get("promoted_by") == "mention_count" and str(p.get("id") or "").strip()
+    )
     promoted_at = now_beijing_iso()
     added = False
     added_items = []
+    promoted_source_ids: set[str] = set()
 
     # 条件A：本轮触及记忆 importance>=4，存动态层 summary（不是原始对话）
     if touched_mem_id:
@@ -1239,11 +1342,16 @@ def promote_to_core_cache(
             if m.get("id") != touched_mem_id:
                 continue
             if int(m.get("importance") or 0) >= 4:
+                source_memory_id = str(m.get("id") or "").strip()
+                if source_memory_id in existing_source_ids:
+                    promoted_source_ids.add(source_memory_id)
+                    break
                 imp_id = f"imp_{window_id}_{round_index}"
                 summary_content = str(m.get("content") or "").strip()
                 if imp_id not in existing_ids and summary_content:
                     item = {
                         "id": imp_id,
+                        "source_memory_id": source_memory_id,
                         "promoted_by": "importance",
                         "content": summary_content,
                         "importance": int(m.get("importance") or 0),
@@ -1260,6 +1368,8 @@ def promote_to_core_cache(
                     pending.append(item)
                     added_items.append(item)
                     existing_ids.add(imp_id)
+                    existing_source_ids.add(source_memory_id)
+                    promoted_source_ids.add(source_memory_id)
                     added = True
             break
 
@@ -1268,10 +1378,13 @@ def promote_to_core_cache(
         mid = m.get("id")
         if not mid or int(m.get("mention_count") or 0) < 5:
             continue
-        if mid in existing_ids:
+        mid = str(mid).strip()
+        if mid in existing_source_ids or mid in existing_ids:
+            promoted_source_ids.add(mid)
             continue
         item = {
             "id": mid,
+            "source_memory_id": mid,
             "promoted_by": "mention_count",
             "content": (m.get("content") or "").strip(),
             "importance": int(m.get("importance") or 0),
@@ -1288,24 +1401,157 @@ def promote_to_core_cache(
         pending.append(item)
         added_items.append(item)
         existing_ids.add(mid)
+        existing_source_ids.add(mid)
+        promoted_source_ids.add(mid)
         added = True
 
     if added:
-        if save_core_cache_pending(pending):
-            _upsert_core_cache_pending_index_safe(added_items)
+        if not save_core_cache_pending(pending):
+            return set()
+        _upsert_core_cache_pending_index_safe(added_items)
         logger.info("core_cache 提拔 条数=%s", len(pending))
+    return promoted_source_ids
+
+
+def stage_core_memory_merge(
+    entry_id: str,
+    *,
+    original_content: str,
+    rewritten_content: str,
+    proposed_at: str,
+    window_id: str,
+    round_index: int,
+    field_updates: dict,
+) -> bool:
+    """暂存核心记忆 merge 候选；不修改当前生效正文，等待人工审核。"""
+    clean_id = str(entry_id or "").strip()
+    original = str(original_content or "").strip()
+    rewritten = str(rewritten_content or "").strip()
+    if not clean_id or not original or not rewritten or original == rewritten:
+        return False
+    pending = get_core_cache_pending()
+    for index, item in enumerate(pending):
+        if not isinstance(item, dict) or str(item.get("id") or "").strip() != clean_id:
+            continue
+        if str(item.get("content") or "").strip() != original:
+            return False
+        updated = dict(item)
+        updated["pending_merge"] = {
+            "original_content": original,
+            "rewritten_content": rewritten,
+            "reason": "本轮召回核心记忆后生成的 merge 候选",
+            "proposed_at": str(proposed_at or "").strip() or now_beijing_iso(),
+            "window_id": str(window_id or "").strip(),
+            "round_index": int(round_index or 0),
+            "field_updates": dict(field_updates or {}),
+        }
+        pending[index] = updated
+        return save_core_cache_pending(pending)
+    return False
+
+
+def delete_memory_by_id(layer: str, entry_id: str) -> bool:
+    """把动态/核心记忆移入统一回收站，并立即退出 active 层与召回索引。"""
+    normalized_layer = _normalize_memory_layer(layer)
+    clean_id = str(entry_id or "").strip()
+    if not normalized_layer or not clean_id:
+        return False
+
+    active_items = get_dynamic_memory_list() if normalized_layer == "dynamic" else get_core_cache_pending()
+    deleted = next(
+        (
+            item
+            for item in active_items
+            if isinstance(item, dict) and str(item.get("id") or "").strip() == clean_id
+        ),
+        None,
+    )
+    if not isinstance(deleted, dict):
+        return False
+    remaining_active = [item for item in active_items if item is not deleted]
+
+    trash_before = get_memory_trash()
+    trash = [
+        item
+        for item in trash_before
+        if not (
+            item.get("layer") == normalized_layer
+            and _memory_trash_entry_id(item) == clean_id
+        )
+    ]
+    trash.insert(
+        0,
+        {
+            "layer": normalized_layer,
+            "deleted_at": now_beijing_iso(),
+            "memory": dict(deleted),
+        },
+    )
+    if not save_memory_trash(trash):
+        return False
+
+    save_active = save_dynamic_memory_list if normalized_layer == "dynamic" else save_core_cache_pending
+    if not save_active(remaining_active):
+        if not save_memory_trash(trash_before):
+            logger.error("记忆删除失败且回收站回滚失败 layer=%s entry_id=%s", normalized_layer, clean_id)
+        return False
+
+    if normalized_layer == "dynamic":
+        _remove_dynamic_memory_index_safe({clean_id})
+    else:
+        _remove_core_cache_pending_index_safe({clean_id})
+    _invalidate_memory_recall_cache_safe()
+    return True
+
+
+def restore_memory_by_id(layer: str, entry_id: str) -> bool:
+    """从统一回收站恢复到原层，并重建该层召回索引。"""
+    normalized_layer = _normalize_memory_layer(layer)
+    clean_id = str(entry_id or "").strip()
+    if not normalized_layer or not clean_id:
+        return False
+
+    trash = get_memory_trash()
+    trash_entry = next(
+        (
+            item
+            for item in trash
+            if item.get("layer") == normalized_layer and _memory_trash_entry_id(item) == clean_id
+        ),
+        None,
+    )
+    if not isinstance(trash_entry, dict) or not isinstance(trash_entry.get("memory"), dict):
+        return False
+
+    active_items = get_dynamic_memory_list() if normalized_layer == "dynamic" else get_core_cache_pending()
+    if any(
+        isinstance(item, dict) and str(item.get("id") or "").strip() == clean_id
+        for item in active_items
+    ):
+        return False
+    restored = dict(trash_entry["memory"])
+    save_active = save_dynamic_memory_list if normalized_layer == "dynamic" else save_core_cache_pending
+    if not save_active(active_items + [restored]):
+        return False
+
+    if normalized_layer == "dynamic":
+        _upsert_dynamic_memory_index_safe(restored)
+    else:
+        _upsert_core_cache_pending_index_safe([restored])
+    _invalidate_memory_recall_cache_safe()
+
+    remaining_trash = [item for item in trash if item is not trash_entry]
+    if not save_memory_trash(remaining_trash):
+        logger.warning("记忆已恢复但回收站清理失败 layer=%s entry_id=%s", normalized_layer, clean_id)
+    return True
 
 
 def delete_core_cache_by_id(entry_id: str) -> bool:
-    """从核心记忆列表中删除指定 id 的条目。"""
-    pending = get_core_cache_pending()
-    new_pending = [p for p in pending if p.get("id") != entry_id]
-    if len(new_pending) == len(pending):
-        return False
-    ok = save_core_cache_pending(new_pending)
-    if ok:
-        _remove_core_cache_pending_index_safe({entry_id})
-    return ok
+    return delete_memory_by_id("core", entry_id)
+
+
+def delete_dynamic_memory_by_id(entry_id: str) -> bool:
+    return delete_memory_by_id("dynamic", entry_id)
 
 
 # ---------- 图片描述存档 ----------
@@ -1714,6 +1960,7 @@ _R2_WIPE_PREFIXES = (
     "global/",
     "dynamic_memory/",
     "core_cache/",
+    "memory/",
     "notebook/",
     "docs/",
     "wenyou/",
