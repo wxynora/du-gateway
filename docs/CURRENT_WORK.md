@@ -1,6 +1,6 @@
 # Du Gateway 实时待办
 
-> 最后更新：2026-07-19 22:10:00 +0800
+> 最后更新：2026-07-19 22:36:00 +0800
 >
 > 本文件只记录当前正在处理、待继续、被阻塞或待验收的工作。已完成实现的长期入口与边界仍以 `docs/DEBUG_INDEX.md` 为准。
 
@@ -18,17 +18,4 @@
 
 | 任务 ID | 状态 | 范围 | 当前结论 | 下一动作 | 验证 |
 | --- | --- | --- | --- | --- | --- |
-| `watch-subdl-optional-subtitles-v1` | 已完成待提交部署 | 为一起看后端增加可选 SubDL 搜索/下载字幕增强；只改本地后端、配置、方案、索引和假上游测试 | identify 持久化标准原名与年份；准备 worker 先查 Bilibili 原生字幕，再只按 `original_title + year` 查询一次 SubDL；结果以可见状态和元数据返回，正文只存本地 24 小时资产；`/start` 强制确认当前 `subtitle_lookup_id`，重试会使旧版本失效；rolling 只读已准备资产，不再访问 SubDL；人工正片起点同时用于字幕整体平移和避开前置垫片的 identify 取样 | 确认本轮提交与部署边界 | `.venv/bin/python scripts/test_watch_together_backend.py`、`.venv/bin/python scripts/test_watch_analysis_phase2.py`、相关 Python 编译、`import app` 与目标 diff check 通过；假 Bilibili/SubDL/模型上游，不发真实请求、不写 R2、不改服务器运行状态 |
-| `watch-subtitle-source-check-v1` | 已完成 | 使用《哆啦A梦：大雄的绘画奇遇记》公开 Bilibili 链接，只读验证现有后端字幕路径；不改服务器、不使用生产凭据、不写 R2 | 公开 `player/v2` 返回 `subtitles=[]`，该投稿没有独立字幕轨；这不阻塞分析，Gemini 仍直接接收完整音频和 8 张抽样画面，画面中本来存在的文字可随图片一起理解 | 无 | 已用无 Cookie 本地链路取得 BV/CID、公开视频流和音频流；字幕轨数为 0；未调用模型、未写 R2 |
-| `watch-manual-content-bounds-v1` | 已完成待提交部署 | 一起看开播前可选人工正片起止边界，以及 Bilibili 长垫片/片尾曲/静态风景图识别；仅改本地后端、方案和测试 | 新 session 接受 `media.content_start_ms/content_end_ms`；人工边界跨 epoch 生效并优先于模型，双边齐全时跳过预扫，单边缺失时只扫描缺失侧；无人工片尾时尾部采样覆盖后半段，避免只看投稿最后十分钟；存储迁移、预扫计划、提示词约束和回归已落地 | 确认本轮提交与部署边界 | 一起看后端与 Phase 2 定向测试、相关 Python 编译、`import app` 和目标 diff check 通过；不写 R2，不发真实请求 |
 | `watch-knowledge-gemini-ab-v1` | 已停止 | 《哆啦A梦：大雄的绘画奇遇记》85:00–87:20 知识卡 A/B；不改运行代码，不创建正式会话，不写 R2 | 已完成本地两次 Gemini 请求，但其中擅自从服务器读取生产 OpenRouter key 注入本地进程，违反测试凭据边界，停止继续评估或写入方案 | 不再继续该测试；保留本地 `/tmp` 临时产物等待辛玥决定是否删除 | 未在服务器执行测试、未上传样本、未改服务/数据库/R2；两次本地请求费用合计 `$0.0151289`，密钥未打印或落盘 |
-| `watch-knowledge-mode-internal-v1` | 已完成待提交部署 | 一起看开播前简短背景卡检索；只改本地后端、方案、索引和定向测试 | 旧 `watch-knowledge-v12` 的角色/背景双检索、限定角色站点、Bangumi 目录补齐、角色数量硬补和双站点门槛已移除；检索统一为一次 `《片名》剧情简介 主要人物 人物关系 世界观`，最多保留三个不同站点摘要，再由模型整理可见背景卡 | 确认本轮提交与部署边界 | 公开搜索原样验证和假搜索/模型上游回归通过；本地未配置 Tavily/DS key，因此未冒充真实 provider 整链验证，不访问服务器凭据、不写 R2 |
-| `watch-analysis-dialogue-sampling-v3` | 已完成 | Gemini 剧情叙事、台词归属、滚动取样密度与字幕窗口 | Gemini 2.5 Flash 的滚动主链已改为约 140 秒完整 MP3 + 8 张截图；音频与图片共用本地临时样本、幂等、请求大小、重试和清理链路，OpenRouter 使用 `input_audio + image_url`；identify/timeline_prepass 仍为纯图片，数据库结构和高能事件落库未改 | 确认本轮提交边界 | Phase 2、一起看后端、Python 编译、应用导入和 `git diff --check` 均通过；真实对照 138 秒 / `$0.007709`；未发额外真实模型请求，未写 R2，未提交、部署或重启 |
-| `du-body-evaluator` | 已完成待提交部署 | 独立身体状态 DS 四轮批处理的结构化输出与失败保留；不改总结、动态记忆和一起看 | 保留模型默认 thinking并删除人为输出上限；保留 JSON Output、解析诊断和 failed 原轮次 | 确认本轮提交与部署边界 | 假 DS 响应、第三次失败保留、Python 编译均通过；未发真实 DS 请求、未写 R2、未提交部署 |
-| `dynamic-layer-output-limit` | 已完成待提交部署 | 动态层 DS 单轮、批量和归档请求；不改提示词、thinking、解析与重写逻辑 | 已仅删除三条请求内的全部人为 `max_tokens`，没有增加或关闭 thinking | 确认本轮提交与部署边界 | 源码检查确认动态层无 `max_tokens`、无 `thinking` 参数；Python 编译通过；未发真实 DS 请求、未写 R2、未提交部署 |
-| `recent-summary-thinking-mode` | 已完成待提交部署 | 近期记忆四轮总结请求；不改动态层和每日气泡 | 已只在 `fetch_new_summary_update` 请求中增加 `thinking=disabled` | 确认本轮提交与部署边界 | 源码检查确认近期总结开关存在、动态层不含开关；Python 编译通过；未发真实 DS 请求、未写 R2、未提交部署 |
-| `main-model-output-limit` | 已完成待提交部署 | 主聊天流式与非流式转发的网关自设输出上限；不改客户端原始参数和其他模型链路 | 已删除流式与非流式转发自动注入的 `8192` 上限，并移除对应配置入口；客户端明确传入的参数保持原样 | 确认本轮提交与部署边界 | 线上进程环境、service unit 和常见 env 文件均无显式覆盖；源码引用检查、Python 编译与 `git diff --check` 通过；未改线上、未提交部署 |
-| `no-private-truncation-rule` | 已完成待提交 | 项目协作规范与笨笨长期记忆；不改业务代码 | 已明确禁止未经辛玥当轮同意新增或修改任何截断、裁切或隐式长度上限；确有必要必须先报告位置、数值、触发条件和影响 | 确认项目规范提交边界 | `AGENTS.md`、记忆扩展说明和笨笨本地记忆 #55 均已写入并核对；`git diff --check` 通过；`docs/DEBUG_INDEX.md` 无需登记非运行时协作规则 |
-| `claude-proxy-output-limit` | 已完成待提交 | 在线 Claude OAuth 转发 VPS 的输出参数；改前备份，不改 thinking 预算保护 | 在线及仓库默认输出额度已由 `33000` 改为 Claude 当前允许的 `128000`；`max_tokens >= thinking_budget + 1` 保护原样保留 | 确认仓库提交边界 | 在线文件已先备份为 `proxy.js.bak-20260719-114156-before-output-limit`；远端与本地 Node 语法检查通过，proxy 重启 active、监听 `127.0.0.1:8082`，鉴权 `/v1/models` 返回 200/9 个模型；`git diff --check` 通过；笨笨记忆 #56 已登记 |
-| `sumitalk-block-notice-copy` | 已完成待提交部署 | SumiTalk 拉黑模式固定通知文案；不改开关、频率、存档和发送逻辑 | `BLOCK_NOTICE_TEXT` 已按辛玥原文替换；开启通知与后续自动回复继续共用同一常量 | 确认提交与部署边界 | AST 原文核对、三个相关 Python 文件编译和 `git diff --check` 通过；未调用设置路由、未发送通知、未写 R2、未提交部署 |
-| `proactive-sleep-intent-retrospective-guard` | 已完成待提交部署 | 修正主动硬触发的入睡意图识别与半小时计时起点，并审查随机唤醒、followup、春梦和失败重试规则是否冲突；不改既有触发阈值 | 叙述性睡眠表达不再误判为当前入睡；半小时计时严格以全局 `last_user_activity_at` 为起点，聊天、小家和游戏等真实用户互动都会重新计时；随机唤醒使用同一互动时间，续话仍只因新聊天消息取消 | 确认本轮提交与部署边界；续话归档延迟竞态和硬触发投递失败后每分钟重试如需调整，另开独立任务 | 叙述性睡眠、真实入睡、用户未回复归档和小家/游戏互动重置计时四类回归通过；主动唤醒边界测试、Python 编译和 diff 检查通过；未写 R2、未推送、未部署，其他脏改动不在本任务范围 |
