@@ -51,6 +51,14 @@ _SLEEP_RETROSPECTIVE_RE = re.compile(
     r"(睡了[^，。！？\n]*(?:小时|分钟|钟|一会儿?|一觉)|睡醒|睡过|睡够|睡不够|睡得|刚睡|睡眠)",
     re.IGNORECASE,
 )
+_SLEEP_NARRATIVE_RE = re.compile(
+    r"((?:趁着|趁)我睡(?:觉|着|了)"
+    r"|(?:昨晚|昨天|前天|刚才|之前|那会儿)[^，。！？\n]{0,10}我睡(?:觉|着|了)"
+    r"|(?:在|当)我睡(?:觉|着|了)(?:时|的时候|期间|那会儿|前|之前|后|以后)"
+    r"|我睡(?:觉|着|了)(?:时|的时候|期间|那会儿|前|之前|后|以后))",
+    re.IGNORECASE,
+)
+_SLEEP_CLAUSE_SPLIT_RE = re.compile(r"[，,。！？!?；;\n]+")
 _SLEEP_AWAY_EXACT_RE = re.compile(
     r"^(?:睡了|睡觉(?:了|啦)?|晚安(?:啦|了|喽|呀)?)[。.!！~～…\s]*$",
     re.IGNORECASE,
@@ -273,7 +281,7 @@ def _message_text(content: Any) -> str:
     return str(content or "")
 
 
-def _is_explicit_sleep_intent_text(text: str) -> bool:
+def _is_explicit_sleep_intent_clause(text: str) -> bool:
     s = re.sub(r"\s+", "", str(text or "").strip())
     if not s:
         return False
@@ -283,7 +291,20 @@ def _is_explicit_sleep_intent_text(text: str) -> bool:
         return False
     if _SLEEP_INTENT_OTHER_SUBJECT_RE.search(s):
         return False
+    if _SLEEP_RETROSPECTIVE_RE.search(s) or _SLEEP_NARRATIVE_RE.search(s):
+        return False
     return bool(_SLEEP_INTENT_RE.search(s))
+
+
+def _is_explicit_sleep_intent_text(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    return any(
+        _is_explicit_sleep_intent_clause(clause)
+        for clause in _SLEEP_CLAUSE_SPLIT_RE.split(raw)
+        if str(clause or "").strip()
+    )
 
 
 def _latest_sleep_message(window_id: str) -> dict | None:
@@ -312,14 +333,6 @@ def _round_user_text(row: dict) -> str:
     return ""
 
 
-def _round_has_assistant(row: dict) -> bool:
-    for msg in row.get("messages") or []:
-        if isinstance(msg, dict) and str(msg.get("role") or "").strip().lower() == "assistant":
-            if _message_text(msg.get("content")).strip():
-                return True
-    return False
-
-
 def _is_backend_event_text(text: str) -> bool:
     s = str(text or "").strip()
     return (
@@ -332,7 +345,7 @@ def _is_backend_event_text(text: str) -> bool:
 def _latest_normal_chat_round(window_id: str) -> dict | None:
     rounds = r2_store.get_conversation_rounds(window_id, last_n=30) or []
     for row in reversed(rounds):
-        if not isinstance(row, dict) or not _round_has_assistant(row):
+        if not isinstance(row, dict):
             continue
         text = _round_user_text(row)
         if not text or _is_backend_event_text(text):
@@ -381,20 +394,7 @@ def _user_announced_away(text: str) -> bool:
         return False
     if any(h in s for h in _AWAY_INTENT_HINTS):
         return True
-    if _SLEEP_RETROSPECTIVE_RE.search(s):
-        return False
-    if _SLEEP_INTENT_META_RE.search(s) or _SLEEP_INTENT_OTHER_SUBJECT_RE.search(s):
-        return False
-    if _SLEEP_INTENT_NEGATION_OR_QUESTION_RE.search(s):
-        return False
-    return bool(_SLEEP_INTENT_RE.search(s) or _SLEEP_AWAY_EXACT_RE.search(s))
-
-
-def _has_user_reply_after(at_dt: datetime) -> bool:
-    last_user_dt = _dt(r2_store.get_last_user_activity_at())
-    if not last_user_dt:
-        return False
-    return last_user_dt > at_dt + timedelta(seconds=30)
+    return bool(_is_explicit_sleep_intent_text(s) or _SLEEP_AWAY_EXACT_RE.search(s))
 
 
 def _is_xhs_app(item: dict) -> bool:
@@ -526,32 +526,34 @@ def _recent_app_activity_lines(doc: dict, history: list[dict], now_dt) -> list[s
 
 
 def _build_no_reply_soft_trigger(doc: dict, history: list[dict], window_id: str, now_dt) -> TriggerEvent | None:
-    latest = _latest_normal_chat_round(window_id)
-    if not latest:
+    activity_at = str(r2_store.get_last_user_activity_at() or "").strip()
+    activity_dt = _dt(activity_at)
+    if not activity_dt:
         return None
-    round_dt = _dt(latest.get("timestamp"))
-    if not round_dt:
-        return None
-    elapsed = _minutes_between(round_dt, now_dt)
+    elapsed = _minutes_between(activity_dt, now_dt)
     if elapsed < _NO_REPLY_SOFT_TRIGGER_AFTER_MINUTES or elapsed > _NO_REPLY_SOFT_TRIGGER_MAX_MINUTES:
         return None
-    if _has_user_reply_after(round_dt):
-        return None
-    if _user_announced_away(str(latest.get("user_text") or "")):
+
+    latest = _latest_normal_chat_round(window_id)
+    latest_chat_dt = _dt(latest.get("timestamp")) if latest else None
+    latest_chat_is_activity = bool(
+        latest_chat_dt
+        and abs((activity_dt - latest_chat_dt).total_seconds()) <= _CHAT_AFTER_SLEEP_GRACE_SECONDS
+    )
+    if latest_chat_is_activity and _user_announced_away(str((latest or {}).get("user_text") or "")):
         return None
     activity_lines = _recent_app_activity_lines(doc, history, now_dt)
     if not activity_lines:
         return None
     fact = (
-        f"她已经大约 {elapsed} 分钟没有回你了。"
-        f"她刚才没有说要去做别的事。过去半小时手机活动："
+        f"她最近一次互动距今大约 {elapsed} 分钟。"
+        f"过去半小时手机活动："
         + "；".join(activity_lines)
         + "。"
     )
-    key_tail = latest.get("index") or latest.get("timestamp") or round_dt.isoformat()
     return TriggerEvent(
         "no_reply_30m_app_activity",
-        f"no_reply_30m_app_activity:{window_id}:{key_tail}",
+        f"no_reply_30m_app_activity:{window_id}:{activity_dt.isoformat()}",
         fact,
         device_id=_device_id(doc),
         event_at=now_beijing_iso(),

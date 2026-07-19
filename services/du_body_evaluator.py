@@ -116,14 +116,21 @@ def _call_ds(rows: list[dict], current_state: dict) -> tuple[dict[int, dict], in
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL or not DU_BODY_EVAL_MODEL:
         raise RuntimeError("body evaluator DeepSeek config missing")
     input_data = {"current_body_state": current_state, "rounds": _prompt_rounds(rows)}
+    attempt = max((int(row.get("attempts") or 1) for row in rows), default=1)
+    user_content = json.dumps(input_data, ensure_ascii=False)
+    if attempt > 1:
+        user_content += (
+            "\n\n上一次响应没有形成可解析结果。本次关闭分析展开，"
+            "请直接输出包含 items 数组的紧凑 JSON；没有变化也输出 {\"items\":[]}。"
+        )
     payload = {
         "model": DU_BODY_EVAL_MODEL,
         "messages": [
             {"role": "system", "content": _PROMPT},
-            {"role": "user", "content": json.dumps(input_data, ensure_ascii=False)},
+            {"role": "user", "content": user_content},
         ],
-        "max_tokens": 1400,
         "temperature": 0,
+        "response_format": {"type": "json_object"},
     }
     started = time.monotonic()
     response = requests.post(
@@ -134,10 +141,22 @@ def _call_ds(rows: list[dict], current_state: dict) -> tuple[dict[int, dict], in
     )
     response.raise_for_status()
     data = response.json()
-    content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+    choice = (data.get("choices") or [{}])[0]
+    message = choice.get("message") if isinstance(choice, dict) else {}
+    message = message if isinstance(message, dict) else {}
+    content = _content_text(message.get("content"))
     parsed = _extract_json(content)
     if not isinstance(parsed, dict) or not isinstance(parsed.get("items"), list):
-        raise ValueError("body evaluator response missing items")
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        details = usage.get("completion_tokens_details") if isinstance(usage.get("completion_tokens_details"), dict) else {}
+        reasoning = _content_text(message.get("reasoning_content"))
+        raise ValueError(
+            "body evaluator response missing items "
+            f"finish_reason={choice.get('finish_reason') if isinstance(choice, dict) else ''} "
+            f"content_chars={len(content)} reasoning_chars={len(reasoning)} "
+            f"completion_tokens={int(usage.get('completion_tokens') or 0)} "
+            f"reasoning_tokens={int(details.get('reasoning_tokens') or 0)}"
+        )
     valid_indices = {int(row.get("round_index") or 0) for row in rows}
     by_round: dict[int, dict] = {}
     for raw in parsed.get("items") or []:

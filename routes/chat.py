@@ -17,7 +17,6 @@ from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 from config import (
     GATEWAY_MODELS,
-    MAX_COMPLETION_TOKENS,
     STREAM_TIMEOUT_SECONDS,
     STREAM_SSE_HEARTBEAT_SECONDS,
     STREAM_SSE_FLUSH_MAX_MS,
@@ -1314,12 +1313,6 @@ def _stream_forward_to_ai(
         body_send = dict(body)
         body_send.pop(DU_REQUEST_ID_BODY_KEY, None)
         body_send["stream"] = True
-        # 若未带 max_tokens 或过小，则设下限，避免中转站默认截断
-        if MAX_COMPLETION_TOKENS > 0:
-            cur = body_send.get("max_tokens")
-            if cur is None or (isinstance(cur, (int, float)) and int(cur) < MAX_COMPLETION_TOKENS):
-                body_send["max_tokens"] = MAX_COMPLETION_TOKENS
-                logger.info("转发已设 max_tokens=%s（原=%s）", MAX_COMPLETION_TOKENS, cur)
         # 经网关时请求体因注入会变大，便于排查「经网关截断、直连不截断」：打一条预估长度
         try:
             msg_len = sum(
@@ -2304,11 +2297,6 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
             body_send = dict(body)
             body_send.pop(DU_REQUEST_ID_BODY_KEY, None)
             body_send["stream"] = False
-            if MAX_COMPLETION_TOKENS > 0:
-                cur = body_send.get("max_tokens")
-                if cur is None or (isinstance(cur, (int, float)) and int(cur) < MAX_COMPLETION_TOKENS):
-                    body_send["max_tokens"] = MAX_COMPLETION_TOKENS
-                    logger.info("转发已设 max_tokens=%s（原=%s）", MAX_COMPLETION_TOKENS, cur)
             body_send = _apply_active_model_request_policy(body_send, url)
             target_url = url
             body_send = _apply_openrouter_request_policy(body_send, url)

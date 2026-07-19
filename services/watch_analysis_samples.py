@@ -10,6 +10,7 @@ from uuid import uuid4
 from PIL import Image, ImageOps
 
 from config import (
+    WATCH_ANALYSIS_MAX_AUDIO_BYTES,
     WATCH_ANALYSIS_MAX_FRAMES_PER_JOB,
     WATCH_ANALYSIS_MAX_LONG_EDGE,
     WATCH_ANALYSIS_MAX_REQUEST_BYTES,
@@ -20,6 +21,7 @@ from config import (
 
 ALLOWED_PURPOSES = {"identify", "timeline_prepass", "rolling"}
 ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
+ALLOWED_AUDIO_MIME_TYPES = {"audio/mpeg", "audio/mp3"}
 
 
 class WatchAnalysisSampleError(ValueError):
@@ -95,6 +97,17 @@ def _prepare_image(image_bytes: bytes, mime_type: str) -> tuple[bytes, int, int,
     return prepared, width, height, perceptual_hash
 
 
+def _prepare_audio(audio_bytes: bytes, mime_type: str) -> bytes:
+    if not audio_bytes:
+        raise WatchAnalysisSampleError("音频内容为空")
+    if len(audio_bytes) > int(WATCH_ANALYSIS_MAX_AUDIO_BYTES):
+        raise WatchAnalysisSampleError("单段音频超过大小限制")
+    normalized_mime = str(mime_type or "audio/mpeg").strip().lower()
+    if normalized_mime not in ALLOWED_AUDIO_MIME_TYPES:
+        raise WatchAnalysisSampleError("只接受 MP3 音频")
+    return bytes(audio_bytes)
+
+
 def prepare_samples(
     *,
     session_id: str,
@@ -107,8 +120,23 @@ def prepare_samples(
     normalized_purpose = normalize_purpose(purpose)
     if not isinstance(raw_samples, list) or not raw_samples:
         raise WatchAnalysisSampleError("samples 不能为空")
-    if len(raw_samples) > int(WATCH_ANALYSIS_MAX_FRAMES_PER_JOB):
-        raise WatchAnalysisSampleError("单次样本数量超过限制")
+    image_count = sum(
+        1
+        for item in raw_samples
+        if isinstance(item, dict)
+        and (item.get("image_bytes") is not None or item.get("image_base64"))
+    )
+    audio_count = sum(
+        1
+        for item in raw_samples
+        if isinstance(item, dict) and item.get("audio_bytes") is not None
+    )
+    if image_count > int(WATCH_ANALYSIS_MAX_FRAMES_PER_JOB):
+        raise WatchAnalysisSampleError("单次图片数量超过限制")
+    if audio_count > 1:
+        raise WatchAnalysisSampleError("单次滚动分析只接受一段音频")
+    if audio_count and normalized_purpose != "rolling":
+        raise WatchAnalysisSampleError("音频只用于 rolling 剧情分析")
     sample_dir = Path(WATCH_ANALYSIS_SAMPLE_DIR) / session_id / str(int(timeline_epoch))
     prepared_items: list[dict] = []
     total_bytes = 0
@@ -127,6 +155,11 @@ def prepare_samples(
                 image_bytes = decode_base64_image(raw.get("image_base64"))
             if image_bytes is not None and not isinstance(image_bytes, bytes):
                 raise WatchAnalysisSampleError("图片内容类型无效")
+            audio_bytes = raw.get("audio_bytes")
+            if audio_bytes is not None and not isinstance(audio_bytes, bytes):
+                raise WatchAnalysisSampleError("音频内容类型无效")
+            if image_bytes is not None and audio_bytes is not None:
+                raise WatchAnalysisSampleError("同一个 sample 不能同时包含图片和音频")
 
             sample_id = f"watch_sample_{uuid4().hex}"
             file_path = ""
@@ -151,8 +184,23 @@ def prepare_samples(
                 file_path = str(path)
                 mime_type = "image/jpeg"
                 sha256 = hashlib.sha256(prepared).hexdigest()
+            elif audio_bytes:
+                prepared = _prepare_audio(
+                    audio_bytes,
+                    str(raw.get("mime_type") or "audio/mpeg"),
+                )
+                byte_size = len(prepared)
+                total_bytes += byte_size
+                if total_bytes > int(WATCH_ANALYSIS_MAX_REQUEST_BYTES):
+                    raise WatchAnalysisSampleError("单次分析素材总量超过限制")
+                sample_dir.mkdir(parents=True, exist_ok=True)
+                path = sample_dir / f"{sample_id}.mp3"
+                path.write_bytes(prepared)
+                file_path = str(path)
+                mime_type = "audio/mpeg"
+                sha256 = hashlib.sha256(prepared).hexdigest()
             if not file_path and not subtitle and not text_content:
-                raise WatchAnalysisSampleError("每个 sample 至少需要图片、字幕或文字之一")
+                raise WatchAnalysisSampleError("每个 sample 至少需要图片、音频、字幕或文字之一")
             prepared_items.append(
                 {
                     "id": sample_id,

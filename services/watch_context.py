@@ -1,15 +1,41 @@
 from __future__ import annotations
 
-import json
+import re
+from collections import Counter
 from typing import Any
 
+from config import WATCH_CONTEXT_REPLY_LEAD_MS
+from services.watch_visual_context import build_contact_sheet
 from storage import watch_analysis_store, watch_runtime_store
+from storage import watch_visual_store
 
 
 WATCH_SESSION_BODY_KEY = "watch_session_id"
 WATCH_SNAPSHOT_BODY_KEY = "watch_snapshot"
-PAST_WINDOW_MS = 5 * 60_000
 FUTURE_WINDOW_MS = 2 * 60_000
+CURRENT_LOOKBACK_MS = 30_000
+RELATED_CHUNK_LIMIT = 4
+_LATIN_OR_NUMBER_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+_CJK_RE = re.compile(r"[\u3400-\u9fff]+")
+_QUERY_STOPWORDS = {
+    "一个",
+    "不是",
+    "什么",
+    "他们",
+    "你们",
+    "我们",
+    "怎么",
+    "这个",
+    "这里",
+    "那个",
+    "那里",
+    "还是",
+    "就是",
+    "然后",
+    "现在",
+    "刚才",
+    "有点",
+}
 
 
 def _int(value: Any, default: int = 0) -> int:
@@ -62,10 +88,115 @@ def _chunk_view(chunk: dict) -> dict:
         "start_ms": _int(chunk.get("start_ms"), 0),
         "end_ms": _int(chunk.get("end_ms"), 0),
         "summary": _compact_text(chunk.get("summary")),
-        "visual_description": _compact_text(chunk.get("visual_description")),
-        "dialogue_summary": _compact_text(chunk.get("dialogue_summary")),
         "characters": chunk.get("characters") if isinstance(chunk.get("characters"), list) else [],
     }
+
+
+def _clock(milliseconds: int) -> str:
+    total_seconds = max(0, int(milliseconds or 0) // 1000)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _format_chunks(chunks: list[dict]) -> list[str]:
+    lines: list[str] = []
+    for chunk in chunks:
+        summary = _compact_text(chunk.get("summary"), 900)
+        if not summary:
+            continue
+        lines.append(
+            f"[{_clock(_int(chunk.get('start_ms'), 0))}-{_clock(_int(chunk.get('end_ms'), 0))}] {summary}"
+        )
+    return lines
+
+
+def _work_name(media: dict, analysis: dict) -> str:
+    title = _compact_text(media.get("title") or analysis.get("identity"), 160) or "当前影片"
+    part_title = _compact_text(media.get("part_title"), 120)
+    return f"《{title}》" + (f"的{part_title}" if part_title else "")
+
+
+def _message_text(message: dict) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return _compact_text(content, 1200)
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, dict) and str(item.get("type") or "") in {"text", "input_text"}:
+            parts.append(str(item.get("text") or item.get("content") or ""))
+    return _compact_text(" ".join(parts), 1200)
+
+
+def _watch_recall_query(messages: list[dict]) -> str:
+    user_texts = [
+        _message_text(message)
+        for message in messages
+        if isinstance(message, dict) and str(message.get("role") or "") == "user"
+    ]
+    return _compact_text("\n".join(text for text in user_texts[-3:] if text), 2400)
+
+
+def _recall_terms(text: str) -> Counter[str]:
+    normalized = str(text or "").lower()
+    terms: list[str] = _LATIN_OR_NUMBER_RE.findall(normalized)
+    for run in _CJK_RE.findall(normalized):
+        if len(run) <= 8 and run not in _QUERY_STOPWORDS:
+            terms.append(run)
+        for size in (2, 3):
+            for index in range(max(0, len(run) - size + 1)):
+                token = run[index : index + size]
+                if token not in _QUERY_STOPWORDS:
+                    terms.append(token)
+    return Counter(term for term in terms if term and term not in _QUERY_STOPWORDS)
+
+
+def _chunk_recall_text(chunk: dict) -> str:
+    characters = chunk.get("characters") if isinstance(chunk.get("characters"), list) else []
+    tags = chunk.get("tags") if isinstance(chunk.get("tags"), list) else []
+    return " ".join(
+        [
+            str(chunk.get("summary") or ""),
+            *(str(item) for item in characters),
+            *(str(item) for item in tags),
+        ]
+    )
+
+
+def _recall_related_chunks(
+    query: str,
+    chunks: list[dict],
+    *,
+    excluded_ids: set[str],
+) -> list[dict]:
+    query_terms = _recall_terms(query)
+    if not query_terms:
+        return []
+    scored: list[tuple[float, int, dict]] = []
+    for chunk in chunks:
+        if str(chunk.get("id") or "") in excluded_ids:
+            continue
+        document_terms = _recall_terms(_chunk_recall_text(chunk))
+        overlap = query_terms.keys() & document_terms.keys()
+        if not overlap:
+            continue
+        score = sum(
+            min(query_terms[term], document_terms[term]) * (1.0 + min(4, len(term)) * 0.35)
+            for term in overlap
+        )
+        scored.append((score, _int(chunk.get("end_ms"), 0), chunk))
+    selected = [
+        item[2]
+        for item in sorted(scored, key=lambda item: (item[0], item[1]), reverse=True)[
+            :RELATED_CHUNK_LIMIT
+        ]
+    ]
+    selected.sort(key=lambda item: (_int(item.get("start_ms"), 0), _int(item.get("end_ms"), 0)))
+    return [_chunk_view(item) for item in selected]
 
 
 def _eligible_story_summary(
@@ -101,9 +232,13 @@ def build_watch_context(
     session_id: str,
     snapshot: dict,
     window_id: str,
+    recall_query: str = "",
 ) -> tuple[str, dict] | None:
     session = watch_runtime_store.get_session(session_id)
     if not session or session.get("ended_at"):
+        return None
+    preparation = session.get("preparation") if isinstance(session.get("preparation"), dict) else {}
+    if not str(preparation.get("started_at") or "").strip():
         return None
     session_window_id = str(session.get("window_id") or "").strip()
     if session_window_id and window_id and session_window_id != window_id:
@@ -118,25 +253,59 @@ def build_watch_context(
         session_id,
         timeline_epoch=timeline_epoch,
         start_before_ms=playhead_ms + FUTURE_WINDOW_MS,
-        end_after_ms=max(0, playhead_ms - PAST_WINDOW_MS),
+        end_after_ms=max(0, playhead_ms - CURRENT_LOOKBACK_MS),
         limit=24,
     )
-    completed_chunks = [item for item in chunks if _int(item.get("end_ms")) <= playhead_ms]
-    past = [
-        _chunk_view(item)
-        for item in completed_chunks
-        if _int(item.get("end_ms")) < max(0, playhead_ms - 30_000)
-    ][-6:]
-    current = [
-        _chunk_view(item)
-        for item in completed_chunks
-        if _int(item.get("end_ms")) >= max(0, playhead_ms - 30_000)
-    ][-4:]
+    current_source = [
+        item
+        for item in chunks
+        if _int(item.get("start_ms")) <= playhead_ms < _int(item.get("end_ms"))
+    ]
+    if not current_source:
+        current_source = [
+            item
+            for item in chunks
+            if _int(item.get("end_ms")) <= playhead_ms
+            and _int(item.get("end_ms")) >= max(0, playhead_ms - CURRENT_LOOKBACK_MS)
+        ][-2:]
+    current = [_chunk_view(item) for item in current_source][-4:]
+    completed_chunks = watch_runtime_store.get_completed_plot_chunks(
+        session_id,
+        timeline_epoch=timeline_epoch,
+        through_ms=playhead_ms,
+    )
+    related = _recall_related_chunks(
+        recall_query,
+        completed_chunks,
+        excluded_ids={str(item.get("id") or "") for item in current_source},
+    )
     future = [
         _chunk_view(item)
         for item in chunks
         if playhead_ms < _int(item.get("start_ms")) <= playhead_ms + FUTURE_WINDOW_MS
     ][:8]
+    reply_lead_ms = 0
+    if bool(snapshot.get("is_playing")):
+        session_reply_lead_ms = _int(
+            (session.get("mode") or {}).get("reply_lead_ms"),
+            WATCH_CONTEXT_REPLY_LEAD_MS,
+        )
+        reply_lead_ms = min(
+            FUTURE_WINDOW_MS,
+            max(
+                0,
+                int(
+                    round(
+                        session_reply_lead_ms
+                        * float(snapshot.get("playback_rate") or 1.0)
+                    )
+                ),
+            ),
+        )
+    reply_until_ms = playhead_ms + reply_lead_ms
+    reply_arrival = [
+        item for item in future if _int(item.get("start_ms"), 0) <= reply_until_ms
+    ]
     story_summary = _eligible_story_summary(
         session,
         session_id=session_id,
@@ -146,56 +315,70 @@ def build_watch_context(
     analysis = session.get("analysis") if isinstance(session.get("analysis"), dict) else {}
     mode = session.get("mode") if isinstance(session.get("mode"), dict) else {}
 
-    visible_context = {
-        "work": {
-            "title": media.get("title") or "",
-            "part_title": media.get("part_title") or "",
-            "identity": analysis.get("identity") or "",
-        },
-        "snapshot": snapshot,
-        "knowledge_mode": mode.get("knowledge_mode") or "known",
-        "analysis_status": analysis.get("status") or "pending",
-        "story_so_far": story_summary,
-        "recent_chunks": past,
-        "current_chunks": current,
-    }
-    future_context = {
-        "window_end_ms": playhead_ms + FUTURE_WINDOW_MS,
-        "chunks": future,
-    }
     action_context = {
         "session_id": session_id,
         "media_id": str(media.get("id") or ""),
         "snapshot": snapshot,
         "future_until_ms": playhead_ms + FUTURE_WINDOW_MS,
+        "visual": {
+            "timeline_epoch": timeline_epoch,
+            "playhead_ms": playhead_ms,
+            "reply_until_ms": reply_until_ms,
+            "related_chunks": related,
+        },
     }
 
+    current_lines = _format_chunks(current)
+    story_text = _compact_text(story_summary.get("background"), 1800)
+    if not current_lines:
+        current_lines.append("这一小段暂时没有可靠的剧情描述。")
+
     lines = [
-        "【一起看动态上下文】",
-        "这是小玥发送这条消息时的真实播放快照。当前回合看到哪里的边界只认 snapshot.playhead_ms，不能用后台更新后的进度改写。",
-        "可见回复只能使用 work、story_so_far、recent_chunks 和 current_chunks 中不晚于播放快照的信息；不要剧透，也不要暗示后续走向。",
-        "如果当前分析片段为空或 analysis_status 尚未 ready，就自然承认这一小段没看清，不要编造画面或剧情。",
-        "VISIBLE_CONTEXT=" + json.dumps(visible_context, ensure_ascii=False, separators=(",", ":")),
+        "【一起看】",
+        f"你正在和小玥一起看{_work_name(media, analysis)}。",
+        "",
+        "视频不会停下来等你回复，所以本轮另外提供了预计回复抵达前会播放到的少量内容。",
     ]
+    story_characters = [
+        _compact_text(item, 120)
+        for item in story_summary.get("characters", [])
+        if _compact_text(item, 120)
+    ]
+    if story_text or story_characters:
+        lines.extend(["", "剧情背景："])
+        if story_text:
+            lines.append(story_text)
+        if story_characters:
+            lines.append("相关人物：" + "、".join(story_characters[:12]))
+    lines.extend(["", "当前剧情：", *current_lines])
+    related_lines = _format_chunks(related)
+    if related_lines:
+        lines.extend(["", "与小玥说的相关的剧情：", *related_lines])
+    reply_lines = _format_chunks(reply_arrival)
+    if reply_lines:
+        lines.extend(
+            [
+                "",
+                "后续的剧情（这部分用于同步你与小玥观看时的延迟进度）：",
+                *reply_lines,
+            ]
+        )
+    if str(analysis.get("status") or "pending") != "ready":
+        lines.extend(["", "没有可靠描述的部分不要自行补写。"])
     if bool(mode.get("danmaku_enabled")) and future:
         lines.extend(
             [
-                "下面 FUTURE_ACTION_CONTEXT 最多覆盖快照后两分钟，只能用来决定是否安排一条稍后显示的隐藏弹幕。",
-                "这些未来信息绝对不能出现在可见回复里；如果无法严格分开，就不要生成弹幕动作。",
-                "FUTURE_ACTION_CONTEXT=" + json.dumps(future_context, ensure_ascii=False, separators=(",", ":")),
-                "想安排弹幕时，在正常回复末尾追加且最多追加一个隐藏块，正文中不要解释：",
-                "<<<DU_WATCH_ACTION>>>",
-                '{"type":"danmaku","session_id":"'
-                + session_id
-                + '","timeline_epoch":'
-                + str(timeline_epoch)
-                + ',"target_ms":整数媒体时间,"text":"弹幕文字","action_id":"稳定唯一标识"}',
-                "<<<END_DU_WATCH_ACTION>>>",
-                "target_ms 必须大于当前 playhead_ms，且不超过 FUTURE_ACTION_CONTEXT.window_end_ms。没有自然想说的弹幕就不要输出隐藏块。",
+                "",
+                "【定时观看反应】",
+                "下面是发送位置后两分钟内可用于弹幕的剧情：",
+                *_format_chunks(future),
+                f"晚于 {_clock(reply_until_ms)} 的内容只能用于定时弹幕，不能写进当前可见回复。",
+                "如果你想发送弹幕，可以在回复末尾追加一行短隐藏标记：[du:danmaku 媒体时间 弹幕内容]。",
+                f"媒体时间必须晚于 {_clock(playhead_ms)} 且不超过 {_clock(playhead_ms + FUTURE_WINDOW_MS)}，例如：[du:danmaku {_clock(min(playhead_ms + 30_000, playhead_ms + FUTURE_WINDOW_MS))} 这里先别盯太紧]。没有想发的就不要写。",
             ]
         )
     else:
-        lines.append("本轮没有可用的未来动作片段，不要生成 DU_WATCH_ACTION 隐藏块。")
+        lines.append("本轮没有可用的未来动作片段，不要发送定时弹幕。")
     return "\n".join(lines), action_context
 
 
@@ -212,13 +395,57 @@ def inject_watch_context(
     snapshot = _normalize_snapshot(next_body.pop(WATCH_SNAPSHOT_BODY_KEY, None))
     if str(reply_channel or "").strip().lower() != "sumitalk" or not session_id or not snapshot:
         return next_body, {}
-    built = build_watch_context(session_id=session_id, snapshot=snapshot, window_id=window_id)
+    messages = next_body.get("messages") if isinstance(next_body.get("messages"), list) else []
+    built = build_watch_context(
+        session_id=session_id,
+        snapshot=snapshot,
+        window_id=window_id,
+        recall_query=_watch_recall_query(messages),
+    )
     if built is None:
         return next_body, {}
     prompt, action_context = built
-    messages = next_body.get("messages") if isinstance(next_body.get("messages"), list) else []
-    next_body["messages"] = [
+    output_messages = [
         {"role": "system", "content": prompt, "__dynamic__": True},
         *list(messages),
     ]
+    session = watch_runtime_store.get_session(session_id)
+    mode = session.get("mode") if isinstance((session or {}).get("mode"), dict) else {}
+    visual = action_context.get("visual") if isinstance(action_context.get("visual"), dict) else {}
+    if str(mode.get("visual_context_mode") or "") == "text_plus_contact_sheet" and visual:
+        sheet = build_contact_sheet(
+            session_id=session_id,
+            timeline_epoch=_int(visual.get("timeline_epoch"), 0),
+            playhead_ms=_int(visual.get("playhead_ms"), 0),
+            reply_until_ms=_int(visual.get("reply_until_ms"), 0),
+            related_chunks=visual.get("related_chunks") if isinstance(visual.get("related_chunks"), list) else [],
+        )
+        if sheet and watch_visual_store.claim_visual_delivery(
+            session_id,
+            timeline_epoch=_int(visual.get("timeline_epoch"), 0),
+            sheet_hash=str(sheet.get("sha256") or ""),
+        ):
+            visual_message = {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "【剧情画面】"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": str(sheet.get("image_url") or ""),
+                            "detail": "low",
+                        },
+                    },
+                ],
+                "__dynamic__": True,
+            }
+            insert_at = len(output_messages)
+            for index in range(len(output_messages) - 1, -1, -1):
+                item = output_messages[index]
+                if isinstance(item, dict) and str(item.get("role") or "").lower() == "user":
+                    insert_at = index
+                    break
+            output_messages.insert(insert_at, visual_message)
+            action_context["visual_panels"] = sheet.get("panels") or []
+    next_body["messages"] = output_messages
     return next_body, action_context

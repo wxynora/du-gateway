@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 from services.hidden_blocks import HiddenBlockParser
@@ -10,11 +11,54 @@ from storage import watch_runtime_store
 
 MARKER_START = "<<<DU_WATCH_ACTION>>>"
 MARKER_END = "<<<END_DU_WATCH_ACTION>>>"
+SHORT_MARKER = "[du:danmaku 00:32:18 弹幕内容]"
 _HIDDEN_BLOCK = HiddenBlockParser.for_markers(
     "DU_WATCH_ACTION",
     MARKER_START,
     MARKER_END,
+    short_markers=("du:danmaku",),
 )
+
+_SHORT_ACTION_RE = re.compile(r"^\s*(\d{1,3}:\d{2}(?::\d{2})?)\s+([\s\S]+?)\s*$")
+
+
+def _clock_to_ms(value: str) -> int | None:
+    parts = str(value or "").strip().split(":")
+    if len(parts) not in {2, 3}:
+        return None
+    try:
+        numbers = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if any(number < 0 for number in numbers) or numbers[-1] >= 60:
+        return None
+    if len(numbers) == 2:
+        minutes, seconds = numbers
+        return (minutes * 60 + seconds) * 1000
+    hours, minutes, seconds = numbers
+    if minutes >= 60:
+        return None
+    return (hours * 3600 + minutes * 60 + seconds) * 1000
+
+
+def _parse_action(raw: str) -> dict | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        item = json.loads(text)
+    except Exception:
+        item = None
+    if isinstance(item, dict):
+        return item
+    match = _SHORT_ACTION_RE.match(text)
+    if not match:
+        return None
+    target_ms = _clock_to_ms(match.group(1))
+    action_text = match.group(2).replace("\x00", "").strip()
+    if target_ms is None or not action_text:
+        return None
+    return {"type": "danmaku", "target_ms": target_ms, "text": action_text}
 
 
 def compute_visible_streaming(text: str) -> str:
@@ -25,10 +69,7 @@ def split_watch_actions(text: str) -> tuple[str, list[dict]]:
     visible, raw_actions = _HIDDEN_BLOCK.split_all(str(text or ""))
     actions: list[dict] = []
     for raw in raw_actions:
-        try:
-            item = json.loads(str(raw or "").strip())
-        except Exception:
-            item = None
+        item = _parse_action(raw)
         if isinstance(item, dict):
             actions.append(item)
     return visible, actions
@@ -41,7 +82,8 @@ def build_watch_danmaku_event(action: dict, *, context: dict | None) -> dict | N
         return None
 
     session_id = str(context.get("session_id") or "").strip()
-    if not session_id or str(action.get("session_id") or "").strip() != session_id:
+    legacy_session_id = str(action.get("session_id") or "").strip()
+    if not session_id or (legacy_session_id and legacy_session_id != session_id):
         return None
     session = watch_runtime_store.get_session(session_id)
     if not session or session.get("ended_at"):
@@ -54,7 +96,6 @@ def build_watch_danmaku_event(action: dict, *, context: dict | None) -> dict | N
     if not media_id or media_id != str((session.get("media") or {}).get("id") or "").strip():
         return None
     try:
-        action_epoch = int(action.get("timeline_epoch"))
         snapshot_epoch = int(snapshot.get("timeline_epoch"))
         current_epoch = int((session.get("playback") or {}).get("timeline_epoch") or 0)
         current_playhead_ms = int((session.get("playback") or {}).get("playhead_ms") or 0)
@@ -62,7 +103,14 @@ def build_watch_danmaku_event(action: dict, *, context: dict | None) -> dict | N
         seen_ms = int(float(snapshot.get("playhead_ms") or 0))
     except (TypeError, ValueError):
         return None
-    if action_epoch != snapshot_epoch or action_epoch != current_epoch:
+    legacy_epoch = action.get("timeline_epoch")
+    if legacy_epoch is not None:
+        try:
+            if int(legacy_epoch) != snapshot_epoch:
+                return None
+        except (TypeError, ValueError):
+            return None
+    if snapshot_epoch != current_epoch:
         return None
     if target_ms <= max(seen_ms, current_playhead_ms) or target_ms > seen_ms + 120_000:
         return None
@@ -70,20 +118,17 @@ def build_watch_danmaku_event(action: dict, *, context: dict | None) -> dict | N
     text = str(action.get("text") or "").replace("\x00", "").strip()
     if not text or len(text) > 120:
         return None
-    action_id = str(action.get("action_id") or "").strip()
-    if not action_id:
-        digest = hashlib.sha256(
-            f"{session_id}:{action_epoch}:{target_ms}:{text}".encode("utf-8")
-        ).hexdigest()[:20]
-        action_id = f"watch_action_{digest}"
-    action_id = action_id[:160]
+    digest = hashlib.sha256(
+        f"{session_id}:{snapshot_epoch}:{target_ms}:{text}".encode("utf-8")
+    ).hexdigest()[:20]
+    action_id = f"watch_action_{digest}"
     return {
         "part_id": f"watch-danmaku-{action_id}",
         "action_id": action_id,
         "type": "danmaku",
         "session_id": session_id,
         "media_id": media_id,
-        "timeline_epoch": action_epoch,
+        "timeline_epoch": snapshot_epoch,
         "target_ms": target_ms,
         "text": text,
         "created_from_snapshot": {

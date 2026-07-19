@@ -31,6 +31,7 @@ from config import (  # noqa: E402
     WATCH_ANALYSIS_JOB_STALE_SECONDS,
     WATCH_ANALYSIS_SOURCE_ENABLED,
     WATCH_ANALYSIS_WORKER_IDLE_SECONDS,
+    WATCH_KNOWLEDGE_ENABLED,
 )
 from services.watch_analysis import (  # noqa: E402
     WatchAnalysisProviderError,
@@ -45,7 +46,19 @@ from services.watch_analysis_source import (  # noqa: E402
     get_watch_analysis_source,
     watch_analysis_source_health,
 )
-from storage import watch_analysis_store, watch_runtime_store  # noqa: E402
+from services.watch_subtitles import SubtitleLookupError  # noqa: E402
+from services.watch_knowledge import (  # noqa: E402
+    build_work_knowledge_card,
+    source_digest,
+)
+from services.watch_visual_context import cache_analysis_frames  # noqa: E402
+from storage import (  # noqa: E402
+    watch_analysis_store,
+    watch_knowledge_store,
+    watch_runtime_store,
+    watch_subtitle_store,
+    watch_visual_store,
+)
 from utils.log import get_logger, setup_logging  # noqa: E402
 
 setup_logging()
@@ -63,10 +76,27 @@ def _job_matches_session(job: dict, session: dict | None) -> bool:
         return False
     media = session.get("media") if isinstance(session.get("media"), dict) else {}
     playback = session.get("playback") if isinstance(session.get("playback"), dict) else {}
-    return (
-        str(media.get("id") or "") == str(job.get("media_id") or "")
-        and int(playback.get("timeline_epoch") or 0) == int(job.get("timeline_epoch") or 0)
-    )
+    if str(media.get("id") or "") != str(job.get("media_id") or ""):
+        return False
+    if str(job.get("purpose") or "") in {"knowledge_card", "subtitle_lookup"}:
+        return True
+    return int(playback.get("timeline_epoch") or 0) == int(job.get("timeline_epoch") or 0)
+
+
+def _session_with_prepared_subtitles(session: dict) -> dict:
+    media = session.get("media") if isinstance(session.get("media"), dict) else {}
+    preparation = session.get("preparation") if isinstance(session.get("preparation"), dict) else {}
+    lookup = preparation.get("subtitle_lookup") if isinstance(preparation.get("subtitle_lookup"), dict) else {}
+    asset = watch_subtitle_store.get_asset_for_session(session)
+    return {
+        **session,
+        "media": {
+            **media,
+            "prepared_subtitle_cues": asset.get("cues") if asset else [],
+            "prepared_subtitle_provider": asset.get("provider") if asset else "",
+            "subtitle_cache_key": asset.get("asset_id") or lookup.get("lookup_id") or "none",
+        },
+    }
 
 
 def _fingerprint_reuse_result(session: dict, sections: list[dict]) -> dict:
@@ -124,11 +154,84 @@ def schedule_source_jobs(*, limit: int = 4) -> dict:
     return {"sessions_checked": checked, "jobs_created": created, "errors": errors}
 
 
+def schedule_knowledge_jobs(*, limit: int = 4) -> dict:
+    checked = 0
+    created = 0
+    errors = 0
+    for session in watch_runtime_store.list_sessions(limit=100):
+        if created >= max(1, int(limit or 1)):
+            break
+        familiarity = str((session.get("analysis") or {}).get("familiarity") or "pending")
+        if str((session.get("preparation") or {}).get("started_at") or "").strip():
+            continue
+        if familiarity == "pending":
+            continue
+        checked += 1
+        try:
+            if familiarity == "recognized" and not bool(
+                (session.get("mode") or {}).get("force_unknown_analysis")
+            ):
+                watch_knowledge_store.ensure_knowledge_job(session)
+                continue
+            if not WATCH_KNOWLEDGE_ENABLED:
+                watch_runtime_store.update_preparation_state(
+                    str(session.get("session_id") or ""),
+                    status="knowledge_failed",
+                    knowledge_card_status="failed",
+                    knowledge_card_error="作品知识卡功能未启用",
+                )
+                continue
+            _job, was_created = watch_knowledge_store.ensure_knowledge_job(session)
+            if was_created:
+                created += 1
+        except (KeyError, ValueError) as exc:
+            errors += 1
+            logger.warning(
+                "一起看知识卡任务未入队 session_id=%s reason=%s",
+                session.get("session_id"),
+                exc,
+            )
+    return {"sessions_checked": checked, "jobs_created": created, "errors": errors}
+
+
+def schedule_subtitle_jobs(*, limit: int = 4) -> dict:
+    checked = 0
+    created = 0
+    errors = 0
+    for session in watch_runtime_store.list_sessions(limit=100):
+        if created >= max(1, int(limit or 1)):
+            break
+        preparation = session.get("preparation") if isinstance(session.get("preparation"), dict) else {}
+        if str(preparation.get("started_at") or "").strip():
+            continue
+        familiarity = str((session.get("analysis") or {}).get("familiarity") or "pending")
+        if familiarity == "pending":
+            continue
+        card_status = str(preparation.get("knowledge_card_status") or "pending")
+        if card_status not in {"ready", "not_required", "failed"}:
+            continue
+        checked += 1
+        try:
+            _job, was_created = watch_subtitle_store.ensure_lookup_job(session)
+            if was_created:
+                created += 1
+        except (KeyError, ValueError) as exc:
+            errors += 1
+            logger.warning(
+                "一起看字幕准备任务未入队 session_id=%s reason=%s",
+                session.get("session_id"),
+                exc,
+            )
+    return {"sessions_checked": checked, "jobs_created": created, "errors": errors}
+
+
 def process_claimed_job(
     job: dict,
     *,
     post: Callable[..., Any] | None = None,
     source: Any | None = None,
+    knowledge_search_post: Callable[..., Any] | None = None,
+    knowledge_model_post: Callable[..., Any] | None = None,
 ) -> dict:
     job_id = str(job.get("job_id") or "")
     session_id = str(job.get("session_id") or "")
@@ -137,6 +240,32 @@ def process_claimed_job(
         watch_analysis_store.mark_job_cancelled(job_id, reason="stale_timeline")
         watch_analysis_store.purge_job_samples(job)
         return {"status": "cancelled", "reason": "stale_timeline"}
+
+    purpose = str(job.get("purpose") or "")
+    if purpose == "subtitle_lookup":
+        try:
+            source_client = source or get_watch_analysis_source()
+            original_title, year = watch_subtitle_store.identity_for_session(session)
+            result = source_client.prepare_subtitles(
+                session,
+                original_title=original_title,
+                year=year,
+            )
+            committed = watch_subtitle_store.commit_lookup_result(job, result)
+            return {
+                "status": "done" if committed.get("applied") else "cancelled",
+                **committed,
+            }
+        except SubtitleLookupError as exc:
+            status = watch_subtitle_store.fail_lookup_job(job, str(exc), retryable=True)
+            return {"status": status, "reason": "subtitle_provider_error", "retryable": True}
+        except WatchAnalysisSourceError as exc:
+            status = watch_subtitle_store.fail_lookup_job(job, str(exc), retryable=exc.retryable)
+            return {"status": status, "reason": "subtitle_source_error", "retryable": exc.retryable}
+        except Exception as exc:
+            status = watch_subtitle_store.fail_lookup_job(job, str(exc), retryable=True)
+            logger.exception("一起看字幕准备任务异常 job_id=%s: %s", job_id, exc)
+            return {"status": status, "reason": "subtitle_worker_error"}
 
     if not watch_analysis_store.cost_budget_available():
         deferred = watch_analysis_store.defer_job(
@@ -151,11 +280,33 @@ def process_claimed_job(
 
     prepared_from_source: list[dict] = []
     try:
+        if str(job.get("purpose") or "") == "knowledge_card":
+            kwargs: dict[str, Any] = {
+                "on_sources_ready": lambda: watch_knowledge_store.mark_building(session_id),
+            }
+            if knowledge_search_post is not None:
+                kwargs["search_post"] = knowledge_search_post
+            if knowledge_model_post is not None:
+                kwargs["model_post"] = knowledge_model_post
+            elif post is not None:
+                kwargs["model_post"] = post
+            card, sources, usage = build_work_knowledge_card(session, **kwargs)
+            committed = watch_knowledge_store.commit_knowledge_result(
+                job,
+                card=card,
+                sources=sources,
+                usage=usage,
+                source_digest=source_digest(sources),
+            )
+            return {
+                "status": "done" if committed.get("applied") else "cancelled",
+                **committed,
+            }
         samples = watch_analysis_store.load_job_samples(job)
         if not samples and str(job.get("input_origin") or "") == "backend_source":
             source_client = source or get_watch_analysis_source()
             raw_samples = source_client.acquire(
-                session,
+                _session_with_prepared_subtitles(session),
                 purpose=str(job.get("purpose") or "rolling"),
                 timestamps_ms=[
                     int(value)
@@ -218,6 +369,18 @@ def process_claimed_job(
             usage=usage,
             samples=samples,
         )
+        if committed.get("applied") and str(job.get("purpose") or "") == "rolling":
+            try:
+                cached_frames = cache_analysis_frames(session, samples)
+                if cached_frames:
+                    logger.info(
+                        "一起看派生帧已缓存 session_id=%s epoch=%s count=%s",
+                        session_id,
+                        (session.get("playback") or {}).get("timeline_epoch"),
+                        len(cached_frames),
+                    )
+            except Exception as exc:
+                logger.warning("一起看派生帧缓存失败 session_id=%s: %s", session_id, exc)
         if committed.get("applied") or committed.get("reason") in {
             "stale_timeline",
             "lease_lost",
@@ -260,6 +423,8 @@ def process_next_job(
     *,
     post: Callable[..., Any] | None = None,
     source: Any | None = None,
+    knowledge_search_post: Callable[..., Any] | None = None,
+    knowledge_model_post: Callable[..., Any] | None = None,
 ) -> dict | None:
     job = watch_analysis_store.claim_next_job(
         stale_after_seconds=int(WATCH_ANALYSIS_JOB_STALE_SECONDS),
@@ -273,7 +438,13 @@ def process_next_job(
         job.get("purpose"),
         job.get("attempts"),
     )
-    outcome = process_claimed_job(job, post=post, source=source)
+    outcome = process_claimed_job(
+        job,
+        post=post,
+        source=source,
+        knowledge_search_post=knowledge_search_post,
+        knowledge_model_post=knowledge_model_post,
+    )
     logger.info(
         "完成一起看分析任务 job_id=%s status=%s reason=%s",
         job.get("job_id"),
@@ -303,7 +474,20 @@ def run_worker_loop() -> None:
             cleanup = watch_analysis_store.cleanup_expired_samples()
             if cleanup.get("samples_deleted"):
                 logger.info("清理一起看过期样本 stats=%s", cleanup)
+            visual_cleanup = watch_visual_store.cleanup_expired_frames()
+            if visual_cleanup.get("rows_deleted"):
+                logger.info("清理一起看过期派生帧 stats=%s", visual_cleanup)
+            subtitle_deleted = watch_subtitle_store.cleanup_expired_assets()
+            if subtitle_deleted:
+                logger.info("清理一起看过期字幕资产 count=%s", subtitle_deleted)
+            watch_runtime_store.cleanup_expired_sessions()
             last_cleanup = now
+        knowledge_scheduled = schedule_knowledge_jobs()
+        if knowledge_scheduled.get("jobs_created"):
+            logger.info("一起看知识卡任务已入队 stats=%s", knowledge_scheduled)
+        subtitle_scheduled = schedule_subtitle_jobs()
+        if subtitle_scheduled.get("jobs_created"):
+            logger.info("一起看字幕准备任务已入队 stats=%s", subtitle_scheduled)
         scheduled = schedule_source_jobs()
         if scheduled.get("jobs_created"):
             logger.info("一起看后端取材任务已入队 stats=%s", scheduled)

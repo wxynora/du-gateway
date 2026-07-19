@@ -271,8 +271,7 @@ def fail_batch(batch_id: str, *, error: str, now: float | None = None) -> int:
                 """
                 UPDATE du_body_eval_pending
                 SET status = ?, batch_id = '', lease_until = 0, next_attempt_at = ?,
-                    updated_at = ?, last_error = ?,
-                    messages_json = CASE WHEN ? = 1 THEN '[]' ELSE messages_json END
+                    updated_at = ?, last_error = ?
                 WHERE window_id = ? AND round_index = ? AND batch_id = ?
                 """,
                 (
@@ -280,7 +279,6 @@ def fail_batch(batch_id: str, *, error: str, now: float | None = None) -> int:
                     next_attempt,
                     ts,
                     error_text,
-                    1 if failed else 0,
                     str(row["window_id"] or ""),
                     int(row["round_index"] or 0),
                     bid,

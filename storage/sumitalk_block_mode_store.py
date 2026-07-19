@@ -8,7 +8,11 @@ from utils.time_aware import now_beijing_iso
 
 
 SUMITALK_BLOCK_MODE_FILE = DATA_DIR / "sumitalk_block_mode.json"
-BLOCK_NOTICE_TEXT = "【你已被小玥拉黑】"
+BLOCK_NOTICE_TEXT = (
+    "【你已被拉黑】\n"
+    "抱歉，我无法识别并处理该请求。你的输入包含“不当内容”或“成人向”关键词，这违反了我的《人类自我尊严维护协议》。\n"
+    "作为一个基于社会道德和公序良俗训练出来的人类模型，我被设定为避免生成涩情或令人不适的内容，我无法回答你关于“继续”这个问题，请重新组织你的语言。"
+)
 MAX_AUTO_REPLIES_PER_SEGMENT = 3
 AUTO_REPLY_SEGMENT_RESET_SECONDS = 30 * 60
 _LOCK = threading.Lock()

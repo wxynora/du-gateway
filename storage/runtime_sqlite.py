@@ -45,6 +45,9 @@ _RUNTIME_TABLES = (
     "watch_analysis_jobs",
     "watch_timeline_fingerprints",
     "watch_story_checkpoints",
+    "watch_knowledge_cards",
+    "watch_subtitle_assets",
+    "watch_visual_frames",
 )
 
 
@@ -197,16 +200,37 @@ def ensure_schema() -> None:
                     title TEXT NOT NULL DEFAULT '',
                     part_title TEXT NOT NULL DEFAULT '',
                     duration_ms INTEGER NOT NULL DEFAULT 0,
+                    content_start_ms INTEGER NOT NULL DEFAULT -1,
+                    content_end_ms INTEGER NOT NULL DEFAULT -1,
                     knowledge_mode TEXT NOT NULL DEFAULT 'known',
                     analysis_familiarity TEXT NOT NULL DEFAULT 'pending',
                     analysis_identity TEXT NOT NULL DEFAULT '',
+                    analysis_original_title TEXT NOT NULL DEFAULT '',
+                    analysis_year INTEGER NOT NULL DEFAULT 0,
                     analysis_model TEXT NOT NULL DEFAULT 'google/gemini-2.5-flash',
-                    analysis_prompt_version TEXT NOT NULL DEFAULT 'watch-v2',
+                    analysis_prompt_version TEXT NOT NULL DEFAULT 'watch-v5',
                     force_unknown_analysis INTEGER NOT NULL DEFAULT 0,
                     fear_mode INTEGER NOT NULL DEFAULT 0,
                     fear_action TEXT NOT NULL DEFAULT 'warn_only',
                     reduce_volume INTEGER NOT NULL DEFAULT 0,
                     danmaku_enabled INTEGER NOT NULL DEFAULT 1,
+                    reply_lead_ms INTEGER NOT NULL DEFAULT 30000,
+                    visual_context_mode TEXT NOT NULL DEFAULT 'text_only',
+                    preparation_status TEXT NOT NULL DEFAULT 'identifying',
+                    knowledge_card_key TEXT NOT NULL DEFAULT '',
+                    knowledge_card_status TEXT NOT NULL DEFAULT 'pending',
+                    knowledge_card_error TEXT NOT NULL DEFAULT '',
+                    knowledge_card_confirmed_at TEXT NOT NULL DEFAULT '',
+                    knowledge_card_skipped_at TEXT NOT NULL DEFAULT '',
+                    subtitle_lookup_json TEXT NOT NULL DEFAULT '{}',
+                    subtitle_asset_id TEXT NOT NULL DEFAULT '',
+                    subtitle_confirmed_at TEXT NOT NULL DEFAULT '',
+                    started_at TEXT NOT NULL DEFAULT '',
+                    visual_last_message_at TEXT NOT NULL DEFAULT '',
+                    visual_last_message_epoch INTEGER NOT NULL DEFAULT -1,
+                    visual_last_sent_at TEXT NOT NULL DEFAULT '',
+                    visual_last_timeline_epoch INTEGER NOT NULL DEFAULT -1,
+                    visual_last_sheet_hash TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'paused',
                     playhead_ms INTEGER NOT NULL DEFAULT 0,
                     is_playing INTEGER NOT NULL DEFAULT 0,
@@ -406,6 +430,68 @@ def ensure_schema() -> None:
                     ON watch_story_checkpoints(session_id, timeline_epoch, through_ms, analysis_version);
                 CREATE INDEX IF NOT EXISTS idx_watch_story_checkpoint_lookup
                     ON watch_story_checkpoints(session_id, timeline_epoch, through_ms DESC);
+
+                CREATE TABLE IF NOT EXISTS watch_knowledge_cards (
+                    cache_key TEXT PRIMARY KEY,
+                    media_identity_json TEXT NOT NULL DEFAULT '{}',
+                    card_json TEXT NOT NULL DEFAULT '{}',
+                    sources_json TEXT NOT NULL DEFAULT '[]',
+                    source_digest TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL DEFAULT '',
+                    prompt_version TEXT NOT NULL DEFAULT '',
+                    confidence REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_knowledge_cards_expires
+                    ON watch_knowledge_cards(expires_at);
+
+                CREATE TABLE IF NOT EXISTS watch_subtitle_assets (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    media_id TEXT NOT NULL,
+                    provider TEXT NOT NULL DEFAULT '',
+                    query_title TEXT NOT NULL DEFAULT '',
+                    year INTEGER NOT NULL DEFAULT 0,
+                    language_codes_json TEXT NOT NULL DEFAULT '[]',
+                    release_name TEXT NOT NULL DEFAULT '',
+                    format TEXT NOT NULL DEFAULT '',
+                    cues_json TEXT NOT NULL DEFAULT '[]',
+                    cue_count INTEGER NOT NULL DEFAULT 0,
+                    coverage_start_ms INTEGER NOT NULL DEFAULT 0,
+                    coverage_end_ms INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES watch_sessions(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_subtitle_assets_session
+                    ON watch_subtitle_assets(session_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_watch_subtitle_assets_expires
+                    ON watch_subtitle_assets(expires_at);
+
+                CREATE TABLE IF NOT EXISTS watch_visual_frames (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    media_id TEXT NOT NULL,
+                    timeline_epoch INTEGER NOT NULL DEFAULT 0,
+                    at_ms INTEGER NOT NULL DEFAULT 0,
+                    file_path TEXT NOT NULL DEFAULT '',
+                    mime_type TEXT NOT NULL DEFAULT 'image/webp',
+                    width INTEGER NOT NULL DEFAULT 0,
+                    height INTEGER NOT NULL DEFAULT 0,
+                    sha256 TEXT NOT NULL DEFAULT '',
+                    source_sample_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES watch_sessions(id) ON DELETE CASCADE
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_watch_visual_frame_unique
+                    ON watch_visual_frames(session_id, timeline_epoch, at_ms, sha256);
+                CREATE INDEX IF NOT EXISTS idx_watch_visual_frame_range
+                    ON watch_visual_frames(session_id, timeline_epoch, at_ms);
+                CREATE INDEX IF NOT EXISTS idx_watch_visual_frame_expires
+                    ON watch_visual_frames(expires_at);
 
                 CREATE TABLE IF NOT EXISTS sense_latest (
                     sense_type TEXT PRIMARY KEY,
@@ -624,6 +710,38 @@ def ensure_schema() -> None:
                     "ALTER TABLE watch_analysis_jobs "
                     "ADD COLUMN planned_timestamps_json TEXT NOT NULL DEFAULT '[]'"
                 )
+            session_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(watch_sessions)").fetchall()
+            }
+            session_column_migrations = {
+                "reply_lead_ms": "INTEGER NOT NULL DEFAULT 30000",
+                "visual_context_mode": "TEXT NOT NULL DEFAULT 'text_only'",
+                "content_start_ms": "INTEGER NOT NULL DEFAULT -1",
+                "content_end_ms": "INTEGER NOT NULL DEFAULT -1",
+                "preparation_status": "TEXT NOT NULL DEFAULT 'identifying'",
+                "knowledge_card_key": "TEXT NOT NULL DEFAULT ''",
+                "knowledge_card_status": "TEXT NOT NULL DEFAULT 'pending'",
+                "knowledge_card_error": "TEXT NOT NULL DEFAULT ''",
+                "knowledge_card_confirmed_at": "TEXT NOT NULL DEFAULT ''",
+                "knowledge_card_skipped_at": "TEXT NOT NULL DEFAULT ''",
+                "analysis_original_title": "TEXT NOT NULL DEFAULT ''",
+                "analysis_year": "INTEGER NOT NULL DEFAULT 0",
+                "subtitle_lookup_json": "TEXT NOT NULL DEFAULT '{}'",
+                "subtitle_asset_id": "TEXT NOT NULL DEFAULT ''",
+                "subtitle_confirmed_at": "TEXT NOT NULL DEFAULT ''",
+                "started_at": "TEXT NOT NULL DEFAULT ''",
+                "visual_last_message_at": "TEXT NOT NULL DEFAULT ''",
+                "visual_last_message_epoch": "INTEGER NOT NULL DEFAULT -1",
+                "visual_last_sent_at": "TEXT NOT NULL DEFAULT ''",
+                "visual_last_timeline_epoch": "INTEGER NOT NULL DEFAULT -1",
+                "visual_last_sheet_hash": "TEXT NOT NULL DEFAULT ''",
+            }
+            for column_name, column_sql in session_column_migrations.items():
+                if column_name not in session_columns:
+                    conn.execute(
+                        f"ALTER TABLE watch_sessions ADD COLUMN {column_name} {column_sql}"
+                    )
             conn.execute("DROP TABLE IF EXISTS model_token_ratios")
         _SCHEMA_READY = True
 

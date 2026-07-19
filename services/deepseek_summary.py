@@ -1044,6 +1044,7 @@ def fetch_new_summary_update(
             "model": DEEPSEEK_CHAT_MODEL,
             "messages": [{"role": "user", "content": attempt_prompt}],
             "max_tokens": 1800,
+            "thinking": {"type": "disabled"},
         }
         try:
             r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)

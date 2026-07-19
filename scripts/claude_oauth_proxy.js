@@ -13,7 +13,7 @@ const PORT = parseInt(process.env.PORT || "8082");
 const HOST = process.env.HOST || "127.0.0.1";
 const PROXY_KEY = process.env.PROXY_KEY;
 const OAUTH_SYNC_KEY = process.env.CLAUDE_OAUTH_SYNC_KEY || PROXY_KEY;
-const DEFAULT_MAX_TOKENS = parseInt(process.env.CLAUDE_MAX_TOKENS || "33000", 10);
+const DEFAULT_MAX_TOKENS = parseInt(process.env.CLAUDE_MAX_TOKENS || "128000", 10);
 const THINKING_BUDGET_TOKENS = parseInt(
   process.env.CLAUDE_THINKING_BUDGET_TOKENS || "32000",
   10

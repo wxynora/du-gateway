@@ -10,6 +10,11 @@ from config import (
     WATCH_ANALYSIS_ENABLED,
     WATCH_ANALYSIS_MAX_REQUEST_BYTES,
     WATCH_ANALYSIS_MODEL,
+    WATCH_KNOWLEDGE_API_KEY,
+    WATCH_KNOWLEDGE_ENABLED,
+    WATCH_KNOWLEDGE_MODEL,
+    WATCH_KNOWLEDGE_SEARCH_API_KEY,
+    WATCH_VISUAL_CONTEXT_ENABLED,
 )
 from services.watch_analysis_samples import (
     WatchAnalysisSampleError,
@@ -17,7 +22,13 @@ from services.watch_analysis_samples import (
     purge_prepared_samples,
 )
 from services.watch_analysis_source import watch_analysis_source_health
-from storage import watch_analysis_store, watch_runtime_store
+from storage import (
+    watch_analysis_store,
+    watch_knowledge_store,
+    watch_runtime_store,
+    watch_subtitle_store,
+    watch_visual_store,
+)
 
 
 def _json_error(error: str, code: str, status: int):
@@ -209,7 +220,110 @@ def register_routes(bp):
             return _json_error("观看会话不存在或已过期", "watch_session_not_found", 404)
         status["analysis_runtime"] = watch_analysis_store.session_job_runtime(session_id)
         status["sample_plan"] = watch_analysis_store.build_sample_plan(_session)
+        status["knowledge_card"] = watch_knowledge_store.get_card_for_session(_session)
+        current_epoch = int((_session.get("playback") or {}).get("timeline_epoch") or 0)
+        status["visual_frames"] = watch_visual_store.frame_cache_status(
+            session_id,
+            timeline_epoch=current_epoch,
+        )
+        requested_visual_mode = str((_session.get("mode") or {}).get("visual_context_mode") or "text_only")
+        visual_available = bool(WATCH_VISUAL_CONTEXT_ENABLED and status["visual_frames"]["count"] >= 2)
+        status["visual_context"] = {
+            "requested_mode": requested_visual_mode,
+            "effective_mode": (
+                "text_plus_contact_sheet"
+                if requested_visual_mode == "text_plus_contact_sheet" and visual_available
+                else "text_only"
+            ),
+            "available": visual_available,
+            "degraded_reason": (
+                ""
+                if requested_visual_mode == "text_only" or visual_available
+                else "visual_context_disabled"
+                if not WATCH_VISUAL_CONTEXT_ENABLED
+                else "frames_not_ready"
+            ),
+        }
+        preparation = status.get("preparation") if isinstance(status.get("preparation"), dict) else {}
+        card_status = str(preparation.get("knowledge_card_status") or "pending")
+        subtitle_lookup = preparation.get("subtitle_lookup") if isinstance(preparation.get("subtitle_lookup"), dict) else {}
+        subtitle_status = str(subtitle_lookup.get("status") or "pending")
+        subtitle_ready = subtitle_status in watch_subtitle_store.TERMINAL_STATUSES
+        requires_confirmation = not bool(preparation.get("started_at"))
+        preparation["can_confirm"] = requires_confirmation and subtitle_ready and (
+            card_status == "not_required"
+            or (card_status == "ready" and bool(status["knowledge_card"]))
+        )
+        preparation["can_skip"] = requires_confirmation and subtitle_ready and card_status not in {"not_required"}
+        preparation["requires_confirmation"] = requires_confirmation
+        status["preparation"] = preparation
         return jsonify({"ok": True, **status})
+
+    @bp.route("/watch/sessions/<session_id>/start", methods=["POST"])
+    def miniapp_watch_session_start(session_id: str):
+        _session, error = _owned_session(session_id)
+        if error is not None:
+            return error
+        body, error = _json_body()
+        if error is not None:
+            return error
+        action = str(body.get("knowledge_card_action") or "").strip().lower()
+        if action not in {"confirm", "skip"}:
+            return _json_error(
+                "knowledge_card_action 必须是 confirm 或 skip",
+                "watch_start_action_required",
+                400,
+            )
+
+        def _start():
+            session = watch_runtime_store.start_session(
+                session_id,
+                knowledge_card_action=action,
+                knowledge_card_key=str(body.get("knowledge_card_key") or "").strip(),
+                subtitle_lookup_id=str(body.get("subtitle_lookup_id") or "").strip(),
+            )
+            return jsonify({"ok": True, "session": session})
+
+        return _handle_store_error(_start)
+
+    @bp.route("/watch/sessions/<session_id>/knowledge-card/regenerate", methods=["POST"])
+    def miniapp_watch_knowledge_regenerate(session_id: str):
+        session, error = _owned_session(session_id)
+        if error is not None:
+            return error
+        if not WATCH_KNOWLEDGE_ENABLED:
+            return _json_error("作品知识卡功能未启用", "watch_knowledge_disabled", 503)
+        if str((session.get("preparation") or {}).get("started_at") or "").strip():
+            return _json_error(
+                "作品知识卡只能在正式开始前重新生成",
+                "watch_knowledge_already_started",
+                409,
+            )
+
+        def _retry():
+            watch_subtitle_store.reset_lookup(session_id)
+            job = watch_knowledge_store.retry_knowledge_job(session)
+            return jsonify({"ok": True, "job": job}), 202
+
+        return _handle_store_error(_retry)
+
+    @bp.route("/watch/sessions/<session_id>/subtitles/retry", methods=["POST"])
+    def miniapp_watch_subtitles_retry(session_id: str):
+        session, error = _owned_session(session_id)
+        if error is not None:
+            return error
+        if str((session.get("preparation") or {}).get("started_at") or "").strip():
+            return _json_error(
+                "字幕只能在正式开始前重新查找",
+                "watch_subtitles_already_started",
+                409,
+            )
+
+        def _retry():
+            job, _created = watch_subtitle_store.retry_lookup(session)
+            return jsonify({"ok": True, "job": job}), 202
+
+        return _handle_store_error(_retry)
 
     @bp.route("/watch/sessions/<session_id>/analysis/samples", methods=["POST"])
     def miniapp_watch_analysis_samples(session_id: str):
@@ -288,6 +402,14 @@ def register_routes(bp):
                 "enabled": bool(WATCH_ANALYSIS_ENABLED),
                 "configured": bool(WATCH_ANALYSIS_API_KEY),
                 "model": WATCH_ANALYSIS_MODEL,
+                "knowledge": {
+                    "enabled": bool(WATCH_KNOWLEDGE_ENABLED),
+                    "configured": bool(WATCH_KNOWLEDGE_API_KEY and WATCH_KNOWLEDGE_SEARCH_API_KEY),
+                    "provider_supported": True,
+                    "model": WATCH_KNOWLEDGE_MODEL,
+                    "search_provider": "controlled_search_then_model",
+                },
+                "visual_context_enabled": bool(WATCH_VISUAL_CONTEXT_ENABLED),
                 "source": watch_analysis_source_health(),
                 "queue": watch_analysis_store.queue_stats(),
             }

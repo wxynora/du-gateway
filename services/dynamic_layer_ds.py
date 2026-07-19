@@ -778,7 +778,6 @@ def call_dynamic_layer_ds(
     payload: dict[str, Any] = {
         "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 600,
         "temperature": 0,
     }
     attempts: list[dict] = []
@@ -1088,12 +1087,9 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
         rounds_batch_json=rounds_batch_json,
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
-    # 多轮需要更大输出
-    max_tokens = min(8000, 500 * max(len(batch_rounds), 1))
     payload: dict[str, Any] = {
         "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
     }
     attempts: list[dict] = []
     try:
@@ -1240,11 +1236,9 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
         "{rounds_batch_json}", json.dumps(rounds_for_prompt, ensure_ascii=False)
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
-    max_tokens = min(2000, 400 * max(len(batch_rounds), 1))
     payload: dict[str, Any] = {
         "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
     }
     last_err: Exception | None = None
     attempts: list[dict] = []

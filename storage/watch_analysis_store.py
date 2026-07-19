@@ -11,6 +11,7 @@ from config import (
     WATCH_ANALYSIS_FEAR_READY_BUFFER_MS,
     WATCH_ANALYSIS_FORWARD_WINDOW_MS,
     WATCH_ANALYSIS_JOB_MAX_ATTEMPTS,
+    WATCH_ANALYSIS_MAX_AUDIO_DURATION_MS,
     WATCH_ANALYSIS_MAX_FRAMES_PER_JOB,
     WATCH_ANALYSIS_MAX_JOBS_PER_SESSION,
     WATCH_ANALYSIS_PREPASS_EDGE_MS,
@@ -584,6 +585,7 @@ def cancel_stale_jobs(session_id: str, *, current_epoch: int | None = None, reas
     if current_epoch is not None:
         clauses.append("timeline_epoch != ?")
         where_params.append(_int(current_epoch, 0))
+        clauses.append("purpose != 'knowledge_card'")
     now_iso = _iso(_now())
     with runtime_sqlite.connect() as conn:
         rows = conn.execute(
@@ -637,6 +639,7 @@ def fail_job(job: dict, error: str, *, retryable: bool) -> str:
     terminal = not retryable or attempts >= max_attempts
     now = _now()
     status = "failed" if terminal else "queued"
+    purpose = str(job.get("purpose") or "")
     available_at = _iso(now + timedelta(seconds=min(120, 2 ** max(1, attempts))))
     with runtime_sqlite.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -666,7 +669,10 @@ def fail_job(job: dict, error: str, *, retryable: bool) -> str:
                 session is None
                 or str(session["status"] or "") == "ended"
                 or str(session["media_id"] or "") != str(job.get("media_id") or "")
-                or int(session["timeline_epoch"] or 0) != int(job.get("timeline_epoch") or 0)
+                or (
+                    purpose != "knowledge_card"
+                    and int(session["timeline_epoch"] or 0) != int(job.get("timeline_epoch") or 0)
+                )
             )
             if stale:
                 conn.execute(
@@ -697,7 +703,25 @@ def fail_job(job: dict, error: str, *, retryable: bool) -> str:
                     lease_token,
                 ),
             )
-            if terminal and result.rowcount:
+            if result.rowcount and purpose == "knowledge_card":
+                preparation_status = "knowledge_failed" if terminal else "collecting_sources"
+                knowledge_status = "failed" if terminal else "queued"
+                conn.execute(
+                    """
+                    UPDATE watch_sessions
+                       SET preparation_status = ?, knowledge_card_status = ?,
+                           knowledge_card_error = ?, updated_at = ?
+                     WHERE id = ?
+                    """,
+                    (
+                        preparation_status,
+                        knowledge_status,
+                        _text(error, 2000),
+                        _iso(now),
+                        job.get("session_id"),
+                    ),
+                )
+            elif terminal and result.rowcount:
                 analysis_status = "degraded" if session and int(session["analysis_covered_until_ms"] or 0) > 0 else "failed"
                 conn.execute(
                     "UPDATE watch_sessions SET analysis_status = ?, analysis_error = ?, updated_at = ? WHERE id = ?",
@@ -830,14 +854,51 @@ def reusable_timeline_sections(session: dict, samples: list[dict], *, max_distan
     return out
 
 
+SKIPPED_TIMELINE_KINDS = {"recap", "intro", "outro", "preview", "non_story"}
+TIMELINE_BOUNDARY_TOLERANCE_MS = 1000
+
+
 def _overlaps_skipped(start_ms: int, end_ms: int, sections: list[dict]) -> bool:
-    skipped = {"intro", "outro", "preview", "non_story"}
     return any(
-        str(section.get("kind") or "") in skipped
+        str(section.get("kind") or "") in SKIPPED_TIMELINE_KINDS
         and start_ms < int(section.get("end_ms") or 0)
         and end_ms > int(section.get("start_ms") or 0)
         for section in sections
     )
+
+
+def _advance_past_skipped(position_ms: int, sections: list[dict]) -> int:
+    position = max(0, int(position_ms))
+    ordered = sorted(
+        sections,
+        key=lambda item: (int(item.get("start_ms") or 0), int(item.get("end_ms") or 0)),
+    )
+    advanced = True
+    while advanced:
+        advanced = False
+        for section in ordered:
+            if str(section.get("kind") or "") not in SKIPPED_TIMELINE_KINDS:
+                continue
+            start_ms = int(section.get("start_ms") or 0)
+            end_ms = int(section.get("end_ms") or 0)
+            if end_ms <= position:
+                continue
+            if start_ms <= position + TIMELINE_BOUNDARY_TOLERANCE_MS:
+                position = end_ms
+                advanced = True
+    return position
+
+
+def _next_skipped_start(position_ms: int, sections: list[dict]) -> int | None:
+    position = max(0, int(position_ms))
+    candidates = [
+        int(section.get("start_ms") or 0)
+        for section in sections
+        if str(section.get("kind") or "") in SKIPPED_TIMELINE_KINDS
+        and int(section.get("end_ms") or 0) > position
+        and int(section.get("start_ms") or 0) > position + TIMELINE_BOUNDARY_TOLERANCE_MS
+    ]
+    return min(candidates) if candidates else None
 
 
 def commit_analysis_result(
@@ -1048,9 +1109,13 @@ def commit_analysis_result(
 
             familiarity = str(session_row["analysis_familiarity"] or "pending")
             identity = str(session_row["analysis_identity"] or "")
+            original_title = str(session_row["analysis_original_title"] or "")
+            identity_year = int(session_row["analysis_year"] or 0)
             if purpose == "identify":
                 familiarity = _text(result.get("familiarity"), 80) or "unknown"
                 identity = _text(result.get("identity"), 500)
+                original_title = _text(result.get("original_title"), 300)
+                identity_year = max(0, int(result.get("identity_year") or 0))
                 if bool(session_row["force_unknown_analysis"]):
                     familiarity = "unknown"
             covered_from = int(session_row["analysis_covered_from_ms"] or 0)
@@ -1060,6 +1125,9 @@ def commit_analysis_result(
                 incoming_until = int(result.get("covered_until_ms") or 0)
                 covered_from = incoming_from if covered_until <= 0 else min(covered_from, incoming_from)
                 covered_until = max(covered_until, incoming_until)
+            covered_until = _advance_past_skipped(covered_until, current_sections)
+            if int(session_row["duration_ms"] or 0) > 0:
+                covered_until = min(covered_until, int(session_row["duration_ms"] or 0))
             playhead_ms = int(session_row["playhead_ms"] or 0)
             duration_ms = int(session_row["duration_ms"] or 0)
             required_buffer = int(WATCH_ANALYSIS_FEAR_READY_BUFFER_MS) if bool(session_row["fear_mode"]) else 0
@@ -1075,6 +1143,8 @@ def commit_analysis_result(
                 """,
                 (session_id, timeline_epoch),
             ).fetchone() is not None
+            if duration_ms > 0 and covered_until >= duration_ms and current_sections:
+                completed_rolling = True
             ready = completed_rolling and covered_until >= ready_until
             analysis_status = "ready" if ready else "analyzing"
             persisted_story_so_far = runtime_sqlite.json_loads(
@@ -1089,14 +1159,16 @@ def commit_analysis_result(
             conn.execute(
                 """
                 UPDATE watch_sessions
-                   SET analysis_familiarity = ?, analysis_identity = ?, analysis_status = ?,
+                   SET analysis_familiarity = ?, analysis_identity = ?,
+                       analysis_original_title = ?, analysis_year = ?, analysis_status = ?,
                        analysis_covered_from_ms = ?, analysis_covered_until_ms = ?,
                        analysis_error = '', story_so_far_json = ?, analysis_story_state_json = ?,
                        updated_at = ?
                  WHERE id = ?
                 """,
                 (
-                    familiarity, identity, analysis_status, covered_from, covered_until,
+                    familiarity, identity, original_title, identity_year, analysis_status,
+                    covered_from, covered_until,
                     runtime_sqlite.json_dumps(persisted_story_so_far),
                     runtime_sqlite.json_dumps(persisted_story_state),
                     now_iso, session_id,
@@ -1212,8 +1284,22 @@ def _gateway_plan(plan: dict) -> dict:
         "managed_by": "gateway",
         "input_origin": "backend_source",
         "client_upload_required": False,
+        "audio_required": False,
         **plan,
     }
+
+
+def _rolling_targets(start_ms: int, end_ms: int, *, interval_ms: int, max_frames: int) -> list[int]:
+    start = max(0, int(start_ms))
+    end = max(start, int(end_ms))
+    limit = max(1, int(max_frames))
+    interval = max(1000, int(interval_ms))
+    if end <= start or limit == 1:
+        return [start]
+    targets = list(range(start, end + 1, interval))[:limit]
+    if targets[-1] != end and len(targets) < limit:
+        targets.append(end)
+    return targets
 
 
 def build_sample_plan(session: dict) -> dict:
@@ -1222,6 +1308,16 @@ def build_sample_plan(session: dict) -> dict:
     playback = session.get("playback") if isinstance(session.get("playback"), dict) else {}
     analysis = session.get("analysis") if isinstance(session.get("analysis"), dict) else {}
     duration_ms = int(media.get("duration_ms") or 0)
+    content_start_ms = (
+        int(media["content_start_ms"])
+        if media.get("content_start_ms") is not None
+        else None
+    )
+    content_end_ms = (
+        int(media["content_end_ms"])
+        if media.get("content_end_ms") is not None
+        else None
+    )
     playhead_ms = int(playback.get("playhead_ms") or 0)
     timeline_epoch = int(playback.get("timeline_epoch") or 0)
     familiarity = str(analysis.get("familiarity") or "pending")
@@ -1234,11 +1330,16 @@ def build_sample_plan(session: dict) -> dict:
         active = _active_job(session_id, "identify", timeline_epoch)
         if active:
             return _in_flight_plan(active)
+        identify_anchor = playhead_ms
+        if content_start_ms is not None and playhead_ms < content_start_ms:
+            identify_anchor = content_start_ms
         targets = sorted(
             {
-                max(0, playhead_ms - 2000),
-                playhead_ms,
-                min(duration_ms, playhead_ms + 2000) if duration_ms else playhead_ms + 2000,
+                max(0, identify_anchor - 2000),
+                identify_anchor,
+                min(duration_ms, identify_anchor + 2000)
+                if duration_ms
+                else identify_anchor + 2000,
             }
         )
         return _gateway_plan({
@@ -1247,22 +1348,64 @@ def build_sample_plan(session: dict) -> dict:
             "target_timestamps_ms": targets[:max_frames],
             "max_frames": max_frames,
         })
-    if not _has_completed_job(session_id, "timeline_prepass", timeline_epoch) and duration_ms > 0:
+    needs_timeline_prepass = content_start_ms is None or content_end_ms is None
+    if (
+        needs_timeline_prepass
+        and not _has_completed_job(session_id, "timeline_prepass", timeline_epoch)
+        and duration_ms > 0
+    ):
         active = _active_job(session_id, "timeline_prepass", timeline_epoch)
         if active:
             return _in_flight_plan(active)
         edge = min(duration_ms // 2, int(WATCH_ANALYSIS_PREPASS_EDGE_MS))
-        front = [int(edge * idx / 3) for idx in range(4)]
-        back_start = max(edge, duration_ms - edge)
-        back = [int(back_start + (duration_ms - back_start) * idx / 3) for idx in range(4)]
+        front_count = max_frames if content_end_ms is not None else max(1, max_frames // 2)
+        back_count = max_frames if content_start_ms is not None else max(1, max_frames - front_count)
+        front: list[int] = []
+        if content_start_ms is None:
+            front_end = min(edge, content_end_ms if content_end_ms is not None else duration_ms)
+            front = [
+                int(front_end * idx / max(1, front_count - 1))
+                for idx in range(front_count)
+            ]
+        back: list[int] = []
+        if content_end_ms is None:
+            known_start = max(0, content_start_ms or 0)
+            back_start = known_start + max(0, duration_ms - known_start) // 2
+            back = [
+                int(back_start + (duration_ms - back_start) * idx / max(1, back_count - 1))
+                for idx in range(back_count)
+            ]
         return _gateway_plan({
             "purpose": "timeline_prepass",
-            "reason": "detect_intro_outro",
+            "reason": "detect_missing_content_bounds",
             "target_timestamps_ms": sorted(set(front + back))[:max_frames],
             "max_frames": max_frames,
+            "manual_content_start_ms": content_start_ms,
+            "manual_content_end_ms": content_end_ms,
+        })
+    preparation = session.get("preparation") if isinstance(session.get("preparation"), dict) else {}
+    knowledge_status = str(preparation.get("knowledge_card_status") or "pending")
+    if familiarity in {"partial", "unknown"} and knowledge_status in {
+        "pending",
+        "queued",
+        "collecting",
+        "building",
+    }:
+        return _gateway_plan({
+            "purpose": "idle",
+            "reason": "knowledge_card_pending",
+            "target_timestamps_ms": [],
+        })
+    if not str(preparation.get("started_at") or "").strip():
+        return _gateway_plan({
+            "purpose": "idle",
+            "reason": "waiting_for_start_confirmation",
+            "target_timestamps_ms": [],
         })
     covered_until = int(analysis.get("covered_until_ms") or 0)
     target_until = min(duration_ms, playhead_ms + int(WATCH_ANALYSIS_FORWARD_WINDOW_MS)) if duration_ms else playhead_ms + int(WATCH_ANALYSIS_FORWARD_WINDOW_MS)
+    if content_end_ms is not None:
+        target_until = min(target_until, content_end_ms)
     if covered_until >= target_until:
         return _gateway_plan({
             "purpose": "idle",
@@ -1281,13 +1424,52 @@ def build_sample_plan(session: dict) -> dict:
     )
     knowledge_mode = str((session.get("mode") or {}).get("knowledge_mode") or "known")
     start = covered_until if knowledge_mode == "needs_summary" else max(playhead_ms, covered_until)
-    targets = list(range(start, target_until + 1, max(1000, interval)))[:max_frames]
+    if content_start_ms is not None:
+        start = max(start, content_start_ms)
+    with runtime_sqlite.connect() as conn:
+        timeline_sections = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT kind, start_ms, end_ms FROM watch_timeline_sections WHERE session_id = ? AND timeline_epoch = ? ORDER BY start_ms, end_ms",
+                (_text(session_id, 160), _int(timeline_epoch, 0)),
+            ).fetchall()
+        ]
+    start = _advance_past_skipped(start, timeline_sections)
+    if duration_ms > 0:
+        start = min(start, duration_ms)
+    if start >= target_until:
+        return _gateway_plan({
+            "purpose": "idle",
+            "reason": "coverage_ready",
+            "target_timestamps_ms": [],
+            "covered_until_ms": covered_until,
+            "effective_covered_until_ms": start,
+            "target_until_ms": target_until,
+        })
+    batch_span = min(
+        max(0, interval * max(0, max_frames - 1)),
+        int(WATCH_ANALYSIS_MAX_AUDIO_DURATION_MS),
+    )
+    batch_end = min(target_until, start + batch_span)
+    next_skipped_start = _next_skipped_start(start, timeline_sections)
+    if next_skipped_start is not None and next_skipped_start <= batch_end:
+        batch_end = max(start, next_skipped_start - 1)
+    targets = _rolling_targets(
+        start,
+        batch_end,
+        interval_ms=interval,
+        max_frames=max_frames,
+    )
     return _gateway_plan({
         "purpose": "rolling",
         "reason": "extend_future_coverage",
         "target_timestamps_ms": targets,
         "max_frames": max_frames,
+        "audio_required": len(targets) >= 2,
+        "audio_range_start_ms": targets[0] if targets else start,
+        "audio_range_end_ms": targets[-1] if targets else start,
         "covered_until_ms": covered_until,
+        "effective_start_ms": start,
         "target_until_ms": target_until,
         "suggested_interval_ms": interval,
     })
