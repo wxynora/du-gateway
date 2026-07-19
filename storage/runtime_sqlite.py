@@ -208,7 +208,7 @@ def ensure_schema() -> None:
                     analysis_original_title TEXT NOT NULL DEFAULT '',
                     analysis_year INTEGER NOT NULL DEFAULT 0,
                     analysis_model TEXT NOT NULL DEFAULT 'google/gemini-2.5-flash',
-                    analysis_prompt_version TEXT NOT NULL DEFAULT 'watch-v5',
+                    analysis_prompt_version TEXT NOT NULL DEFAULT 'watch-v7',
                     force_unknown_analysis INTEGER NOT NULL DEFAULT 0,
                     fear_mode INTEGER NOT NULL DEFAULT 0,
                     fear_action TEXT NOT NULL DEFAULT 'warn_only',

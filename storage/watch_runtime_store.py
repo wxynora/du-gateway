@@ -11,14 +11,14 @@ from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
 
-from config import WATCH_CONTEXT_REPLY_LEAD_MS
+from config import WATCH_ANALYSIS_PROMPT_VERSION, WATCH_CONTEXT_REPLY_LEAD_MS
 from storage import runtime_sqlite
 
 
 ACTIVE_TTL = timedelta(hours=24)
 ENDED_TTL = timedelta(hours=6)
 DEFAULT_ANALYSIS_MODEL = "google/gemini-2.5-flash"
-DEFAULT_PROMPT_VERSION = "watch-v6"
+DEFAULT_PROMPT_VERSION = WATCH_ANALYSIS_PROMPT_VERSION
 
 KNOWLEDGE_MODES = {"known", "needs_summary"}
 FEAR_ACTIONS = {"warn_only", "cover_video"}

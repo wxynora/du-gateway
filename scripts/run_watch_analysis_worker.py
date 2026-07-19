@@ -373,11 +373,24 @@ def process_claimed_job(
             try:
                 cached_frames = cache_analysis_frames(session, samples)
                 if cached_frames:
-                    logger.info(
-                        "一起看派生帧已缓存 session_id=%s epoch=%s count=%s",
+                    latest_session = watch_runtime_store.get_session(session_id) or session
+                    latest_playback = (
+                        latest_session.get("playback")
+                        if isinstance(latest_session.get("playback"), dict)
+                        else {}
+                    )
+                    retention = watch_visual_store.prune_session_frames(
                         session_id,
-                        (session.get("playback") or {}).get("timeline_epoch"),
+                        timeline_epoch=int(latest_playback.get("timeline_epoch") or 0),
+                        playhead_ms=int(latest_playback.get("playhead_ms") or 0),
+                    )
+                    logger.info(
+                        "一起看派生帧已缓存 session_id=%s epoch=%s count=%s retained=%s deleted=%s",
+                        session_id,
+                        latest_playback.get("timeline_epoch"),
                         len(cached_frames),
+                        retention.get("retained"),
+                        retention.get("rows_deleted"),
                     )
             except Exception as exc:
                 logger.warning("一起看派生帧缓存失败 session_id=%s: %s", session_id, exc)

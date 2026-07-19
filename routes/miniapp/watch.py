@@ -194,6 +194,7 @@ def register_routes(bp):
                         session_id,
                         timeline_epoch=current_epoch,
                     )
+                    watch_visual_store.delete_session_frames(session_id)
                 watch_analysis_store.cancel_stale_jobs(
                     session_id,
                     current_epoch=current_epoch,
@@ -493,6 +494,7 @@ def register_routes(bp):
                 current_epoch=None,
                 reason="session_ended",
             )
+            watch_visual_store.delete_session_frames(session_id)
             return jsonify({"ok": True, "session": session})
 
         return _handle_store_error(_end)

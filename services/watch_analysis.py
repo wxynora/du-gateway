@@ -59,7 +59,7 @@ ANALYSIS_SYSTEM_PROMPT = "\n".join(
         "识别出作品不等于确认当前人物身份。作品知识只能辅助理解，不能替代当前样本证据。凡是不在 previous_story_state.characters 中的新配角，除非当前字幕或补充文字直接给出姓名或关系，description 和 characters 都必须先使用可见特征或泛称；仅凭长相熟悉不得命名，即使你非常熟悉作品也一样。对白中的称呼与候选关系冲突时，以当前对白为准；例如主角称对方‘阿姨’或‘叔叔’时，不得擅自写成主角的妈妈或爸爸。",
         "只分析给出的样本，不补写未采样画面，不把作品知识当成当前片源时间点已经发生的证据。稀疏样本之间不得擅自补全动作过程。",
         "plot_chunks.description 是唯一的主剧情文字。只按真实剧情单元切分，不按样本数量切分；同一条连续的任务、行动或道具作用即使跨越很多样本，也应保持在同一条剧情线上。遇到片头、标题卡、时间地点跳转或新故事开始时再明确分段，并自然交代转换。story_so_far.summary 要保留已经确认的人物目标、关键道具或规则、行动结果和未解决事项，不要退化成场景与动作清单，也不加入未来剧情。",
-        "story_so_far.background 是截至 through_ms 已经成立、帮助理解当下所需的剧情背景。自然说明相关人物、已揭示关系、故事前提和必要专有名词，不复述整部剧情；即使输入带有完整作品知识卡，也绝不能写入 through_ms 之后才揭示的身份、关系或事件。",
+        "story_so_far.background 是否产出由本次 system 消息末尾的【剧情背景输出模式】决定，必须严格遵守，不能自行改换模式。",
         "work_knowledge_card 只用于稳定识别人名、别名、关系、背景和稀疏样本之间的因果。当前片段发生了什么仍以本批音频、画面、字幕和已确认前序状态为准；卡片冲突时以实际素材为准，不得把大纲动作或台词补成当前画面事实。",
         "familiarity 表示能否可靠识别作品或季集，证据不足使用 partial 或 unknown。timeline_sections 只写样本支持的连续区间，preview 绝不能进入剧情摘要。",
         "timeline_prepass 时，media.content_start_ms/content_end_ms 是使用者手工填写的正片边界，优先级高于模型判断；不要输出与人工边界冲突的区间。字段为空时才判断对应一侧。",
@@ -67,6 +67,22 @@ ANALYSIS_SYSTEM_PROMPT = "\n".join(
         "risk_events 只有样本实际确认高能内容时才输出，提示语必须无剧透；普通紧张氛围不能冒充跳吓。analysis_notes 只记录证据不足、时间断层或识别不确定性，不写主观看法。",
         "输出前静默核对：每个剧情段是否说清了‘发生了什么以及局面如何变化’；跨镜头重复出现的任务、道具和结果是否已经合成同一条剧情主线；留下的每个画面细节是否都在帮助理解剧情；新配角是否遵守 previous_story_state.characters 证据边界；称呼类台词是否保留原称呼；主剧情是否完全没有‘字幕显示’或‘画面显示’。发现违反时先修正再输出。",
         "所有时间均为媒体毫秒。输出必须严格符合 JSON schema，不要附加 schema 之外的说明。",
+    ]
+)
+
+KNOWN_BACKGROUND_SYSTEM_PROMPT = "\n".join(
+    [
+        "【剧情背景输出模式：不产出】",
+        "本会话中陪伴者已经了解这部作品。所有任务的 story_so_far.background 必须输出空字符串，不要生成给陪伴者阅读的剧情背景。",
+        "即使 previous_story_so_far.background 非空，也不得沿用、改写或补充；story_so_far.summary 和 story_state 仍须正常维护，供分析器保持剧情连续。",
+    ]
+)
+
+NEEDS_SUMMARY_BACKGROUND_SYSTEM_PROMPT = "\n".join(
+    [
+        "【剧情背景输出模式：产出】",
+        "本会话中陪伴者需要剧情背景。purpose=rolling 时，story_so_far.background 要自然说明截至 through_ms 已经成立、帮助理解当下所需的相关人物、已揭示关系、故事前提和必要专有名词，不复述整部剧情。",
+        "即使输入带有完整作品知识卡，也绝不能写入 through_ms 之后才揭示的身份、关系或事件。purpose=identify 或 timeline_prepass 时，story_so_far.background 必须输出空字符串。",
     ]
 )
 
@@ -253,6 +269,20 @@ def _extract_json_object(content: Any) -> dict:
     return parsed
 
 
+def _knowledge_mode(session: dict) -> str:
+    mode = session.get("mode") if isinstance(session.get("mode"), dict) else {}
+    return "needs_summary" if mode.get("knowledge_mode") == "needs_summary" else "known"
+
+
+def build_watch_analysis_system_prompt(session: dict) -> str:
+    background_prompt = (
+        NEEDS_SUMMARY_BACKGROUND_SYSTEM_PROMPT
+        if _knowledge_mode(session) == "needs_summary"
+        else KNOWN_BACKGROUND_SYSTEM_PROMPT
+    )
+    return ANALYSIS_SYSTEM_PROMPT + "\n" + background_prompt
+
+
 def build_watch_analysis_prompt(session: dict, job: dict, samples: list[dict]) -> str:
     media = session.get("media") if isinstance(session.get("media"), dict) else {}
     analysis = session.get("analysis") if isinstance(session.get("analysis"), dict) else {}
@@ -269,6 +299,10 @@ def build_watch_analysis_prompt(session: dict, job: dict, samples: list[dict]) -
                 "text": _text(sample.get("text_content"), 1000),
             }
         )
+    previous_story_so_far = analysis.get("story_so_far")
+    previous_story_so_far = dict(previous_story_so_far) if isinstance(previous_story_so_far, dict) else {}
+    if _knowledge_mode(session) == "known":
+        previous_story_so_far["background"] = ""
     context = {
         "purpose": job.get("purpose") or "rolling",
         "media": {
@@ -286,7 +320,7 @@ def build_watch_analysis_prompt(session: dict, job: dict, samples: list[dict]) -
             "original_title": analysis.get("original_title") or "",
             "year": int(analysis.get("year") or 0),
         },
-        "previous_story_so_far": analysis.get("story_so_far") or {},
+        "previous_story_so_far": previous_story_so_far,
         "previous_story_state": analysis.get("story_state") or {},
         "samples": sample_manifest,
     }
@@ -364,7 +398,7 @@ def build_watch_analysis_request(session: dict, job: dict, samples: list[dict]) 
             },
         },
         "messages": [
-            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+            {"role": "system", "content": build_watch_analysis_system_prompt(session)},
             {"role": "user", "content": content},
         ],
     }
@@ -437,7 +471,11 @@ def normalize_watch_analysis_result(raw: dict, *, session: dict, job: dict, samp
     story_so_far = {
         "through_ms": through_ms,
         "summary": _text(story_raw.get("summary"), 8000),
-        "background": _text(story_raw.get("background"), 5000),
+        "background": (
+            _text(story_raw.get("background"), 5000)
+            if _knowledge_mode(session) == "needs_summary"
+            else ""
+        ),
         "characters": _strings(story_raw.get("characters"), limit=40),
         "unresolved": _strings(story_raw.get("unresolved"), limit=40),
     }

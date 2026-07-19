@@ -4,7 +4,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from config import WATCH_VISUAL_CONTEXT_INTERVAL_SECONDS, WATCH_VISUAL_FRAME_TTL_SECONDS
+from config import (
+    WATCH_VISUAL_CONTEXT_INTERVAL_SECONDS,
+    WATCH_VISUAL_FRAME_FUTURE_WINDOW_MS,
+    WATCH_VISUAL_FRAME_MAX_PER_SESSION,
+    WATCH_VISUAL_FRAME_PAST_WINDOW_MS,
+    WATCH_VISUAL_FRAME_TTL_SECONDS,
+)
 from storage import runtime_sqlite
 
 
@@ -199,6 +205,85 @@ def claim_visual_delivery(
             raise
 
 
+def _delete_frame_rows(conn, rows: list[Any]) -> dict:
+    deleted_ids: list[str] = []
+    deleted_files = 0
+    for row in rows:
+        frame_id = str(row["id"] or "").strip()
+        if not frame_id:
+            continue
+        path = Path(str(row["file_path"] or ""))
+        try:
+            if path.is_file():
+                path.unlink()
+                deleted_files += 1
+        except OSError:
+            continue
+        deleted_ids.append(frame_id)
+    if deleted_ids:
+        placeholders = ",".join("?" for _ in deleted_ids)
+        conn.execute(
+            f"DELETE FROM watch_visual_frames WHERE id IN ({placeholders})",
+            deleted_ids,
+        )
+    return {"rows_deleted": len(deleted_ids), "files_deleted": deleted_files}
+
+
+def delete_session_frames(session_id: str) -> dict:
+    with runtime_sqlite.connect() as conn:
+        rows = conn.execute(
+            "SELECT id, file_path FROM watch_visual_frames WHERE session_id = ?",
+            (_text(session_id, 160),),
+        ).fetchall()
+        return _delete_frame_rows(conn, list(rows))
+
+
+def prune_session_frames(
+    session_id: str,
+    *,
+    timeline_epoch: int,
+    playhead_ms: int,
+) -> dict:
+    epoch = max(0, int(timeline_epoch))
+    playhead = max(0, int(playhead_ms))
+    keep_from = max(0, playhead - int(WATCH_VISUAL_FRAME_PAST_WINDOW_MS))
+    keep_until = playhead + int(WATCH_VISUAL_FRAME_FUTURE_WINDOW_MS)
+    max_frames = max(1, int(WATCH_VISUAL_FRAME_MAX_PER_SESSION))
+    with runtime_sqlite.connect() as conn:
+        rows = list(
+            conn.execute(
+                "SELECT id, file_path, timeline_epoch, at_ms FROM watch_visual_frames WHERE session_id = ?",
+                (_text(session_id, 160),),
+            ).fetchall()
+        )
+        to_delete = [
+            row
+            for row in rows
+            if int(row["timeline_epoch"] or 0) != epoch
+            or int(row["at_ms"] or 0) < keep_from
+            or int(row["at_ms"] or 0) > keep_until
+        ]
+        delete_ids = {str(row["id"] or "") for row in to_delete}
+        retained = [row for row in rows if str(row["id"] or "") not in delete_ids]
+        if len(retained) > max_frames:
+            retained.sort(
+                key=lambda row: (
+                    abs(int(row["at_ms"] or 0) - playhead),
+                    int(row["at_ms"] or 0),
+                    str(row["id"] or ""),
+                )
+            )
+            to_delete.extend(retained[max_frames:])
+        deleted = _delete_frame_rows(conn, to_delete)
+    return {
+        **deleted,
+        "retained": max(0, len(rows) - int(deleted["rows_deleted"])),
+        "keep_from_ms": keep_from,
+        "keep_until_ms": keep_until,
+        "max_frames": max_frames,
+    }
+
+
 def cleanup_expired_frames() -> dict:
     now_iso = _iso(_now())
     with runtime_sqlite.connect() as conn:
@@ -206,17 +291,4 @@ def cleanup_expired_frames() -> dict:
             "SELECT id, file_path FROM watch_visual_frames WHERE expires_at <= ?",
             (now_iso,),
         ).fetchall()
-        deleted_files = 0
-        for row in rows:
-            path = Path(str(row["file_path"] or ""))
-            if path.exists():
-                try:
-                    path.unlink()
-                    deleted_files += 1
-                except OSError:
-                    pass
-        result = conn.execute(
-            "DELETE FROM watch_visual_frames WHERE expires_at <= ?",
-            (now_iso,),
-        )
-    return {"rows_deleted": int(result.rowcount or 0), "files_deleted": deleted_files}
+        return _delete_frame_rows(conn, list(rows))
