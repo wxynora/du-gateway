@@ -34,6 +34,8 @@ _RUNTIME_TABLES = (
     "recall_message_markers",
     "recall_message_targets",
     "tool_result_cache",
+    "du_body_eval_pending",
+    "du_body_eval_audit",
     "watch_sessions",
     "watch_timeline_sections",
     "watch_plot_chunks",
@@ -143,6 +145,45 @@ def ensure_schema() -> None:
                     ON tool_result_cache(created_at, id);
                 CREATE INDEX IF NOT EXISTS idx_tool_result_cache_expires
                     ON tool_result_cache(expires_at);
+
+                CREATE TABLE IF NOT EXISTS du_body_eval_pending (
+                    window_id TEXT NOT NULL,
+                    round_index INTEGER NOT NULL,
+                    round_hash TEXT NOT NULL,
+                    round_timestamp TEXT NOT NULL DEFAULT '',
+                    messages_json TEXT NOT NULL DEFAULT '[]',
+                    prompt_version TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    batch_id TEXT NOT NULL DEFAULT '',
+                    lease_until REAL NOT NULL DEFAULT 0,
+                    next_attempt_at REAL NOT NULL DEFAULT 0,
+                    queued_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (window_id, round_index)
+                );
+                CREATE INDEX IF NOT EXISTS idx_du_body_eval_pending_due
+                    ON du_body_eval_pending(window_id, status, next_attempt_at, round_index);
+                CREATE INDEX IF NOT EXISTS idx_du_body_eval_pending_lease
+                    ON du_body_eval_pending(status, lease_until);
+
+                CREATE TABLE IF NOT EXISTS du_body_eval_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL UNIQUE,
+                    window_id TEXT NOT NULL,
+                    round_index INTEGER NOT NULL,
+                    round_hash TEXT NOT NULL,
+                    prompt_version TEXT NOT NULL,
+                    batch_id TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    event_json TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_du_body_eval_audit_window_round
+                    ON du_body_eval_audit(window_id, round_index, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_du_body_eval_audit_created
+                    ON du_body_eval_audit(created_at DESC);
 
                 CREATE TABLE IF NOT EXISTS watch_sessions (
                     id TEXT PRIMARY KEY,

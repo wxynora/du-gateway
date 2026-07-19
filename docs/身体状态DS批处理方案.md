@@ -1,7 +1,15 @@
 # 身体状态 DS 批处理方案
 
-> 状态：方案稿，尚未实现代码。
+> 状态：已按当前架构实现。pending 与审计落运行 SQLite，不新增 R2 状态文件。
 > 目标：把「体力/敏感度/占有欲/坏心值/隐性压强」从动态记忆 DS 中拆出，改成独立、低频、逐轮 delta 的身体状态评估链路。
+
+当前代码入口：
+
+- `services/du_body_evaluator.py`：批次调度、DS 调用、逐轮 apply、启动恢复。
+- `storage/du_body_eval_store.py`：SQLite pending、lease、失败重试与审计。
+- `pipeline/pipeline.py::step_run_post_archive_tasks()`：真实归档轮次登记入口。
+- `services/pixel_home.py::apply_du_body_delta()`：统一数值应用与稳定幂等键。
+- `storage/pixel_home_store.py::mutate_pixel_home_state()`：线程和同机进程锁内读改写。
 
 ## 背景
 
@@ -112,7 +120,7 @@ services/pixel_home.py::apply_du_body_delta()
 不过落地时建议给 PixelHome store 补一个锁内 `read-modify-write` helper：
 
 ```text
-mutate_du_body_state(mutator)
+mutate_pixel_home_state(mutator)
 ```
 
 原因是小家手动道具、隐藏标记、身体 DS 都会改 `du_body_state`。如果还是各自读一份旧状态再保存，容易出现“DS 刚扣了体力，手动道具保存又用旧快照覆盖回去”的并发问题。
@@ -155,50 +163,16 @@ DU_BODY_EVAL_AUDIT_KEEP=300
 
 宽限时间不是为了每条都跑，而是避免一晚上只聊 1-3 轮时永远不评估。
 
-## R2/本地状态结构
+## 运行状态结构
 
-新增 R2 key：
+当前不新增 R2 key。运行 SQLite 使用两张表：
 
 ```text
-body_state/eval_state.json
-body_state/delta_audit.json
+du_body_eval_pending
+du_body_eval_audit
 ```
 
-不复用现有 `dynamic_memory/ds_audit.json`，因为它是动态记忆 DS 审计，不记录身体状态 apply 前后值。
-
-`body_state/eval_state.json` 结构建议：
-
-```json
-{
-  "windows": {
-    "tg_8260066512": {
-      "pending": [
-        {
-          "round_index": 11801,
-          "round_hash": "sha256:...",
-          "queued_at": "2026-07-05T01:06:04+08:00",
-          "attempts": 0,
-          "status": "pending",
-          "idempotency_key": "body_delta:tg_8260066512:11801:sha256...:v1"
-        }
-      ],
-      "last_applied_round_index": 11800,
-      "updated_at": "2026-07-05T01:06:04+08:00"
-    }
-  },
-  "updated_at": "2026-07-05T01:06:04+08:00"
-}
-```
-
-pending 里不存完整正文，只存 `round_index`。执行时用：
-
-```python
-r2_store.get_conversation_round_by_index(window_id, round_index)
-```
-
-读取原始已清洗轮次。
-
-这样可以避免在 body eval state 里重复存大文本。
+`pending` 暂存尚未处理的已清洗真实轮次，成功或判定无变化后立即删除；失败保留并按 lease/attempts 重试。`audit` 只保存 round/hash、before/delta/after、原因和状态，不保存完整对话，并按最近 300 条限量。最终身体状态仍沿用 `global/pixel_home_state.json`，幂等键与状态同次写入。
 
 ## 幂等策略
 
@@ -220,7 +194,7 @@ body_delta:{window_id}:{round_index}:{round_hash}:{prompt_version}
 状态机：
 
 ```text
-pending -> processing -> applied / no_delta / skipped / failed / conflict
+pending -> processing -> applied / already_applied / no_delta / shadow / skipped / failed
 ```
 
 审计事件和 state 都要记录：
@@ -238,7 +212,7 @@ applied_at
 
 执行前检查：
 
-1. 如果该 `idempotency_key` 已在 `body_state/delta_audit.json` 里出现 `status=applied`，跳过。
+1. 如果该 `idempotency_key` 已在 SQLite 审计或 PixelHome 的近期已应用键中出现，跳过。
 2. 如果 pending 里同一轮重复出现，只保留一条。
 3. 如果 DS 重试后成功，按成功结果 apply。
 4. 如果 DS 失败，pending 保留，`attempts += 1`。
@@ -248,7 +222,7 @@ applied_at
 
 ```json
 {
-  "applied_body_delta_ids": [
+  "du_body_delta_applied_ids": [
     "body_delta:tg_8260066512:11801:sha256...:v1"
   ]
 }
@@ -382,7 +356,7 @@ DU_BODY_STAMINA_RECOVERY_LOW_RATE_PER_HOUR
 
 ## 审计日志
 
-新增 `body_state/delta_audit.json`：
+SQLite `du_body_eval_audit` 的 `event_json` 记录：
 
 ```json
 {
@@ -539,13 +513,13 @@ services/pixel_home.py::save_du_body_state()
 - `toy_types/intensity/position/state` 仍由手动设置和小家隐藏标记维护。
 - body evaluator 不生成小家事件文案。
 - 如果一轮里出现道具变化，body evaluator 可以根据那一轮内容改变 `sensitivity/stamina`，但不写道具字段。
-- 如果手动校准和 DS delta 同时发生，优先保留手动道具字段；数值冲突时写 `status=conflict` 审计，第一版可以按“读最新状态后 apply delta”处理。
+- 如果手动校准和 DS delta 同时发生，两者都在同一把跨进程锁内读取最新状态后写入；手动道具字段与 DS 数值 delta 分开合并，不互相覆盖。
 
 ## 与前端的关系
 
 第一阶段不要求新增前端。
 
-最小可用只看日志和 R2 audit。
+最小可用只看日志和 SQLite audit。
 
 第二阶段可以在 MiniApp 小家/记忆调试里加一个“身体数值审计”折叠区：
 
@@ -555,7 +529,7 @@ services/pixel_home.py::save_du_body_state()
 
 ## 阶段拆分
 
-### 阶段 1：Shadow，只新增 evaluator 和审计，不 apply
+### 阶段 1：Shadow，只新增 evaluator 和审计，不 apply（已具备开关）
 
 改动范围：
 
@@ -576,14 +550,14 @@ storage/r2_store.py（如选择把 audit helper 放这里）
 - `skip_body_delta=True` 的回合不进入 pending。
 - 小家身体状态不实际变化。
 
-### 阶段 2：幂等 apply，关闭动态层 BODY apply
+### 阶段 2：幂等 apply，关闭动态层 BODY apply（已实现）
 
 改动范围：
 
 ```text
 pipeline/pipeline.py
 services/dynamic_layer_ds.py（可先不删 prompt，只不应用）
-services/pixel_home.py（补 applied_body_delta_ids 或等价幂等保护）
+services/pixel_home.py（补 `du_body_delta_applied_ids` 幂等保护）
 ```
 
 验收：
@@ -593,7 +567,7 @@ services/pixel_home.py（补 applied_body_delta_ids 或等价幂等保护）
 - 同一轮重试、重复 batch、进程重启，都不会二次 apply。
 - 手动道具字段不会被 DS delta 覆盖。
 
-### 阶段 2.5：Pending worker 和 stale 处理
+### 阶段 2.5：Pending worker 和 stale 处理（已实现）
 
 改动范围：
 
@@ -660,7 +634,7 @@ miniapp/src/ui/tabs/PixelHomeTab.tsx 或 MemoryDebugTab.tsx
 ### 线上验证
 
 1. 查日志出现 `身体状态 DS batch 已调度`。
-2. 查 `body_state/delta_audit.json` 有事件。
+2. 查 SQLite `du_body_eval_audit` 有事件。
 3. 小家体力不再长期假满。
 4. 动态记忆 DS 审计仍正常。
 5. 实时总结 4 轮计数不变。

@@ -11,7 +11,7 @@ from services.hidden_blocks import HiddenBlockParser
 from services.pixel_home_garden import build_garden_state, record_garden_actions
 from services.pixel_home_weather import build_virtual_home_weather
 from storage import r2_store
-from storage.pixel_home_store import get_pixel_home_state, save_pixel_home_state
+from storage.pixel_home_store import get_pixel_home_state, mutate_pixel_home_state, save_pixel_home_state
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 
@@ -2113,7 +2113,12 @@ def build_pixel_home_state() -> dict:
     stored, stamina_changed = _auto_recover_du_body_stamina(stored, now_iso=recovered_at)
     changed = changed or stamina_changed
     if changed:
-        save_pixel_home_state(stored)
+        def _mutate(latest: dict) -> dict:
+            latest, _ = _auto_end_stale_events(latest)
+            latest, _ = _auto_recover_du_body_stamina(latest, now_iso=recovered_at)
+            return latest
+
+        stored = mutate_pixel_home_state(_mutate) or stored
     xinyue = _normalize_actor(stored.get("xinyue"), DEFAULT_XINYUE_STATE)
     du = _normalize_actor(stored.get("du"), DEFAULT_DU_STATE, reference_spot=str(xinyue.get("spot") or ""))
     mode_state["du"] = _actor_public(du, reference_spot=str(xinyue.get("spot") or ""))
@@ -2130,39 +2135,71 @@ def build_pixel_home_state() -> dict:
 
 def save_du_body_state(payload: Any) -> dict:
     now_iso = now_beijing_iso()
-    current, _ = _auto_recover_du_body_stamina(_stored_state(), now_iso=now_iso)
     raw = payload if isinstance(payload, dict) else {}
-    previous = current.get("du_body_state") if isinstance(current.get("du_body_state"), dict) else {}
-    previous_normalized = _normalize_du_body_state(previous)
-    previous_toy_key = (
-        tuple(previous_normalized.get("toy_types") if isinstance(previous_normalized.get("toy_types"), list) else []),
-        int(previous_normalized.get("intensity") or 0),
-    )
-    has_toy_patch = any(key in raw for key in ("toy_types", "toy_type", "toy", "tool", "position", "body_position", "state", "status", "intensity", "level"))
-    has_value_patch = _has_du_body_value_patch(raw)
-    state: dict[str, Any] = {}
-    if has_toy_patch or has_value_patch:
-        merged_input = _merge_du_body_patch_input(previous_normalized, raw)
-        state = _normalize_du_body_state(merged_input)
-        if state:
-            state["updated_at"] = now_iso
-            if any(key in raw for key in DU_BODY_VALUE_ALIASES.get("stamina_value", ("stamina_value",))):
-                state["stamina_recovered_at"] = now_iso
-            current["du_body_state"] = state
-        elif has_toy_patch:
-            state = {
-                "toy_types": [],
-                "toy_type": "",
-                "position": "",
-                "state": "",
-                "intensity": 0,
-                "updated_at": now_iso,
+    result: dict[str, Any] = {}
+
+    def _mutate(current: dict) -> dict:
+        current, _ = _auto_recover_du_body_stamina(current, now_iso=now_iso)
+        previous = current.get("du_body_state") if isinstance(current.get("du_body_state"), dict) else {}
+        previous_normalized = _normalize_du_body_state(previous)
+        previous_toy_key = (
+            tuple(previous_normalized.get("toy_types") if isinstance(previous_normalized.get("toy_types"), list) else []),
+            int(previous_normalized.get("intensity") or 0),
+        )
+        has_toy_patch = any(
+            key in raw
+            for key in (
+                "toy_types",
+                "toy_type",
+                "toy",
+                "tool",
+                "position",
+                "body_position",
+                "state",
+                "status",
+                "intensity",
+                "level",
+            )
+        )
+        has_value_patch = _has_du_body_value_patch(raw)
+        state: dict[str, Any] = {}
+        if has_toy_patch or has_value_patch:
+            merged_input = _merge_du_body_patch_input(previous_normalized, raw)
+            state = _normalize_du_body_state(merged_input)
+            if state:
+                state["updated_at"] = now_iso
+                if any(key in raw for key in DU_BODY_VALUE_ALIASES.get("stamina_value", ("stamina_value",))):
+                    state["stamina_recovered_at"] = now_iso
+                current["du_body_state"] = state
+            elif has_toy_patch:
+                state = {
+                    "toy_types": [],
+                    "toy_type": "",
+                    "position": "",
+                    "state": "",
+                    "intensity": 0,
+                    "updated_at": now_iso,
+                }
+                current["du_body_state"] = state
+        else:
+            current.pop("du_body_state", None)
+        current["updated_at"] = now_iso
+        result.update(
+            {
+                "previous": dict(previous),
+                "previous_toy_key": previous_toy_key,
+                "has_toy_patch": has_toy_patch,
+                "state": dict(state),
             }
-            current["du_body_state"] = state
-    else:
-        current.pop("du_body_state", None)
-    current["updated_at"] = now_iso
-    ok = save_pixel_home_state(current)
+        )
+        return current
+
+    saved = mutate_pixel_home_state(_mutate)
+    ok = saved is not None
+    state = result.get("state") if isinstance(result.get("state"), dict) else {}
+    previous = result.get("previous") if isinstance(result.get("previous"), dict) else {}
+    previous_toy_key = result.get("previous_toy_key") or ((), 0)
+    has_toy_patch = bool(result.get("has_toy_patch"))
     next_toy_key = (
         tuple(state.get("toy_types") if isinstance(state.get("toy_types"), list) else []),
         int(state.get("intensity") or 0),
@@ -2177,49 +2214,106 @@ def save_du_body_state(payload: Any) -> dict:
     return response_state if state else {"ok": bool(ok)}
 
 
-def apply_du_body_delta(payload: Any) -> dict:
-    deltas = _normalize_du_body_delta_payload(payload)
-    now_iso = now_beijing_iso()
-    if not deltas:
-        current, recovered = _auto_recover_du_body_stamina(_stored_state(), now_iso=now_iso)
-        ok = True
-        if recovered:
-            ok = save_pixel_home_state(current)
-        normalized = _normalize_du_body_state(current.get("du_body_state"))
-        return {"ok": bool(ok), "changed": bool(recovered), "du_body_state": _du_body_state_without_hidden(normalized)}
+def normalize_du_body_delta(payload: Any) -> dict[str, int]:
+    return dict(_normalize_du_body_delta_payload(payload))
 
-    current, recovery_changed = _auto_recover_du_body_stamina(_stored_state(), now_iso=now_iso)
-    previous = current.get("du_body_state") if isinstance(current.get("du_body_state"), dict) else {}
-    state = _normalize_du_body_state(previous)
+
+def get_du_body_state_snapshot() -> dict:
+    current, _ = _auto_recover_du_body_stamina(_stored_state(), now_iso=now_beijing_iso())
+    state = _normalize_du_body_state(current.get("du_body_state"))
     for key, default in DU_BODY_DEFAULT_VALUES.items():
         if key not in state:
             state[key] = default
+    return state
 
-    changed = False
-    applied: dict[str, int] = {}
-    for field, delta in deltas.items():
-        before = _clamp_du_body_value(state.get(field))
-        after = _apply_du_body_delta_value(field, before, delta)
-        if after != before:
-            changed = True
-        state[field] = after
-        applied[field] = delta
-        if field == "stamina_value":
-            state["stamina_recovered_at"] = now_iso
 
-    state["updated_at"] = now_iso
-    normalized = _normalize_du_body_state(state)
-    if not normalized:
-        return {"ok": True, "changed": False, "du_body_state": {}}
+def apply_du_body_delta(payload: Any, *, idempotency_key: str = "") -> dict:
+    deltas = _normalize_du_body_delta_payload(payload)
+    now_iso = now_beijing_iso()
+    if not deltas:
+        result: dict[str, Any] = {}
 
-    current["du_body_state"] = normalized
-    current["updated_at"] = now_iso
-    ok = save_pixel_home_state(current)
+        def _recover(current: dict) -> dict:
+            current, recovered = _auto_recover_du_body_stamina(current, now_iso=now_iso)
+            result["recovered"] = bool(recovered)
+            result["state"] = _normalize_du_body_state(current.get("du_body_state"))
+            return current
+
+        current = mutate_pixel_home_state(_recover)
+        ok = current is not None
+        recovered = bool(result.get("recovered"))
+        normalized = result.get("state") if isinstance(result.get("state"), dict) else {}
+        return {"ok": bool(ok), "changed": bool(recovered), "du_body_state": _du_body_state_without_hidden(normalized)}
+
+    idem = str(idempotency_key or "").strip()
+    result: dict[str, Any] = {}
+
+    def _mutate(current: dict) -> dict:
+        current, recovery_changed = _auto_recover_du_body_stamina(current, now_iso=now_iso)
+        previous = current.get("du_body_state") if isinstance(current.get("du_body_state"), dict) else {}
+        state = _normalize_du_body_state(previous)
+        for key, default in DU_BODY_DEFAULT_VALUES.items():
+            if key not in state:
+                state[key] = default
+        before_state = dict(state)
+        applied_ids = [
+            str(value).strip()
+            for value in (current.get("du_body_delta_applied_ids") or [])
+            if str(value or "").strip()
+        ]
+        if idem and idem in applied_ids:
+            result.update(
+                {
+                    "duplicate": True,
+                    "changed": bool(recovery_changed),
+                    "before_state": before_state,
+                    "after_state": dict(state),
+                    "applied_delta": {},
+                }
+            )
+            return current
+
+        changed = False
+        applied: dict[str, int] = {}
+        for field, delta in deltas.items():
+            before = _clamp_du_body_value(state.get(field))
+            after = _apply_du_body_delta_value(field, before, delta)
+            if after != before:
+                changed = True
+            state[field] = after
+            applied[field] = delta
+            if field == "stamina_value":
+                state["stamina_recovered_at"] = now_iso
+
+        state["updated_at"] = now_iso
+        normalized = _normalize_du_body_state(state)
+        current["du_body_state"] = normalized
+        if idem:
+            applied_ids.append(idem)
+            current["du_body_delta_applied_ids"] = applied_ids[-300:]
+        current["updated_at"] = now_iso
+        result.update(
+            {
+                "duplicate": False,
+                "changed": bool(changed or recovery_changed),
+                "before_state": before_state,
+                "after_state": dict(normalized),
+                "applied_delta": applied,
+            }
+        )
+        return current
+
+    saved = mutate_pixel_home_state(_mutate)
+    ok = saved is not None
+    normalized = result.get("after_state") if isinstance(result.get("after_state"), dict) else {}
     return {
         "ok": bool(ok),
-        "changed": bool(changed or recovery_changed),
+        "changed": bool(result.get("changed")),
+        "duplicate": bool(result.get("duplicate")),
         "du_body_state": _du_body_state_without_hidden(normalized),
-        "applied_delta": applied,
+        "before_state": result.get("before_state") if isinstance(result.get("before_state"), dict) else {},
+        "after_state": normalized,
+        "applied_delta": result.get("applied_delta") if isinstance(result.get("applied_delta"), dict) else {},
     }
 
 

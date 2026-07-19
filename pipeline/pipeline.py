@@ -24,6 +24,7 @@ from config import (
     DEEPSEEK_API_URL,
     DEEPSEEK_API_KEY,
     DEEPSEEK_CHAT_MODEL,
+    DU_DYNAMIC_LAYER_BODY_DELTA_ENABLED,
 )
 from pathlib import Path
 from storage import r2_store
@@ -3788,8 +3789,15 @@ def _step_dynamic_layer_evolve(
             round_index,
             decision.get("body_delta") if isinstance(decision, dict) else {},
         )
-    else:
+    elif DU_DYNAMIC_LAYER_BODY_DELTA_ENABLED:
         _apply_dynamic_body_delta(decision, window_id=window_id, round_index=round_index)
+    elif isinstance(decision, dict) and decision.get("body_delta"):
+        logger.info(
+            "动态层 BODY delta 未应用：已由独立 evaluator 接管 window_id=%s round_index=%s body_delta=%s",
+            window_id,
+            round_index,
+            decision.get("body_delta"),
+        )
     return archive_payload
 
 
@@ -4040,9 +4048,30 @@ def step_run_post_archive_tasks(
             daemon=False,
         )
         t.start()
-    if skip_dynamic_memory_write and skip_body_delta:
+    if skip_body_delta:
+        logger.info("身体状态 evaluator 跳过 window_id=%s round_index=%s", window_id, round_index)
+    else:
+        try:
+            from services.du_body_evaluator import enqueue_archived_round
+
+            queued = enqueue_archived_round(window_id, round_index, round_messages)
+            logger.info(
+                "身体状态 evaluator 登记 window_id=%s round_index=%s queued=%s reason=%s",
+                window_id,
+                round_index,
+                bool(queued.get("queued")),
+                queued.get("reason") or "",
+            )
+        except Exception:
+            logger.warning(
+                "身体状态 evaluator 登记失败 window_id=%s round_index=%s",
+                window_id,
+                round_index,
+                exc_info=True,
+            )
+    if skip_dynamic_memory_write:
         logger.info(
-            "动态层跳过：请求要求跳过动态记忆与 BODY delta window_id=%s round_index=%s",
+            "动态层跳过：请求要求跳过动态记忆写入 window_id=%s round_index=%s",
             window_id,
             round_index,
         )

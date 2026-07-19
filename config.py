@@ -269,6 +269,21 @@ DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_CHAT_MODEL = os.environ.get("DEEPSEEK_CHAT_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
 
+# 渡的身体状态：独立四轮 DS evaluator，不参与动态记忆和实时总结计数。
+DU_BODY_EVALUATOR_ENABLED = os.environ.get("DU_BODY_EVALUATOR_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+DU_BODY_EVALUATOR_APPLY = os.environ.get("DU_BODY_EVALUATOR_APPLY", "1").strip().lower() in ("1", "true", "yes")
+DU_DYNAMIC_LAYER_BODY_DELTA_ENABLED = os.environ.get("DU_DYNAMIC_LAYER_BODY_DELTA_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+DU_BODY_EVAL_MODEL = os.environ.get("DU_BODY_EVAL_MODEL", DEEPSEEK_CHAT_MODEL).strip() or DEEPSEEK_CHAT_MODEL
+DU_BODY_EVAL_PROMPT_VERSION = os.environ.get("DU_BODY_EVAL_PROMPT_VERSION", "body-v1").strip() or "body-v1"
+DU_BODY_EVAL_BATCH_SIZE = _env_int("DU_BODY_EVAL_BATCH_SIZE", 4, 1, 12)
+DU_BODY_EVAL_MAX_PENDING = _env_int("DU_BODY_EVAL_MAX_PENDING", 12, 4, 100)
+DU_BODY_EVAL_MAX_ATTEMPTS = _env_int("DU_BODY_EVAL_MAX_ATTEMPTS", 3, 1, 8)
+DU_BODY_EVAL_AUDIT_KEEP = _env_int("DU_BODY_EVAL_AUDIT_KEEP", 300, 20, 5000)
+DU_BODY_EVAL_GRACE_SECONDS = _env_int("DU_BODY_EVAL_GRACE_SECONDS", 1800, 60, 21600)
+DU_BODY_EVAL_STALE_SECONDS = _env_int("DU_BODY_EVAL_STALE_SECONDS", 21600, 1800, 172800)
+DU_BODY_EVAL_LEASE_SECONDS = _env_int("DU_BODY_EVAL_LEASE_SECONDS", 300, 30, 1800)
+DU_BODY_EVAL_TIMEOUT_SECONDS = _env_int("DU_BODY_EVAL_TIMEOUT_SECONDS", 90, 10, 300)
+
 # 共读读书卡片维护：幕后结构化整理，不参与渡的回复语气。
 CO_READ_CARD_API_URL = os.environ.get(
     "CO_READ_CARD_API_URL",

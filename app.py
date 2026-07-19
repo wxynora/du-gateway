@@ -6,10 +6,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from config import DATA_DIR
-from utils.log import setup_logging
+from utils.log import get_logger, setup_logging
 
 # 先配置日志，后续模块打 log 才能带 [R2]/[Pipeline] 等来源
 setup_logging()
+logger = get_logger(__name__)
 
 from flask import Flask, request
 from routes.chat import bp as chat_bp
@@ -51,6 +52,14 @@ app.register_blueprint(music_melody_api_bp)
 app.register_blueprint(internal_stt_api_bp)
 app.register_blueprint(xiaoai_api_bp)
 app.register_blueprint(aifarm_proxy_bp)
+
+try:
+    from services.du_body_evaluator import resume_pending_workers
+
+    resume_pending_workers()
+except Exception:
+    # 身体状态是旁路慢任务，启动恢复失败不能阻断网关主服务。
+    logger.warning("身体状态 evaluator 启动恢复失败", exc_info=True)
 
 # Telegram Webhook 只在 web worker 内快速落持久队列；输入聚合与回复发送由
 # scripts/run_telegram_webhook_worker.py 持有。默认不在 gunicorn worker 里启动 TG runtime，
