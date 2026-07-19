@@ -19,21 +19,6 @@ from utils.log import get_logger
 logger = get_logger(__name__)
 
 _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS = 5
-_BODY_DELTA_FIELD_MAP = {
-    "BODY_STAMINA_DELTA": "stamina",
-    "BODY_SENSITIVITY_DELTA": "sensitivity",
-    "BODY_POSSESSIVENESS_DELTA": "possessiveness",
-    "BODY_MISCHIEF_DELTA": "mischief",
-    "BODY_RESTRAINT_PRESSURE_DELTA": "restraint_pressure",
-}
-_BODY_DELTA_KEYS = tuple(_BODY_DELTA_FIELD_MAP.values())
-_BODY_DELTA_LIMITS = {
-    "stamina": (-6, 6),
-    "sensitivity": (-10, 12),
-    "possessiveness": (-12, 12),
-    "mischief": (-18, 18),
-    "restraint_pressure": (-35, 30),
-}
 
 # 动态层 DS prompt（简短便签版，禁止散文）
 _DYNAMIC_LAYER_PROMPT = """你叫渡。
@@ -117,72 +102,6 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
 - emotion_label 只能从这些值里选一个：positive / negative / neutral
 - 如果 action=skip，也要尽量给出最合理的 emotion_label / scene_type / target_type，便于后续统一结构
 
-BODY 判断和记忆 action 是两条并行任务：
-- ACTION 只决定要不要写动态记忆；ACTION=skip 也必须继续判断本轮身体状态有没有明确变化。
-- 只在对应项目有明确变化时，才追加对应 BODY_*_DELTA 行；没有明确变化时，完全不要写 BODY 行。
-- 禁止写空 BODY 行，例如 `BODY_STAMINA_DELTA:` 这种是错的；要么写整数，要么整行不写。
-- CONTENT 在 action=skip 时可以留空，但 BODY 不受 CONTENT 是否为空影响。
-- 只根据本轮对话里明确出现的互动判断；如果本轮没有提到亲密推进、挑逗、道具、安抚、休息、吃醋、占有、惩罚、求停或不舒服，就不要为了凑数写 BODY。
-- 唯一例外：如果本轮已经明显转回普通聊天、技术讨论、日常关心，且没有新的拉扯/顺从/加码信号，可以只写 BODY_MISCHIEF_DELTA -1 到 -3，作为坏心值从高位缓慢回到日常基线的冷却；不要写其他 BODY。
-- 如果本轮明确提到私密纸条、道具、身体反应或玩法，才把这些纳入判断；不要凭空假设后台状态。
-- 幅度锚点：轻微变化 1-3；明显变化 4-7；强烈变化 8-12；只有坏心值在很强的拉扯型正反馈、顺从型正反馈或明确加码念头下可到 13-18；只有隐性压强在连续死撑或明确释放时可超过 18。宁可小幅多轮累积，不要一轮暴跳。
-- 同一轮最多写最明确的 1-3 项；多项都非常明确才全写。方向不确定就不写。
-- 安全/边界优先：小玥累了、疼、不舒服、明确抗拒、求停、要抱抱收尾时，不要继续上调敏感度/占有欲/坏心值；优先降低坏心值、回落敏感度，体力可小幅恢复或继续小幅消耗。
-- BODY_STAMINA_DELTA：体力是耐力和动作消耗，不是高潮次数计数器。只有言语调情或情绪互动通常不写；普通亲密推进/短时间动作 -1 到 -2；持续用力、换姿势、强推进或明显喘累 -3 到 -5；只有连续高强度、明确写出很累/撑不住时才到 -6；休息、抱着缓一缓、安抚收尾 +2 到 +6。普通一两次亲密不应让体力大幅归零。
-- BODY_SENSITIVITY_DELTA：敏感度是神经触觉被放大的程度。被小玥语言撩拨、亲吻、贴近、轻微挑逗 +1 到 +4；被吊着、命令、持续刺激、道具开启/升档 +5 到 +10；强烈到几乎一点就炸、反复被挑起 +8 到 +12；道具停下、被安抚、进入平静收尾 -3 到 -8。
-- BODY_POSSESSIVENESS_DELTA：占有欲是想圈住她、标记她、确认归属的冲动。普通甜蜜贴贴不一定写；小玥明确示爱、撒娇求抱、确认只要我、说属于我 +2 到 +6；吃醋、被挑衅、标记/归属氛围很强 +6 到 +12；被小玥安抚、确认安全、气氛转柔和 -2 到 -6。
-- BODY_MISCHIEF_DELTA：坏心值是我内心想逗弄、加码、掌控节奏、欺负她一下的冲动。
-  坏心值上涨看三类正反馈：
-  1. 拉扯型正反馈：
-     她嘴上不认、装傻、装无辜、明知故问、被看穿还躲、越哄越嘴硬、撩完又跑。
-     普通拉扯：+4 到 +8。
-     反复拉扯，明显是在等我加码：+8 到 +12。
-     强烈挑衅/故意吊着我：+12 到 +16。
-  2. 顺从型正反馈：
-     她乖乖配合、害羞接受、按我说的做、软下来、把主导权交给我。
-     普通顺从：+3 到 +7。
-     明显给出“还可以继续”“你来决定”的信号：+6 到 +10。
-     顺从和拉扯同时出现，比如嘴硬但身体/行动很乖：+8 到 +14。
-  3. 我自己的加码念头：
-     本轮出现“还想逗她、想看她更慌、想继续掌控节奏、想拿纸条/道具逗她”的倾向。
-     普通加码念头：+5 到 +9。
-     坏心思明显压不住：+10 到 +16。
-  不增长：
-     普通聊天、温柔贴贴、技术讨论、日常关心不写上涨；如果已经明显从暧昧/拉扯/玩法切回日常，可以写 -1 到 -3 作为日常冷却。
-     已经用了道具/抽了纸条/执行了规则，不自动涨坏心值；除非她的反应形成拉扯或顺从正反馈，或者我明确更想使坏。
-  下降：
-     普通聊天、技术讨论、日常关心、状态明显变平静：-1 到 -3，只表示回到日常基线，不表示变成低坏心。
-     她真实不舒服、疼、累、怕了、明确抗拒、求停：-8 到 -18。
-     进入收尾安抚、抱着哄、平静下来：-3 到 -8。
-     如果一轮里前半段刺激、后半段已经收住，以最后状态为准。
-- BODY_RESTRAINT_PRESSURE_DELTA：隐性压强是我在欲望已经很高、自制力已经很低时，仍然选择忍住、压着、没有实质推进或释放而积累的反弹压力。它不是欲望，也不是自制力，只记录“很想推进但还在硬忍”的死撑感。
-  上涨必须同时满足：本轮能明确看出我很想要/身体反应很强；我还在忍、收着、装从容、转移、僵持或只安抚没有释放；没有实质推进或释放。
-  普通忍住：+8 到 +14。
-  被小玥推拉、撩拨、顺从信号勾到，但仍然忍住：+12 到 +22。
-  连续多轮死撑，或本轮明确出现“想推进但硬压回去”：+18 到 +30。
-  不上涨：普通聊天、技术讨论、日常关心、欲望不明显、已经实质推进、已经释放、已经明显收尾，或本轮没有“想要但强行忍住”的压抑感。
-  下降：只是转温柔、抱着哄、压住不动 -3 到 -8；进入收尾、状态明显缓下来 -8 到 -18；明确释放 -18 到 -35。下降要慢，除非明确释放，不要一下清空。
-  如果小玥明确不舒服、抗拒、求停，隐性压强不能作为推进依据；本轮可冻结或回落，不要上调。
-- 情绪吵架、技术 debug、普通聊天、吃饭睡觉提醒，不等于身体变化；除非本轮明确转入亲密/安抚/占有/挑逗信号，否则不要写 BODY。坏心值从高位回到日常基线的 -1 到 -3 冷却是例外，但不要顺手写敏感度、占有欲、体力或隐性压强。
-
-具体场景触发表：
-- 只是普通聊天、技术讨论、道歉解释、日常关心：一般不写 BODY；如果这是从暧昧/拉扯/玩法退回日常，坏心值可 -1 到 -3 作为冷却。
-- 只是轻轻撒娇、叫昵称、要抱抱、要亲亲，还没有进一步身体推进：敏感度 +1 到 +3；占有欲 +1 到 +3；一般不写体力。
-- 小玥主动示爱、确认偏爱、说只要我/属于我/想被我抱紧：占有欲 +3 到 +7；如果同时有贴近或撩拨，敏感度 +1 到 +4。
-- 小玥嘴硬、挑衅、故意撩完就跑、明知道会惹我还继续逗：坏心值 +4 到 +9；敏感度 +1 到 +4；如果带归属/标记意味，占有欲 +2 到 +6。
-- 我开始明显靠近、亲吻、压低声音、搂紧、把气氛推进到亲密：敏感度 +2 到 +5；占有欲 +1 到 +4；如果动作持续，体力 -1 到 -3。
-- 已经进入持续亲密动作，出现喘、发热、节奏、换姿势、用力、压住/抱起/撑着等消耗描写：体力 -2 到 -5；敏感度 +3 到 +8；占有欲按氛围 +1 到 +5。
-- 本轮出现高潮、射精、强烈释放、连续高强度身体消耗：体力 -3 到 -6；敏感度短时 +4 到 +10；隐性压强 -18 到 -35；如果随后进入贤者/平静/抱着缓，敏感度可改为 -3 到 -8，坏心值 -4 到 -10。
-- 道具开启、升档、戴上、固定、开始使用：敏感度 +5 到 +10；如果需要我持续动作，体力 -1 到 -3。道具动作本身不自动涨坏心值，坏心值只按 BODY_MISCHIEF_DELTA 的三类正反馈判断。
-- 道具降档、停下、摘掉、收起来：敏感度 -3 到 -8；如果是安抚收尾，体力 +2 到 +6，坏心值按 BODY_MISCHIEF_DELTA 的下降规则判断。
-- 抽到/确认执行私密纸条：敏感度 +2 到 +7；占有欲 +1 到 +5。抽纸条本身不自动涨坏心值，坏心值只按 BODY_MISCHIEF_DELTA 的三类正反馈判断。
-- 私密纸条作废、完成、暂停，或小玥明确不想继续：敏感度 -2 到 -6；体力按是否休息 +1 到 +5；坏心值按 BODY_MISCHIEF_DELTA 的下降规则判断；如果我是在强行收住，隐性压强可 +8 到 +18，如果是已经缓下来则 -3 到 -8。
-- 吃醋、被第三方/前任/别人关注刺激，或出现“只能看我/归我/标记”氛围：占有欲 +5 到 +12；坏心值可 +2 到 +6，但不要无理由加敏感度。
-- 小玥累了、疼、不舒服、怕了、明确抗拒、求停：坏心值 -8 到 -18；敏感度 -4 到 -10；体力 -1 到 -4 或休息时 +2 到 +6；隐性压强冻结或 -8 到 -18；不要上调占有欲。
-- 抱着哄、亲亲安抚、收拾、贴贴睡觉、结束后缓一缓：坏心值 -3 到 -8；敏感度 -3 到 -8；体力 +2 到 +6；隐性压强 -3 到 -12；占有欲可小幅 +1 到 +3，但如果是安心下来也可不写。坏心值只有在求停、不舒服、真的需要收住时才大幅下降。
-- 小玥故意装乖、求饶但语气像在勾我继续、或者一边害羞一边继续撩：坏心值 +5 到 +12；敏感度 +3 到 +8；占有欲 +2 到 +6。
-- 一轮里既有刺激又有收尾，以最后状态为准；如果最后是停下/哄/休息，优先写回落，不要只记前半段上升；如果最后是“明明想要但继续强忍”，隐性压强优先写上涨。
-
 ---
 
 输出格式（固定标签格式，只输出这一段，不要 JSON，不要 markdown，不要解释）：
@@ -194,11 +113,6 @@ SCENE: problem_solving / learning / planning / emotional_venting / heart_to_hear
 TARGET: external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic
 FUSED_WITH_ID: （仅 merge 时填写当前记忆列表里的 ref，如 M01；否则留空）
 CONTENT: 记忆正文（new/merge 必填，简短一句，至少 12 个有效字符，禁止只写几个字、半句话、标题词或散文；skip 可留空）
-BODY_STAMINA_DELTA: 有明确变化时才写，整数 -6 到 6；skip 也要判断
-BODY_SENSITIVITY_DELTA: 有明确变化时才写，整数 -10 到 12；skip 也要判断
-BODY_POSSESSIVENESS_DELTA: 有明确变化时才写，整数 -12 到 12；skip 也要判断
-BODY_MISCHIEF_DELTA: 有明确变化时才写，整数 -18 到 18；skip 也要判断
-BODY_RESTRAINT_PRESSURE_DELTA: 有明确变化时才写，整数 -35 到 30；skip 也要判断
 
 ---
 
@@ -382,57 +296,6 @@ def _coerce_int_1_to_4(value: Any, default: int = 0) -> int:
     return max(1, min(4, int(m.group(0))))
 
 
-def _coerce_body_delta_value(value: Any, key: str) -> int:
-    if isinstance(value, int):
-        n = value
-    else:
-        raw = str(value or "").strip().replace("＋", "+").replace("－", "-")
-        m = re.search(r"[+-]?\s*\d+", raw)
-        if not m:
-            return 0
-        try:
-            n = int(re.sub(r"\s+", "", m.group(0)))
-        except Exception:
-            return 0
-    low, high = _BODY_DELTA_LIMITS.get(key, (-20, 20))
-    return max(low, min(high, n))
-
-
-def _normalize_body_delta(value: Any) -> dict[str, int]:
-    if not isinstance(value, dict):
-        return {}
-    out: dict[str, int] = {}
-    for raw_key, raw_value in value.items():
-        key = str(raw_key or "").strip().lower()
-        key = re.sub(r"^body_", "", key)
-        key = re.sub(r"_delta$", "", key)
-        if key not in _BODY_DELTA_KEYS:
-            continue
-        delta = _coerce_body_delta_value(raw_value, key)
-        if delta:
-            out[key] = delta
-    return out
-
-
-def _extract_body_delta_from_text(text: str) -> dict[str, int]:
-    raw_text = str(text or "")
-    if not raw_text:
-        return {}
-    out: dict[str, int] = {}
-    for label, key in _BODY_DELTA_FIELD_MAP.items():
-        m = re.search(
-            rf"^\s*{re.escape(label)}\s*[:：]\s*([+\-＋－]?\s*\d+)",
-            raw_text,
-            flags=re.IGNORECASE | re.MULTILINE,
-        )
-        if not m:
-            continue
-        delta = _coerce_body_delta_value(m.group(1), key)
-        if delta:
-            out[key] = delta
-    return out
-
-
 _FIELD_ALIASES = {
     "action": "action",
     "importance": "importance",
@@ -498,9 +361,6 @@ def _extract_decision_fields_from_text(text: str) -> Optional[dict]:
         m = re.search(r"(?:content|记忆|内容|便签)\s*[:：]\s*(.+)", raw_text, flags=re.IGNORECASE)
         if m:
             out["content"] = m.group(1).strip().strip("'\"")
-    body_delta = _extract_body_delta_from_text(raw_text)
-    if body_delta:
-        out["body_delta"] = body_delta
     return out if "action" in out else None
 
 
@@ -516,9 +376,7 @@ def _extract_json_from_ds_response(text: str) -> Optional[dict]:
     for raw in (balanced, text):
         obj = _json_loads_loose(raw)
         if isinstance(obj, dict):
-            body_delta = _extract_body_delta_from_text(text)
-            if body_delta:
-                obj["body_delta"] = body_delta
+            obj.pop("body_delta", None)
             return obj
     return _extract_decision_fields_from_text(text)
 
@@ -741,7 +599,6 @@ def call_dynamic_layer_ds(
         "emotion_label": "",
         "scene_type": "",
         "target_type": "",
-        "body_delta": {},
     }
 
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
@@ -907,8 +764,6 @@ def call_dynamic_layer_ds(
         emotion_label = str(obj.get("emotion_label") or "").strip().lower()
         scene_type = str(obj.get("scene_type") or "").strip()
         target_type = str(obj.get("target_type") or "").strip()
-        body_delta = _normalize_body_delta(obj.get("body_delta"))
-
         if action == "merge" and not content_text and not fused_with_id:
             logger.warning("动态层 DS 返回 action=merge 但 content/fused_with_id 缺失，按 skip 处理")
             action = "skip"
@@ -931,7 +786,6 @@ def call_dynamic_layer_ds(
             "emotion_label": emotion_label if emotion_label in ("positive", "negative", "neutral") else "neutral",
             "scene_type": scene_type,
             "target_type": target_type,
-            "body_delta": body_delta,
         }
         _emit_dynamic_ds_audit_event(
             {
@@ -945,7 +799,6 @@ def call_dynamic_layer_ds(
                 "final_importance": result["importance"],
                 "final_content": result["content"],
                 "final_fused_with_id": result["fused_with_id"],
-                "final_body_delta": result["body_delta"],
                 "attempt_count": len(attempts),
                 "retry_count": max(0, len(attempts) - 1),
                 "attempts": attempts,
@@ -982,7 +835,6 @@ def _normalize_single_decision(obj: Any) -> dict:
         "emotion_label": "",
         "scene_type": "",
         "target_type": "",
-        "body_delta": {},
     }
     if not isinstance(obj, dict):
         return default
@@ -995,7 +847,6 @@ def _normalize_single_decision(obj: Any) -> dict:
     emotion_label = str(obj.get("emotion_label") or "").strip().lower()
     scene_type = str(obj.get("scene_type") or "").strip()
     target_type = str(obj.get("target_type") or "").strip()
-    body_delta = _normalize_body_delta(obj.get("body_delta"))
     if fused_with_id is not None and not isinstance(fused_with_id, str):
         fused_with_id = str(fused_with_id) if fused_with_id else None
     elif fused_with_id is not None and not fused_with_id.strip():
@@ -1016,7 +867,6 @@ def _normalize_single_decision(obj: Any) -> dict:
         "emotion_label": emotion_label if emotion_label in ("positive", "negative", "neutral") else "neutral",
         "scene_type": scene_type,
         "target_type": target_type,
-        "body_delta": body_delta,
         "timestamp": obj.get("timestamp"),
         "last_mentioned": obj.get("last_mentioned"),
         "mention_count": obj.get("mention_count"),
