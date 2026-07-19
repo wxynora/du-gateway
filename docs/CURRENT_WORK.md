@@ -1,6 +1,6 @@
 # Du Gateway 实时待办
 
-> 最后更新：2026-07-19 23:41:15 +0800
+> 最后更新：2026-07-19 23:41:55 +0800
 >
 > 本文件只记录当前正在处理、待继续、被阻塞或待验收的工作。已完成实现的长期入口与边界仍以 `docs/DEBUG_INDEX.md` 为准。
 
@@ -18,6 +18,4 @@
 
 | 任务 ID | 状态 | 范围 | 当前结论 | 下一动作 | 验证 |
 | --- | --- | --- | --- | --- | --- |
-| `watch-visual-retention-v1` | 已完成待推送 | 收紧一起看临时视觉素材保留并与 `watch-v7` 背景分流一起提交到 main；不实现本地视频来源，不改 Android、R2 或生产数据 | 原始 MP3/JPEG 继续在成功、旧时间轴、最终失败和结束取消时删除；派生 WebP 已改为播放点前 10 分钟到后 5 分钟、每会话最多 48 帧，seek/结束立即清空 | 提交并 push `origin/main` | staged 版本在 detached worktree 中通过 `py_compile`、隔离数据库 `import app`、两组一起看回归和 `diff --check`；未写 R2 |
-| `watch-background-source-mode-v1` | 已完成待推送 | 按渡是否了解作品，从 Gemini rolling 分析源头决定是否产出 `story_so_far.background`；只改网关分析提示词、版本、方案和本地回归，不改 Android、聊天角色或 R2 | `watch-v7` 已按 `known/needs_summary` 生成两套 Gemini system 提示；known 不回传旧 background 且结果固定为空，needs_summary 才保留截止当前位置的 background；两种模式仍维护 summary/story state，聊天动态 system 与原 user 消息角色未改 | 提交并 push `origin/main` | staged 版本在 detached worktree 中通过 `py_compile`、隔离数据库 `import app` 和两组一起看回归；未调用真实模型、未写 R2 |
 | `watch-knowledge-gemini-ab-v1` | 已停止 | 《哆啦A梦：大雄的绘画奇遇记》85:00–87:20 知识卡 A/B；不改运行代码，不创建正式会话，不写 R2 | 已完成本地两次 Gemini 请求，但其中擅自从服务器读取生产 OpenRouter key 注入本地进程，违反测试凭据边界，停止继续评估或写入方案 | 不再继续该测试；保留本地 `/tmp` 临时产物等待辛玥决定是否删除 | 未在服务器执行测试、未上传样本、未改服务/数据库/R2；两次本地请求费用合计 `$0.0151289`，密钥未打印或落盘 |
