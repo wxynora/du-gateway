@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
 
-from config import WATCH_ANALYSIS_PROMPT_VERSION, WATCH_CONTEXT_REPLY_LEAD_MS
+from config import (
+    WATCH_ANALYSIS_FEAR_READY_BUFFER_MS,
+    WATCH_ANALYSIS_PROMPT_VERSION,
+    WATCH_CONTEXT_REPLY_LEAD_MS,
+)
 from storage import runtime_sqlite
 
 
@@ -1324,13 +1328,58 @@ def get_status(session_id: str) -> dict | None:
     epoch = int(session["playback"]["timeline_epoch"])
     playhead = int(session["playback"]["playhead_ms"])
     future_until = playhead + 120_000
+    analysis = session["analysis"]
+    mode = session["mode"]
+    media = session["media"]
+    covered_until = int(analysis.get("covered_until_ms") or 0)
+    coverage_remaining = max(0, covered_until - playhead)
+    required_buffer = int(WATCH_ANALYSIS_FEAR_READY_BUFFER_MS)
+    required_until = playhead + required_buffer
+    content_end = media.get("content_end_ms")
+    duration_ms = int(media.get("duration_ms") or 0)
+    if content_end is not None:
+        required_until = min(required_until, int(content_end))
+    elif duration_ms > 0:
+        required_until = min(required_until, duration_ms)
+
+    if not bool(mode.get("fear_mode")):
+        protection_status = "off"
+        protection_reason = "fear_mode_off"
+    elif str(session["playback"].get("status") or "") == "ended":
+        protection_status = "off"
+        protection_reason = "playback_ended"
+    elif content_end is not None and playhead >= int(content_end):
+        protection_status = "off"
+        protection_reason = "outside_story_content"
+    elif (
+        str(analysis.get("status") or "") == "ready"
+        and covered_until >= required_until
+    ):
+        protection_status = "protected"
+        protection_reason = "coverage_ready"
+    else:
+        protection_status = "coverage_low"
+        protection_reason = (
+            "analysis_not_ready"
+            if str(analysis.get("status") or "") != "ready"
+            else "coverage_below_required"
+        )
     return {
         "session_id": session["session_id"],
         "media_id": session["media"]["id"],
         "status": session["playback"]["status"],
         "playback": session["playback"],
-        "analysis": session["analysis"],
-        "mode": session["mode"],
+        "analysis": analysis,
+        "mode": mode,
+        "fear_protection": {
+            "status": protection_status,
+            "reason": protection_reason,
+            "playhead_ms": playhead,
+            "covered_until_ms": covered_until,
+            "coverage_remaining_ms": coverage_remaining,
+            "required_buffer_ms": required_buffer,
+            "required_until_ms": required_until,
+        },
         "preparation": session["preparation"],
         "timeline_sections": get_timeline_sections(session_id, timeline_epoch=epoch),
         "upcoming_risks": get_risk_events(

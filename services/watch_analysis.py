@@ -64,7 +64,7 @@ ANALYSIS_SYSTEM_PROMPT = "\n".join(
         "familiarity 表示能否可靠识别作品或季集，证据不足使用 partial 或 unknown。timeline_sections 只写样本支持的连续区间，preview 绝不能进入剧情摘要。",
         "timeline_prepass 时，media.content_start_ms/content_end_ms 是使用者手工填写的正片边界，优先级高于模型判断；不要输出与人工边界冲突的区间。字段为空时才判断对应一侧。",
         "Bilibili 等用户投稿可能在正片前后拼接与作品无关的长垫片来规避审核。连续出现静态风景照、无叙事变化的插画或壁纸、上传者说明，并且缺少作品人物、对白和剧情连续性时，应优先标记为 non_story，不得因为它持续很久就当成作品内容。若音频、字幕或画面表明片尾曲或滚动字幕已经开始，应从该处警惕正文已结束：纯片尾标记为 outro，仍在讲故事则标记 credits_over_story；其后即使还有很长的静态图片或纯音乐，也应另标 non_story，而不是把媒体文件末尾当作电影结尾。",
-        "risk_events 只有样本实际确认高能内容时才输出，提示语必须无剧透；普通紧张氛围不能冒充跳吓。analysis_notes 只记录证据不足、时间断层或识别不确定性，不写主观看法。",
+        "risk_events 只有样本实际确认高能内容时才输出，提示语必须无剧透；普通紧张氛围不能冒充跳吓。start_ms 必须取观众需要开始回避的最早可能时间，不是最强烈画面或声音出现的时间；无法精确判断时向前取，宁可提前，不得晚于实际高能内容。end_ms 必须取确认风险已经完全结束、画面与声音重新安全的时间；无法精确判断时向后取。analysis_notes 只记录证据不足、时间断层或识别不确定性，不写主观看法。",
         "输出前静默核对：每个剧情段是否说清了‘发生了什么以及局面如何变化’；跨镜头重复出现的任务、道具和结果是否已经合成同一条剧情主线；留下的每个画面细节是否都在帮助理解剧情；新配角是否遵守 previous_story_state.characters 证据边界；称呼类台词是否保留原称呼；主剧情是否完全没有‘字幕显示’或‘画面显示’。发现违反时先修正再输出。",
         "所有时间均为媒体毫秒。输出必须严格符合 JSON schema，不要附加 schema 之外的说明。",
     ]
@@ -180,8 +180,16 @@ ANALYSIS_SCHEMA = {
                 "properties": {
                     "risk_type": {"type": "string", "enum": sorted(RISK_TYPES)},
                     "severity": {"type": "integer", "minimum": 1, "maximum": 3},
-                    "start_ms": {"type": "integer", "minimum": 0},
-                    "end_ms": {"type": "integer", "minimum": 0},
+                    "start_ms": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "观众需要开始回避的最早可能媒体时间；不确定时向前取，不能晚于实际高能内容。",
+                    },
+                    "end_ms": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "确认高能内容已经完全结束、重新安全的媒体时间；不确定时向后取。",
+                    },
                     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                     "spoiler_free_hint": {"type": "string"},
                 },

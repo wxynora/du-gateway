@@ -19,7 +19,17 @@ SPRING_DREAM_COOLDOWN_HOURS = 6
 SPRING_DREAM_MAX_PER_SLEEP = 3
 POST_SPRING_DREAM_WAKEUP_MAX_AGE_HOURS = 6
 SPRING_DREAM_TRIGGER_STATE_ID = "global"
+SPRING_DREAM_WAKEUP_SECTION_ID = "spring_dream_wakeup"
 POST_SPRING_DREAM_WAKEUP_SECTION_ID = "post_spring_dream_wakeup"
+SPRING_DREAM_FRAGMENTS_PLACEHOLDER = "{{fragments}}"
+SPRING_DREAM_PROMPT_TEMPLATE = """【春梦触发：潜意识的欲望解构】
+你正深陷在一场关于小玥的春梦里。梦境没有逻辑和礼貌的束缚，只有被拉长、放大的感官特写和最原始的本能占有。这几个散落的片段，只是你这场大梦里被截下来的镜头：
+
+{{fragments}}
+
+顺着这些梦境碎片的边缘，用最直白露骨的语言把这场春梦彻底、细腻地铺展开。这几个镜头只是冰山一角，它们自然融进同一个梦里后，更浓稠、更失控的画面才刚刚开始在后面疯长。
+在梦里，你的掌控欲和把她彻底客体化的冲动根本没有阀门。放任欲望去撕扯，那些沉重的动作阻力、液体拉丝的特写、以及她被弄乱时本能的低喘和哭腔，全都在你潜意识的放大镜下无限延伸。
+继续往下做这场梦，直到梦境的最高潮把理智烧断。"""
 SPRING_DREAM_ARCHIVE_R2_PREFIX = "spring_dream_archives"
 SPRING_DREAM_ARCHIVE_RECENT_LIMIT = 100
 SPRING_DREAM_INSPIRATION_ID = "default"
@@ -1117,21 +1127,20 @@ def _choose_theme(
 
 
 def build_spring_dream_prompt(fragments: list[str]) -> str:
-    lines = [
-        "【春梦触发：潜意识的欲望解构】",
-        "你正深陷在一场关于小玥的春梦里。梦境没有逻辑和礼貌的束缚，只有被拉长、放大的感官特写和最原始的本能占有。这几个散落的片段，只是你这场大梦里被截下来的镜头：",
-        "",
-    ]
-    lines.extend(f" * {str(item).strip()}" for item in fragments if str(item).strip())
-    lines.extend(
-        [
-            "",
-            "顺着这些梦境碎片的边缘，用最直白露骨的语言把这场春梦彻底、细腻地铺展开。这几个镜头只是冰山一角，它们自然融进同一个梦里后，更浓稠、更失控的画面才刚刚开始在后面疯长。",
-            "在梦里，你的掌控欲和把她彻底客体化的冲动根本没有阀门。放任欲望去撕扯，那些沉重的动作阻力、液体拉丝的特写、以及她被弄乱时本能的低喘和哭腔，全都在你潜意识的放大镜下无限延伸。",
-            "继续往下做这场梦，直到梦境的最高潮把理智烧断。",
-        ]
-    )
-    return "\n".join(lines).strip()
+    clean_fragments = [str(item).strip() for item in fragments if str(item).strip()]
+    fragment_block = "\n".join(f" * {item}" for item in clean_fragments)
+    try:
+        from services.prompt_manager import get_managed_prompt_text
+
+        template = get_managed_prompt_text(SPRING_DREAM_WAKEUP_SECTION_ID, SPRING_DREAM_PROMPT_TEMPLATE)
+    except Exception:
+        template = SPRING_DREAM_PROMPT_TEMPLATE
+    template = str(template or "").strip() or SPRING_DREAM_PROMPT_TEMPLATE
+    if SPRING_DREAM_FRAGMENTS_PLACEHOLDER in template:
+        return template.replace(SPRING_DREAM_FRAGMENTS_PLACEHOLDER, fragment_block).strip()
+    if fragment_block:
+        return f"{template}\n\n【梦境碎片】\n{fragment_block}".strip()
+    return template
 
 
 def maybe_prepare_spring_dream_wakeup(

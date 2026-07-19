@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from math import log
 from typing import Any
 
 from config import WATCH_CONTEXT_REPLY_LEAD_MS
@@ -15,6 +16,9 @@ WATCH_SNAPSHOT_BODY_KEY = "watch_snapshot"
 FUTURE_WINDOW_MS = 2 * 60_000
 CURRENT_LOOKBACK_MS = 30_000
 RELATED_CHUNK_LIMIT = 4
+_RECALL_MESSAGE_WEIGHTS = (0.2, 0.45, 1.0)
+_BM25_K1 = 1.2
+_BM25_B = 0.75
 _LATIN_OR_NUMBER_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 _CJK_RE = re.compile(r"[\u3400-\u9fff]+")
 _QUERY_STOPWORDS = {
@@ -132,13 +136,13 @@ def _message_text(message: dict) -> str:
     return _compact_text(" ".join(parts), 1200)
 
 
-def _watch_recall_query(messages: list[dict]) -> str:
+def _watch_recall_queries(messages: list[dict]) -> list[str]:
     user_texts = [
         _message_text(message)
         for message in messages
         if isinstance(message, dict) and str(message.get("role") or "") == "user"
     ]
-    return _compact_text("\n".join(text for text in user_texts[-3:] if text), 2400)
+    return [text for text in user_texts[-3:] if text]
 
 
 def _recall_terms(text: str) -> Counter[str]:
@@ -155,45 +159,114 @@ def _recall_terms(text: str) -> Counter[str]:
     return Counter(term for term in terms if term and term not in _QUERY_STOPWORDS)
 
 
-def _chunk_recall_text(chunk: dict) -> str:
-    characters = chunk.get("characters") if isinstance(chunk.get("characters"), list) else []
-    tags = chunk.get("tags") if isinstance(chunk.get("tags"), list) else []
-    return " ".join(
+def _weighted_query_terms(query: str | list[str]) -> dict[str, float]:
+    texts = [query] if isinstance(query, str) else [str(item or "") for item in query]
+    texts = [text for text in texts[-3:] if text.strip()]
+    weights = _RECALL_MESSAGE_WEIGHTS[-len(texts) :]
+    weighted: dict[str, float] = {}
+    for text, weight in zip(texts, weights):
+        for term, count in _recall_terms(text).items():
+            weighted[term] = weighted.get(term, 0.0) + weight * min(3, count)
+    return weighted
+
+
+def _chunk_field_terms(chunk: dict) -> tuple[Counter[str], Counter[str], Counter[str]]:
+    body = " ".join(
         [
             str(chunk.get("summary") or ""),
-            *(str(item) for item in characters),
-            *(str(item) for item in tags),
+            str(chunk.get("dialogue_summary") or ""),
         ]
+    )
+    tags = chunk.get("tags") if isinstance(chunk.get("tags"), list) else []
+    characters = chunk.get("characters") if isinstance(chunk.get("characters"), list) else []
+    return (
+        _recall_terms(body),
+        _recall_terms(" ".join(str(item) for item in tags)),
+        _recall_terms(" ".join(str(item) for item in characters)),
     )
 
 
+def _bm25_tf(term_frequency: int, document_length: int, average_length: float) -> float:
+    if term_frequency <= 0:
+        return 0.0
+    length_ratio = document_length / max(1.0, average_length)
+    denominator = term_frequency + _BM25_K1 * (1.0 - _BM25_B + _BM25_B * length_ratio)
+    return term_frequency * (_BM25_K1 + 1.0) / denominator
+
+
 def _recall_related_chunks(
-    query: str,
+    query: str | list[str],
     chunks: list[dict],
     *,
     excluded_ids: set[str],
 ) -> list[dict]:
-    query_terms = _recall_terms(query)
+    query_terms = _weighted_query_terms(query)
     if not query_terms:
         return []
-    scored: list[tuple[float, int, dict]] = []
+
+    documents: list[tuple[dict, Counter[str], Counter[str], Counter[str]]] = []
+    document_frequency: Counter[str] = Counter()
+    character_terms: set[str] = set()
     for chunk in chunks:
         if str(chunk.get("id") or "") in excluded_ids:
             continue
-        document_terms = _recall_terms(_chunk_recall_text(chunk))
-        overlap = query_terms.keys() & document_terms.keys()
-        if not overlap:
+        body_terms, tag_terms, chunk_character_terms = _chunk_field_terms(chunk)
+        all_terms = set(body_terms) | set(tag_terms) | set(chunk_character_terms)
+        if not all_terms:
             continue
-        score = sum(
-            min(query_terms[term], document_terms[term]) * (1.0 + min(4, len(term)) * 0.35)
-            for term in overlap
+        document_frequency.update(all_terms)
+        character_terms.update(chunk_character_terms)
+        documents.append((chunk, body_terms, tag_terms, chunk_character_terms))
+    if not documents:
+        return []
+
+    average_body_length = sum(sum(body.values()) for _, body, _, _ in documents) / len(documents)
+    document_count = len(documents)
+    scored: list[tuple[float, int, bool, dict]] = []
+    for chunk, body_terms, tag_terms, chunk_character_terms in documents:
+        score = 0.0
+        has_content_anchor = False
+        body_length = sum(body_terms.values())
+        for term, query_weight in query_terms.items():
+            body_tf = body_terms.get(term, 0)
+            tag_tf = tag_terms.get(term, 0)
+            character_tf = chunk_character_terms.get(term, 0)
+            if not (body_tf or tag_tf or character_tf):
+                continue
+            frequency = document_frequency.get(term, 0)
+            inverse_frequency = log(
+                1.0 + (document_count - frequency + 0.5) / (frequency + 0.5)
+            )
+            field_score = (
+                _bm25_tf(body_tf, body_length, average_body_length)
+                + 0.55 * min(1, tag_tf)
+                + 0.12 * min(1, character_tf)
+            )
+            score += query_weight * inverse_frequency * field_score
+            if term not in character_terms and (body_tf or tag_tf):
+                has_content_anchor = True
+        if score <= 0:
+            continue
+        if not has_content_anchor:
+            score *= 0.2
+        scored.append(
+            (score, _int(chunk.get("end_ms"), 0), has_content_anchor, chunk)
         )
-        scored.append((score, _int(chunk.get("end_ms"), 0), chunk))
+    if not scored:
+        return []
+
+    anchored = [item for item in scored if item[2]]
+    candidates = anchored if anchored else scored
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    if anchored:
+        minimum_score = candidates[0][0] * 0.35
+        candidates = [item for item in candidates if item[0] >= minimum_score]
+        limit = RELATED_CHUNK_LIMIT
+    else:
+        limit = 1
     selected = [
-        item[2]
-        for item in sorted(scored, key=lambda item: (item[0], item[1]), reverse=True)[
-            :RELATED_CHUNK_LIMIT
-        ]
+        item[3]
+        for item in candidates[:limit]
     ]
     selected.sort(key=lambda item: (_int(item.get("start_ms"), 0), _int(item.get("end_ms"), 0)))
     return [_chunk_view(item) for item in selected]
@@ -400,7 +473,7 @@ def inject_watch_context(
         session_id=session_id,
         snapshot=snapshot,
         window_id=window_id,
-        recall_query=_watch_recall_query(messages),
+        recall_query=_watch_recall_queries(messages),
     )
     if built is None:
         return next_body, {}

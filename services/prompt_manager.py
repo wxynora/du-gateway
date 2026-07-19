@@ -48,6 +48,12 @@ PROMPT_SECTIONS: tuple[PromptSectionDef, ...] = (
         80_000,
     ),
     PromptSectionDef(
+        "spring_dream_wakeup",
+        "春梦唤醒",
+        "春梦本体使用的提示词模板；{{fragments}} 会替换为本次抽到的梦境碎片。",
+        80_000,
+    ),
+    PromptSectionDef(
         "post_spring_dream_wakeup",
         "春梦后唤醒版",
         "上一轮随机唤醒命中春梦后，下一轮睡眠期随机唤醒使用的自定义文案；留空则走原随机唤醒。",
@@ -125,6 +131,13 @@ def default_prompt_content(section_id: str) -> str:
         return ""
     if sid == "nsfw_rules":
         return _read_text_file("prompts/du_nsfw_prompt.txt")
+    if sid == "spring_dream_wakeup":
+        try:
+            from services.spring_dream import SPRING_DREAM_PROMPT_TEMPLATE
+
+            return SPRING_DREAM_PROMPT_TEMPLATE.strip()
+        except Exception:
+            return ""
     if sid == "post_spring_dream_wakeup":
         return ""
     if sid == RANDOM_PROACTIVE_DECISION_SECTION_ID:
