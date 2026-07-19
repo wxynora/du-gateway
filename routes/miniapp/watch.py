@@ -21,7 +21,11 @@ from services.watch_analysis_samples import (
     prepare_samples,
     purge_prepared_samples,
 )
-from services.watch_analysis_source import watch_analysis_source_health
+from services.watch_analysis_source import (
+    WatchAnalysisSourceError,
+    get_watch_analysis_source,
+    watch_analysis_source_health,
+)
 from storage import (
     watch_analysis_store,
     watch_knowledge_store,
@@ -99,6 +103,27 @@ def _analysis_upload_body() -> tuple[dict | None, Any | None]:
 
 
 def register_routes(bp):
+    @bp.route("/watch/bilibili/parts", methods=["GET"])
+    def miniapp_watch_bilibili_parts():
+        bvid = str(request.args.get("bvid") or "").strip()
+        try:
+            page = int(request.args.get("page") or 1)
+        except (TypeError, ValueError):
+            return _json_error("page 无效", "watch_bilibili_page_invalid", 400)
+        if page <= 0:
+            return _json_error("page 无效", "watch_bilibili_page_invalid", 400)
+        try:
+            result = get_watch_analysis_source().describe_parts(
+                {"id": f"bili:{bvid}:p{page}"}
+            )
+        except WatchAnalysisSourceError as exc:
+            return _json_error(
+                str(exc),
+                "watch_bilibili_parts_failed",
+                502 if exc.retryable else 400,
+            )
+        return jsonify({"ok": True, **result})
+
     @bp.route("/watch/sessions", methods=["POST"])
     def miniapp_watch_session_create():
         body, error = _json_body()

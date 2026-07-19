@@ -214,11 +214,6 @@ def step_inject_current_base_model(body: dict) -> dict:
     return body
 
 
-def step_inject_pseudo_cot_inner_os(body: dict, window_id: str) -> dict:
-    """内心 OS 伪 COT 已固定关闭，避免无标记内心段污染可见正文。"""
-    return body
-
-
 def _last_user_text_for_humor_memes(body: dict) -> str:
     for msg in reversed(body.get("messages") or []):
         if (msg.get("role") or "").lower() != "user":

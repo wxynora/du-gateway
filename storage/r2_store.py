@@ -64,7 +64,6 @@ from storage.r2_conversation_store import (
     _latest_rounds,
     _merge_rounds_by_index,
     _prefix,
-    _pseudo_cot_state_key,
     _read_conversation_backup_rounds_for_dates,
     _read_conversation_data_with_legacy_migrate,
     _read_conversation_meta,
@@ -79,11 +78,9 @@ from storage.r2_conversation_store import (
     get_conversation_round_by_index,
     get_conversation_rounds,
     get_next_round_index,
-    get_pseudo_cot_state,
     list_conversation_rounds_preview,
     normalize_window_id,
     overwrite_conversation_rounds,
-    save_pseudo_cot_state,
 )
 from storage.r2_context_store import (
     IMAGE_DESC_RECENT_LIMIT,

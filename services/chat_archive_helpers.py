@@ -695,9 +695,6 @@ _MILLION_PLAN_ASSISTANT_SIDECAR_KEYS = (
     "reasoning_omitted",
     "thinking_blocks",
     "tool_calls",
-    "reasoning_source",
-    "official_reasoning_refused",
-    "official_reasoning_refusal_text",
 )
 
 

@@ -55,10 +55,6 @@ def _image_desc_recent_key(window_id: str) -> str:
     return _get_key(_prefix(window_id), "image_descriptions_recent.json")
 
 
-def _pseudo_cot_state_key(window_id: str) -> str:
-    return _get_key(_prefix(window_id), "pseudo_cot_state.json")
-
-
 def _round_index_value(round_entry: dict) -> int:
     try:
         return int((round_entry or {}).get("index") or 0)
@@ -607,28 +603,6 @@ def get_conversation_round_by_index(window_id: str, round_index: int) -> Optiona
                     logger.warning("get_conversation_round_by_index backup sqlite 同步失败 window_id=%s index=%s error=%s", window_id, round_index, e)
             return r
     return None
-
-
-def get_pseudo_cot_state(window_id: str = "") -> dict:
-    client = _s3_client()
-    if not client:
-        return {}
-    data = _read_json(client, _pseudo_cot_state_key(window_id))
-    return data if isinstance(data, dict) else {}
-
-
-def save_pseudo_cot_state(window_id: str, state: dict) -> bool:
-    client = _s3_client()
-    if not client:
-        return False
-    payload = dict(state or {})
-    payload["window_id"] = normalize_window_id(window_id)
-    try:
-        _write_json(client, _pseudo_cot_state_key(window_id), payload)
-        return True
-    except Exception as e:
-        logger.error("save_pseudo_cot_state 失败 window_id=%s error=%s", window_id, e, exc_info=True)
-        return False
 
 
 def _content_to_text_for_preview(content) -> str:

@@ -47,7 +47,6 @@ from pipeline.pipeline import (
     step_inject_reference_note,
     step_inject_current_base_model,
     step_inject_system_alarm_action_result,
-    step_inject_pseudo_cot_inner_os,
     step_inject_humor_memes,
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
@@ -167,15 +166,6 @@ from services.chat_response_enrichers import (
 from services.chat_sidecars import (
     apply_hidden_sidecars_to_assistant_response as _apply_hidden_sidecars_to_assistant_response,
     extract_and_store_hidden_sidecars as _extract_and_store_hidden_sidecars,
-)
-from services.pseudo_cot import (
-    PseudoCotStreamState as _PseudoCotStreamState,
-    apply_pseudo_cot_state_and_fallback as _apply_pseudo_cot_state_and_fallback,
-    extract_inner_os_from_response_json as _extract_inner_os_from_response_json,
-    pseudo_cot_instruction_enabled as _pseudo_cot_instruction_enabled,
-    replace_response_reasoning_with_inner_os as _replace_response_reasoning_with_inner_os,
-    split_inner_os_from_text as _split_inner_os_from_text,
-    transform_sse_chunk_bytes as _transform_pseudo_cot_sse_chunk_bytes,
 )
 from services.chat_tool_helpers import (
     append_visible_tool_round_content as _append_visible_tool_round_content,
@@ -1430,7 +1420,6 @@ def _stream_with_r2_archive(
     du_request_id = normalize_debug_request_id(du_request_id or (body or {}).get(DU_REQUEST_ID_BODY_KEY))
     last_user = _last_user_message(body.get("messages") or [])
     du_daily_maintenance = _is_du_daily_maintenance_request()
-    pseudo_cot_stream_enabled = _pseudo_cot_instruction_enabled(body)
     emitted_listen_invite_actions: set[str] = set()
     emitted_watch_actions: set[str] = set()
 
@@ -1765,7 +1754,6 @@ def _stream_with_r2_archive(
         flush_window_s = flush_ms / 1000.0
         last_send_ts = time.time()
         du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
-        pseudo_cot_state = _PseudoCotStreamState() if pseudo_cot_stream_enabled else None
         assistant_part_id = "assistant-text-1"
         assistant_event_state = {"started": False, "finished": False}
         reasoning_part_id = "reasoning-1"
@@ -1781,11 +1769,6 @@ def _stream_with_r2_archive(
             _collect_content_from_chunk(raw_chunk)
             _emit_reasoning_chunk(raw_chunk, 1, reasoning_part_id, reasoning_event_state)
             outgoing_chunk = _strip_reasoning_from_sse_chunk(raw_chunk)
-            if pseudo_cot_state:
-                outgoing_chunk = _transform_pseudo_cot_sse_chunk_bytes(
-                    outgoing_chunk,
-                    pseudo_cot_state,
-                )
             outgoing_chunk = transform_sse_chunk_bytes_pcmd(outgoing_chunk, du_state)
             _emit_assistant_sse_chunk(
                 outgoing_chunk,
@@ -1846,7 +1829,7 @@ def _stream_with_r2_archive(
             _finish_reasoning_stream_event(1, reasoning_part_id, reasoning_event_state)
             _finish_assistant_stream_event(1, assistant_part_id, assistant_event_state)
             full_content = "".join(content_parts)
-            visible_source, inner_os = _split_inner_os_from_text(full_content)
+            visible_source = full_content
             _emit_listen_invite_actions(visible_source, body.get("messages") or [])
             _emit_watch_actions(visible_source)
             visible = _extract_and_store_hidden_sidecars(
@@ -1877,12 +1860,6 @@ def _stream_with_r2_archive(
                     msg["reasoning_omitted"] = True
                 if cache_debug_entries:
                     msg["cache_debug"] = list(cache_debug_entries)
-                _apply_pseudo_cot_state_and_fallback(
-                    window_id,
-                    msg,
-                    inner_os,
-                    force_inner_os=pseudo_cot_stream_enabled,
-                )
                 round_cleaned = (
                     _build_round_cleaned_for_archive(
                         last_user,
@@ -1922,7 +1899,6 @@ def _stream_with_r2_archive(
     completed_tool_results: list[dict] = []
     tool_loop_finished = False
     final_thinking_blocks: list[dict] = []
-    stream_inner_os_parts: list[str] = []
     try:
         while True:
             stream_attempt_no += 1
@@ -1941,7 +1917,6 @@ def _stream_with_r2_archive(
             assistant_part_id = f"assistant-text-{event_round}-{stream_attempt_no}"
             assistant_event_state = {"started": False, "finished": False}
             assistant_du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
-            assistant_pseudo_state = _PseudoCotStreamState() if pseudo_cot_stream_enabled else None
             chunks = []
             chunk_queue = queue.Queue()
 
@@ -1972,11 +1947,6 @@ def _stream_with_r2_archive(
                 chunks.append(chunk)
                 _emit_reasoning_chunk(chunk, event_round, reasoning_part_id, round_event_state)
                 assistant_chunk = _strip_reasoning_from_sse_chunk(chunk)
-                if assistant_pseudo_state:
-                    assistant_chunk = _transform_pseudo_cot_sse_chunk_bytes(
-                        assistant_chunk,
-                        assistant_pseudo_state,
-                    )
                 assistant_chunk = transform_sse_chunk_bytes_pcmd(assistant_chunk, assistant_du_state)
                 _emit_assistant_sse_chunk(
                     assistant_chunk,
@@ -2126,16 +2096,11 @@ def _stream_with_r2_archive(
                 tool_midstream_retry_used = True
                 continue
             du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
-            pseudo_cot_state = _PseudoCotStreamState() if pseudo_cot_stream_enabled else None
             done_chunks = []
             raw_parsed_content = parsed.get("content") or ""
             final_parsed_content = dedupe_stream_sumitalk_cards(raw_parsed_content)
             archived_content = _merge_visible_tool_round_content(tool_visible_content_parts, final_parsed_content)
-            archived_content, parsed_inner_os = _split_inner_os_from_text(archived_content)
-            if parsed_inner_os:
-                stream_inner_os_parts.append(parsed_inner_os)
             outgoing_content = final_parsed_content if sumitalk_event_sink else archived_content
-            outgoing_content, _outgoing_inner_os = _split_inner_os_from_text(outgoing_content)
             if outgoing_content != raw_parsed_content:
                 visible_content = du_state.feed_delta(outgoing_content)
                 if visible_content:
@@ -2146,8 +2111,6 @@ def _stream_with_r2_archive(
                         done_chunks.append(ch)
                         continue
                     safe_chunk = _strip_reasoning_from_sse_chunk(ch)
-                    if pseudo_cot_state:
-                        safe_chunk = _transform_pseudo_cot_sse_chunk_bytes(safe_chunk, pseudo_cot_state)
                     yield transform_sse_chunk_bytes_pcmd(safe_chunk, du_state)
             content_parts.append(archived_content)
             if _reply_channel() == "sumitalk":
@@ -2182,11 +2145,9 @@ def _stream_with_r2_archive(
             break
     finally:
         full_content = "".join(content_parts)
-        visible_source, inner_os = _split_inner_os_from_text(full_content)
+        visible_source = full_content
         _emit_listen_invite_actions(visible_source, current_body.get("messages") or [])
         _emit_watch_actions(visible_source)
-        if not inner_os and stream_inner_os_parts:
-            inner_os = "\n\n".join(part for part in stream_inner_os_parts if part).strip()
         visible = _extract_and_store_hidden_sidecars(
             visible_source,
             window_id=window_id,
@@ -2238,12 +2199,6 @@ def _stream_with_r2_archive(
                 msg["reasoning_omitted"] = True
             if cache_debug_entries:
                 msg["cache_debug"] = list(cache_debug_entries)
-            _apply_pseudo_cot_state_and_fallback(
-                window_id,
-                msg,
-                inner_os,
-                force_inner_os=pseudo_cot_stream_enabled,
-            )
             tc_trace = _collect_tool_trace_from_messages(current_body.get("messages") or [])
             if tc_trace:
                 msg["tool_calls"] = tc_trace
@@ -2786,7 +2741,6 @@ def chat_completions():
             logger.debug("pixel_home user state inference skipped error=%s", e)
     body = step_inject_current_base_model(body)
     body = step_inject_system_alarm_action_result(body, window_id)
-    body = step_inject_pseudo_cot_inner_os(body, window_id)
     body = step_inject_du_thought(body, window_id)
     body = step_inject_pending_thoughts(body, window_id)
     body = step_inject_secret_drawer(body, window_id)
@@ -3139,10 +3093,6 @@ def chat_completions():
             logger.error("工具续轮结束但最终正文仍为空（非流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
     archive_thinking_blocks_for_r2: list[dict] = []
     if resp_json:
-        resp_json, inner_os = _extract_inner_os_from_response_json(resp_json)
-        pseudo_cot_response_enabled = _pseudo_cot_instruction_enabled(body)
-        if pseudo_cot_response_enabled and inner_os:
-            resp_json = _replace_response_reasoning_with_inner_os(resp_json, inner_os)
         if is_sumitalk_request:
             raw_assistant = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
             raw_assistant_text = get_assistant_content_text(raw_assistant) if isinstance(raw_assistant, dict) else ""
@@ -3301,12 +3251,6 @@ def chat_completions():
                 msg_for_r2["reasoning_omitted"] = True
             if cache_debug_entries:
                 msg_for_r2["cache_debug"] = cache_debug_entries
-            _apply_pseudo_cot_state_and_fallback(
-                window_id,
-                msg_for_r2,
-                inner_os,
-                force_inner_os=pseudo_cot_response_enabled,
-            )
             tc_trace = _collect_tool_trace_from_messages(body.get("messages") or [])
             if tc_trace and not msg_for_r2.get("tool_calls"):
                 msg_for_r2["tool_calls"] = tc_trace

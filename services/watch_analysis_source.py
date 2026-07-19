@@ -277,6 +277,65 @@ class BilibiliApiAnalysisSource:
             }
         raise WatchAnalysisSourceError("Bilibili 视频不存在这个分 P", retryable=False)
 
+    def describe_parts(self, media: dict) -> dict:
+        canonical_url, bvid, current_page = canonical_bilibili_url(media)
+        headers = {
+            "User-Agent": _clean_header(WATCH_ANALYSIS_SOURCE_USER_AGENT),
+            "Referer": canonical_url,
+            "Origin": "https://www.bilibili.com",
+        }
+        view_data, _request_headers = self._api_data_with_auth_fallback(
+            BILIBILI_VIEW_API,
+            params={"bvid": bvid},
+            headers=headers,
+            label="分 P 信息",
+        )
+        current_info = self._page_info(view_data, current_page)
+        raw_pages = view_data.get("pages")
+        if not isinstance(raw_pages, list) or not raw_pages:
+            raw_pages = [current_info]
+
+        parts: list[dict] = []
+        for item in raw_pages:
+            if not isinstance(item, dict):
+                continue
+            page = max(0, int(item.get("page") or 0))
+            cid = max(0, int(item.get("cid") or 0))
+            if page <= 0 or cid <= 0:
+                continue
+            part = {
+                "page": page,
+                "cid": cid,
+                "title": _clean_header(item.get("part") or f"P{page}", 240),
+                "duration_ms": max(0, int(item.get("duration") or 0)) * 1000,
+                "media_id": f"bili:{bvid}:p{page}",
+                "canonical_url": f"https://www.bilibili.com/video/{bvid}?p={page}",
+                "embed_url": (
+                    "https://player.bilibili.com/player.html"
+                    f"?bvid={bvid}&page={page}&high_quality=1&danmaku=0"
+                ),
+                "is_current": page == current_page,
+            }
+            parts.append(part)
+        parts.sort(key=lambda item: int(item["page"]))
+        current_index = next(
+            (index for index, item in enumerate(parts) if item["is_current"]),
+            -1,
+        )
+        if current_index < 0:
+            raise WatchAnalysisSourceError("Bilibili 视频不存在这个分 P", retryable=False)
+        return {
+            "source": "bilibili",
+            "bvid": bvid,
+            "title": _clean_header(view_data.get("title") or bvid, 240),
+            "current_page": current_page,
+            "part_count": len(parts),
+            "parts": parts,
+            "current": parts[current_index],
+            "previous": parts[current_index - 1] if current_index > 0 else None,
+            "next": parts[current_index + 1] if current_index + 1 < len(parts) else None,
+        }
+
     @staticmethod
     def _stream_urls(item: dict) -> list[str]:
         values: list[Any] = [
@@ -697,9 +756,15 @@ class BilibiliApiAnalysisSource:
         if str(media.get("source") or "") != "bilibili_embed":
             raise WatchAnalysisSourceError("当前分析源不支持这个播放来源", retryable=False)
         duration_ms = max(0, int(media.get("duration_ms") or 0))
+        normalized_purpose = str(purpose or "").strip().lower()
+        max_timestamp = duration_ms
+        if duration_ms > 0 and normalized_purpose in {"identify", "timeline_prepass"}:
+            max_timestamp = max(0, duration_ms - 1000)
         targets = sorted(
             {
-                min(duration_ms, max(0, int(value))) if duration_ms else max(0, int(value))
+                min(max_timestamp, max(0, int(value)))
+                if duration_ms
+                else max(0, int(value))
                 for value in timestamps_ms
             }
         )
@@ -712,7 +777,7 @@ class BilibiliApiAnalysisSource:
                 frames = list(executor.map(lambda at_ms: self._extract_frame(resolved, at_ms), targets))
             audio_bytes = (
                 self._extract_audio(resolved, targets[0], targets[-1])
-                if str(purpose or "").strip().lower() == "rolling" and len(targets) >= 2
+                if normalized_purpose == "rolling" and len(targets) >= 2
                 else b""
             )
         except WatchAnalysisSourceError:

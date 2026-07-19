@@ -289,12 +289,11 @@ def enqueue_source_plan(
     if purpose not in {"identify", "timeline_prepass", "rolling"}:
         raise ValueError("后端分析计划 purpose 无效")
     duration_ms = int((session.get("media") or {}).get("duration_ms") or 0)
-    timestamps_ms = sorted(
-        {
-            min(duration_ms, _int(value, 0)) if duration_ms > 0 else _int(value, 0)
-            for value in (plan.get("target_timestamps_ms") or [])
-        }
-    )[: int(WATCH_ANALYSIS_MAX_FRAMES_PER_JOB)]
+    timestamps_ms = _source_plan_timestamps(
+        plan.get("target_timestamps_ms") or [],
+        duration_ms=duration_ms,
+        purpose=purpose,
+    )
     if not timestamps_ms:
         raise ValueError("后端分析计划没有目标时间")
     key = _source_idempotency_key(
@@ -1300,6 +1299,28 @@ def _rolling_targets(start_ms: int, end_ms: int, *, interval_ms: int, max_frames
     if targets[-1] != end and len(targets) < limit:
         targets.append(end)
     return targets
+
+
+def _last_frame_timestamp_ms(duration_ms: int) -> int:
+    # Bilibili reports rounded durations; seeking at the exact EOF can return no frame.
+    return max(0, int(duration_ms) - 1000)
+
+
+def _source_plan_timestamps(
+    timestamps_ms: list[int],
+    *,
+    duration_ms: int,
+    purpose: str,
+) -> list[int]:
+    max_timestamp = int(duration_ms)
+    if duration_ms > 0 and purpose in {"identify", "timeline_prepass"}:
+        max_timestamp = _last_frame_timestamp_ms(duration_ms)
+    return sorted(
+        {
+            min(max_timestamp, _int(value, 0)) if duration_ms > 0 else _int(value, 0)
+            for value in timestamps_ms
+        }
+    )[: int(WATCH_ANALYSIS_MAX_FRAMES_PER_JOB)]
 
 
 def build_sample_plan(session: dict) -> dict:
