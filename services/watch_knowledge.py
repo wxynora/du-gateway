@@ -12,7 +12,6 @@ import requests
 from config import (
     WATCH_KNOWLEDGE_API_KEY,
     WATCH_KNOWLEDGE_API_URL,
-    WATCH_KNOWLEDGE_MAX_OUTPUT_TOKENS,
     WATCH_KNOWLEDGE_MODEL,
     WATCH_KNOWLEDGE_PROMPT_VERSION,
     WATCH_KNOWLEDGE_SEARCH_API_KEY,
@@ -234,7 +233,6 @@ def build_knowledge_request(session: dict, sources: list[dict]) -> dict:
     identity = _knowledge_identity(session)
     return {
         "model": WATCH_KNOWLEDGE_MODEL,
-        "max_tokens": int(WATCH_KNOWLEDGE_MAX_OUTPUT_TOKENS),
         "temperature": 0,
         "thinking": {"type": "disabled"},
         "system": KNOWLEDGE_SYSTEM_PROMPT,

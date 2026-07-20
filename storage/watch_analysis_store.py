@@ -8,7 +8,6 @@ from uuid import uuid4
 
 from config import (
     WATCH_ANALYSIS_CLIENT_PLAN_TTL_SECONDS,
-    WATCH_ANALYSIS_DAILY_MAX_COST_USD,
     WATCH_ANALYSIS_FORWARD_WINDOW_MS,
     WATCH_ANALYSIS_INITIAL_READY_BUFFER_MS,
     WATCH_ANALYSIS_JOB_MAX_ATTEMPTS,
@@ -1009,38 +1008,6 @@ def fail_job(
     return status
 
 
-def defer_job(job: dict, *, available_at: datetime, reason: str) -> bool:
-    job_id = str(job.get("job_id") or "")
-    lease_token = str(job.get("lease_token") or "")
-    now_iso = _iso(_now())
-    with runtime_sqlite.connect() as conn:
-        result = conn.execute(
-            """
-            UPDATE watch_analysis_jobs
-               SET status = 'queued', attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
-                   available_at = ?, leased_until = '', lease_token = '', error = ?, updated_at = ?
-             WHERE id = ? AND status = 'running' AND lease_token = ?
-               AND cancel_requested = 0
-               AND EXISTS (
-                    SELECT 1 FROM watch_sessions s
-                     WHERE s.id = watch_analysis_jobs.session_id
-                       AND s.status != 'ended'
-                       AND s.client_lease_expires_at != ''
-                       AND s.client_lease_expires_at > ?
-               )
-            """,
-            (
-                _iso(available_at),
-                _text(reason, 1000),
-                now_iso,
-                job_id,
-                lease_token,
-                now_iso,
-            ),
-        )
-    return bool(result.rowcount)
-
-
 def reset_for_epoch(session_id: str, *, timeline_epoch: int) -> None:
     now_iso = _iso(_now())
     with runtime_sqlite.connect() as conn:
@@ -1603,11 +1570,6 @@ def session_analysis_cost(session_id: str) -> dict:
     }
 
 
-def cost_budget_available() -> bool:
-    limit = float(WATCH_ANALYSIS_DAILY_MAX_COST_USD or 0)
-    return limit <= 0 or daily_cost_usd() < limit
-
-
 def session_job_runtime(session_id: str) -> dict:
     with runtime_sqlite.connect() as conn:
         rows = conn.execute(
@@ -1622,7 +1584,6 @@ def session_job_runtime(session_id: str) -> dict:
         "counts": {str(row["status"]): int(row["n"] or 0) for row in rows},
         "latest_job": _row_to_job(latest, public=True) if latest is not None else {},
         "daily_cost_usd": daily_cost_usd(),
-        "daily_cost_limit_usd": float(WATCH_ANALYSIS_DAILY_MAX_COST_USD or 0),
     }
 
 
@@ -2128,19 +2089,28 @@ def build_sample_plan(session: dict) -> dict:
     start = _advance_past_skipped(start, timeline_sections)
     if duration_ms > 0:
         start = min(start, duration_ms)
-    if start >= target_until:
-        return _delivery_plan(session, {
-            "purpose": "idle",
-            "reason": "coverage_ready",
-            "target_timestamps_ms": [],
-            "covered_until_ms": covered_until,
-            "effective_covered_until_ms": start,
-            "target_until_ms": target_until,
-        })
     batch_span = min(
         max(0, interval * max(0, max_frames - 1)),
         int(WATCH_ANALYSIS_MAX_AUDIO_DURATION_MS),
     )
+    terminal_end_candidates = [
+        value
+        for value in (duration_ms, content_end_ms)
+        if value is not None and value > 0
+    ]
+    terminal_end_ms = min(terminal_end_candidates) if terminal_end_candidates else None
+    reaches_terminal_end = terminal_end_ms is not None and target_until >= terminal_end_ms
+    remaining_to_target = max(0, target_until - start)
+    if start >= target_until or (remaining_to_target < batch_span and not reaches_terminal_end):
+        return _delivery_plan(session, {
+            "purpose": "idle",
+            "reason": "coverage_refill_wait" if start < target_until else "coverage_ready",
+            "target_timestamps_ms": [],
+            "covered_until_ms": covered_until,
+            "effective_covered_until_ms": start,
+            "target_until_ms": target_until,
+            "refill_batch_ms": batch_span,
+        })
     batch_end = min(target_until, start + batch_span)
     next_skipped_start = _next_skipped_start(start, timeline_sections)
     if next_skipped_start is not None and next_skipped_start <= batch_end:
@@ -2277,5 +2247,4 @@ def queue_stats() -> dict:
         "sample_count": int(sample_totals["n"] or 0),
         "sample_bytes": int(sample_totals["bytes"] or 0),
         "daily_cost_usd": daily_cost_usd(),
-        "daily_cost_limit_usd": float(WATCH_ANALYSIS_DAILY_MAX_COST_USD or 0),
     }

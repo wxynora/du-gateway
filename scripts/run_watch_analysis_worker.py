@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -82,12 +81,6 @@ def _schedule_allowed(session: dict, *, scheduler: str) -> bool:
             reason,
         )
     return allowed
-
-
-def _next_budget_window() -> datetime:
-    now = datetime.now(timezone.utc)
-    tomorrow = (now + timedelta(days=1)).date()
-    return datetime.combine(tomorrow, datetime.min.time(), tzinfo=timezone.utc) + timedelta(minutes=5)
 
 
 def cleanup_abandoned_sessions() -> dict:
@@ -352,17 +345,6 @@ def process_claimed_job(
             status = watch_subtitle_store.fail_lookup_job(job, str(exc), retryable=True)
             logger.exception("一起看字幕准备任务异常 job_id=%s: %s", job_id, exc)
             return {"status": status, "reason": "subtitle_worker_error"}
-
-    if not watch_analysis_store.cost_budget_available():
-        deferred = watch_analysis_store.defer_job(
-            job,
-            available_at=_next_budget_window(),
-            reason="daily_cost_budget_exhausted",
-        )
-        return {
-            "status": "deferred" if deferred else "cancelled",
-            "reason": "daily_cost_budget_exhausted" if deferred else "lease_lost",
-        }
 
     prepared_from_source: list[dict] = []
     try:
