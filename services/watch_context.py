@@ -415,7 +415,7 @@ def build_watch_context(
         f"你正在和小玥一起看{_work_name(media, analysis)}。",
         "",
         "视频不会停下来等你回复，所以本轮另外提供了预计回复抵达前会播放到的少量内容。",
-        "不要和小玥照搬复述你看到的剧情内容",
+        "小玥正在和你看同一段，不需要和她照搬复述你看到的剧情内容以及逐项描述剧情画面。",
     ]
     story_characters = [
         _compact_text(item, 120)

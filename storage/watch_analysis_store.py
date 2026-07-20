@@ -14,7 +14,6 @@ from config import (
     WATCH_ANALYSIS_JOB_MAX_ATTEMPTS,
     WATCH_ANALYSIS_MAX_AUDIO_DURATION_MS,
     WATCH_ANALYSIS_MAX_FRAMES_PER_JOB,
-    WATCH_ANALYSIS_MAX_JOBS_PER_SESSION,
     WATCH_ANALYSIS_PREPASS_EDGE_MS,
     WATCH_ANALYSIS_PROMPT_VERSION,
     WATCH_ANALYSIS_RECOGNIZED_INTERVAL_MS,
@@ -286,15 +285,6 @@ def enqueue_samples(
                 raise ValueError("客户端租约已过期，不能新建分析任务")
             if str(current["media_id"] or "") != media_id or int(current["timeline_epoch"] or 0) != timeline_epoch:
                 raise ValueError("播放时间轴已经变化，请重新采样")
-            count = int(
-                conn.execute(
-                    "SELECT COUNT(*) AS n FROM watch_analysis_jobs WHERE session_id = ?",
-                    (session_id,),
-                ).fetchone()["n"]
-                or 0
-            )
-            if count >= int(WATCH_ANALYSIS_MAX_JOBS_PER_SESSION):
-                raise ValueError("本次观看的分析任务已达到上限")
             duplicate = conn.execute(
                 "SELECT * FROM watch_analysis_jobs WHERE idempotency_key = ?",
                 (key,),
@@ -430,15 +420,6 @@ def enqueue_source_plan(
                 or int(current["timeline_epoch"] or 0) != timeline_epoch
             ):
                 raise ValueError("播放时间轴已经变化，请重新生成分析计划")
-            count = int(
-                conn.execute(
-                    "SELECT COUNT(*) AS n FROM watch_analysis_jobs WHERE session_id = ?",
-                    (session_id,),
-                ).fetchone()["n"]
-                or 0
-            )
-            if count >= int(WATCH_ANALYSIS_MAX_JOBS_PER_SESSION):
-                raise ValueError("本次观看的分析任务已达到上限")
             duplicate = conn.execute(
                 "SELECT * FROM watch_analysis_jobs WHERE idempotency_key = ?",
                 (key,),
