@@ -112,6 +112,41 @@ def run() -> None:
     )
     _assert(invalid_bounds.status_code == 400, "正片起止相同时仍能创建会话")
 
+    idempotent_payload = {
+        "window_id": "sumitalk:idempotent-create",
+        "media": {
+            "id": "bili:BV-idempotent-create:1",
+            "source": "bilibili_embed",
+            "title": "重复建会测试",
+            "duration_ms": 7_200_000,
+        },
+        "mode": {"knowledge_mode": "known", "fear_mode": False},
+    }
+    first_create_response = client.post("/miniapp-api/watch/sessions", json=idempotent_payload)
+    repeated_create_response = client.post("/miniapp-api/watch/sessions", json=idempotent_payload)
+    first_create = _json(first_create_response)["session"]
+    repeated_create = _json(repeated_create_response)["session"]
+    _assert(first_create_response.status_code == 201, "首次建会没有返回 created")
+    _assert(repeated_create_response.status_code == 200, "重复建会没有返回 reused")
+    _assert(first_create["session_id"] == repeated_create["session_id"], "相同建会重试创建了第二个会话")
+    _assert(first_create["create_reused"] is False, "首次建会被错误标记为复用")
+    _assert(repeated_create["create_reused"] is True, "重复建会没有明确返回复用状态")
+    with runtime_sqlite.connect() as conn:
+        active_count = conn.execute(
+            "SELECT COUNT(*) AS total FROM watch_sessions "
+            "WHERE window_id = ? AND media_id = ? AND status != 'ended'",
+            ("sumitalk:idempotent-create", "bili:BV-idempotent-create:1"),
+        ).fetchone()
+    _assert(int(active_count["total"] or 0) == 1, "重复建会仍落下了多个活动会话")
+    changed_mode = {
+        **idempotent_payload,
+        "mode": {"knowledge_mode": "known", "fear_mode": True},
+    }
+    distinct_create = _json(client.post("/miniapp-api/watch/sessions", json=changed_mode))["session"]
+    _assert(distinct_create["session_id"] != first_create["session_id"], "不同模式被错误合并到旧会话")
+    watch_runtime_store.end_session(first_create["session_id"])
+    watch_runtime_store.end_session(distinct_create["session_id"])
+
     bounded_response = client.post(
         "/miniapp-api/watch/sessions",
         json={
@@ -576,6 +611,13 @@ def run() -> None:
     _assert("门后突然传来巨响。" in visible_prompt, "回复抵达窗口没有注入近未来片段")
     _assert("走廊的灯在更远处全部熄灭。" not in visible_prompt, "可见回复窗口超过配置提前量")
     _assert("走廊的灯在更远处全部熄灭。" in known_prompt, "两分钟弹幕窗口没有保留较远未来片段")
+    _assert(
+        "小玥正在和你看同一段，不需要和她照搬复述你看到的剧情内容以及逐项描述剧情画面。"
+        in known_prompt,
+        "一起看剧情没有禁止照搬复述剧情和逐项描述画面",
+    )
+    _assert("视频约播放到 01:30" in known_prompt, "弹幕提示没有使用预计回复抵达位置")
+    _assert("[du:danmaku 02:30 这里先别盯太紧]" in known_prompt, "弹幕示例仍按发送位置固定加时")
     _assert("VISIBLE_CONTEXT" not in known_prompt, "动态上下文仍把内部 JSON 字段暴露给主模型")
     paused_body = dict(chat_body)
     paused_body["watch_snapshot"] = {**snapshot, "is_playing": False}
@@ -716,7 +758,13 @@ def run() -> None:
     _assert(visible == "我也觉得……先别往前凑。", "隐藏弹幕块泄漏到可见正文")
     event = build_watch_danmaku_event(actions[0], context=action_context)
     _assert(event is not None, "合法隐藏弹幕没有生成 typed event")
+    _assert(event["target_ms"] == 75_000, "提示优化不应硬改或吞掉模型给出的正常弹幕时间")
     _assert(event["type"] == "danmaku" and "channel" not in event, "弹幕事件不应选择消息 channel")
+    invalid_visible, invalid_actions = split_watch_actions(
+        "这句保留。\n[du:danmaku 没写时间的弹幕]"
+    )
+    _assert(invalid_visible == "这句保留。", "无效弹幕标记泄漏到可见正文")
+    _assert(not invalid_actions, "缺少媒体时间的弹幕标记被错误解析")
     legacy_visible, legacy_actions = split_watch_actions(
         "旧格式兼容\n<<<DU_WATCH_ACTION>>>\n"
         '{"type":"danmaku","target_ms":76000,"text":"旧格式仍可解析"}'
@@ -771,6 +819,7 @@ def run() -> None:
         "seek 后旧 epoch 弹幕仍然有效",
     )
 
+    before_reference_update = watch_runtime_store.get_session(session_id)
     sections_response = client.put(
         f"/miniapp-api/watch/sessions/{session_id}/timeline-sections",
         json={
@@ -785,7 +834,12 @@ def run() -> None:
     _assert(sections_response.status_code == 200, "片头片尾人工纠正失败")
     status = _json(client.get(f"/miniapp-api/watch/sessions/{session_id}/status"))
     _assert(len(status["timeline_sections"]) == 3, "status 未返回时间轴片段")
-    _assert(status["analysis"]["status"] == "warming_context", "边界纠正后没有触发分析重建状态")
+    _assert(
+        status["analysis"]["status"] != "warming_context"
+        and status["analysis"]["covered_until_ms"]
+        >= before_reference_update["analysis"]["covered_until_ms"],
+        "人工参考范围错误清空或降级了已付费分析",
+    )
 
     feedback_response = client.post(
         f"/miniapp-api/watch/sessions/{session_id}/risk-feedback",

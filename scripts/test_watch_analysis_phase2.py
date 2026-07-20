@@ -23,7 +23,6 @@ os.environ["WATCH_ANALYSIS_SAMPLE_DIR"] = str(TEMP_DIR / "samples")
 os.environ["WATCH_VISUAL_CACHE_DIR"] = str(TEMP_DIR / "visual-cache")
 os.environ["OPENROUTER_API_KEY"] = "test-watch-analysis-key"
 os.environ["WATCH_KNOWLEDGE_API_KEY"] = "test-watch-knowledge-key"
-os.environ["WATCH_ANALYSIS_DAILY_MAX_COST_USD"] = "100"
 os.environ["TAVILY_API_KEY"] = "test-tavily-key"
 os.environ["WATCH_VISUAL_FRAME_PAST_WINDOW_MS"] = "600000"
 os.environ["WATCH_VISUAL_FRAME_FUTURE_WINDOW_MS"] = "300000"
@@ -31,6 +30,10 @@ os.environ["WATCH_VISUAL_FRAME_MAX_PER_SESSION"] = "48"
 
 from PIL import Image  # noqa: E402
 
+from config import (  # noqa: E402
+    WATCH_SUBTITLE_JOB_MAX_ATTEMPTS,
+    WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS,
+)
 from services.watch_analysis import (  # noqa: E402
     ANALYSIS_SYSTEM_PROMPT,
     WatchAnalysisProviderError,
@@ -58,6 +61,7 @@ from services.watch_analysis_source import (  # noqa: E402
     BilibiliApiAnalysisSource,
     canonical_bilibili_url,
 )
+from services.watch_subtitles import SubtitleLookupError  # noqa: E402
 from services.watch_context import build_watch_context  # noqa: E402
 from storage import (  # noqa: E402
     runtime_sqlite,
@@ -171,18 +175,10 @@ def _raw_result(
         },
         "timeline_sections": sections or [],
         "plot_chunks": chunks or [],
-        "story_so_far": {
+        "story_background": {
             "through_ms": story_through_ms,
-            "summary": story_summary,
             "background": story_background or story_summary,
             "characters": ["林夏"] if story_summary else [],
-            "unresolved": ["门后有什么"] if story_summary else [],
-        },
-        "story_state": {
-            "characters": ["林夏"] if story_summary else [],
-            "locations": ["旧宅"] if story_summary else [],
-            "events": [story_summary] if story_summary else [],
-            "unresolved": ["门后有什么"] if story_summary else [],
         },
         "risk_events": risks or [],
         "analysis_notes": "test",
@@ -336,7 +332,7 @@ def _test_analysis_response_adapter() -> None:
             }
         ),
     )
-    _assert(blocked_result["story_so_far"]["through_ms"] == 20_000, "分块 content 没有重新拼接解析")
+    _assert(blocked_result["story_background"]["through_ms"] == 20_000, "分块 content 没有重新拼接解析")
 
     parsed_result, _usage = analyze_watch_samples(
         session,
@@ -344,7 +340,7 @@ def _test_analysis_response_adapter() -> None:
         samples,
         post=_analysis_message_post({"content": "", "parsed": raw}),
     )
-    _assert(parsed_result["story_state"]["characters"] == ["林夏"], "message.parsed 结构化结果没有被接受")
+    _assert(parsed_result["plot_chunks"][0]["summary"] == "林夏推开门，走进旧宅。", "message.parsed 结构化结果没有被接受")
 
     truncated_content = raw_text[:-40]
     log_stream = StringIO()
@@ -420,8 +416,7 @@ def _test_session_analysis_cost_accumulates_retry_usage() -> None:
         result={
             "timeline_sections": [],
             "plot_chunks": [],
-            "story_so_far": {},
-            "story_state": {},
+            "story_background": {},
             "risk_events": [],
             "covered_from_ms": 10_000,
             "covered_until_ms": 20_000,
@@ -445,6 +440,249 @@ def _test_session_analysis_cost_accumulates_retry_usage() -> None:
     _assert(cost["complete"] is True and cost["pending_jobs"] == 0, "完整费用被错误标成未结算")
     _assert(cost["input_tokens"] == 220 and cost["output_tokens"] == 100, "会话 token 没有累计")
     watch_runtime_store.end_session(session["session_id"])
+
+
+def _test_paid_usage_survives_end_race_and_is_idempotent() -> None:
+    session = watch_runtime_store.create_session(
+        device_id="test-device-usage-race",
+        window_id="sumitalk:usage-race",
+        companion={"id": "companion", "name": "Companion"},
+        media={
+            "id": "bili:BV-usage-race:p1",
+            "source": "bilibili_embed",
+            "title": "费用竞态测试",
+            "duration_ms": 180_000,
+        },
+        mode={"knowledge_mode": "known", "fear_mode": False},
+    )
+    job, samples = _enqueue(session["session_id"], "rolling", [0, 20_000])
+    claimed = watch_analysis_store.claim_next_job(stale_after_seconds=300)
+    _assert(claimed and claimed["job_id"] == job["job_id"], "费用竞态任务未领取")
+    usage = {
+        "input_tokens": 120,
+        "output_tokens": 40,
+        "total_tokens": 160,
+        "cost_usd": 0.0123,
+        "provider_calls": 1,
+        "priced_calls": 1,
+        "cost_reported": True,
+        "model": "test-provider",
+    }
+    _assert(
+        watch_analysis_store.record_job_usage(claimed, usage, event_key="analysis:1:provider"),
+        "供应商调用费用没有先行落账",
+    )
+    watch_runtime_store.end_session(session["session_id"])
+    _assert(
+        watch_analysis_store.cancel_claimed_job(claimed, reason="session_ended"),
+        "结束竞态中的已领取任务没有进入取消终态",
+    )
+    _assert(
+        watch_analysis_store.record_job_usage(claimed, usage, event_key="analysis:1:provider"),
+        "结束后重复确认费用事件失败",
+    )
+    cost = watch_analysis_store.session_analysis_cost(session["session_id"])
+    _assert(abs(cost["amount_usd"] - 0.0123) < 0.0000001, "结束竞态丢失或重复累计费用")
+    _assert(cost["provider_calls"] == 1 and cost["pricing_complete"], "费用事件幂等状态不正确")
+    _assert(cost["complete"], "会话结束后费用仍被错误标记为处理中")
+    watch_analysis_store.purge_job_samples(claimed)
+
+
+def _test_seek_reuses_paid_coverage_without_reanalysis() -> None:
+    session = watch_runtime_store.create_session(
+        device_id="test-device-seek-cache",
+        window_id="sumitalk:seek-cache",
+        companion={"id": "companion", "name": "Companion"},
+        media={
+            "id": "bili:BV-seek-cache:p1",
+            "source": "bilibili_embed",
+            "title": "Seek 缓存测试",
+            "duration_ms": 180_000,
+            "content_start_ms": 0,
+            "content_end_ms": 180_000,
+        },
+        mode={"knowledge_mode": "known", "fear_mode": True},
+    )
+    session_id = session["session_id"]
+    watch_runtime_store.update_analysis_state(
+        session_id,
+        {"status": "analyzing", "familiarity": "recognized", "identity": "Seek 缓存测试"},
+    )
+    watch_runtime_store.update_preparation_state(
+        session_id,
+        status="ready_to_confirm",
+        knowledge_card_status="not_required",
+    )
+    watch_runtime_store.start_session(
+        session_id,
+        knowledge_card_action="confirm",
+        subtitle_lookup_id=_set_terminal_subtitle(session_id),
+        protection_action="continue_unprotected",
+    )
+    job, samples = _enqueue(session_id, "rolling", [0, 70_000, 140_000])
+    claimed = watch_analysis_store.claim_next_job(stale_after_seconds=300)
+    _assert(claimed and claimed["job_id"] == job["job_id"], "Seek 缓存任务未领取")
+    committed = watch_analysis_store.commit_analysis_result(
+        claimed,
+        result={
+            "timeline_sections": [],
+            "plot_chunks": [
+                {
+                    "start_ms": 10_000,
+                    "end_ms": 120_000,
+                    "summary": "这段剧情已经付费解析。",
+                    "characters": ["林夏"],
+                    "tags": ["缓存"],
+                    "confidence": 0.9,
+                }
+            ],
+            "story_background": {
+                "through_ms": 140_000,
+                "background": "",
+                "characters": [],
+            },
+            "risk_events": [
+                {
+                    "risk_type": "jumpscare",
+                    "severity": "2",
+                    "start_ms": 80_000,
+                    "end_ms": 82_000,
+                    "warn_at_ms": 73_000,
+                    "label": "前方有突然惊吓。",
+                    "companion_hint": "前方有突然惊吓。",
+                    "confidence": 0.9,
+                }
+            ],
+            "covered_from_ms": 0,
+            "covered_until_ms": 140_000,
+            "analysis_version": "seek-cache-test",
+        },
+        usage={
+            "cost_usd": 0.02,
+            "provider_calls": 1,
+            "priced_calls": 1,
+            "cost_reported": True,
+        },
+        samples=samples,
+    )
+    _assert(committed.get("applied"), "Seek 缓存基础剧情没有落库")
+    before_cost = watch_analysis_store.session_analysis_cost(session_id)
+    _updated, applied, _ignored = watch_runtime_store.update_playback(
+        session_id,
+        {
+            "media_id": "bili:BV-seek-cache:p1",
+            "playhead_ms": 30_000,
+            "is_playing": False,
+            "playback_rate": 1.0,
+            "timeline_epoch": 1,
+            "snapshot_seq": 1,
+            "captured_at": "2026-07-21T00:00:00Z",
+        },
+    )
+    _assert(applied, "Seek 缓存测试没有切换 epoch")
+    watch_analysis_store.reset_for_epoch(session_id, timeline_epoch=1)
+    plan = watch_analysis_store.build_sample_plan(watch_runtime_store.get_session(session_id))
+    refreshed = watch_runtime_store.get_session(session_id)
+    _assert(refreshed["analysis"]["covered_until_ms"] == 140_000, "Seek 后没有恢复已付费覆盖")
+    _assert(plan["purpose"] == "rolling", "Seek 后错误重跑作品识别或时间轴预扫")
+    _assert(plan["audio_range_start_ms"] >= 140_000, "Seek 后重新取材了已付费剧情区间")
+    copied_chunks = watch_runtime_store.get_plot_chunks(
+        session_id,
+        timeline_epoch=1,
+        start_before_ms=140_000,
+        end_after_ms=0,
+        limit=20,
+    )
+    copied_risks = watch_runtime_store.get_risk_events(
+        session_id,
+        timeline_epoch=1,
+        from_ms=0,
+        until_ms=140_000,
+        limit=20,
+    )
+    _assert(copied_chunks and copied_risks, "Seek 后只恢复覆盖游标，没有恢复剧情或高能结果")
+    after_cost = watch_analysis_store.session_analysis_cost(session_id)
+    _assert(after_cost["amount_usd"] == before_cost["amount_usd"], "复用缓存额外增加了费用")
+    watch_runtime_store.end_session(session_id)
+
+
+def _test_normal_mode_waits_for_five_minute_initial_coverage() -> None:
+    session = watch_runtime_store.create_session(
+        device_id="test-device-normal-initial-gate",
+        window_id="sumitalk:normal-initial-gate",
+        companion={"id": "companion", "name": "Companion"},
+        media={
+            "id": "bili:BV-normal-initial-gate:p1",
+            "source": "bilibili_embed",
+            "title": "普通模式首段门禁测试",
+            "part_title": "P1",
+            "duration_ms": 600_000,
+        },
+        mode={"knowledge_mode": "known", "fear_mode": False},
+    )
+    session_id = session["session_id"]
+    with runtime_sqlite.connect() as conn:
+        conn.execute(
+            "UPDATE watch_sessions SET analysis_familiarity = 'recognized', "
+            "knowledge_card_status = 'not_required', preparation_status = 'ready_to_confirm' "
+            "WHERE id = ?",
+            (session_id,),
+        )
+    started = watch_runtime_store.start_session(
+        session_id,
+        knowledge_card_action="confirm",
+        subtitle_lookup_id=_set_terminal_subtitle(session_id),
+    )
+    gate = watch_runtime_store.get_start_gate(started)
+    _assert(gate["status"] == "buffering" and not gate["can_play"], "普通模式确认后直接解锁")
+    _assert(gate["required_until_ms"] == 300_000, "普通模式首段门禁不是五分钟")
+    _assert(not gate["can_continue_unprotected"], "普通模式错误暴露了无保护继续")
+
+    first_job, first_samples = _enqueue(session_id, "rolling", [0, 299_999])
+    first_claimed = watch_analysis_store.claim_next_job(stale_after_seconds=300)
+    _assert(first_claimed and first_claimed["job_id"] == first_job["job_id"], "普通模式首批任务未领取")
+    watch_analysis_store.commit_analysis_result(
+        first_claimed,
+        result={
+            "timeline_sections": [],
+            "plot_chunks": [],
+            "story_background": {},
+            "risk_events": [],
+            "covered_from_ms": 0,
+            "covered_until_ms": 299_999,
+            "analysis_version": "normal-initial-gate-test",
+        },
+        usage={"cost_usd": 0},
+        samples=first_samples,
+    )
+    almost_ready = watch_runtime_store.get_session(session_id)
+    _assert(
+        not watch_runtime_store.get_start_gate(almost_ready)["can_play"],
+        "普通模式不足五分钟时提前解锁",
+    )
+
+    final_job, final_samples = _enqueue(session_id, "rolling", [299_999, 300_000])
+    final_claimed = watch_analysis_store.claim_next_job(stale_after_seconds=300)
+    _assert(final_claimed and final_claimed["job_id"] == final_job["job_id"], "普通模式补齐任务未领取")
+    watch_analysis_store.commit_analysis_result(
+        final_claimed,
+        result={
+            "timeline_sections": [],
+            "plot_chunks": [],
+            "story_background": {},
+            "risk_events": [],
+            "covered_from_ms": 299_999,
+            "covered_until_ms": 300_000,
+            "analysis_version": "normal-initial-gate-test",
+        },
+        usage={"cost_usd": 0},
+        samples=final_samples,
+    )
+    ready = watch_runtime_store.get_session(session_id)
+    ready_gate = watch_runtime_store.get_start_gate(ready)
+    _assert(ready_gate["status"] == "ready" and ready_gate["can_play"], "普通模式满五分钟后未自动解锁")
+    _assert(ready["preparation"]["playback_unlocked_at"], "普通模式解锁没有原子持久化")
+    watch_runtime_store.end_session(session_id)
 
 
 def _test_initial_fear_coverage_unlocks_playback() -> None:
@@ -484,7 +722,7 @@ def _test_initial_fear_coverage_unlocks_playback() -> None:
         "首段分析前没有保持播放器锁定",
     )
 
-    _job, samples = _enqueue(session_id, "rolling", [5_000, 145_000])
+    _job, samples = _enqueue(session_id, "rolling", [0, 300_000])
     claimed = watch_analysis_store.claim_next_job(stale_after_seconds=300)
     _assert(claimed is not None and claimed["job_id"] == _job["job_id"], "首段分析任务没有领取")
     committed = watch_analysis_store.commit_analysis_result(
@@ -492,11 +730,10 @@ def _test_initial_fear_coverage_unlocks_playback() -> None:
         result={
             "timeline_sections": [],
             "plot_chunks": [],
-            "story_so_far": {},
-            "story_state": {},
+            "story_background": {},
             "risk_events": [],
-            "covered_from_ms": 5_000,
-            "covered_until_ms": 145_000,
+            "covered_from_ms": 0,
+            "covered_until_ms": 300_000,
             "analysis_version": "initial-gate-test",
         },
         usage={"cost_usd": 0},
@@ -506,7 +743,7 @@ def _test_initial_fear_coverage_unlocks_playback() -> None:
     unlocked = watch_runtime_store.get_session(session_id)
     _assert(unlocked is not None, "首段门禁测试会话意外消失")
     gate = watch_runtime_store.get_start_gate(unlocked)
-    _assert(gate["covered_until_ms"] == 145_000, "首段分析覆盖范围没有保存")
+    _assert(gate["covered_until_ms"] == 300_000, "首段分析覆盖范围没有保存")
     _assert(gate["status"] == "ready" and gate["can_play"], "首段覆盖达标后播放器没有自动解锁")
     _assert(
         bool(unlocked["preparation"]["playback_unlocked_at"]),
@@ -670,6 +907,7 @@ def _test_knowledge_preparation_flow() -> None:
     knowledge_request = model_calls[0]["json"]
     knowledge_prompt = knowledge_request["system"]
     _assert(knowledge_request["model"] == "deepseek-v4-flash", "知识卡没有使用 DS V4 Flash")
+    _assert("max_tokens" not in knowledge_request, "知识卡请求仍携带显式输出上限")
     _assert(knowledge_request["thinking"] == {"type": "disabled"}, "知识卡没有关闭 thinking")
     _assert("tools" not in knowledge_request, "知识卡整理阶段仍允许模型自行搜索")
     _assert("SEARCH_SOURCES=" in knowledge_request["messages"][0]["content"], "受控搜索摘要没有传给知识卡模型")
@@ -705,6 +943,15 @@ def _test_knowledge_preparation_flow() -> None:
     _assert(subtitle_lookup["cue_count"] == 2, "字幕命中元数据没有返回条目数")
     _assert("cues" not in subtitle_lookup, "字幕正文被错误返回给前端")
     _assert(ready["preparation"]["status"] == "ready_to_confirm", "字幕准备完成后没有等待确认")
+    preparation_cost = watch_analysis_store.session_analysis_cost(session_id)
+    _assert(preparation_cost["complete"], "知识卡和字幕任务完成后费用仍显示处理中")
+    _assert(not preparation_cost["pricing_complete"], "未报价的搜索和字幕调用被错误标成已计价")
+    _assert(preparation_cost["provider_calls"] == 3, "知识卡搜索、整理模型或字幕调用没有完整入账")
+    _assert(preparation_cost["unpriced_calls"] == 3, "未报价供应商调用数不正确")
+    _assert(
+        set(preparation_cost["breakdown"]) == {"knowledge_card", "subtitle_lookup"},
+        "准备阶段费用没有按用途拆分",
+    )
     prepared_session = _session_with_prepared_subtitles(ready)
     _assert(
         prepared_session["media"]["prepared_subtitle_cues"][0]["text"] == "Xin chao",
@@ -971,7 +1218,13 @@ class _FakeSubtitlePreparationSource:
             "coverage_start_ms": 60_000,
             "coverage_end_ms": 63_000,
             "message": "已找到外部字幕",
+            "provider_called": True,
         }
+
+
+class _FailingSubtitlePreparationSource:
+    def prepare_subtitles(self, session: dict, *, original_title: str, year: int) -> dict:
+        raise SubtitleLookupError("test subtitle provider timeout")
 
 
 class _FakeHttpResponse:
@@ -1297,6 +1550,18 @@ def _test_optional_subdl_subtitles() -> None:
                     "results": [{"name": "Test Movie", "year": 2025, "type": "movie"}],
                     "subtitles": [
                         {
+                            "release_name": "Test.Movie.2025.Bad",
+                            "url": "/subtitle/sub-bad/file-bad",
+                            "unpack_files": [
+                                {
+                                    "name": "Test.Movie.2025.bad.srt",
+                                    "format": "srt",
+                                    "language": "VI",
+                                    "url": "/subtitle/sub-bad/file-bad",
+                                }
+                            ],
+                        },
+                        {
                             "release_name": "Test.Movie.2025",
                             "unpack_files": [
                                 {
@@ -1310,6 +1575,8 @@ def _test_optional_subdl_subtitles() -> None:
                     ],
                 }
             )
+        if url == "https://dl.subdl.com/subtitle/sub-bad/file-bad":
+            return _FakeRawHttpResponse(b"", status_code=503)
         if url == "https://dl.subdl.com/subtitle/sub-1/file-1":
             return _FakeRawHttpResponse(
                 b"1\n00:00:00,000 --> 00:00:01,500\nXin chao\n\n"
@@ -1338,7 +1605,11 @@ def _test_optional_subdl_subtitles() -> None:
     _assert(prepared["query_title"] == "Test Movie", "准备结果没有保留实际查询原名")
     _assert(prepared["language_codes"] == ["VI"], "准备结果没有保留字幕语言")
     _assert(len(prepared["cues"]) == 2, "准备结果没有保留字幕条目")
-    _assert(len(subdl_calls) == 2, "准备阶段没有只执行一次原名搜索和一次下载")
+    _assert(len(subdl_calls) == 3, "字幕候选没有按 URL 去重后依次尝试")
+    _assert(
+        all(call.get("timeout", 0) <= WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS for call in subdl_calls),
+        "字幕查询仍复用了视频取材的长超时",
+    )
     session["media"].update(
         {
             "prepared_subtitle_cues": prepared["cues"],
@@ -1351,12 +1622,62 @@ def _test_optional_subdl_subtitles() -> None:
         purpose="identify",
         timestamps_ms=[60_500, 62_000],
     )
-    _assert(len(subdl_calls) == 2, "滚动分析阶段重复请求了 SubDL")
+    _assert(len(subdl_calls) == 3, "滚动分析阶段重复请求了 SubDL")
     _assert(
         samples[0]["subtitle"] == "Xin chao Di theo toi",
         "外语字幕没有按人工正片起点偏移后进入样本",
     )
     _assert(samples[1]["subtitle"] == "Di theo toi", "外部字幕窗口与媒体时间没有对齐")
+
+
+def _test_subtitle_provider_failure_is_visible_without_automatic_retry() -> None:
+    session = watch_runtime_store.create_session(
+        device_id="test-device-subtitle-failure",
+        window_id="sumitalk:subtitle-failure",
+        companion={"id": "du", "name": "渡"},
+        media={
+            "id": "bili:BV-subtitle-failure:p1",
+            "source": "bilibili_embed",
+            "title": "字幕失败测试",
+            "duration_ms": 120_000,
+        },
+        mode={"knowledge_mode": "known", "fear_mode": False},
+    )
+    session_id = session["session_id"]
+    watch_runtime_store.update_analysis_state(
+        session_id,
+        {
+            "status": "analyzing",
+            "familiarity": "recognized",
+            "identity": "字幕失败测试",
+            "original_title": "Subtitle Failure Test",
+            "year": 2026,
+        },
+    )
+    schedule_knowledge_jobs(limit=1)
+    scheduled = schedule_subtitle_jobs(limit=1)
+    _assert(scheduled["jobs_created"] == 1, "认识作品后没有建立字幕任务")
+    with runtime_sqlite.connect() as conn:
+        row = conn.execute(
+            "SELECT max_attempts FROM watch_analysis_jobs WHERE session_id = ? AND purpose = 'subtitle_lookup'",
+            (session_id,),
+        ).fetchone()
+    _assert(
+        row is not None and int(row["max_attempts"] or 0) == WATCH_SUBTITLE_JOB_MAX_ATTEMPTS == 1,
+        "字幕任务仍会在准备页背后自动重复慢请求",
+    )
+    outcome = process_next_job(source=_FailingSubtitlePreparationSource())
+    _assert(outcome and outcome["status"] == "failed", "字幕 provider 失败后没有进入可见终态")
+    failed = watch_runtime_store.get_session(session_id)
+    _assert(
+        failed["preparation"]["subtitle_lookup"]["status"] == "failed",
+        "字幕 provider 失败仍停留在搜索态",
+    )
+    _assert(
+        failed["preparation"]["subtitle_lookup"]["can_retry"],
+        "字幕 provider 失败后没有保留显式重试入口",
+    )
+    watch_runtime_store.end_session(session_id)
 
 
 def _test_knowledge_card_subtitle_identity() -> None:
@@ -1443,14 +1764,14 @@ def _test_gateway_managed_source_flow() -> None:
         {
             "media_id": "bili:BV1xx411c7mD:p1",
             "playhead_ms": 15_000,
-            "is_playing": True,
+            "is_playing": False,
             "playback_rate": 1.0,
             "timeline_epoch": 1,
             "snapshot_seq": 1,
             "captured_at": "2026-07-18T09:59:00Z",
         },
     )
-    _assert(applied, "后端取材测试播放快照没有应用")
+    _assert(applied, "锁定期间的暂停位置没有同步给后端取材")
     plan = watch_analysis_store.build_sample_plan(watch_runtime_store.get_session(session_id))
     _assert(plan["managed_by"] == "gateway", "分析计划没有标记由网关管理")
     _assert(plan["client_upload_required"] is False, "分析主链仍要求客户端截图")
@@ -1484,16 +1805,7 @@ def _test_background_output_modes() -> None:
     ]
     base_session = {
         "media": {"id": "local:test", "title": "测试作品", "duration_ms": 120_000},
-        "analysis": {
-            "story_so_far": {
-                "through_ms": 10_000,
-                "summary": "上一段已经确认的剧情。",
-                "background": "旧版本曾生成的剧情背景。",
-                "characters": ["林夏"],
-                "unresolved": [],
-            },
-            "story_state": {"characters": ["林夏"], "events": ["进入旧宅"]},
-        },
+        "analysis": {},
     }
     known_session = {**base_session, "mode": {"knowledge_mode": "known"}}
     summary_session = {**base_session, "mode": {"knowledge_mode": "needs_summary"}}
@@ -1507,23 +1819,28 @@ def _test_background_output_modes() -> None:
     _assert("【剧情背景输出模式：产出】" in summary_system, "needs_summary 模式没有使用产出背景的 Gemini system 提示词")
     _assert("截至 through_ms" in summary_system, "needs_summary 模式没有限制剧情背景的时间边界")
     _assert(known_system != summary_system, "两种知识模式仍共用完全相同的 Gemini system 提示词")
+    _assert("max_tokens" not in known_request, "一起看 Gemini 请求仍携带显式输出上限")
 
     known_prompt = known_request["messages"][1]["content"][0]["text"]
     summary_prompt = summary_request["messages"][1]["content"][0]["text"]
     known_context = json.loads(known_prompt.split("INPUT_CONTEXT=", 1)[1])
     summary_context = json.loads(summary_prompt.split("INPUT_CONTEXT=", 1)[1])
     _assert(
-        known_context["previous_story_so_far"]["background"] == "",
-        "known 模式仍把旧剧情背景送回 Gemini 继续改写",
+        known_context["previous_adjacent_plot_chunks"] == [],
+        "没有相邻剧情时错误生成了跨批次上下文",
     )
     _assert(
-        known_context["previous_story_so_far"]["summary"] == "上一段已经确认的剧情。",
-        "known 模式错误清空了分析连续性摘要",
+        "previous_story_so_far" not in known_context and "previous_story_state" not in known_context,
+        "known 模式仍把累计剧情或事件状态送回 Gemini",
     )
     _assert(
-        summary_context["previous_story_so_far"]["background"] == "旧版本曾生成的剧情背景。",
-        "needs_summary 模式没有延续已确认的剧情背景",
+        "previous_story_so_far" not in summary_context and "previous_story_state" not in summary_context,
+        "needs_summary 模式仍把累计剧情或事件状态送回 Gemini",
     )
+    schema = known_request["response_format"]["json_schema"]["schema"]
+    _assert("story_background" in schema["properties"], "解析 schema 缺少按模式产出的剧情背景")
+    _assert("story_so_far" not in schema["properties"], "解析 schema 仍要求累计剧情")
+    _assert("story_state" not in schema["properties"], "解析 schema 仍要求累计事件状态")
 
     raw = _raw_result(
         story_through_ms=20_000,
@@ -1542,13 +1859,13 @@ def _test_background_output_modes() -> None:
         job=job,
         samples=samples,
     )
-    _assert(known_result["story_so_far"]["background"] == "", "known 模式接受了模型违规返回的剧情背景")
+    _assert(known_result["story_background"]["background"] == "", "known 模式接受了模型违规返回的剧情背景")
     _assert(
-        known_result["story_so_far"]["summary"] == "林夏继续探索旧宅。",
-        "known 模式错误丢弃了供分析器使用的累计剧情摘要",
+        known_result["story_background"]["characters"] == [],
+        "known 模式接受了模型违规返回的剧情人物背景",
     )
     _assert(
-        summary_result["story_so_far"]["background"] == "林夏此前为了寻找失踪的同伴进入旧宅。",
+        summary_result["story_background"]["background"] == "林夏此前为了寻找失踪的同伴进入旧宅。",
         "needs_summary 模式丢失了 Gemini 生成的剧情背景",
     )
 
@@ -1613,6 +1930,81 @@ def _test_visual_frame_retention() -> None:
     )
 
 
+def _test_session_job_count_does_not_stop_long_media() -> None:
+    session = watch_runtime_store.create_session(
+        device_id="test-device-no-job-cap",
+        window_id="sumitalk:no-job-cap",
+        companion={"id": "du", "name": "渡"},
+        media={
+            "id": "bili:BV-no-job-cap:p1",
+            "source": "bilibili_embed",
+            "title": "长片任务计数测试",
+            "part_title": "第一集",
+            "duration_ms": 1_000_000,
+        },
+        mode={"knowledge_mode": "known", "fear_mode": False},
+    )
+    session_id = session["session_id"]
+    for index in range(241):
+        _job, created = watch_analysis_store.enqueue_source_plan(
+            session=watch_runtime_store.get_session(session_id),
+            plan={"purpose": "rolling", "target_timestamps_ms": [index * 1000]},
+        )
+        _assert(created, f"第 {index + 1} 个分析任务被错误拦截")
+    watch_runtime_store.end_session(session_id)
+
+
+def _test_rolling_prefetch_uses_full_batches_to_thirty_minutes() -> None:
+    base_session = {
+        "session_id": "watch_rolling_prefetch_test",
+        "media": {
+            "id": "bili:rolling-prefetch:p1",
+            "source": "bilibili_embed",
+            "duration_ms": 3_600_000,
+            "content_start_ms": 0,
+            "content_end_ms": 3_500_000,
+        },
+        "mode": {"knowledge_mode": "known"},
+        "playback": {"playhead_ms": 0, "timeline_epoch": 0},
+        "analysis": {"familiarity": "recognized", "covered_until_ms": 0},
+        "preparation": {"started_at": "2026-07-20T16:00:00Z"},
+        "ended_at": "",
+    }
+    first = watch_analysis_store.build_sample_plan(base_session)
+    _assert(first["purpose"] == "rolling", "30 分钟预取没有开始首个滚动批次")
+    _assert(first["target_until_ms"] == 1_800_000, "滚动预取目标不是最多领先 30 分钟")
+    _assert(first["audio_range_end_ms"] == 140_000, "首个滚动任务没有使用完整 140 秒批次")
+
+    waiting = watch_analysis_store.build_sample_plan(
+        {
+            **base_session,
+            "analysis": {"familiarity": "recognized", "covered_until_ms": 1_680_000},
+        }
+    )
+    _assert(waiting["purpose"] == "idle", "不足一个完整批次的播放头差值仍触发了模型请求")
+    _assert(waiting["reason"] == "coverage_refill_wait", "滚动预取没有进入完整批次等待状态")
+
+    refill = watch_analysis_store.build_sample_plan(
+        {
+            **base_session,
+            "playback": {"playhead_ms": 20_000, "timeline_epoch": 0},
+            "analysis": {"familiarity": "recognized", "covered_until_ms": 1_680_000},
+        }
+    )
+    _assert(refill["purpose"] == "rolling", "领先量消耗一个完整批次后没有恢复预取")
+    _assert(refill["audio_range_end_ms"] == 1_820_000, "恢复预取仍生成了不足 140 秒的追赶批次")
+
+    final_chunk = watch_analysis_store.build_sample_plan(
+        {
+            **base_session,
+            "media": {**base_session["media"], "content_end_ms": 1_800_000},
+            "analysis": {"familiarity": "recognized", "covered_until_ms": 1_760_000},
+        }
+    )
+    _assert(final_chunk["purpose"] == "rolling", "正片结尾前的最后一段没有收尾")
+    _assert(final_chunk["audio_range_end_ms"] == 1_800_000, "最后一批越过了正常正片结尾")
+
+
 def run() -> None:
     runtime_sqlite._SCHEMA_READY = False
     _assert("静态风景照" in ANALYSIS_SYSTEM_PROMPT, "时间轴预扫没有识别 Bilibili 静态垫片")
@@ -1620,14 +2012,21 @@ def run() -> None:
     _assert("content_start_ms/content_end_ms" in ANALYSIS_SYSTEM_PROMPT, "人工正片边界没有进入分析约束")
     _assert("输入字幕无论使用哪种语言" in ANALYSIS_SYSTEM_PROMPT, "外语字幕没有被限制为中文剧情辅助材料")
     _assert("忽略冲突字幕" in ANALYSIS_SYSTEM_PROMPT, "字幕错位时没有要求以实际音画为准")
+    _assert("它不是累计剧情" in ANALYSIS_SYSTEM_PROMPT, "剧情背景仍可能被当成累计剧情")
     _test_analysis_response_adapter()
     _test_session_analysis_cost_accumulates_retry_usage()
+    _test_paid_usage_survives_end_race_and_is_idempotent()
+    _test_seek_reuses_paid_coverage_without_reanalysis()
+    _test_normal_mode_waits_for_five_minute_initial_coverage()
     _test_initial_fear_coverage_unlocks_playback()
     _test_background_output_modes()
     _test_visual_frame_retention()
+    _test_session_job_count_does_not_stop_long_media()
+    _test_rolling_prefetch_uses_full_batches_to_thirty_minutes()
     _test_backend_source_adapter()
     _test_authenticated_api_fallback()
     _test_optional_subdl_subtitles()
+    _test_subtitle_provider_failure_is_visible_without_automatic_retry()
     _test_knowledge_card_subtitle_identity()
     _test_knowledge_source_and_timeline_gates()
     _test_knowledge_preparation_flow()
@@ -1720,8 +2119,8 @@ def run() -> None:
     _assert("接受委托并完成了任务" in system_prompt, "提示词没有说明如何连接任务与结果")
     _assert("只按真实剧情单元切分，不按样本数量切分" in system_prompt, "提示词仍按截图数量硬切剧情")
     _assert("道具能力、计划目的、任务内容或规则" in system_prompt, "提示词没有要求说清关键剧情机制")
-    _assert("不要退化成场景与动作清单" in system_prompt, "累计剧情仍可能退化成画面记录")
-    _assert("凡是不在 previous_story_state.characters 中的新配角" in system_prompt, "提示词没有限制新配角的身份推断")
+    _assert("previous_adjacent_plot_chunks 只用于接住批次边界" in system_prompt, "提示词没有限制跨批次上下文用途")
+    _assert("未在 previous_adjacent_plot_chunks 中出现的新配角" in system_prompt, "提示词没有限制新配角的身份推断")
     _assert("description 和 characters 都必须先使用可见特征或泛称" in system_prompt, "提示词没有把新配角限制落实到输出字段")
     _assert("以当前对白为准" in system_prompt, "提示词没有处理称呼与候选关系冲突")
     _assert("输出前静默核对" in system_prompt, "提示词没有要求输出前校验关键约束")
@@ -1733,8 +2132,9 @@ def run() -> None:
     _assert("核心剧情事件" in chunk_properties["description"]["description"], "schema 没有把主剧情要求落到 description 字段")
     _assert("visual_description" not in chunk_properties, "schema 仍要求重复输出视觉描述")
     _assert("dialogue_summary" not in chunk_properties, "schema 仍要求重复输出对白摘要")
-    story_required = request_json["response_format"]["json_schema"]["schema"]["properties"]["story_so_far"]["required"]
+    story_required = request_json["response_format"]["json_schema"]["schema"]["properties"]["story_background"]["required"]
     _assert("background" in story_required, "解析输出没有要求当前已知剧情背景")
+    _assert("max_tokens" not in request_json, "视觉分析请求仍携带显式输出上限")
     _assert(request_json["messages"][1]["role"] == "user", "视觉样本没有作为 user 消息发送")
     _assert(
         all(item.get("type") != "input_audio" for item in request_json["messages"][1]["content"]),
@@ -1892,6 +2292,7 @@ def run() -> None:
     _assert(first_rolling and first_rolling["status"] == "done", "第一段剧情分析未完成")
 
     _enqueue(session_id, "rolling", [60_000, 100_000, 175_000])
+    second_rolling_requests: list[dict] = []
     second_rolling = process_next_job(
         post=_post_for(
             _raw_result(
@@ -1945,10 +2346,27 @@ def run() -> None:
                         "spoiler_free_hint": "低置信度事件。",
                     },
                 ],
-            )
+            ),
+            second_rolling_requests,
         )
     )
     _assert(second_rolling and second_rolling["status"] == "done", "第二段剧情分析未完成")
+    second_request = second_rolling_requests[0]["json"]
+    second_context = json.loads(
+        second_request["messages"][1]["content"][0]["text"].split("INPUT_CONTEXT=", 1)[1]
+    )
+    _assert("max_tokens" not in second_request, "第二批 Gemini 请求仍携带显式输出上限")
+    _assert(
+        any(
+            item.get("description") == "林夏走进旧宅。"
+            for item in second_context["previous_adjacent_plot_chunks"]
+        ),
+        "第二批没有收到上一批边界附近的已解析剧情",
+    )
+    _assert(
+        "previous_story_so_far" not in second_context and "previous_story_state" not in second_context,
+        "第二批仍收到累计剧情或事件状态",
+    )
 
     visual_status = watch_visual_store.frame_cache_status(session_id, timeline_epoch=1)
     _assert(visual_status["count"] >= 5, "滚动分析完成后没有生成派生帧缓存")
@@ -2005,6 +2423,7 @@ def run() -> None:
 
     correction_job, correction_samples = _enqueue(session_id, "rolling", [110_000, 120_000])
     correction_paths = [Path(item["file_path"]) for item in correction_samples]
+    analysis_before_correction = watch_runtime_store.get_session(session_id)["analysis"]
     watch_runtime_store.replace_timeline_sections(
         session_id,
         [
@@ -2015,33 +2434,39 @@ def run() -> None:
         timeline_epoch=1,
     )
     corrected = watch_runtime_store.get_session(session_id)
-    _assert(corrected["analysis"]["status"] == "warming_context", "人工边界纠正状态不正确")
-    _assert(corrected["analysis"]["covered_until_ms"] == 0, "人工边界纠正没有重置覆盖游标")
-    _assert(corrected["analysis"]["story_so_far"] == {}, "人工边界纠正保留了旧累计摘要")
+    _assert(
+        corrected["analysis"]["status"] == analysis_before_correction["status"],
+        "人工参考范围不应改变分析状态或凭空解锁",
+    )
+    _assert(
+        corrected["analysis"]["covered_until_ms"]
+        == analysis_before_correction["covered_until_ms"],
+        "人工参考范围不应清空或凭空推进已付费覆盖",
+    )
     _assert(
         watch_analysis_store.get_job(correction_job["job_id"])["status"] == "cancelled",
         "人工边界纠正没有取消进行中的分析任务",
     )
     _assert(all(not path.exists() for path in correction_paths), "人工边界纠正没有删除待分析截图")
     _assert(
-        not watch_runtime_store.get_plot_chunks(
+        watch_runtime_store.get_plot_chunks(
             session_id,
             timeline_epoch=1,
             start_before_ms=180_000,
             end_after_ms=0,
             limit=20,
         ),
-        "人工边界纠正没有清除派生剧情片段",
+        "人工参考范围错误清除了已付费剧情片段",
     )
     _assert(
-        not watch_runtime_store.get_risk_events(
+        watch_runtime_store.get_risk_events(
             session_id,
             timeline_epoch=1,
             from_ms=0,
             until_ms=180_000,
             limit=20,
         ),
-        "人工边界纠正没有清除派生高能事件",
+        "人工参考范围错误清除了已付费高能事件",
     )
 
     _enqueue(session_id, "rolling", [120_000, 130_000])
@@ -2078,8 +2503,7 @@ def run() -> None:
                 }
             ],
             "timeline_sections": [],
-            "story_so_far": {},
-            "story_state": {},
+            "story_background": {},
             "risk_events": [],
             "analysis_version": "stale-test",
         },
@@ -2097,9 +2521,14 @@ def run() -> None:
     )
     _assert(not stale_chunks, "旧 epoch 分析结果写进了新时间轴")
     epoch_plan = watch_analysis_store.build_sample_plan(watch_runtime_store.get_session(session_id))
+    epoch_session = watch_runtime_store.get_session(session_id)
     _assert(
-        epoch_plan["purpose"] == "timeline_prepass",
-        "新 epoch 错误复用了旧 epoch 已完成任务状态",
+        epoch_session["analysis"]["covered_until_ms"] == 175_000,
+        "seek 后没有复用人工参考范围内的已付费剧情覆盖",
+    )
+    _assert(
+        epoch_plan["purpose"] == "idle",
+        "seek 后仍准备重复分析已付费剧情范围",
     )
 
     _retry_job, retry_samples = _enqueue(session_id, "rolling", [130_000, 140_000])

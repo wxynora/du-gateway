@@ -308,6 +308,21 @@ def process_claimed_job(
                 original_title=original_title,
                 year=year,
             )
+            if bool(result.get("provider_called")):
+                watch_analysis_store.record_job_usage(
+                    job,
+                    {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0,
+                        "cost_usd": 0.0,
+                        "provider_calls": 1,
+                        "priced_calls": 0,
+                        "cost_reported": False,
+                        "model": str(result.get("provider") or "subtitle-provider"),
+                    },
+                    event_key=f"subtitle:{int(job.get('attempts') or 0)}:provider",
+                )
             logger.info(
                 "完成一起看字幕 provider job_id=%s status=%s provider=%s elapsed_ms=%s",
                 job_id,
@@ -324,6 +339,20 @@ def process_claimed_job(
         except WatchJobCancelled as exc:
             return {"status": "cancelled", "reason": exc.reason, "stage": exc.stage}
         except SubtitleLookupError as exc:
+            watch_analysis_store.record_job_usage(
+                job,
+                {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "cost_usd": 0.0,
+                    "provider_calls": 1,
+                    "priced_calls": 0,
+                    "cost_reported": False,
+                    "model": "subtitle-provider",
+                },
+                event_key=f"subtitle:{int(job.get('attempts') or 0)}:provider",
+            )
             logger.warning(
                 "一起看字幕 provider 失败 job_id=%s elapsed_ms=%s reason=%s",
                 job_id,
@@ -349,9 +378,21 @@ def process_claimed_job(
     prepared_from_source: list[dict] = []
     try:
         if str(job.get("purpose") or "") == "knowledge_card":
+            knowledge_usage_recorded = False
+
+            def _record_knowledge_usage(stage: str, usage: dict) -> None:
+                nonlocal knowledge_usage_recorded
+                recorded = watch_analysis_store.record_job_usage(
+                    job,
+                    usage,
+                    event_key=f"knowledge:{int(job.get('attempts') or 0)}:{stage}",
+                )
+                knowledge_usage_recorded = knowledge_usage_recorded or recorded
+
             kwargs: dict[str, Any] = {
                 "on_sources_ready": lambda: watch_knowledge_store.mark_building(session_id),
                 "checkpoint": lambda stage: _require_job_live(job, stage=stage),
+                "on_provider_usage": _record_knowledge_usage,
             }
             if knowledge_search_post is not None:
                 kwargs["search_post"] = knowledge_search_post
@@ -365,7 +406,7 @@ def process_claimed_job(
                 job,
                 card=card,
                 sources=sources,
-                usage=usage,
+                usage={} if knowledge_usage_recorded else usage,
                 source_digest=source_digest(sources),
             )
             return {
@@ -449,17 +490,21 @@ def process_claimed_job(
         elif post is None:
             session = _require_job_live(job, stage="before_gemini")
             result, usage = analyze_watch_samples(session, job, samples)
-            _require_job_live(job, stage="after_gemini")
         else:
             session = _require_job_live(job, stage="before_gemini")
             result, usage = analyze_watch_samples(session, job, samples, post=post)
-            _require_job_live(job, stage="after_gemini")
+        usage_recorded = watch_analysis_store.record_job_usage(
+            job,
+            usage,
+            event_key=f"analysis:{int(job.get('attempts') or 0)}:provider",
+        )
+        _require_job_live(job, stage="after_gemini")
 
         _require_job_live(job, stage="before_result_commit")
         committed = watch_analysis_store.commit_analysis_result(
             job,
             result=result,
-            usage=usage,
+            usage={} if usage_recorded else usage,
             samples=samples,
         )
         if committed.get("applied") and str(job.get("purpose") or "") == "rolling":
@@ -510,11 +555,18 @@ def process_claimed_job(
             "retryable": exc.retryable,
         }
     except WatchAnalysisProviderError as exc:
+        usage_recorded = False
+        if exc.usage:
+            usage_recorded = watch_analysis_store.record_job_usage(
+                job,
+                exc.usage,
+                event_key=f"analysis:{int(job.get('attempts') or 0)}:provider",
+            )
         status = watch_analysis_store.fail_job(
             job,
             str(exc),
             retryable=exc.retryable,
-            usage=exc.usage,
+            usage={} if usage_recorded else exc.usage,
         )
         if status in {"failed", "cancelled"}:
             watch_analysis_store.purge_job_samples(job)

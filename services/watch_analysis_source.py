@@ -510,6 +510,7 @@ class BilibiliApiAnalysisSource:
             "coverage_start_ms": min(starts) if starts else 0,
             "coverage_end_ms": max(ends) if ends else 0,
             "message": message,
+            "provider_called": bool(asset.get("provider_called")),
         }
 
     def prepare_subtitles(self, session: dict, *, original_title: str, year: int) -> dict:
@@ -567,6 +568,7 @@ class BilibiliApiAnalysisSource:
                 "query_title": title,
                 "year": max(0, int(year or 0)),
                 "message": "没有找到可用字幕",
+                "provider_called": True,
             }
         cues = _shift_subtitle_cues(
             _subtitle_cues_from_text(str(found.get("text") or "")),
@@ -583,6 +585,7 @@ class BilibiliApiAnalysisSource:
                 "release_name": found.get("release_name") or "",
                 "format": found.get("format") or "",
                 "cues": cues,
+                "provider_called": True,
             },
             year=year,
             message="已找到外部字幕",

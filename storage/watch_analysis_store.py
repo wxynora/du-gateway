@@ -22,7 +22,13 @@ from config import (
 from storage import runtime_sqlite
 
 
-ANALYSIS_MODEL_PURPOSES = {"identify", "timeline_prepass", "rolling"}
+SESSION_COST_PURPOSES = {
+    "identify",
+    "timeline_prepass",
+    "rolling",
+    "knowledge_card",
+    "subtitle_lookup",
+}
 
 
 def _now() -> datetime:
@@ -133,7 +139,13 @@ def _usage_totals(value: Any) -> dict:
         "elapsed_ms": _int(usage.get("elapsed_ms"), 0),
         "provider_calls": provider_calls,
         "priced_calls": min(provider_calls, priced_calls),
+        "unpriced_calls": max(0, provider_calls - min(provider_calls, priced_calls)),
         "model": model,
+        "recorded_events": [
+            str(item)
+            for item in usage.get("recorded_events", [])
+            if str(item or "").strip()
+        ],
     }
 
 
@@ -142,6 +154,9 @@ def _merge_usage(existing: Any, incoming: Any) -> dict:
     delta = _usage_totals(incoming)
     provider_calls = before["provider_calls"] + delta["provider_calls"]
     priced_calls = before["priced_calls"] + delta["priced_calls"]
+    recorded_events = list(
+        dict.fromkeys([*before["recorded_events"], *delta["recorded_events"]])
+    )
     return {
         "input_tokens": before["input_tokens"] + delta["input_tokens"],
         "output_tokens": before["output_tokens"] + delta["output_tokens"],
@@ -152,7 +167,68 @@ def _merge_usage(existing: Any, incoming: Any) -> dict:
         "priced_calls": priced_calls,
         "cost_complete": priced_calls >= provider_calls,
         "model": delta["model"] or before["model"],
+        "recorded_events": recorded_events,
     }
+
+
+def merge_usage(existing: Any, incoming: Any) -> dict:
+    return _merge_usage(existing, incoming)
+
+
+def record_job_usage(job: dict, usage: dict, *, event_key: str) -> bool:
+    job_id = _text(job.get("job_id"), 160)
+    normalized_event_key = _text(event_key, 240)
+    if not job_id or not normalized_event_key:
+        return False
+    now_iso = _iso(_now())
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT usage_json FROM watch_analysis_jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return False
+            existing = runtime_sqlite.json_loads(row["usage_json"], {})
+            existing_events = {
+                str(item)
+                for item in (
+                    existing.get("recorded_events", [])
+                    if isinstance(existing, dict)
+                    else []
+                )
+            }
+            if normalized_event_key in existing_events:
+                conn.execute("COMMIT")
+                return True
+            incoming = {
+                **(usage if isinstance(usage, dict) else {}),
+                "recorded_events": [normalized_event_key],
+            }
+            merged = _merge_usage(existing, incoming)
+            conn.execute(
+                """
+                UPDATE watch_analysis_jobs
+                   SET usage_json = ?, input_tokens = ?, output_tokens = ?,
+                       cost_usd = ?, updated_at = ?
+                 WHERE id = ?
+                """,
+                (
+                    runtime_sqlite.json_dumps(merged),
+                    merged["input_tokens"],
+                    merged["output_tokens"],
+                    merged["cost_usd"],
+                    now_iso,
+                    job_id,
+                ),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return True
 
 
 def _row_to_sample(row: Any) -> dict:
@@ -1011,25 +1087,101 @@ def fail_job(
 def reset_for_epoch(session_id: str, *, timeline_epoch: int) -> None:
     now_iso = _iso(_now())
     with runtime_sqlite.connect() as conn:
-        conn.execute(
-            """
-            UPDATE watch_sessions
-               SET analysis_status = 'pending', analysis_covered_from_ms = 0,
-                   analysis_covered_until_ms = 0, analysis_error = '',
-                   story_so_far_json = '{}', analysis_story_state_json = '{}',
-                   updated_at = ?
-             WHERE id = ? AND timeline_epoch = ? AND status != 'ended'
-            """,
-            (now_iso, _text(session_id, 160), _int(timeline_epoch, 0)),
-        )
-        conn.execute(
-            """
-            UPDATE watch_client_sample_plans
-               SET status = 'cancelled', cancelled_at = ?
-             WHERE session_id = ? AND timeline_epoch != ? AND status = 'open'
-            """,
-            (now_iso, _text(session_id, 160), _int(timeline_epoch, 0)),
-        )
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            prior_epoch_row = conn.execute(
+                """
+                SELECT timeline_epoch
+                  FROM watch_timeline_sections
+                 WHERE session_id = ? AND timeline_epoch != ?
+                 ORDER BY updated_at DESC, timeline_epoch DESC
+                 LIMIT 1
+                """,
+                (_text(session_id, 160), _int(timeline_epoch, 0)),
+            ).fetchone()
+            if prior_epoch_row is not None:
+                prior_epoch = int(prior_epoch_row["timeline_epoch"] or 0)
+                prior_sections = conn.execute(
+                    """
+                    SELECT kind, start_ms, end_ms, source, confidence
+                      FROM watch_timeline_sections
+                     WHERE session_id = ? AND timeline_epoch = ?
+                     ORDER BY start_ms, end_ms, id
+                    """,
+                    (_text(session_id, 160), prior_epoch),
+                ).fetchall()
+                existing_sections = {
+                    (
+                        str(row["kind"] or ""),
+                        int(row["start_ms"] or 0),
+                        int(row["end_ms"] or 0),
+                        str(row["source"] or ""),
+                    )
+                    for row in conn.execute(
+                        """
+                        SELECT kind, start_ms, end_ms, source
+                          FROM watch_timeline_sections
+                         WHERE session_id = ? AND timeline_epoch = ?
+                        """,
+                        (_text(session_id, 160), _int(timeline_epoch, 0)),
+                    ).fetchall()
+                }
+                for row in prior_sections:
+                    signature = (
+                        str(row["kind"] or ""),
+                        int(row["start_ms"] or 0),
+                        int(row["end_ms"] or 0),
+                        str(row["source"] or ""),
+                    )
+                    if signature in existing_sections:
+                        continue
+                    digest = hashlib.sha256(
+                        f"{session_id}:{timeline_epoch}:{signature}".encode("utf-8")
+                    ).hexdigest()[:20]
+                    conn.execute(
+                        """
+                        INSERT INTO watch_timeline_sections (
+                            id, session_id, timeline_epoch, kind, start_ms, end_ms,
+                            source, confidence, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            f"watch_section_{digest}",
+                            _text(session_id, 160),
+                            _int(timeline_epoch, 0),
+                            signature[0],
+                            signature[1],
+                            signature[2],
+                            signature[3],
+                            float(row["confidence"] or 0),
+                            now_iso,
+                            now_iso,
+                        ),
+                    )
+                    existing_sections.add(signature)
+            conn.execute(
+                """
+                UPDATE watch_sessions
+                   SET analysis_status = 'pending', analysis_covered_from_ms = 0,
+                       analysis_covered_until_ms = 0, analysis_error = '',
+                       story_so_far_json = '{}', analysis_story_state_json = '{}',
+                       updated_at = ?
+                 WHERE id = ? AND timeline_epoch = ? AND status != 'ended'
+                """,
+                (now_iso, _text(session_id, 160), _int(timeline_epoch, 0)),
+            )
+            conn.execute(
+                """
+                UPDATE watch_client_sample_plans
+                   SET status = 'cancelled', cancelled_at = ?
+                 WHERE session_id = ? AND timeline_epoch != ? AND status = 'open'
+                """,
+                (now_iso, _text(session_id, 160), _int(timeline_epoch, 0)),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
 
 def get_story_checkpoint(session_id: str, *, timeline_epoch: int, through_ms: int) -> dict:
@@ -1170,6 +1322,315 @@ def _next_skipped_start(position_ms: int, sections: list[dict]) -> int | None:
         and int(section.get("start_ms") or 0) > position + TIMELINE_BOUNDARY_TOLERANCE_MS
     ]
     return min(candidates) if candidates else None
+
+
+def _cached_rolling_intervals(
+    conn,
+    *,
+    session_id: str,
+    media_id: str,
+    timeline_epoch: int,
+) -> list[tuple[int, int]]:
+    rows = conn.execute(
+        """
+        SELECT range_start_ms, range_end_ms, result_json
+          FROM watch_analysis_jobs
+         WHERE session_id = ? AND media_id = ? AND timeline_epoch != ?
+           AND purpose = 'rolling' AND status = 'done'
+         ORDER BY range_start_ms, range_end_ms, created_at
+        """,
+        (_text(session_id, 160), _text(media_id, 240), _int(timeline_epoch, 0)),
+    ).fetchall()
+    intervals: list[tuple[int, int]] = []
+    for row in rows:
+        result = runtime_sqlite.json_loads(row["result_json"], {})
+        start_ms = _int(
+            result.get("covered_from_ms") if isinstance(result, dict) else None,
+            int(row["range_start_ms"] or 0),
+        )
+        end_ms = _int(
+            result.get("covered_until_ms") if isinstance(result, dict) else None,
+            int(row["range_end_ms"] or 0),
+        )
+        if end_ms > start_ms:
+            intervals.append((start_ms, end_ms))
+    merged: list[tuple[int, int]] = []
+    for start_ms, end_ms in intervals:
+        if merged and start_ms <= merged[-1][1] + 1000:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end_ms))
+        else:
+            merged.append((start_ms, end_ms))
+    return merged
+
+
+def _copy_cached_epoch_rows(
+    conn,
+    *,
+    session_id: str,
+    media_id: str,
+    timeline_epoch: int,
+    start_ms: int,
+    end_ms: int,
+    now_iso: str,
+) -> None:
+    plot_rows = conn.execute(
+        """
+        SELECT * FROM watch_plot_chunks
+         WHERE session_id = ? AND media_id = ? AND timeline_epoch != ?
+           AND end_ms > ? AND start_ms < ?
+         ORDER BY updated_at, id
+        """,
+        (
+            _text(session_id, 160),
+            _text(media_id, 240),
+            _int(timeline_epoch, 0),
+            _int(start_ms, 0),
+            _int(end_ms, 0),
+        ),
+    ).fetchall()
+    for row in plot_rows:
+        chunk_start = int(row["start_ms"] or 0)
+        chunk_end = int(row["end_ms"] or 0)
+        analysis_version = str(row["analysis_version"] or "")
+        digest = hashlib.sha256(
+            f"{session_id}:{timeline_epoch}:{chunk_start}:{chunk_end}:{analysis_version}".encode()
+        ).hexdigest()[:20]
+        conn.execute(
+            """
+            INSERT INTO watch_plot_chunks (
+                id, session_id, media_id, timeline_epoch, start_ms, end_ms,
+                summary, visual_description, dialogue_summary, characters_json,
+                tags_json, confidence, analysis_version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                summary = excluded.summary, characters_json = excluded.characters_json,
+                tags_json = excluded.tags_json, confidence = excluded.confidence,
+                updated_at = excluded.updated_at
+            """,
+            (
+                f"watch_plot_{digest}",
+                _text(session_id, 160),
+                _text(media_id, 240),
+                _int(timeline_epoch, 0),
+                chunk_start,
+                chunk_end,
+                str(row["summary"] or ""),
+                str(row["visual_description"] or ""),
+                str(row["dialogue_summary"] or ""),
+                str(row["characters_json"] or "[]"),
+                str(row["tags_json"] or "[]"),
+                float(row["confidence"] or 0),
+                analysis_version,
+                now_iso,
+                now_iso,
+            ),
+        )
+
+    risk_rows = conn.execute(
+        """
+        SELECT * FROM watch_risk_events
+         WHERE session_id = ? AND media_id = ? AND timeline_epoch != ?
+           AND end_ms > ? AND start_ms < ?
+         ORDER BY updated_at, id
+        """,
+        (
+            _text(session_id, 160),
+            _text(media_id, 240),
+            _int(timeline_epoch, 0),
+            _int(start_ms, 0),
+            _int(end_ms, 0),
+        ),
+    ).fetchall()
+    for row in risk_rows:
+        event_start = int(row["start_ms"] or 0)
+        event_end = int(row["end_ms"] or 0)
+        analysis_version = str(row["analysis_version"] or "")
+        digest = hashlib.sha256(
+            f"{session_id}:{timeline_epoch}:{row['risk_type']}:{event_start}:{event_end}:{analysis_version}".encode()
+        ).hexdigest()[:20]
+        conn.execute(
+            """
+            INSERT INTO watch_risk_events (
+                id, session_id, media_id, timeline_epoch, risk_type, severity,
+                start_ms, end_ms, warn_at_ms, label, companion_hint, confidence,
+                status, analysis_version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                severity = excluded.severity, warn_at_ms = excluded.warn_at_ms,
+                label = excluded.label, companion_hint = excluded.companion_hint,
+                confidence = excluded.confidence, status = excluded.status,
+                updated_at = excluded.updated_at
+            """,
+            (
+                f"watch_risk_{digest}",
+                _text(session_id, 160),
+                _text(media_id, 240),
+                _int(timeline_epoch, 0),
+                str(row["risk_type"] or "other"),
+                str(row["severity"] or "1"),
+                event_start,
+                event_end,
+                int(row["warn_at_ms"] or 0),
+                str(row["label"] or ""),
+                str(row["companion_hint"] or ""),
+                float(row["confidence"] or 0),
+                str(row["status"] or "confirmed"),
+                analysis_version,
+                now_iso,
+                now_iso,
+            ),
+        )
+
+    checkpoint_rows = conn.execute(
+        """
+        SELECT * FROM watch_story_checkpoints
+         WHERE session_id = ? AND media_id = ? AND timeline_epoch != ?
+           AND through_ms >= ? AND through_ms <= ?
+         ORDER BY through_ms, created_at
+        """,
+        (
+            _text(session_id, 160),
+            _text(media_id, 240),
+            _int(timeline_epoch, 0),
+            _int(start_ms, 0),
+            _int(end_ms, 0),
+        ),
+    ).fetchall()
+    for row in checkpoint_rows:
+        through_ms = int(row["through_ms"] or 0)
+        analysis_version = str(row["analysis_version"] or "")
+        digest = hashlib.sha256(
+            f"{session_id}:{timeline_epoch}:{through_ms}:{analysis_version}".encode()
+        ).hexdigest()[:20]
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO watch_story_checkpoints (
+                id, session_id, media_id, timeline_epoch, through_ms,
+                summary_json, story_state_json, analysis_version, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"watch_story_{digest}",
+                _text(session_id, 160),
+                _text(media_id, 240),
+                _int(timeline_epoch, 0),
+                through_ms,
+                str(row["summary_json"] or "{}"),
+                str(row["story_state_json"] or "{}"),
+                analysis_version,
+                now_iso,
+            ),
+        )
+
+
+def reuse_cached_epoch_coverage(session: dict) -> dict:
+    session_id = str(session.get("session_id") or "")
+    media = session.get("media") if isinstance(session.get("media"), dict) else {}
+    playback = session.get("playback") if isinstance(session.get("playback"), dict) else {}
+    analysis = session.get("analysis") if isinstance(session.get("analysis"), dict) else {}
+    media_id = str(media.get("id") or "")
+    timeline_epoch = _int(playback.get("timeline_epoch"), 0)
+    if not session_id or not media_id or timeline_epoch <= 0 or session.get("ended_at"):
+        return {"applied": False}
+    now_iso = _iso(_now())
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT * FROM watch_sessions
+             WHERE id = ? AND media_id = ? AND timeline_epoch = ? AND status != 'ended'
+            """,
+            (_text(session_id, 160), _text(media_id, 240), timeline_epoch),
+        ).fetchone()
+        if row is None:
+            conn.execute("COMMIT")
+            return {"applied": False}
+        current_from = int(row["analysis_covered_from_ms"] or 0)
+        current_until = int(row["analysis_covered_until_ms"] or 0)
+        sections = [
+            dict(item)
+            for item in conn.execute(
+                """
+                SELECT kind, start_ms, end_ms FROM watch_timeline_sections
+                 WHERE session_id = ? AND timeline_epoch = ?
+                 ORDER BY start_ms, end_ms
+                """,
+                (_text(session_id, 160), timeline_epoch),
+            ).fetchall()
+        ]
+        playhead_ms = int(row["playhead_ms"] or 0)
+        content_start_ms = int(row["content_start_ms"] or -1)
+        anchor = max(playhead_ms, current_until)
+        if current_until <= 0 and content_start_ms >= 0:
+            anchor = max(anchor, content_start_ms)
+        anchor = _advance_past_skipped(anchor, sections)
+        selected: tuple[int, int] | None = None
+        for start_ms, end_ms in _cached_rolling_intervals(
+            conn,
+            session_id=session_id,
+            media_id=media_id,
+            timeline_epoch=timeline_epoch,
+        ):
+            if start_ms <= anchor <= end_ms + 1000:
+                selected = (start_ms, end_ms)
+                break
+        if selected is None or selected[1] <= current_until:
+            conn.execute("COMMIT")
+            return {"applied": False}
+        reused_from, reused_until = selected
+        combined_from = (
+            min(current_from, reused_from)
+            if current_until > 0 and reused_from <= current_until + 1000
+            else reused_from
+        )
+        _copy_cached_epoch_rows(
+            conn,
+            session_id=session_id,
+            media_id=media_id,
+            timeline_epoch=timeline_epoch,
+            start_ms=reused_from,
+            end_ms=reused_until,
+            now_iso=now_iso,
+        )
+        duration_ms = int(row["duration_ms"] or 0)
+        required_until = playhead_ms + int(WATCH_ANALYSIS_INITIAL_READY_BUFFER_MS)
+        content_end_ms = int(row["content_end_ms"] or -1)
+        if content_end_ms >= 0:
+            required_until = min(required_until, content_end_ms)
+        elif duration_ms > 0:
+            required_until = min(required_until, duration_ms)
+        ready = reused_until >= required_until
+        should_unlock = bool(
+            str(row["started_at"] or "")
+            and not str(row["playback_unlocked_at"] or "")
+            and ready
+        )
+        conn.execute(
+            """
+            UPDATE watch_sessions
+               SET analysis_status = ?, analysis_covered_from_ms = ?,
+                   analysis_covered_until_ms = ?, analysis_error = '',
+                   playback_unlocked_at = CASE WHEN ? THEN ? ELSE playback_unlocked_at END,
+                   updated_at = ?
+             WHERE id = ? AND timeline_epoch = ? AND status != 'ended'
+            """,
+            (
+                "ready" if ready else "analyzing",
+                combined_from,
+                reused_until,
+                int(should_unlock),
+                now_iso,
+                now_iso,
+                _text(session_id, 160),
+                timeline_epoch,
+            ),
+        )
+        conn.execute("COMMIT")
+    return {
+        "applied": True,
+        "covered_from_ms": combined_from,
+        "covered_until_ms": reused_until,
+    }
 
 
 def commit_analysis_result(
@@ -1531,7 +1992,7 @@ def daily_cost_usd(now: datetime | None = None) -> float:
             """
             SELECT COALESCE(SUM(cost_usd), 0) AS total
               FROM watch_analysis_jobs
-             WHERE status = 'done' AND finished_at >= ?
+             WHERE created_at >= ?
             """,
             (_iso(day_start),),
         ).fetchone()
@@ -1539,12 +2000,13 @@ def daily_cost_usd(now: datetime | None = None) -> float:
 
 
 def session_analysis_cost(session_id: str) -> dict:
-    placeholders = ",".join("?" for _ in ANALYSIS_MODEL_PURPOSES)
-    params = [_text(session_id, 160), *sorted(ANALYSIS_MODEL_PURPOSES)]
+    purposes = sorted(SESSION_COST_PURPOSES)
+    placeholders = ",".join("?" for _ in purposes)
+    params = [_text(session_id, 160), *purposes]
     with runtime_sqlite.connect() as conn:
         rows = conn.execute(
             f"""
-            SELECT status, usage_json
+            SELECT purpose, status, usage_json
               FROM watch_analysis_jobs
              WHERE session_id = ? AND purpose IN ({placeholders})
              ORDER BY created_at, id
@@ -1553,20 +2015,37 @@ def session_analysis_cost(session_id: str) -> dict:
         ).fetchall()
     totals = _usage_totals({})
     pending_jobs = 0
+    breakdown: dict[str, dict] = {}
     for row in rows:
         usage = _usage_totals(runtime_sqlite.json_loads(row["usage_json"], {}))
         totals = _usage_totals(_merge_usage(totals, usage))
+        purpose = str(row["purpose"] or "")
+        purpose_totals = _usage_totals(breakdown.get(purpose, {}))
+        breakdown[purpose] = _usage_totals(_merge_usage(purpose_totals, usage))
         if str(row["status"] or "") in {"queued", "running"}:
             pending_jobs += 1
     return {
         "currency": "USD",
         "amount_usd": totals["cost_usd"],
-        "complete": pending_jobs == 0 and totals["priced_calls"] >= totals["provider_calls"],
+        "complete": pending_jobs == 0,
+        "pricing_complete": totals["priced_calls"] >= totals["provider_calls"],
         "provider_calls": totals["provider_calls"],
         "priced_calls": totals["priced_calls"],
+        "unpriced_calls": totals["unpriced_calls"],
         "pending_jobs": pending_jobs,
         "input_tokens": totals["input_tokens"],
         "output_tokens": totals["output_tokens"],
+        "breakdown": {
+            purpose: {
+                "amount_usd": usage["cost_usd"],
+                "provider_calls": usage["provider_calls"],
+                "priced_calls": usage["priced_calls"],
+                "unpriced_calls": usage["unpriced_calls"],
+                "input_tokens": usage["input_tokens"],
+                "output_tokens": usage["output_tokens"],
+            }
+            for purpose, usage in sorted(breakdown.items())
+        },
     }
 
 
@@ -1588,14 +2067,18 @@ def session_job_runtime(session_id: str) -> dict:
 
 
 def _has_completed_job(session_id: str, purpose: str, timeline_epoch: int) -> bool:
+    epoch_clause = "" if purpose == "timeline_prepass" else " AND timeline_epoch = ?"
+    params: list[Any] = [_text(session_id, 160), purpose]
+    if epoch_clause:
+        params.append(_int(timeline_epoch, 0))
     with runtime_sqlite.connect() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT 1 FROM watch_analysis_jobs
-             WHERE session_id = ? AND purpose = ? AND timeline_epoch = ? AND status = 'done'
+             WHERE session_id = ? AND purpose = ?{epoch_clause} AND status = 'done'
              LIMIT 1
             """,
-            (_text(session_id, 160), purpose, _int(timeline_epoch, 0)),
+            params,
         ).fetchone()
     return row is not None
 
@@ -1972,6 +2455,14 @@ def build_sample_plan(session: dict) -> dict:
     )
     playhead_ms = int(playback.get("playhead_ms") or 0)
     timeline_epoch = int(playback.get("timeline_epoch") or 0)
+    if timeline_epoch > 0:
+        reused = reuse_cached_epoch_coverage(session)
+        if reused.get("applied"):
+            analysis = {
+                **analysis,
+                "covered_from_ms": int(reused.get("covered_from_ms") or 0),
+                "covered_until_ms": int(reused.get("covered_until_ms") or 0),
+            }
     familiarity = str(analysis.get("familiarity") or "pending")
     max_frames = int(WATCH_ANALYSIS_MAX_FRAMES_PER_JOB)
     if session.get("ended_at"):

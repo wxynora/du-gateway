@@ -299,7 +299,7 @@ def commit_knowledge_result(
         conn.execute("BEGIN IMMEDIATE")
         try:
             running = conn.execute(
-                "SELECT cancel_requested FROM watch_analysis_jobs WHERE id = ? AND status = 'running' AND lease_token = ?",
+                "SELECT cancel_requested, usage_json FROM watch_analysis_jobs WHERE id = ? AND status = 'running' AND lease_token = ?",
                 (job_id, lease_token),
             ).fetchone()
             session_row = conn.execute(
@@ -377,6 +377,12 @@ def commit_knowledge_result(
                 """,
                 (cache_key, now_iso, _iso(now + timedelta(hours=24)), session_id),
             )
+            from storage import watch_analysis_store
+
+            merged_usage = watch_analysis_store.merge_usage(
+                runtime_sqlite.json_loads(running["usage_json"], {}),
+                usage,
+            )
             conn.execute(
                 """
                 UPDATE watch_analysis_jobs
@@ -389,10 +395,10 @@ def commit_knowledge_result(
                     now_iso,
                     now_iso,
                     runtime_sqlite.json_dumps({"cache_key": cache_key, "card": card}),
-                    runtime_sqlite.json_dumps(usage),
-                    int(usage.get("input_tokens") or 0),
-                    int(usage.get("output_tokens") or 0),
-                    max(0.0, float(usage.get("cost_usd") or 0)),
+                    runtime_sqlite.json_dumps(merged_usage),
+                    int(merged_usage.get("input_tokens") or 0),
+                    int(merged_usage.get("output_tokens") or 0),
+                    max(0.0, float(merged_usage.get("cost_usd") or 0)),
                     job_id,
                 ),
             )

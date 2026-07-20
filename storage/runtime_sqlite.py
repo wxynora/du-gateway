@@ -36,6 +36,7 @@ _RUNTIME_TABLES = (
     "tool_result_cache",
     "du_body_eval_pending",
     "du_body_eval_audit",
+    "watch_viewings",
     "watch_sessions",
     "watch_timeline_sections",
     "watch_plot_chunks",
@@ -191,6 +192,12 @@ def ensure_schema() -> None:
 
                 CREATE TABLE IF NOT EXISTS watch_sessions (
                     id TEXT PRIMARY KEY,
+                    creation_key TEXT NOT NULL DEFAULT '',
+                    viewing_id TEXT NOT NULL DEFAULT '',
+                    work_key TEXT NOT NULL DEFAULT '',
+                    part_key TEXT NOT NULL DEFAULT '',
+                    part_index INTEGER NOT NULL DEFAULT 1,
+                    part_count INTEGER NOT NULL DEFAULT 1,
                     device_id TEXT NOT NULL DEFAULT '',
                     window_id TEXT NOT NULL DEFAULT '',
                     companion_id TEXT NOT NULL DEFAULT '',
@@ -242,6 +249,10 @@ def ensure_schema() -> None:
                     timeline_epoch INTEGER NOT NULL DEFAULT 0,
                     snapshot_seq INTEGER NOT NULL DEFAULT 0,
                     captured_at TEXT NOT NULL DEFAULT '',
+                    playback_observed_at TEXT NOT NULL DEFAULT '',
+                    played_duration_ms INTEGER NOT NULL DEFAULT 0,
+                    completed_at TEXT NOT NULL DEFAULT '',
+                    completion_event_id TEXT NOT NULL DEFAULT '',
                     analysis_status TEXT NOT NULL DEFAULT 'pending',
                     analysis_covered_from_ms INTEGER NOT NULL DEFAULT 0,
                     analysis_covered_until_ms INTEGER NOT NULL DEFAULT 0,
@@ -261,7 +272,30 @@ def ensure_schema() -> None:
                     ON watch_sessions(window_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_watch_sessions_expires
                     ON watch_sessions(expires_at);
-
+                CREATE TABLE IF NOT EXISTS watch_viewings (
+                    id TEXT PRIMARY KEY,
+                    work_key TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    cover_url TEXT NOT NULL DEFAULT '',
+                    companion_id TEXT NOT NULL DEFAULT '',
+                    companion_name TEXT NOT NULL DEFAULT '',
+                    created_by_device_id TEXT NOT NULL DEFAULT '',
+                    source_window_id TEXT NOT NULL DEFAULT '',
+                    part_count INTEGER NOT NULL DEFAULT 1,
+                    parts_json TEXT NOT NULL DEFAULT '[]',
+                    played_duration_ms INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    completed_at TEXT NOT NULL DEFAULT '',
+                    last_session_id TEXT NOT NULL DEFAULT '',
+                    ticket_id TEXT NOT NULL DEFAULT '',
+                    ticket_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_viewings_updated
+                    ON watch_viewings(updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_watch_viewings_ticket
+                    ON watch_viewings(ticket_id, completed_at DESC);
                 CREATE TABLE IF NOT EXISTS watch_timeline_sections (
                     id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
@@ -759,6 +793,12 @@ def ensure_schema() -> None:
             }
             backfill_playback_unlock = "playback_unlocked_at" not in session_columns
             session_column_migrations = {
+                "creation_key": "TEXT NOT NULL DEFAULT ''",
+                "viewing_id": "TEXT NOT NULL DEFAULT ''",
+                "work_key": "TEXT NOT NULL DEFAULT ''",
+                "part_key": "TEXT NOT NULL DEFAULT ''",
+                "part_index": "INTEGER NOT NULL DEFAULT 1",
+                "part_count": "INTEGER NOT NULL DEFAULT 1",
                 "reply_lead_ms": "INTEGER NOT NULL DEFAULT 30000",
                 "visual_context_mode": "TEXT NOT NULL DEFAULT 'text_only'",
                 "content_start_ms": "INTEGER NOT NULL DEFAULT -1",
@@ -785,12 +825,25 @@ def ensure_schema() -> None:
                 "visual_last_sent_at": "TEXT NOT NULL DEFAULT ''",
                 "visual_last_timeline_epoch": "INTEGER NOT NULL DEFAULT -1",
                 "visual_last_sheet_hash": "TEXT NOT NULL DEFAULT ''",
+                "playback_observed_at": "TEXT NOT NULL DEFAULT ''",
+                "played_duration_ms": "INTEGER NOT NULL DEFAULT 0",
+                "completed_at": "TEXT NOT NULL DEFAULT ''",
+                "completion_event_id": "TEXT NOT NULL DEFAULT ''",
             }
             for column_name, column_sql in session_column_migrations.items():
                 if column_name not in session_columns:
                     conn.execute(
                         f"ALTER TABLE watch_sessions ADD COLUMN {column_name} {column_sql}"
                     )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_watch_sessions_active_creation "
+                "ON watch_sessions(device_id, window_id, creation_key) "
+                "WHERE creation_key != '' AND status != 'ended'"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_watch_sessions_viewing "
+                "ON watch_sessions(viewing_id, created_at)"
+            )
             if backfill_playback_unlock:
                 conn.execute(
                     "UPDATE watch_sessions SET playback_unlocked_at = started_at "

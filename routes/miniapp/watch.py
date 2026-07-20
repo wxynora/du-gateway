@@ -32,6 +32,7 @@ from storage import (
     watch_knowledge_store,
     watch_runtime_store,
     watch_subtitle_store,
+    watch_viewing_store,
     watch_visual_store,
 )
 
@@ -169,8 +170,19 @@ def register_routes(bp):
                 companion=companion,
                 media=media,
                 mode=mode,
+                viewing_id=str(body.get("viewing_id") or "").strip(),
             )
-            return jsonify({"ok": True, "session": session}), 201
+            return jsonify(
+                {
+                    "ok": True,
+                    "session": session,
+                    "viewing_summary": watch_viewing_store.get_for_session(
+                        session["session_id"]
+                    ),
+                }
+            ), (
+                200 if session.get("create_reused") else 201
+            )
 
         return _handle_store_error(_create)
 
@@ -194,7 +206,24 @@ def register_routes(bp):
         session, error = _owned_session(session_id)
         if error is not None:
             return error
-        return jsonify({"ok": True, "session": session})
+        return jsonify(
+            {
+                "ok": True,
+                "session": session,
+                "viewing_summary": watch_viewing_store.get_for_session(session_id),
+            }
+        )
+
+    @bp.route("/watch/viewings/<viewing_id>", methods=["GET"])
+    def miniapp_watch_viewing_get(viewing_id: str):
+        viewing = watch_viewing_store.get_viewing(viewing_id)
+        if viewing is None:
+            return _json_error("观看记录不存在", "watch_viewing_not_found", 404)
+        return jsonify({"ok": True, "viewing_summary": viewing})
+
+    @bp.route("/watch/tickets", methods=["GET"])
+    def miniapp_watch_ticket_list():
+        return jsonify({"ok": True, "tickets": watch_viewing_store.list_tickets()})
 
     @bp.route("/watch/sessions/<session_id>/playback", methods=["PUT"])
     def miniapp_watch_session_playback(session_id: str):
@@ -239,12 +268,14 @@ def register_routes(bp):
                     current_epoch=current_epoch,
                     reason="timeline_epoch_changed",
                 )
+            viewing_summary = watch_viewing_store.get_for_session(session_id)
             return jsonify(
                 {
                     "ok": True,
                     "applied": applied,
                     "ignored_reason": ignored_reason,
                     "session": session,
+                    "viewing_summary": viewing_summary,
                 }
             )
 
@@ -263,6 +294,7 @@ def register_routes(bp):
         if status is None:
             return _json_error("观看会话不存在或已过期", "watch_session_not_found", 404)
         status["analysis_runtime"] = watch_analysis_store.session_job_runtime(session_id)
+        status["viewing_summary"] = watch_viewing_store.get_for_session(session_id)
         status["sample_plan"] = watch_analysis_store.build_sample_plan(_session)
         status["knowledge_card"] = watch_knowledge_store.get_card_for_session(_session)
         current_epoch = int((_session.get("playback") or {}).get("timeline_epoch") or 0)
@@ -732,6 +764,7 @@ def register_routes(bp):
         def _end():
             session = watch_runtime_store.end_session(session_id)
             analysis_cost = watch_analysis_store.session_analysis_cost(session_id)
+            viewing_summary = watch_viewing_store.get_for_session(session_id)
             samples_purged = watch_analysis_store.purge_session_samples(session_id)
             watch_visual_store.delete_session_frames(session_id)
             return jsonify(
@@ -739,6 +772,12 @@ def register_routes(bp):
                     "ok": True,
                     "session": session,
                     "analysis_cost": analysis_cost,
+                    "viewing_summary": viewing_summary,
+                    "ticket": (
+                        viewing_summary.get("ticket")
+                        if isinstance(viewing_summary, dict)
+                        else None
+                    ),
                     "samples_purged": samples_purged,
                 }
             )

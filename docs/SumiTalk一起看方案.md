@@ -1162,6 +1162,8 @@ unknown            无法可靠判断，按正片分析
 | 创建观看会话 | `POST /miniapp-api/watch/sessions` |
 | 查询当前设备会话 | `GET /miniapp-api/watch/sessions?window_id=...` |
 | 恢复单个会话 | `GET /miniapp-api/watch/sessions/<session_id>` |
+| 恢复跨分 P 观看与票根 | `GET /miniapp-api/watch/viewings/<viewing_id>` |
+| 查询服务端票夹 | `GET /miniapp-api/watch/tickets` |
 | 确认知识卡或明确跳过并正式开始 | `POST /miniapp-api/watch/sessions/<session_id>/start` |
 | 知识卡失败后重新生成 | `POST /miniapp-api/watch/sessions/<session_id>/knowledge-card/regenerate` |
 | 字幕未命中或失败后重新查询 | `POST /miniapp-api/watch/sessions/<session_id>/subtitles/retry` |
@@ -1188,6 +1190,7 @@ unknown            无法可靠判断，按正片分析
 ```json
 {
   "window_id": "sumitalk:window-id",
+  "viewing_id": "首个分 P 省略；后续分 P 复用服务端返回值",
   "companion": {"id": "du", "name": "渡"},
   "media": {
     "id": "bili:BVxxxx:cid",
@@ -1195,6 +1198,11 @@ unknown            无法可靠判断，按正片分析
     "url": "https://player.bilibili.com/player.html?...",
     "title": "作品名",
     "part_title": "季集或分 P",
+    "work_key": "同一作品与版本的稳定身份",
+    "part_key": "当前分 P 的稳定身份",
+    "part_index": 1,
+    "part_count": 2,
+    "cover_url": "可选封面",
     "duration_ms": 7200000,
     "content_start_ms": 3600000,
     "content_end_ms": 6900000
@@ -1212,7 +1220,11 @@ unknown            无法可靠判断，按正片分析
 }
 ```
 
-成功返回 `201` 和 `{ "ok": true, "session": WatchSession }`。新 session 固定为暂停的 `preparation.status=identifying`，不代表已正式开播。`content_start_ms/content_end_ms` 均为可选的媒体绝对毫秒时间，分别表示人工确认的正片开始，以及正片结束或片尾曲开始；可以只填一侧，填写时必须位于媒体时长内且开始早于结束。人工边界会作为 `source=manual` 的 `non_story/outro` 时间段跨 seek 保留，滚动分析不得越界。`knowledge_mode` 只能是 `known | needs_summary`；`fear_action` 只能是 `warn_only | cover_video`；`visual_context_mode` 只能是 `text_only | text_plus_contact_sheet`；`reply_lead_ms` 必须是 0 到 120000 的整数，省略时使用 30000 默认值。`force_unknown_analysis=true` 是识图结果不可靠时的人工降级，会同时把知识模式降为 `needs_summary`，将分析熟悉度改为 `unknown` 并重新进入知识卡准备。该降级只允许在正式开始前从 false 改为 true，不允许直接改回 false 伪造升级。
+首次创建返回 `201`；同一设备、窗口、媒体、模式与能力参数的超时重放会在事务内复用仍有有效客户端租约的活跃 session，返回 `200` 且 `session.create_reused=true`，不得重复建立准备和分析流水线。首个分 P 未传 `viewing_id` 时由后端生成；后续分 P 使用独立 session，但必须复用同一个 `viewing_id`，并提交一致的 `work_key` 及真实 `part_index/part_count`，服务端才会把播放时长和完成状态归到同一次观看。旧客户端不传这些字段时按单 P viewing 兼容。新 session 固定为暂停的 `preparation.status=identifying`，不代表已正式开播。`content_start_ms/content_end_ms` 均为可选的媒体绝对毫秒时间，分别表示人工确认的正片开始，以及正片结束或片尾曲开始；可以只填一侧，填写时必须位于媒体时长内且开始早于结束。人工边界会作为 `source=manual` 的 `non_story/outro` 时间段跨 seek 保留，滚动分析不得越界。`knowledge_mode` 只能是 `known | needs_summary`；`fear_action` 只能是 `warn_only | cover_video`；`visual_context_mode` 只能是 `text_only | text_plus_contact_sheet`；`reply_lead_ms` 必须是 0 到 120000 的整数，省略时使用 30000 默认值。`force_unknown_analysis=true` 是识图结果不可靠时的人工降级，会同时把知识模式降为 `needs_summary`，将分析熟悉度改为 `unknown` 并重新进入知识卡准备。该降级只允许在正式开始前从 false 改为 true，不允许直接改回 false 伪造升级。
+
+播放快照的服务端接收时间作为累计基准，只累计相邻、同 `timeline_epoch`、上一快照确实处于播放状态的确认区间；累计值取服务端经过时间与媒体前进量按上一播放倍速换算值中较小者。准备、暂停和 seek 均不计入 `played_duration_ms`。客户端可在真实媒体结束快照附加 `media_ended=true`；会话只有在已正式解锁、最新可信位置达到 `content_end_ms`（未提供时为媒体终点），并且本轮为连续播放或真实结束事件时才写 `completion_event_id`。`DELETE session` 只结束会话，不能制造完成事件。
+
+创建、单会话恢复、播放更新、状态和 DELETE 响应都会返回 `viewing_summary`。最后一个目标分 P 完成后，后端在长期 `watch_viewings` 表生成稳定 `ticket_id/ticket`；重复快照和重复 DELETE 复用同一张票根。DELETE 仍原样返回本 session 的 `analysis_cost`，并额外返回 `viewing_summary` 与 `ticket`。`GET /watch/viewings/<viewing_id>` 恢复单次观看，`GET /watch/tickets` 按完成时间返回服务端持久化票根，供受信任的另一设备恢复。
 
 ### 14.2 开播前状态与确认
 
@@ -1290,7 +1302,7 @@ unknown            无法可靠判断，按正片分析
 
 - `PUT .../mode`：请求 `{ "mode": { ...要修改的字段 } }`；支持观看中修改 `reply_lead_ms`，不允许夹带未定义字段。
 - `force_unknown_analysis`：只能在开播前做一次保守降级；开播后修改或试图从 true 改回 false 返回 `400`。
-- `PUT .../timeline-sections`：请求 `{ "timeline_epoch": 3, "sections": [...] }`；支持 `recap | cold_open | intro | content | credits_over_story | outro | preview | post_credit | non_story | unknown`。人工纠正后保留手工边界，清空当前 epoch 的派生剧情、累计摘要和风险事件，并从头重算，期间状态为 `warming_context`。
+- `PUT .../timeline-sections`：请求 `{ "timeline_epoch": 3, "sections": [...] }`；支持 `recap | cold_open | intro | content | credits_over_story | outro | preview | post_credit | non_story | unknown`。人工纠正只是后续取材的参考范围，不保证边界精确；保存时取消当前 epoch 尚未完成的取材任务并清理对应原始样本，但不删除已完成剧情、风险、检查点、usage，不改变已付费覆盖游标或凭参考范围解锁播放器。
 - `GET .../status`：返回 preparation、完整 knowledge card、playback、mode、analysis、`fear_protection`、当前 epoch 的 timeline sections、未来两分钟内的 upcoming risks、派生帧覆盖范围、视觉模式的 requested/effective/degraded 状态、`analysis_runtime` 和下一批 `sample_plan`。`fear_protection` 按本次查询时的真实播放点动态计算，不能由旧的 `analysis.status` 冒充；`sample_plan.managed_by=gateway` 表示该计划由 worker 自动执行，客户端不按其中时间点 seek 或截图；存在同类 queued/running 任务时返回 `reason=analysis_in_flight`，待确认时返回 `reason=waiting_for_start_confirmation`。
 - `POST .../risk-feedback`：`feedback_type` 支持 `false_positive | missed | too_early | too_late`，另可带 `risk_event_id`、`playhead_ms` 和 `note`。
 - `DELETE .../<session_id>`：结束会话并使待发送动作失效；结束态短期保留后由运行时 TTL 清理。
@@ -1341,9 +1353,9 @@ Bilibili 来源下，客户端只通过播放心跳报告当前媒体、playhead
 - rolling 默认每 20 秒取一帧，每批最多 8 帧并配一段完整音频，单批覆盖约 140 秒；开播先准备五分钟，随后按完整批次连续预取到最多领先 30 分钟或 `content_end_ms`。达到 30 分钟后，至少消耗一个完整批次才重新补充；只有正常正片结尾允许不足一批的收尾请求。
 - 原子写入剧情片段、按模式可选的当前剧情背景和确定性风险事件，不维护累计剧情或累计事件状态。
 - 胆小模式风险事件使用保守起止区间，状态接口再按实时 playhead 和两分钟最低覆盖计算保护是否仍然有效。
-- 丢弃旧 media/epoch 回包；seek 后旧任务和动作失效。
+- 丢弃旧 media/epoch 回包；seek 后旧任务、开放取材计划和动作失效。相同 session 与 media 已完成的 rolling 区间按媒体时间复用到新 epoch，并复制对应剧情、风险和检查点；调度从缓存覆盖末端继续，不重复请求 Gemini。
 - 503/429 等暂时错误指数退避重试；达到次数上限后进入 `failed/degraded`。
-- 活跃会话不按累计分析任务数或每日费用设置硬停止上限；长片持续 rolling 只由租约、结束/取消状态、合法时间范围、30 分钟预取高水位和正常正片终点控制。费用继续按真实 provider usage 统计并展示，不参与自动停机或延期。
+- 活跃会话不按累计分析任务数或每日费用设置硬停止上限；长片持续 rolling 只由租约、结束/取消状态、合法时间范围、30 分钟预取高水位和正常正片终点控制。费用账覆盖 identify、timeline prepass、rolling、知识卡搜索/整理和外部字幕调用；真实 provider 响应先按 attempt/stage 事件幂等落账，再检查结束、租约或 epoch，迟到结果可以拒绝但调用不能消失。`complete` 只表示没有 queued/running 任务，`pricing_complete` 单独表示所有调用都返回了美元价格，未报价调用通过 `unpriced_calls` 和用途 breakdown 明示，不能把零显示成免费。费用不参与自动停机或延期。
 - 成功落库、旧时间轴取消、永久失败或会话结束时立即删除原始截图和 MP3；可重试任务只在重试期间暂存。低清派生 WebP 按“过去 10 分钟 + 未来 5 分钟、每会话最多 48 帧”滑动裁剪，seek 和结束会话立即清空；分析状态和派生文本只留在本地运行库，不写 R2。
 
 分析诊断接口返回是否启用、是否配置 key、模型、后端取材源就绪状态、各任务状态数量、最早排队时间、过期 running 数、临时样本数量/字节和当日费用。部署除 Python requirements 外还要求系统安装 `ffmpeg`；systemd 安装入口 `scripts/install_watch_analysis_worker_service.sh` 会检查 `bilibili_api` provider 与 `ffmpeg` 是否就绪。安装/重启是单独部署动作，不由 Flask 进程代跑。
@@ -1449,7 +1461,7 @@ Lean In/
 | B 站播放器加载失败 | 展示明确重试/外部打开，不进入伪播放状态 |
 | 播放时间读取失败 | 暂停一起看同步，不能凭本地计时长期猜测 |
 | 片头片尾边界置信度不足 | 按正片继续分析；允许多花识图成本，不能冒险跳过剧情 |
-| 片头片尾边界误判 | 接受人工纠正并重算受影响摘要、风险事件和未来窗口 |
+| 片头片尾边界误判 | 接受人工参考并重建尚未完成的取材计划；已完成剧情、风险、覆盖与费用保持不变 |
 | 分析器短暂失败 | 播放继续，使用已有缓存，显示分析覆盖正在缩短 |
 | 分析缓存耗尽 | 普通播放继续；渡不使用未知未来剧情，不假装看见 |
 | 胆小模式覆盖不足 | 明确暂停保护并让用户选择等待、关闭或继续，不能静默漏保 |
@@ -1743,8 +1755,8 @@ Lean In/
 - 备用截图/字幕样本上传、压缩、哈希、TTL 和幂等任务队列。
 - Gemini 2.5 Flash 严格结构化 provider，显式关闭 thinking。
 - 独立分析 worker、单任务最多三次尝试、费用统计、队列诊断和 systemd 安装脚本。
-- 作品熟悉度、片头片尾/预告切分、滚动剧情、累计摘要检查点和高能事件落库。
-- seek epoch 失效、人工边界纠正重算、过期会话级联清理和原始截图删除。
+- 作品熟悉度、片头片尾/预告切分、滚动剧情、剧情检查点和高能事件落库。
+- seek epoch 失效与已付费媒体区间复用、人工边界参考只重建未完成取材、过期会话级联清理和原始截图删除。
 
 2026-07-19 继续完成的后端能力：
 
@@ -1775,6 +1787,10 @@ Lean In/
 6. 每个 Bilibili 分 P 使用独立 session 和独立门锁。切 P 时先结束旧 session，再创建目标 P 的准备会话，保持目标 P 暂停并重新准备首段五分钟；上一 P 的 `playback_unlocked_at`、覆盖进度、风险和剧情缓存不能沿用。
 7. 锁定期间如果播放器误进入播放状态，客户端要立即暂停并保留锁层；后端拒绝 `is_playing=true` 的播放快照时，前端展示真实错误，不得自行假定已经解锁。
 8. 开播后的播放状态条继续显示相对当前播放点的真实提前解析时长。解析领先不足时显示当前秒数或明确降级状态，不再显示模糊的“正在追上当前剧情”。
+
+### 观看完成与票根的当前边界
+
+网关已经实现可信播放累计、跨分 P `viewing_id`、真实完成门禁、稳定票根和服务端票夹恢复；票根只保存结构化元数据，不延长音频、截图、字幕或剧情缓存 TTL。当前没有把票根或完成事件写入 Stay with Du，也没有实现观后感、收藏或评分的服务端同步。原生现有本地票夹可以继续使用，接入服务端恢复时以上述 viewing/ticket 接口为准。
 
 ### 后续本地联动：看完归档、观后感与观影票根
 

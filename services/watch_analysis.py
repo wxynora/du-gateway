@@ -734,6 +734,15 @@ def analyze_watch_samples(
             f"分析上游 HTTP {status_code}: {body}",
             retryable=retryable,
             status_code=status_code,
+            usage={
+                "cost_usd": 0.0,
+                "provider_calls": 1,
+                "priced_calls": 0,
+                "cost_reported": False,
+                "provider_called": True,
+                "elapsed_ms": elapsed_ms,
+                "model": WATCH_ANALYSIS_MODEL,
+            },
         )
     try:
         data = response.json()
@@ -747,7 +756,19 @@ def analyze_watch_samples(
             job.get("range_end_ms") or 0,
             getattr(response, "text", ""),
         )
-        raise WatchAnalysisProviderError("分析上游响应不是 JSON", retryable=True) from exc
+        raise WatchAnalysisProviderError(
+            "分析上游响应不是 JSON",
+            retryable=True,
+            usage={
+                "cost_usd": 0.0,
+                "provider_calls": 1,
+                "priced_calls": 0,
+                "cost_reported": False,
+                "provider_called": True,
+                "elapsed_ms": elapsed_ms,
+                "model": WATCH_ANALYSIS_MODEL,
+            },
+        ) from exc
     if not isinstance(data, dict):
         logger.warning(
             "一起看分析响应包顶层无效 session_id=%s job_id=%s purpose=%s range_ms=%s-%s raw_response=%s",
@@ -758,7 +779,19 @@ def analyze_watch_samples(
             job.get("range_end_ms") or 0,
             json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str),
         )
-        raise WatchAnalysisProviderError("分析上游响应顶层不是对象", retryable=True)
+        raise WatchAnalysisProviderError(
+            "分析上游响应顶层不是对象",
+            retryable=True,
+            usage={
+                "cost_usd": 0.0,
+                "provider_calls": 1,
+                "priced_calls": 0,
+                "cost_reported": False,
+                "provider_called": True,
+                "elapsed_ms": elapsed_ms,
+                "model": WATCH_ANALYSIS_MODEL,
+            },
+        )
     usage = _usage_from_response(data, elapsed_ms=elapsed_ms)
     message = (((data.get("choices") or [{}])[0] or {}).get("message") or {})
     try:

@@ -19,7 +19,6 @@ TEMP_DIR = Path(tempfile.mkdtemp(prefix="watch-local-lifecycle-test-"))
 os.environ["RUNTIME_STATE_DB"] = str(TEMP_DIR / "runtime.sqlite3")
 os.environ["WATCH_ANALYSIS_SAMPLE_DIR"] = str(TEMP_DIR / "samples")
 os.environ["WATCH_VISUAL_CACHE_DIR"] = str(TEMP_DIR / "visual")
-os.environ["WATCH_ANALYSIS_DAILY_MAX_COST_USD"] = "100"
 os.environ["OPENROUTER_API_KEY"] = "test-watch-analysis-key"
 
 from flask import Blueprint, Flask  # noqa: E402
@@ -364,7 +363,12 @@ def _test_end_races_do_not_call_or_commit_model() -> None:
     _assert(actual_model_calls == 1, "模型竞态测试没有真正进入模型调用边界")
     _assert(model_outcome["reason"] == "cancel_requested", "模型返回后没有再次验活")
     stored_model_job = watch_analysis_store.get_job(model_job["job_id"], public=False)
-    _assert(stored_model_job and not stored_model_job["usage"], "竞态取消后仍提交了模型 usage")
+    _assert(
+        stored_model_job
+        and abs(float(stored_model_job["usage"].get("cost_usd") or 0) - 0.002) < 0.0000001
+        and int(stored_model_job["usage"].get("provider_calls") or 0) == 1,
+        "模型已实际调用但结束竞态丢失了费用 usage",
+    )
     with runtime_sqlite.connect() as conn:
         chunks = conn.execute(
             "SELECT COUNT(*) AS n FROM watch_plot_chunks WHERE session_id = ?",

@@ -505,6 +505,7 @@ def build_work_knowledge_card(
     model_post: Callable[..., Any] = requests.post,
     on_sources_ready: Callable[[], None] | None = None,
     checkpoint: Callable[[str], None] | None = None,
+    on_provider_usage: Callable[[str, dict], None] | None = None,
 ) -> tuple[dict, list[dict], dict]:
     if not WATCH_KNOWLEDGE_API_KEY:
         raise WatchAnalysisProviderError("WATCH_KNOWLEDGE_API_KEY/DEEPSEEK_API_KEY 未配置", retryable=False)
@@ -526,6 +527,19 @@ def build_work_knowledge_card(
         raise WatchAnalysisProviderError(f"知识卡搜索请求失败: {exc}", retryable=True) from exc
     search_elapsed_ms = int((time.perf_counter() - search_started) * 1000)
     search_status = int(getattr(search_response, "status_code", 0) or 0)
+    search_usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0.0,
+        "provider_calls": 1,
+        "priced_calls": 0,
+        "cost_reported": False,
+        "elapsed_ms": search_elapsed_ms,
+        "model": "tavily-search",
+    }
+    if on_provider_usage is not None:
+        on_provider_usage("search", search_usage)
     if search_status >= 400:
         retryable = search_status in {408, 409, 425, 429} or search_status >= 500
         raise WatchAnalysisProviderError(
@@ -533,8 +547,9 @@ def build_work_knowledge_card(
             retryable=retryable,
             status_code=search_status,
         )
+    search_data = _response_json(search_response, "知识卡搜索")
     sources = _merge_search_sources(
-        [_extract_search_sources(_response_json(search_response, "知识卡搜索"), focus=str(request["focus"]))]
+        [_extract_search_sources(search_data, focus=str(request["focus"]))]
     )
     if not sources:
         raise WatchAnalysisProviderError("知识卡搜索没有返回可用结果", retryable=True)
@@ -563,25 +578,72 @@ def build_work_knowledge_card(
     model_elapsed_ms = int((time.perf_counter() - model_started) * 1000)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     status_code = int(getattr(response, "status_code", 0) or 0)
+    unpriced_model_usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0.0,
+        "provider_calls": 1,
+        "priced_calls": 0,
+        "cost_reported": False,
+        "elapsed_ms": model_elapsed_ms,
+        "model": WATCH_KNOWLEDGE_MODEL,
+    }
     if status_code >= 400:
+        if on_provider_usage is not None:
+            on_provider_usage("model", unpriced_model_usage)
         retryable = status_code in {408, 409, 425, 429} or status_code >= 500
         raise WatchAnalysisProviderError(
             f"知识卡上游 HTTP {status_code}: {_text(getattr(response, 'text', ''), 500)}",
             retryable=retryable,
             status_code=status_code,
         )
-    if checkpoint is not None:
-        checkpoint("after_knowledge_model")
-    data = _response_json(response, "知识卡上游")
-    card = normalize_knowledge_card(_extract_card_content(data), session=session, sources=sources)
+    try:
+        data = _response_json(response, "知识卡上游")
+    except WatchAnalysisProviderError:
+        if on_provider_usage is not None:
+            on_provider_usage("model", unpriced_model_usage)
+        raise
     usage_raw = data.get("usage") if isinstance(data.get("usage"), dict) else {}
     input_tokens = max(0, int(usage_raw.get("input_tokens") or 0))
     output_tokens = max(0, int(usage_raw.get("output_tokens") or 0))
+    cost_reported = "cost" in usage_raw or "cost_usd" in usage_raw
+    try:
+        model_cost_usd = max(
+            0.0,
+            float(
+                usage_raw.get("cost")
+                if "cost" in usage_raw
+                else usage_raw.get("cost_usd") or 0
+            ),
+        )
+    except (TypeError, ValueError):
+        model_cost_usd = 0.0
+        cost_reported = False
+    model_usage = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "cost_usd": model_cost_usd,
+        "provider_calls": 1,
+        "priced_calls": int(cost_reported),
+        "cost_reported": cost_reported,
+        "elapsed_ms": model_elapsed_ms,
+        "model": _text(data.get("model") or WATCH_KNOWLEDGE_MODEL, 160),
+    }
+    if on_provider_usage is not None:
+        on_provider_usage("model", model_usage)
+    if checkpoint is not None:
+        checkpoint("after_knowledge_model")
+    card = normalize_knowledge_card(_extract_card_content(data), session=session, sources=sources)
     usage = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
-        "cost_usd": 0.0,
+        "cost_usd": model_cost_usd,
+        "provider_calls": 2,
+        "priced_calls": int(cost_reported),
+        "cost_reported": False,
         "elapsed_ms": elapsed_ms,
         "search_elapsed_ms": search_elapsed_ms,
         "model_elapsed_ms": model_elapsed_ms,

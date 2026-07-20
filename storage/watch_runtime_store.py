@@ -6,6 +6,8 @@ runtime database. Nothing in this module reads from or writes to R2.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -18,7 +20,7 @@ from config import (
     WATCH_CLIENT_LEASE_SECONDS,
     WATCH_CONTEXT_REPLY_LEAD_MS,
 )
-from storage import runtime_sqlite
+from storage import runtime_sqlite, watch_viewing_store
 
 
 ACTIVE_TTL = timedelta(hours=24)
@@ -70,6 +72,19 @@ def _now() -> datetime:
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _text(value: Any, limit: int = 500) -> str:
@@ -400,6 +415,8 @@ def _row_to_session(row: Any) -> dict:
         local_media = {}
     return {
         "session_id": str(row["id"] or ""),
+        "viewing_id": str(row["viewing_id"] or ""),
+        "work_key": str(row["work_key"] or ""),
         "device_id": str(row["device_id"] or ""),
         "window_id": str(row["window_id"] or ""),
         "companion": {
@@ -412,6 +429,9 @@ def _row_to_session(row: Any) -> dict:
             "url": str(row["source_url"] or ""),
             "title": str(row["title"] or ""),
             "part_title": str(row["part_title"] or ""),
+            "part_key": str(row["part_key"] or ""),
+            "part_index": int(row["part_index"] or 1),
+            "part_count": int(row["part_count"] or 1),
             "duration_ms": int(row["duration_ms"] or 0),
             "content_start_ms": (
                 int(row["content_start_ms"])
@@ -458,6 +478,10 @@ def _row_to_session(row: Any) -> dict:
             "timeline_epoch": int(row["timeline_epoch"] or 0),
             "snapshot_seq": int(row["snapshot_seq"] or 0),
             "captured_at": str(row["captured_at"] or ""),
+            "observed_at": str(row["playback_observed_at"] or ""),
+            "played_duration_ms": int(row["played_duration_ms"] or 0),
+            "completed_at": str(row["completed_at"] or ""),
+            "completion_event_id": str(row["completion_event_id"] or ""),
         },
         "analysis": {
             "familiarity": str(row["analysis_familiarity"] or "pending"),
@@ -667,6 +691,7 @@ def create_session(
     companion: dict,
     media: dict,
     mode: dict,
+    viewing_id: str = "",
 ) -> dict:
     media_id = _text(media.get("id"), 240)
     if not media_id:
@@ -706,52 +731,162 @@ def create_session(
     if force_unknown:
         knowledge_mode = "needs_summary"
 
+    companion_id = _text(companion.get("id"), 120) or "du"
+    companion_name = _text(companion.get("name"), 80) or "渡"
+    requested_viewing_id = _metadata_text(viewing_id)
+    work_key = watch_viewing_store.derive_work_key(media)
+    part = watch_viewing_store.normalize_part(media)
+    analysis_model = _text(mode.get("analysis_model"), 160) or DEFAULT_ANALYSIS_MODEL
+    analysis_prompt_version = _text(mode.get("analysis_prompt_version"), 80) or DEFAULT_PROMPT_VERSION
+    creation_payload = {
+        "viewing_id": requested_viewing_id,
+        "companion": {"id": companion_id, "name": companion_name},
+        "media": {
+            "id": media_id,
+            "source": source,
+            "url": _text(media.get("url"), 4000),
+            "title": _text(media.get("title"), 300),
+            "part_title": _text(media.get("part_title"), 300),
+            "work_key": work_key,
+            "part_key": part["part_key"],
+            "part_index": part["part_index"],
+            "part_count": part["part_count"],
+            "duration_ms": duration_ms,
+            "content_start_ms": content_start_ms,
+            "content_end_ms": content_end_ms,
+            "local_media": local_media,
+        },
+        "mode": {
+            "knowledge_mode": knowledge_mode,
+            "analysis_model": analysis_model,
+            "analysis_prompt_version": analysis_prompt_version,
+            "force_unknown_analysis": force_unknown,
+            "fear_mode": _bool(mode.get("fear_mode")),
+            "fear_action": fear_action,
+            "reduce_volume": _bool(mode.get("reduce_volume")),
+            "danmaku_enabled": _bool(mode.get("danmaku_enabled"), True),
+            "reply_lead_ms": reply_lead_ms,
+            "visual_context_mode": visual_context_mode,
+        },
+    }
+    creation_key = hashlib.sha256(
+        json.dumps(
+            creation_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
     now = _now()
     now_iso = _iso(now)
     session_id = f"watch_{uuid4().hex}"
-    values = (
-        session_id,
-        _text(device_id, 160),
-        _text(window_id, 160),
-        _text(companion.get("id"), 120) or "du",
-        _text(companion.get("name"), 80) or "渡",
-        media_id,
-        source,
-        _text(media.get("url"), 4000),
-        _text(media.get("title"), 300),
-        _text(media.get("part_title"), 300),
-        duration_ms,
-        content_start_ms,
-        content_end_ms,
-        knowledge_mode,
-        _text(mode.get("analysis_model"), 160) or DEFAULT_ANALYSIS_MODEL,
-        _text(mode.get("analysis_prompt_version"), 80) or DEFAULT_PROMPT_VERSION,
-        int(force_unknown),
-        int(_bool(mode.get("fear_mode"))),
-        fear_action,
-        int(_bool(mode.get("reduce_volume"))),
-        int(_bool(mode.get("danmaku_enabled"), True)),
-        reply_lead_ms,
-        visual_context_mode,
-        now_iso,
-        now_iso,
-        _iso(now + ACTIVE_TTL),
-    )
     with runtime_sqlite.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
             _cleanup_expired(conn, now_iso)
+            existing = conn.execute(
+                """
+                SELECT * FROM watch_sessions
+                 WHERE device_id = ? AND window_id = ? AND creation_key = ?
+                   AND status != 'ended' AND expires_at > ?
+                 ORDER BY created_at DESC LIMIT 1
+                """,
+                (
+                    _text(device_id, 160),
+                    _text(window_id, 160),
+                    creation_key,
+                    now_iso,
+                ),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    str(existing["client_lease_expires_at"] or "")
+                    and str(existing["client_lease_expires_at"] or "") > now_iso
+                ):
+                    conn.execute(
+                        """
+                        UPDATE watch_sessions
+                           SET client_seen_at = ?, client_lease_expires_at = ?,
+                               updated_at = ?, expires_at = ?
+                         WHERE id = ?
+                        """,
+                        (
+                            now_iso,
+                            _iso(now + timedelta(seconds=int(WATCH_CLIENT_LEASE_SECONDS))),
+                            now_iso,
+                            _iso(now + ACTIVE_TTL),
+                            str(existing["id"] or ""),
+                        ),
+                    )
+                    reused = _get_session_row(conn, str(existing["id"] or ""))
+                    conn.execute("COMMIT")
+                    session = _row_to_session(reused)
+                    session["create_reused"] = True
+                    return session
+                _end_session_state(
+                    conn,
+                    session_id=str(existing["id"] or ""),
+                    now_iso=now_iso,
+                    reason="superseded_expired_creation",
+                )
+            actual_viewing_id = watch_viewing_store.ensure_viewing(
+                conn,
+                requested_viewing_id=requested_viewing_id,
+                work_key=work_key,
+                media=media,
+                companion_id=companion_id,
+                companion_name=companion_name,
+                device_id=_text(device_id, 160),
+                window_id=_text(window_id, 160),
+                now_iso=now_iso,
+            )
+            values = (
+                session_id,
+                creation_key,
+                actual_viewing_id,
+                work_key,
+                part["part_key"],
+                part["part_index"],
+                part["part_count"],
+                _text(device_id, 160),
+                _text(window_id, 160),
+                companion_id,
+                companion_name,
+                media_id,
+                source,
+                _text(media.get("url"), 4000),
+                _text(media.get("title"), 300),
+                _text(media.get("part_title"), 300),
+                duration_ms,
+                content_start_ms,
+                content_end_ms,
+                knowledge_mode,
+                analysis_model,
+                analysis_prompt_version,
+                int(force_unknown),
+                int(_bool(mode.get("fear_mode"))),
+                fear_action,
+                int(_bool(mode.get("reduce_volume"))),
+                int(_bool(mode.get("danmaku_enabled"), True)),
+                reply_lead_ms,
+                visual_context_mode,
+                now_iso,
+                now_iso,
+                _iso(now + ACTIVE_TTL),
+            )
             conn.execute(
                 """
                 INSERT INTO watch_sessions (
-                    id, device_id, window_id, companion_id, companion_name,
+                    id, creation_key, viewing_id, work_key, part_key, part_index, part_count,
+                    device_id, window_id, companion_id, companion_name,
                     media_id, source, source_url, title, part_title, duration_ms,
                     content_start_ms, content_end_ms,
                     knowledge_mode, analysis_model, analysis_prompt_version,
                     force_unknown_analysis, fear_mode, fear_action, reduce_volume,
                     danmaku_enabled, reply_lead_ms, visual_context_mode,
                     created_at, updated_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values,
             )
@@ -803,7 +938,9 @@ def create_session(
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return _row_to_session(row)
+    session = _row_to_session(row)
+    session["create_reused"] = False
+    return session
 
 
 def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
@@ -846,11 +983,58 @@ def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
             playback_rate = min(4.0, max(0.25, _float(snapshot.get("playback_rate"), 1.0)))
             captured_at = _text(snapshot.get("captured_at"), 80) or now_iso
             status = "playing" if is_playing else "paused"
+            played_delta_ms = 0
+            previous_observed_at = _parse_iso(row["playback_observed_at"])
+            if (
+                incoming_epoch == current_epoch
+                and bool(row["is_playing"])
+                and not str(row["completed_at"] or "").strip()
+                and previous_observed_at is not None
+            ):
+                server_elapsed_ms = max(
+                    0,
+                    int((now - previous_observed_at).total_seconds() * 1000),
+                )
+                media_delta_ms = max(0, playhead_ms - int(row["playhead_ms"] or 0))
+                previous_rate = max(0.25, float(row["playback_rate"] or 1.0))
+                media_elapsed_ms = int(media_delta_ms / previous_rate)
+                played_delta_ms = min(server_elapsed_ms, media_elapsed_ms)
+            session_played_duration_ms = int(row["played_duration_ms"] or 0) + played_delta_ms
+            completion_end_ms = (
+                int(row["content_end_ms"])
+                if int(row["content_end_ms"]) >= 0
+                else duration_ms
+            )
+            explicit_media_end = _bool(snapshot.get("media_ended")) or _bool(
+                snapshot.get("ended")
+            )
+            reached_end_continuously = (
+                incoming_epoch == current_epoch and played_delta_ms > 0
+            )
+            completed_at = str(row["completed_at"] or "")
+            completion_event_id = str(row["completion_event_id"] or "")
+            if (
+                not completed_at
+                and str(row["started_at"] or "").strip()
+                and str(row["playback_unlocked_at"] or "").strip()
+                and completion_end_ms > 0
+                and playhead_ms >= completion_end_ms
+                and (reached_end_continuously or explicit_media_end)
+            ):
+                completed_at = now_iso
+                completion_identity = (
+                    f"{session_id}:{media_id or row['media_id']}:{incoming_epoch}"
+                )
+                completion_event_id = "watch_completion_" + hashlib.sha256(
+                    completion_identity.encode("utf-8")
+                ).hexdigest()
             conn.execute(
                 """
                 UPDATE watch_sessions
                    SET duration_ms = ?, playhead_ms = ?, is_playing = ?, playback_rate = ?,
                        timeline_epoch = ?, snapshot_seq = ?, captured_at = ?, status = ?,
+                       playback_observed_at = ?, played_duration_ms = ?,
+                       completed_at = ?, completion_event_id = ?,
                        client_seen_at = ?, client_lease_expires_at = ?,
                        updated_at = ?, expires_at = ?
                  WHERE id = ?
@@ -864,6 +1048,10 @@ def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
                     incoming_seq,
                     captured_at,
                     status,
+                    now_iso,
+                    session_played_duration_ms,
+                    completed_at,
+                    completion_event_id,
                     now_iso,
                     _iso(now + timedelta(seconds=int(WATCH_CLIENT_LEASE_SECONDS))),
                     now_iso,
@@ -882,6 +1070,14 @@ def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
                     now_iso=now_iso,
                 )
             updated = _get_session_row(conn, session_id)
+            watch_viewing_store.record_session_progress(
+                conn,
+                session_row=updated,
+                played_delta_ms=played_delta_ms,
+                completed_at=completed_at,
+                completion_event_id=completion_event_id,
+                now_iso=now_iso,
+            )
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -1396,6 +1592,12 @@ def replace_timeline_sections(
     with runtime_sqlite.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            session_row = conn.execute(
+                "SELECT id FROM watch_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if session_row is None:
+                raise KeyError("watch_session_not_found")
             active_samples = conn.execute(
                 """
                 SELECT file_path FROM watch_analysis_samples
@@ -1421,13 +1623,16 @@ def replace_timeline_sections(
             conn.execute(
                 """
                 UPDATE watch_analysis_jobs
-                   SET status = 'cancelled', error = 'timeline_sections_corrected',
+                   SET status = 'cancelled', cancel_requested = 1,
+                       cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END,
+                       error = 'timeline_sections_corrected',
+                       cancel_reason = 'timeline_sections_corrected',
                        finished_at = ?, updated_at = ?, leased_until = '', lease_token = ''
                  WHERE session_id = ? AND timeline_epoch = ?
-                   AND purpose != 'knowledge_card'
+                   AND purpose IN ('identify', 'timeline_prepass', 'rolling')
                    AND status IN ('queued', 'running')
                 """,
-                (now_iso, now_iso, session_id, epoch),
+                (now_iso, now_iso, now_iso, session_id, epoch),
             )
             conn.execute(
                 "DELETE FROM watch_timeline_sections WHERE session_id = ? AND timeline_epoch = ?",
@@ -1447,26 +1652,7 @@ def replace_timeline_sections(
                     ),
                 )
             conn.execute(
-                "DELETE FROM watch_plot_chunks WHERE session_id = ? AND timeline_epoch = ?",
-                (session_id, epoch),
-            )
-            conn.execute(
-                "DELETE FROM watch_risk_events WHERE session_id = ? AND timeline_epoch = ?",
-                (session_id, epoch),
-            )
-            conn.execute(
-                "DELETE FROM watch_story_checkpoints WHERE session_id = ? AND timeline_epoch = ?",
-                (session_id, epoch),
-            )
-            conn.execute(
-                """
-                UPDATE watch_sessions
-                   SET analysis_status = 'warming_context', analysis_error = '',
-                       analysis_covered_from_ms = 0, analysis_covered_until_ms = 0,
-                       story_so_far_json = '{}', analysis_story_state_json = '{}',
-                       updated_at = ?
-                 WHERE id = ?
-                """,
+                "UPDATE watch_sessions SET updated_at = ? WHERE id = ?",
                 (now_iso, session_id),
             )
             conn.execute("COMMIT")
