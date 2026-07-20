@@ -14,6 +14,7 @@ from uuid import uuid4
 from config import (
     WATCH_ANALYSIS_FEAR_READY_BUFFER_MS,
     WATCH_ANALYSIS_PROMPT_VERSION,
+    WATCH_CLIENT_LEASE_SECONDS,
     WATCH_CONTEXT_REPLY_LEAD_MS,
 )
 from storage import runtime_sqlite
@@ -58,6 +59,8 @@ TIMELINE_SECTION_KINDS = {
     "unknown",
 }
 RISK_FEEDBACK_TYPES = {"false_positive", "missed", "too_early", "too_late"}
+LOCAL_SUBTITLE_KINDS = {"none", "embedded", "external"}
+LOCAL_SUBTITLE_FORMATS = {"srt", "vtt"}
 
 
 def _now() -> datetime:
@@ -113,6 +116,164 @@ def _optional_media_ms(value: Any, field: str) -> int:
     if parsed < 0:
         raise ValueError(f"{field} 必须是非负毫秒整数")
     return parsed
+
+
+def _metadata_text(value: Any) -> str:
+    return str(value or "").replace("\x00", "").strip()
+
+
+def _normalize_local_media(media: dict) -> dict:
+    raw = media.get("local_media")
+    if not isinstance(raw, dict):
+        raise ValueError("media.local_media 必须是对象")
+    asset_id = _metadata_text(raw.get("local_asset_id"))
+    media_revision = _metadata_text(raw.get("media_revision"))
+    if not asset_id:
+        raise ValueError("media.local_media.local_asset_id 不能为空")
+    if _metadata_text(media.get("id")) != f"local:{asset_id}":
+        raise ValueError("本地媒体 id 必须等于 local:<local_asset_id>")
+    if not media_revision:
+        raise ValueError("media.local_media.media_revision 不能为空")
+
+    raw_capabilities = raw.get("capabilities")
+    if not isinstance(raw_capabilities, dict):
+        raise ValueError("media.local_media.capabilities 必须是对象")
+    required_capabilities = {
+        "can_play",
+        "can_seek",
+        "can_read_future",
+        "can_export_frames",
+        "can_export_audio",
+        "has_audio",
+        "is_drm",
+    }
+    missing = sorted(required_capabilities - set(raw_capabilities))
+    if missing:
+        raise ValueError(f"本地媒体能力检测缺少字段: {', '.join(missing)}")
+    capabilities = {
+        key: _bool(raw_capabilities.get(key))
+        for key in sorted(required_capabilities)
+    }
+    if not capabilities["can_play"]:
+        raise ValueError("所选本地文件当前无法播放")
+
+    raw_audio = raw.get("selected_audio")
+    selected_audio = raw_audio if isinstance(raw_audio, dict) else {}
+    selected_audio = {
+        "track_id": _metadata_text(selected_audio.get("track_id")),
+        "language": _metadata_text(selected_audio.get("language")),
+        "label": _metadata_text(selected_audio.get("label")),
+    }
+    if capabilities["has_audio"] and not selected_audio["track_id"]:
+        raise ValueError("本地媒体有音轨时必须明确 selected_audio.track_id")
+
+    raw_subtitle = raw.get("selected_subtitle")
+    selected_subtitle = raw_subtitle if isinstance(raw_subtitle, dict) else {}
+    subtitle_kind = _enum(
+        selected_subtitle.get("kind"),
+        LOCAL_SUBTITLE_KINDS,
+        "none",
+        "media.local_media.selected_subtitle.kind",
+    )
+    subtitle_format = _metadata_text(selected_subtitle.get("format")).lower()
+    if subtitle_kind != "none" and subtitle_format not in LOCAL_SUBTITLE_FORMATS:
+        raise ValueError("本地字幕格式只能是 srt 或 vtt")
+    try:
+        subtitle_offset_ms = int(float(selected_subtitle.get("offset_ms") or 0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("本地字幕 offset_ms 必须是毫秒整数") from exc
+    selected_subtitle = {
+        "kind": subtitle_kind,
+        "track_id": _metadata_text(selected_subtitle.get("track_id")),
+        "language": _metadata_text(selected_subtitle.get("language")),
+        "label": _metadata_text(selected_subtitle.get("label")),
+        "format": subtitle_format,
+        "offset_ms": subtitle_offset_ms,
+    }
+    if subtitle_kind == "embedded" and not selected_subtitle["track_id"]:
+        raise ValueError("内嵌字幕必须明确 selected_subtitle.track_id")
+
+    unavailable_reasons: list[str] = []
+    if capabilities["is_drm"]:
+        unavailable_reasons.append("drm_protected")
+    if not capabilities["can_read_future"]:
+        unavailable_reasons.append("future_read_unavailable")
+    if not capabilities["can_export_frames"]:
+        unavailable_reasons.append("frame_export_unavailable")
+    analysis_available = not unavailable_reasons
+    audio_available = bool(
+        capabilities["has_audio"]
+        and capabilities["can_export_audio"]
+        and selected_audio["track_id"]
+    )
+    if not analysis_available:
+        sampling_status = "unavailable"
+    elif audio_available:
+        sampling_status = "ready"
+    else:
+        sampling_status = "degraded"
+    return {
+        "local_asset_id": asset_id,
+        "media_revision": media_revision,
+        "capabilities": capabilities,
+        "selected_audio": selected_audio,
+        "selected_subtitle": selected_subtitle,
+        "sampling": {
+            "status": sampling_status,
+            "analysis_available": analysis_available,
+            "audio_available": audio_available,
+            "reasons": unavailable_reasons,
+            "audio_degraded_reason": (
+                ""
+                if audio_available
+                else "no_audio_track"
+                if not capabilities["has_audio"]
+                else "audio_export_unavailable"
+            ),
+        },
+    }
+
+
+def _local_subtitle_lookup(local_media: dict) -> dict:
+    selected = local_media.get("selected_subtitle") or {}
+    kind = str(selected.get("kind") or "none")
+    lookup_id = f"watch_subtitle_lookup_{uuid4().hex}"
+    if kind == "none":
+        audio_available = bool((local_media.get("sampling") or {}).get("audio_available"))
+        return {
+            "lookup_id": lookup_id,
+            "status": "not_found",
+            "provider": "local_file",
+            "query_title": "",
+            "language_codes": [],
+            "release_name": "",
+            "format": "",
+            "cue_count": 0,
+            "coverage_start_ms": 0,
+            "coverage_end_ms": 0,
+            "message": (
+                "未选择字幕，将使用音频和画面理解剧情"
+                if audio_available
+                else "未选择字幕，将仅使用画面理解剧情"
+            ),
+            "error": "",
+            "can_retry": False,
+        }
+    return {
+        "lookup_id": lookup_id,
+        "status": "awaiting_client",
+        "provider": f"local_{kind}",
+        "query_title": "",
+        "language_codes": [selected.get("language")] if selected.get("language") else [],
+        "release_name": str(selected.get("label") or ""),
+        "format": str(selected.get("format") or ""),
+        "cue_count": 0,
+        "coverage_start_ms": 0,
+        "coverage_end_ms": 0,
+        "message": "等待客户端提交已选择的本地字幕",
+        "error": "",
+        "can_retry": False,
+    }
 
 
 def _ensure_content_bound_sections(
@@ -189,6 +350,7 @@ def _cleanup_expired(conn, now_iso: str) -> int:
         conn.execute("DELETE FROM watch_visual_frames WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM watch_analysis_samples WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM watch_analysis_jobs WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM watch_client_sample_plans WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM watch_sessions WHERE id = ?", (session_id,))
     conn.execute("DELETE FROM watch_knowledge_cards WHERE expires_at <= ?", (now_iso,))
     return len(session_ids)
@@ -232,6 +394,9 @@ def _row_to_session(row: Any) -> dict:
             for key, value in subtitle_lookup.items()
             if not str(key).startswith("_")
         }
+    local_media = runtime_sqlite.json_loads(row["local_media_json"], {})
+    if not isinstance(local_media, dict):
+        local_media = {}
     return {
         "session_id": str(row["id"] or ""),
         "device_id": str(row["device_id"] or ""),
@@ -257,6 +422,7 @@ def _row_to_session(row: Any) -> dict:
                 if int(row["content_end_ms"]) >= 0
                 else None
             ),
+            "local_media": local_media,
         },
         "mode": {
             "knowledge_mode": str(row["knowledge_mode"] or "known"),
@@ -278,6 +444,10 @@ def _row_to_session(row: Any) -> dict:
             "subtitle_lookup": subtitle_lookup,
             "subtitle_confirmed_at": str(row["subtitle_confirmed_at"] or ""),
             "started_at": str(row["started_at"] or ""),
+            "playback_unlocked_at": str(row["playback_unlocked_at"] or ""),
+            "fear_unprotected_confirmed_at": str(
+                row["fear_unprotected_confirmed_at"] or ""
+            ),
         },
         "playback": {
             "status": str(row["status"] or "paused"),
@@ -302,6 +472,15 @@ def _row_to_session(row: Any) -> dict:
             "story_so_far": runtime_sqlite.json_loads(row["story_so_far_json"], {}),
             "story_state": runtime_sqlite.json_loads(row["analysis_story_state_json"], {}),
         },
+        "client_lease": {
+            "client_seen_at": str(row["client_seen_at"] or ""),
+            "expires_at": str(row["client_lease_expires_at"] or ""),
+            "valid": bool(
+                str(row["client_lease_expires_at"] or "")
+                and str(row["client_lease_expires_at"] or "") > _iso(_now())
+                and str(row["status"] or "") != "ended"
+            ),
+        },
         "created_at": str(row["created_at"] or ""),
         "updated_at": str(row["updated_at"] or ""),
         "ended_at": str(row["ended_at"] or ""),
@@ -321,6 +500,136 @@ def get_session(session_id: str) -> dict | None:
         _cleanup_expired(conn, _iso(_now()))
         row = _get_session_row(conn, session_id)
         return _row_to_session(row) if row is not None else None
+
+
+def touch_client_lease(session_id: str) -> dict:
+    now = _now()
+    now_iso = _iso(now)
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = _get_session_row(conn, session_id)
+            if row is None:
+                raise KeyError("watch_session_not_found")
+            if str(row["status"] or "") == "ended":
+                raise ValueError("观看会话已结束")
+            conn.execute(
+                """
+                UPDATE watch_sessions
+                   SET client_seen_at = ?, client_lease_expires_at = ?, expires_at = ?
+                 WHERE id = ?
+                """,
+                (
+                    now_iso,
+                    _iso(now + timedelta(seconds=int(WATCH_CLIENT_LEASE_SECONDS))),
+                    _iso(now + ACTIVE_TTL),
+                    session_id,
+                ),
+            )
+            updated = _get_session_row(conn, session_id)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return _row_to_session(updated)
+
+
+def schedule_eligibility(session: dict, *, now_iso: str | None = None) -> tuple[bool, str]:
+    if not session or session.get("ended_at") or str((session.get("playback") or {}).get("status") or "") == "ended":
+        return False, "session_ended"
+    lease = session.get("client_lease") if isinstance(session.get("client_lease"), dict) else {}
+    expires_at = str(lease.get("expires_at") or "")
+    if not expires_at or expires_at <= (now_iso or _iso(_now())):
+        return False, "client_lease_expired"
+    return True, ""
+
+
+def _end_session_state(conn, *, session_id: str, now_iso: str, reason: str) -> dict:
+    queued = conn.execute(
+        """
+        UPDATE watch_analysis_jobs
+           SET status = 'cancelled', cancel_reason = ?, error = ?,
+               finished_at = ?, updated_at = ?, leased_until = '', lease_token = ''
+         WHERE session_id = ? AND status = 'queued'
+        """,
+        (reason, reason, now_iso, now_iso, session_id),
+    ).rowcount
+    running = conn.execute(
+        """
+        UPDATE watch_analysis_jobs
+           SET cancel_requested = 1, cancel_requested_at = ?, cancel_reason = ?,
+               updated_at = ?
+         WHERE session_id = ? AND status = 'running' AND cancel_requested = 0
+        """,
+        (now_iso, reason, now_iso, session_id),
+    ).rowcount
+    plans = conn.execute(
+        """
+        UPDATE watch_client_sample_plans
+           SET status = 'cancelled', cancelled_at = ?
+         WHERE session_id = ? AND status = 'open'
+        """,
+        (now_iso, session_id),
+    ).rowcount
+    conn.execute(
+        """
+        UPDATE watch_sessions
+           SET status = 'ended', is_playing = 0, ended_at = ?,
+               updated_at = ?, expires_at = ?
+         WHERE id = ? AND status != 'ended'
+        """,
+        (now_iso, now_iso, _iso(_now() + ENDED_TTL), session_id),
+    )
+    return {
+        "queued_cancelled": int(queued or 0),
+        "running_cancel_requested": int(running or 0),
+        "plans_cancelled": int(plans or 0),
+    }
+
+
+def expire_abandoned_sessions() -> dict:
+    now_iso = _iso(_now())
+    ended = 0
+    queued_cancelled = 0
+    running_cancel_requested = 0
+    plans_cancelled = 0
+    session_ids: list[str] = []
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            rows = conn.execute(
+                """
+                SELECT id FROM watch_sessions
+                 WHERE status != 'ended'
+                   AND (client_lease_expires_at = '' OR client_lease_expires_at <= ?)
+                """,
+                (now_iso,),
+            ).fetchall()
+            for row in rows:
+                session_id = str(row["id"] or "")
+                stats = _end_session_state(
+                    conn,
+                    session_id=session_id,
+                    now_iso=now_iso,
+                    reason="client_lease_expired",
+                )
+                session_ids.append(session_id)
+                ended += 1
+                queued_cancelled += stats["queued_cancelled"]
+                running_cancel_requested += stats["running_cancel_requested"]
+                plans_cancelled += stats["plans_cancelled"]
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {
+        "sessions_ended": ended,
+        "queued_cancelled": queued_cancelled,
+        "running_cancel_requested": running_cancel_requested,
+        "plans_cancelled": plans_cancelled,
+        "skip_reason": "client_lease_expired" if ended else "",
+        "session_ids": session_ids,
+    }
 
 
 def list_sessions(
@@ -364,6 +673,7 @@ def create_session(
     source = _text(media.get("source"), 80)
     if not source:
         raise ValueError("media.source 不能为空")
+    local_media = _normalize_local_media(media) if source == "local_file" else {}
     duration_ms = _int(media.get("duration_ms"), 0)
     if duration_ms <= 0:
         raise ValueError("media.duration_ms 必须大于 0")
@@ -444,6 +754,40 @@ def create_session(
                 """,
                 values,
             )
+            conn.execute(
+                """
+                UPDATE watch_sessions
+                   SET client_seen_at = ?, client_lease_expires_at = ?
+                 WHERE id = ?
+                """,
+                (
+                    now_iso,
+                    _iso(now + timedelta(seconds=int(WATCH_CLIENT_LEASE_SECONDS))),
+                    session_id,
+                ),
+            )
+            if local_media:
+                subtitle_lookup = _local_subtitle_lookup(local_media)
+                sampling = local_media.get("sampling") or {}
+                analysis_available = bool(sampling.get("analysis_available"))
+                conn.execute(
+                    """
+                    UPDATE watch_sessions
+                       SET local_media_json = ?, subtitle_lookup_json = ?,
+                           analysis_familiarity = ?, analysis_identity = ?,
+                           analysis_status = ?, analysis_error = ?
+                     WHERE id = ?
+                    """,
+                    (
+                        runtime_sqlite.json_dumps(local_media),
+                        runtime_sqlite.json_dumps(subtitle_lookup),
+                        "pending" if analysis_available else "unknown",
+                        "" if analysis_available else _text(media.get("title"), 500),
+                        "pending" if analysis_available else "degraded",
+                        "" if analysis_available else "local_sampling_unavailable",
+                        session_id,
+                    ),
+                )
             _ensure_content_bound_sections(
                 conn,
                 session_id=session_id,
@@ -492,7 +836,9 @@ def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
             if duration_ms > 0:
                 playhead_ms = min(playhead_ms, duration_ms)
             is_playing = _bool(snapshot.get("is_playing"))
-            if is_playing and not str(row["started_at"] or "").strip():
+            if is_playing and not str(row["playback_unlocked_at"] or "").strip():
+                if str(row["started_at"] or "").strip():
+                    raise ValueError("胆小模式初始保护尚未就绪，请等待或明确无保护继续")
                 raise ValueError("请先确认开播前资料，再正式开始一起看")
             playback_rate = min(4.0, max(0.25, _float(snapshot.get("playback_rate"), 1.0)))
             captured_at = _text(snapshot.get("captured_at"), 80) or now_iso
@@ -502,6 +848,7 @@ def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
                 UPDATE watch_sessions
                    SET duration_ms = ?, playhead_ms = ?, is_playing = ?, playback_rate = ?,
                        timeline_epoch = ?, snapshot_seq = ?, captured_at = ?, status = ?,
+                       client_seen_at = ?, client_lease_expires_at = ?,
                        updated_at = ?, expires_at = ?
                  WHERE id = ?
                 """,
@@ -514,6 +861,8 @@ def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
                     incoming_seq,
                     captured_at,
                     status,
+                    now_iso,
+                    _iso(now + timedelta(seconds=int(WATCH_CLIENT_LEASE_SECONDS))),
                     now_iso,
                     _iso(now + ACTIVE_TTL),
                     session_id,
@@ -593,6 +942,7 @@ def update_mode(session_id: str, changes: dict) -> dict:
                 raise ValueError("已手动降级为陌生作品分析，不能直接升级识别结果")
             if force_unknown:
                 knowledge_mode = "needs_summary"
+            fear_mode = _bool(changes.get("fear_mode"), bool(row["fear_mode"]))
             conn.execute(
                 """
                 UPDATE watch_sessions
@@ -604,7 +954,7 @@ def update_mode(session_id: str, changes: dict) -> dict:
                 """,
                 (
                     knowledge_mode,
-                    int(_bool(changes.get("fear_mode"), bool(row["fear_mode"]))),
+                    int(fear_mode),
                     fear_action,
                     int(_bool(changes.get("reduce_volume"), bool(row["reduce_volume"]))),
                     int(_bool(changes.get("danmaku_enabled"), bool(row["danmaku_enabled"]))),
@@ -616,6 +966,15 @@ def update_mode(session_id: str, changes: dict) -> dict:
                     session_id,
                 ),
             )
+            if (
+                not fear_mode
+                and str(row["started_at"] or "").strip()
+                and not str(row["playback_unlocked_at"] or "").strip()
+            ):
+                conn.execute(
+                    "UPDATE watch_sessions SET playback_unlocked_at = ? WHERE id = ?",
+                    (now_iso, session_id),
+                )
             if force_unknown and not old_force_unknown:
                 conn.execute(
                     """
@@ -627,18 +986,31 @@ def update_mode(session_id: str, changes: dict) -> dict:
                     """,
                     (now_iso, now_iso, session_id),
                 )
-                conn.execute(
-                    """
-                    UPDATE watch_sessions
-                       SET analysis_familiarity = 'unknown', preparation_status = 'identifying',
-                           knowledge_card_key = '', knowledge_card_status = 'pending',
-                           knowledge_card_error = '', knowledge_card_confirmed_at = '',
-                           knowledge_card_skipped_at = '', subtitle_lookup_json = '{}',
-                           subtitle_asset_id = '', subtitle_confirmed_at = ''
-                     WHERE id = ?
-                    """,
-                    (session_id,),
-                )
+                if str(row["source"] or "") == "local_file":
+                    conn.execute(
+                        """
+                        UPDATE watch_sessions
+                           SET analysis_familiarity = 'unknown', preparation_status = 'identifying',
+                               knowledge_card_key = '', knowledge_card_status = 'pending',
+                               knowledge_card_error = '', knowledge_card_confirmed_at = '',
+                               knowledge_card_skipped_at = ''
+                         WHERE id = ?
+                        """,
+                        (session_id,),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE watch_sessions
+                           SET analysis_familiarity = 'unknown', preparation_status = 'identifying',
+                               knowledge_card_key = '', knowledge_card_status = 'pending',
+                               knowledge_card_error = '', knowledge_card_confirmed_at = '',
+                               knowledge_card_skipped_at = '', subtitle_lookup_json = '{}',
+                               subtitle_asset_id = '', subtitle_confirmed_at = ''
+                         WHERE id = ?
+                        """,
+                        (session_id,),
+                    )
             updated = _get_session_row(conn, session_id)
             conn.execute("COMMIT")
         except Exception:
@@ -712,18 +1084,90 @@ def update_preparation_state(
     return _row_to_session(updated)
 
 
+def _fear_coverage_ready_row(row: Any) -> bool:
+    if not bool(row["fear_mode"]):
+        return True
+    playhead_ms = int(row["playhead_ms"] or 0)
+    required_until_ms = playhead_ms + int(WATCH_ANALYSIS_FEAR_READY_BUFFER_MS)
+    content_end_ms = int(row["content_end_ms"])
+    duration_ms = int(row["duration_ms"] or 0)
+    if content_end_ms >= 0:
+        required_until_ms = min(required_until_ms, content_end_ms)
+    elif duration_ms > 0:
+        required_until_ms = min(required_until_ms, duration_ms)
+    return (
+        str(row["analysis_status"] or "") == "ready"
+        and int(row["analysis_covered_until_ms"] or 0) >= required_until_ms
+    )
+
+
+def get_start_gate(session: dict) -> dict:
+    preparation = session.get("preparation") if isinstance(session.get("preparation"), dict) else {}
+    mode = session.get("mode") if isinstance(session.get("mode"), dict) else {}
+    analysis = session.get("analysis") if isinstance(session.get("analysis"), dict) else {}
+    media = session.get("media") if isinstance(session.get("media"), dict) else {}
+    playback = session.get("playback") if isinstance(session.get("playback"), dict) else {}
+    started_at = str(preparation.get("started_at") or "")
+    unlocked_at = str(preparation.get("playback_unlocked_at") or "")
+    unprotected_at = str(preparation.get("fear_unprotected_confirmed_at") or "")
+    playhead_ms = int(playback.get("playhead_ms") or 0)
+    required_until_ms = playhead_ms + int(WATCH_ANALYSIS_FEAR_READY_BUFFER_MS)
+    content_end_ms = media.get("content_end_ms")
+    duration_ms = int(media.get("duration_ms") or 0)
+    if content_end_ms is not None:
+        required_until_ms = min(required_until_ms, int(content_end_ms))
+    elif duration_ms > 0:
+        required_until_ms = min(required_until_ms, duration_ms)
+    coverage_ready = (
+        str(analysis.get("status") or "") == "ready"
+        and int(analysis.get("covered_until_ms") or 0) >= required_until_ms
+    )
+    local_media = media.get("local_media") if isinstance(media.get("local_media"), dict) else {}
+    local_sampling = local_media.get("sampling") if isinstance(local_media.get("sampling"), dict) else {}
+    if not started_at:
+        status = "awaiting_confirmation"
+        reason = "preparation_not_confirmed"
+    elif unlocked_at:
+        status = "unprotected" if unprotected_at else "ready"
+        reason = "explicit_unprotected_continue" if unprotected_at else "playback_unlocked"
+    elif coverage_ready:
+        status = "ready_to_unlock"
+        reason = "coverage_ready"
+    else:
+        status = "buffering"
+        reason = (
+            "local_sampling_unavailable"
+            if str(local_sampling.get("status") or "") == "unavailable"
+            else "initial_fear_coverage_pending"
+        )
+    return {
+        "status": status,
+        "reason": reason,
+        "can_play": bool(unlocked_at),
+        "can_unlock": bool(started_at and (coverage_ready or not bool(mode.get("fear_mode")))),
+        "can_continue_unprotected": bool(started_at and mode.get("fear_mode") and not unlocked_at),
+        "required_until_ms": required_until_ms,
+        "covered_until_ms": int(analysis.get("covered_until_ms") or 0),
+        "started_at": started_at,
+        "playback_unlocked_at": unlocked_at,
+        "fear_unprotected_confirmed_at": unprotected_at,
+    }
+
+
 def start_session(
     session_id: str,
     *,
     knowledge_card_action: str,
     knowledge_card_key: str = "",
     subtitle_lookup_id: str = "",
+    protection_action: str = "wait",
 ) -> dict:
-    action = _enum(
-        knowledge_card_action,
-        {"confirm", "skip"},
-        "",
-        "knowledge_card_action",
+    action = _text(knowledge_card_action, 40).lower()
+    normalized_protection_action = _enum(
+        protection_action,
+        {"wait", "continue_unprotected"},
+        "wait",
+        "protection_action",
     )
     now = _now()
     now_iso = _iso(now)
@@ -736,8 +1180,44 @@ def start_session(
             if str(row["status"] or "") == "ended":
                 raise ValueError("观看会话已结束")
             if str(row["started_at"] or "").strip():
+                if not str(row["playback_unlocked_at"] or "").strip():
+                    coverage_ready = _fear_coverage_ready_row(row)
+                    should_unlock = (
+                        not bool(row["fear_mode"])
+                        or coverage_ready
+                        or normalized_protection_action == "continue_unprotected"
+                    )
+                    if should_unlock:
+                        conn.execute(
+                            """
+                            UPDATE watch_sessions
+                               SET playback_unlocked_at = ?,
+                                   fear_unprotected_confirmed_at = ?,
+                                   updated_at = ?, expires_at = ?
+                             WHERE id = ?
+                            """,
+                            (
+                                now_iso,
+                                now_iso
+                                if bool(row["fear_mode"])
+                                and not coverage_ready
+                                and normalized_protection_action == "continue_unprotected"
+                                else "",
+                                now_iso,
+                                _iso(now + ACTIVE_TTL),
+                                session_id,
+                            ),
+                        )
+                        row = _get_session_row(conn, session_id)
                 conn.execute("COMMIT")
                 return _row_to_session(row)
+
+            action = _enum(
+                action,
+                {"confirm", "skip"},
+                "",
+                "knowledge_card_action",
+            )
 
             card_status = str(row["knowledge_card_status"] or "pending")
             current_key = str(row["knowledge_card_key"] or "")
@@ -781,12 +1261,26 @@ def start_session(
                     """,
                     (now_iso, now_iso, session_id),
                 )
+            coverage_ready = _fear_coverage_ready_row(row)
+            should_unlock = (
+                not bool(row["fear_mode"])
+                or coverage_ready
+                or normalized_protection_action == "continue_unprotected"
+            )
+            unprotected_at = (
+                now_iso
+                if bool(row["fear_mode"])
+                and not coverage_ready
+                and normalized_protection_action == "continue_unprotected"
+                else ""
+            )
             conn.execute(
                 """
                 UPDATE watch_sessions
                    SET preparation_status = 'confirmed', started_at = ?,
                        knowledge_card_confirmed_at = ?, knowledge_card_skipped_at = ?,
                        knowledge_card_status = ?, subtitle_confirmed_at = ?,
+                       playback_unlocked_at = ?, fear_unprotected_confirmed_at = ?,
                        updated_at = ?, expires_at = ?
                  WHERE id = ?
                 """,
@@ -796,6 +1290,8 @@ def start_session(
                     skipped_at,
                     "skipped" if action == "skip" else card_status,
                     now_iso,
+                    now_iso if should_unlock else "",
+                    unprotected_at,
                     now_iso,
                     _iso(now + ACTIVE_TTL),
                     session_id,
@@ -818,20 +1314,20 @@ def end_session(session_id: str) -> dict:
             row = _get_session_row(conn, session_id)
             if row is None:
                 raise KeyError("watch_session_not_found")
-            conn.execute(
-                """
-                UPDATE watch_sessions
-                   SET status = 'ended', is_playing = 0, ended_at = ?, updated_at = ?, expires_at = ?
-                 WHERE id = ?
-                """,
-                (now_iso, now_iso, _iso(now + ENDED_TTL), session_id),
+            cleanup = _end_session_state(
+                conn,
+                session_id=session_id,
+                now_iso=now_iso,
+                reason="session_ended",
             )
             updated = _get_session_row(conn, session_id)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return _row_to_session(updated)
+    session = _row_to_session(updated)
+    session["end_cleanup"] = cleanup
+    return session
 
 
 def _section_to_dict(row: Any) -> dict:
@@ -1364,7 +1860,7 @@ def get_status(session_id: str) -> dict | None:
             if str(analysis.get("status") or "") != "ready"
             else "coverage_below_required"
         )
-    return {
+    status = {
         "session_id": session["session_id"],
         "media_id": session["media"]["id"],
         "status": session["playback"]["status"],
@@ -1390,3 +1886,5 @@ def get_status(session_id: str) -> dict | None:
         ),
         "updated_at": session["updated_at"],
     }
+    status["start_gate"] = get_start_gate(session)
+    return status

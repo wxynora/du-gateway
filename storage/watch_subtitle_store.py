@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from config import WATCH_ANALYSIS_JOB_MAX_ATTEMPTS
+from services.watch_subtitles import parse_subtitle_cues
 from storage import runtime_sqlite, watch_analysis_store, watch_knowledge_store
 
 
@@ -79,6 +80,16 @@ def ensure_lookup_job(session: dict, *, force: bool = False) -> tuple[dict, bool
         raise ValueError("作品资料尚未准备完成，不能开始查找字幕")
     current = _lookup(session)
     current_status = str(current.get("status") or "pending")
+    media = session.get("media") if isinstance(session.get("media"), dict) else {}
+    if str(media.get("source") or "") == "local_file":
+        if current_status in TERMINAL_STATUSES:
+            from storage import watch_runtime_store
+
+            watch_runtime_store.update_preparation_state(
+                session_id,
+                status="ready_to_confirm",
+            )
+        return {}, False
     if current_status == "searching" and not force:
         existing = _active_job(session_id)
         return existing or {}, False
@@ -88,7 +99,6 @@ def ensure_lookup_job(session: dict, *, force: bool = False) -> tuple[dict, bool
     original_title, year = _identity(session)
     lookup_id = f"watch_subtitle_lookup_{uuid4().hex}"
     job_id = f"watch_job_{uuid4().hex}"
-    media = session.get("media") if isinstance(session.get("media"), dict) else {}
     retry_suffix = uuid4().hex if force else "initial"
     idempotency_key = (
         f"subtitle:{session_id}:{media.get('id') or ''}:{original_title.casefold()}:{year}:{retry_suffix}"
@@ -115,13 +125,18 @@ def ensure_lookup_job(session: dict, *, force: bool = False) -> tuple[dict, bool
         conn.execute("BEGIN IMMEDIATE")
         try:
             row = conn.execute(
-                "SELECT status, started_at, media_id FROM watch_sessions WHERE id = ?",
+                "SELECT status, started_at, media_id, client_lease_expires_at FROM watch_sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
             if row is None:
                 raise KeyError("watch_session_not_found")
             if str(row["status"] or "") == "ended" or str(row["started_at"] or ""):
                 raise ValueError("字幕只能在正式开始前准备")
+            if (
+                not str(row["client_lease_expires_at"] or "")
+                or str(row["client_lease_expires_at"] or "") <= now_iso
+            ):
+                raise ValueError("客户端租约已过期，不能新建字幕任务")
             conn.execute(
                 """
                 INSERT INTO watch_analysis_jobs (
@@ -184,16 +199,34 @@ def commit_lookup_result(job: dict, result: dict) -> dict:
         conn.execute("BEGIN IMMEDIATE")
         try:
             running = conn.execute(
-                "SELECT 1 FROM watch_analysis_jobs WHERE id = ? AND status = 'running' AND lease_token = ?",
+                "SELECT cancel_requested FROM watch_analysis_jobs WHERE id = ? AND status = 'running' AND lease_token = ?",
                 (job_id, lease_token),
             ).fetchone()
             row = conn.execute(
                 "SELECT * FROM watch_sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
-            if running is None or row is None or str(row["status"] or "") == "ended":
+            if running is None:
                 conn.execute("ROLLBACK")
-                return {"applied": False, "reason": "lease_or_session_lost"}
+                return {"applied": False, "reason": "lease_lost"}
+            if bool(running["cancel_requested"]):
+                rejection_reason = "cancel_requested"
+            elif row is None or str(row["status"] or "") == "ended":
+                rejection_reason = "session_ended"
+            elif (
+                not str(row["client_lease_expires_at"] or "")
+                or str(row["client_lease_expires_at"] or "") <= now_iso
+            ):
+                rejection_reason = "client_lease_expired"
+            else:
+                rejection_reason = ""
+            if rejection_reason:
+                conn.execute(
+                    "UPDATE watch_analysis_jobs SET status = 'cancelled', cancel_requested = 1, cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END, cancel_reason = ?, error = ?, finished_at = ?, updated_at = ?, lease_token = '', leased_until = '' WHERE id = ?",
+                    (now_iso, rejection_reason, rejection_reason, now_iso, now_iso, job_id),
+                )
+                conn.execute("COMMIT")
+                return {"applied": False, "reason": rejection_reason}
             current = runtime_sqlite.json_loads(row["subtitle_lookup_json"], {})
             lookup_id = _text(current.get("lookup_id"), 160)
             if not lookup_id or _text(current.get("_job_id"), 160) != job_id:
@@ -289,11 +322,40 @@ def fail_lookup_job(job: dict, error: str, *, retryable: bool) -> str:
         conn.execute("BEGIN IMMEDIATE")
         try:
             row = conn.execute(
-                "SELECT attempts, max_attempts FROM watch_analysis_jobs WHERE id = ? AND status = 'running' AND lease_token = ?",
+                "SELECT attempts, max_attempts, cancel_requested FROM watch_analysis_jobs WHERE id = ? AND status = 'running' AND lease_token = ?",
                 (job_id, lease_token),
             ).fetchone()
             if row is None:
                 conn.execute("ROLLBACK")
+                return "cancelled"
+            session_state = conn.execute(
+                "SELECT status, client_lease_expires_at FROM watch_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if bool(row["cancel_requested"]):
+                cancellation_reason = "cancel_requested"
+            elif session_state is None or str(session_state["status"] or "") == "ended":
+                cancellation_reason = "session_ended"
+            elif (
+                not str(session_state["client_lease_expires_at"] or "")
+                or str(session_state["client_lease_expires_at"] or "") <= now_iso
+            ):
+                cancellation_reason = "client_lease_expired"
+            else:
+                cancellation_reason = ""
+            if cancellation_reason:
+                conn.execute(
+                    "UPDATE watch_analysis_jobs SET status = 'cancelled', cancel_requested = 1, cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END, cancel_reason = ?, error = ?, finished_at = ?, updated_at = ?, leased_until = '', lease_token = '' WHERE id = ?",
+                    (
+                        now_iso,
+                        cancellation_reason,
+                        cancellation_reason,
+                        now_iso,
+                        now_iso,
+                        job_id,
+                    ),
+                )
+                conn.execute("COMMIT")
                 return "cancelled"
             should_retry = retryable and int(row["attempts"] or 0) < int(row["max_attempts"] or 1)
             if should_retry:
@@ -342,13 +404,26 @@ def reset_lookup(session_id: str) -> dict:
     with runtime_sqlite.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            session_row = conn.execute(
+                "SELECT status, started_at, client_lease_expires_at FROM watch_sessions WHERE id = ?",
+                (_text(session_id, 160),),
+            ).fetchone()
+            if session_row is None or str(session_row["status"] or "") == "ended":
+                raise ValueError("观看会话已经结束")
+            if str(session_row["started_at"] or ""):
+                raise ValueError("字幕只能在正式开始前重新查找")
+            if (
+                not str(session_row["client_lease_expires_at"] or "")
+                or str(session_row["client_lease_expires_at"] or "") <= now_iso
+            ):
+                raise ValueError("客户端租约已过期，不能重建字幕任务")
             conn.execute(
-                "UPDATE watch_analysis_jobs SET status = 'cancelled', error = 'subtitle_lookup_reset', finished_at = ?, updated_at = ?, leased_until = '', lease_token = '' WHERE session_id = ? AND purpose = 'subtitle_lookup' AND status IN ('queued', 'running')",
-                (now_iso, now_iso, _text(session_id, 160)),
+                "UPDATE watch_analysis_jobs SET status = 'cancelled', cancel_requested = 1, cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END, cancel_reason = 'subtitle_lookup_reset', error = 'subtitle_lookup_reset', finished_at = ?, updated_at = ?, leased_until = '', lease_token = '' WHERE session_id = ? AND purpose = 'subtitle_lookup' AND status IN ('queued', 'running')",
+                (now_iso, now_iso, now_iso, _text(session_id, 160)),
             )
             conn.execute("DELETE FROM watch_subtitle_assets WHERE session_id = ?", (_text(session_id, 160),))
             conn.execute(
-                "UPDATE watch_sessions SET subtitle_lookup_json = '{}', subtitle_asset_id = '', subtitle_confirmed_at = '', updated_at = ? WHERE id = ? AND started_at = ''",
+                "UPDATE watch_sessions SET subtitle_lookup_json = '{}', subtitle_asset_id = '', subtitle_confirmed_at = '', updated_at = ? WHERE id = ? AND status != 'ended' AND started_at = ''",
                 (now_iso, _text(session_id, 160)),
             )
             conn.execute("COMMIT")
@@ -363,6 +438,162 @@ def reset_lookup(session_id: str) -> dict:
 def retry_lookup(session: dict) -> tuple[dict, bool]:
     reset = reset_lookup(str(session.get("session_id") or ""))
     return ensure_lookup_job(reset, force=True)
+
+
+def commit_local_subtitle(
+    session: dict,
+    *,
+    media_revision: str,
+    subtitle_text: str,
+    subtitle_format: str,
+    track_id: str,
+) -> dict:
+    session_id = _text(session.get("session_id"), 160)
+    media = session.get("media") if isinstance(session.get("media"), dict) else {}
+    local_media = media.get("local_media") if isinstance(media.get("local_media"), dict) else {}
+    selected = local_media.get("selected_subtitle") if isinstance(local_media.get("selected_subtitle"), dict) else {}
+    if str(media.get("source") or "") != "local_file":
+        raise ValueError("本地字幕接口只适用于 local_file 会话")
+    if str((session.get("preparation") or {}).get("started_at") or ""):
+        raise ValueError("本地字幕只能在正式开始前提交")
+    if str(media_revision or "") != str(local_media.get("media_revision") or ""):
+        raise ValueError("本地文件版本已经变化，请重新选择文件")
+    kind = str(selected.get("kind") or "none")
+    if kind not in {"embedded", "external"}:
+        raise ValueError("当前会话没有选择需要提交的本地字幕")
+    expected_format = str(selected.get("format") or "").lower()
+    if str(subtitle_format or "").lower() != expected_format:
+        raise ValueError("提交的字幕格式与当前选择不一致")
+    expected_track_id = str(selected.get("track_id") or "")
+    if expected_track_id and str(track_id or "") != expected_track_id:
+        raise ValueError("提交的字幕轨与当前播放器选择不一致")
+    cues = parse_subtitle_cues(
+        subtitle_text,
+        offset_ms=int(selected.get("offset_ms") or 0),
+    )
+    if not cues:
+        raise ValueError("本地字幕没有解析出可用时间轴")
+    now = _now()
+    now_iso = _iso(now)
+    expires_at = _iso(now + ASSET_TTL)
+    asset_id = f"watch_subtitle_asset_{uuid4().hex}"
+    lookup = _lookup(session)
+    lookup_id = _text(lookup.get("lookup_id"), 160) or f"watch_subtitle_lookup_{uuid4().hex}"
+    coverage_start_ms = max(0, int(float(cues[0].get("start") or 0) * 1000))
+    coverage_end_ms = max(
+        coverage_start_ms,
+        int(float(cues[-1].get("end") or 0) * 1000),
+    )
+    public_lookup = {
+        "lookup_id": lookup_id,
+        "status": "found",
+        "provider": f"local_{kind}",
+        "query_title": "",
+        "language_codes": [selected.get("language")] if selected.get("language") else [],
+        "release_name": str(selected.get("label") or ""),
+        "format": expected_format,
+        "cue_count": len(cues),
+        "coverage_start_ms": coverage_start_ms,
+        "coverage_end_ms": coverage_end_ms,
+        "message": "已载入所选本地字幕",
+        "error": "",
+        "can_retry": False,
+    }
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT status, started_at, media_id, knowledge_card_status FROM watch_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None or str(row["status"] or "") == "ended":
+                raise KeyError("watch_session_not_found")
+            if str(row["started_at"] or ""):
+                raise ValueError("本地字幕只能在正式开始前提交")
+            conn.execute("DELETE FROM watch_subtitle_assets WHERE session_id = ?", (session_id,))
+            conn.execute(
+                """
+                INSERT INTO watch_subtitle_assets (
+                    id, session_id, media_id, provider, query_title, year,
+                    language_codes_json, release_name, format, cues_json,
+                    cue_count, coverage_start_ms, coverage_end_ms, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, '', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    asset_id,
+                    session_id,
+                    str(row["media_id"] or ""),
+                    f"local_{kind}",
+                    runtime_sqlite.json_dumps(public_lookup["language_codes"]),
+                    public_lookup["release_name"],
+                    expected_format,
+                    runtime_sqlite.json_dumps(cues),
+                    len(cues),
+                    coverage_start_ms,
+                    coverage_end_ms,
+                    now_iso,
+                    expires_at,
+                ),
+            )
+            preparation_status = (
+                "ready_to_confirm"
+                if str(row["knowledge_card_status"] or "") in {"ready", "not_required", "failed"}
+                else "searching_subtitles"
+            )
+            conn.execute(
+                """
+                UPDATE watch_sessions
+                   SET preparation_status = ?, subtitle_lookup_json = ?,
+                       subtitle_asset_id = ?, subtitle_confirmed_at = '',
+                       updated_at = ?, expires_at = ?
+                 WHERE id = ?
+                """,
+                (
+                    preparation_status,
+                    runtime_sqlite.json_dumps(public_lookup),
+                    asset_id,
+                    now_iso,
+                    expires_at,
+                    session_id,
+                ),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return public_lookup
+
+
+def enrich_samples_with_subtitles(session: dict, job: dict, samples: list[dict]) -> list[dict]:
+    asset = get_asset_for_session(session)
+    cues = asset.get("cues") if isinstance(asset.get("cues"), list) else []
+    if not cues:
+        return samples
+    timestamps = sorted({int(item.get("at_ms") or 0) for item in samples})
+    range_end_ms = int(job.get("range_end_ms") or (timestamps[-1] if timestamps else 0))
+    out: list[dict] = []
+    for item in samples:
+        if str(item.get("subtitle") or "").strip():
+            out.append(item)
+            continue
+        start_ms = int(item.get("at_ms") or 0)
+        later = [value for value in timestamps if value > start_ms]
+        end_ms = min(later) if later else max(start_ms + 1000, range_end_ms)
+        start_seconds = start_ms / 1000.0
+        end_seconds = end_ms / 1000.0
+        texts = [
+            str(cue.get("text") or "").strip()
+            for cue in cues
+            if float(cue.get("end") or 0) >= start_seconds - 0.2
+            and float(cue.get("start") or 0) < end_seconds
+        ]
+        out.append(
+            {
+                **item,
+                "subtitle": " ".join(dict.fromkeys(text for text in texts if text)),
+            }
+        )
+    return out
 
 
 def get_asset_for_session(session: dict) -> dict:

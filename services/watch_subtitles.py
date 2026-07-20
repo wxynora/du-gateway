@@ -35,6 +35,59 @@ def _decode_subtitle(payload: bytes) -> str:
     return payload.decode("utf-8", errors="replace")
 
 
+def decode_subtitle_bytes(payload: bytes) -> str:
+    return _decode_subtitle(bytes(payload or b""))
+
+
+def _timestamp_seconds(value: str) -> float | None:
+    normalized = str(value or "").strip().replace(",", ".")
+    parts = normalized.split(":")
+    if len(parts) not in {2, 3}:
+        return None
+    try:
+        seconds = float(parts[-1])
+        minutes = int(parts[-2])
+        hours = int(parts[-3]) if len(parts) == 3 else 0
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, hours * 3600 + minutes * 60 + seconds)
+
+
+def parse_subtitle_cues(text: str, *, offset_ms: int = 0) -> list[dict]:
+    lines = str(text or "").replace("\r\n", "\n").split("\n")
+    offset_seconds = int(offset_ms) / 1000.0
+    cues: list[dict] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index].strip()
+        if "-->" not in line:
+            index += 1
+            continue
+        left, right = (part.strip().split(" ", 1)[0] for part in line.split("-->", 1))
+        start = _timestamp_seconds(left)
+        end = _timestamp_seconds(right)
+        index += 1
+        content: list[str] = []
+        while index < len(lines) and lines[index].strip():
+            cleaned = re.sub(r"<[^>]+>", "", lines[index]).strip()
+            if cleaned:
+                content.append(cleaned)
+            index += 1
+        if start is not None and end is not None:
+            shifted_start = max(0.0, start + offset_seconds)
+            shifted_end = max(0.0, end + offset_seconds)
+            if shifted_end > shifted_start and content:
+                cues.append(
+                    {
+                        "start": shifted_start,
+                        "end": shifted_end,
+                        "text": " ".join(content),
+                    }
+                )
+        index += 1
+    return cues
+
+
 def _subtitle_text_from_download(payload: bytes, *, name: str) -> str:
     if not payload:
         return ""

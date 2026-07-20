@@ -26,6 +26,7 @@ from services.watch_analysis_source import (
     get_watch_analysis_source,
     watch_analysis_source_health,
 )
+from services.watch_subtitles import decode_subtitle_bytes
 from storage import (
     watch_analysis_store,
     watch_knowledge_store,
@@ -93,12 +94,25 @@ def _analysis_upload_body() -> tuple[dict | None, Any | None]:
     for index, sample in enumerate(samples):
         if not isinstance(sample, dict):
             continue
-        field = str(sample.get("file_field") or f"frame_{index}").strip()
+        kind = str(sample.get("kind") or "image").strip().lower()
+        field = str(
+            sample.get("file_field")
+            or (f"audio_{index}" if kind == "audio" else f"frame_{index}")
+        ).strip()
         uploaded = request.files.get(field)
         if uploaded is None:
             continue
-        sample["image_bytes"] = uploaded.stream.read(int(WATCH_ANALYSIS_MAX_REQUEST_BYTES) + 1)
-        sample["mime_type"] = str(sample.get("mime_type") or uploaded.mimetype or "image/jpeg")
+        payload = uploaded.stream.read(int(WATCH_ANALYSIS_MAX_REQUEST_BYTES) + 1)
+        if kind == "audio":
+            sample["audio_bytes"] = payload
+            sample["mime_type"] = str(
+                sample.get("mime_type") or uploaded.mimetype or "audio/mpeg"
+            )
+        else:
+            sample["image_bytes"] = payload
+            sample["mime_type"] = str(
+                sample.get("mime_type") or uploaded.mimetype or "image/jpeg"
+            )
     return body, None
 
 
@@ -241,6 +255,10 @@ def register_routes(bp):
         _session, error = _owned_session(session_id)
         if error is not None:
             return error
+        try:
+            _session = watch_runtime_store.touch_client_lease(session_id)
+        except (KeyError, ValueError) as exc:
+            return _json_error(str(exc), "watch_session_lease_failed", 409)
         status = watch_runtime_store.get_status(session_id)
         if status is None:
             return _json_error("观看会话不存在或已过期", "watch_session_not_found", 404)
@@ -285,6 +303,24 @@ def register_routes(bp):
         status["preparation"] = preparation
         return jsonify({"ok": True, **status})
 
+    @bp.route("/watch/sessions/<session_id>/heartbeat", methods=["POST"])
+    def miniapp_watch_session_heartbeat(session_id: str):
+        _session, error = _owned_session(session_id)
+        if error is not None:
+            return error
+
+        def _heartbeat():
+            session = watch_runtime_store.touch_client_lease(session_id)
+            return jsonify(
+                {
+                    "ok": True,
+                    "session_id": session_id,
+                    "client_lease": session.get("client_lease") or {},
+                }
+            )
+
+        return _handle_store_error(_heartbeat)
+
     @bp.route("/watch/sessions/<session_id>/start", methods=["POST"])
     def miniapp_watch_session_start(session_id: str):
         _session, error = _owned_session(session_id)
@@ -294,7 +330,10 @@ def register_routes(bp):
         if error is not None:
             return error
         action = str(body.get("knowledge_card_action") or "").strip().lower()
-        if action not in {"confirm", "skip"}:
+        already_started = bool(
+            str(((_session.get("preparation") or {}).get("started_at")) or "").strip()
+        )
+        if not already_started and action not in {"confirm", "skip"}:
             return _json_error(
                 "knowledge_card_action 必须是 confirm 或 skip",
                 "watch_start_action_required",
@@ -302,13 +341,21 @@ def register_routes(bp):
             )
 
         def _start():
+            watch_runtime_store.touch_client_lease(session_id)
             session = watch_runtime_store.start_session(
                 session_id,
                 knowledge_card_action=action,
                 knowledge_card_key=str(body.get("knowledge_card_key") or "").strip(),
                 subtitle_lookup_id=str(body.get("subtitle_lookup_id") or "").strip(),
+                protection_action=str(body.get("protection_action") or "wait").strip(),
             )
-            return jsonify({"ok": True, "session": session})
+            return jsonify(
+                {
+                    "ok": True,
+                    "session": session,
+                    "start_gate": watch_runtime_store.get_start_gate(session),
+                }
+            )
 
         return _handle_store_error(_start)
 
@@ -327,8 +374,15 @@ def register_routes(bp):
             )
 
         def _retry():
-            watch_subtitle_store.reset_lookup(session_id)
-            job = watch_knowledge_store.retry_knowledge_job(session)
+            live_session = watch_runtime_store.touch_client_lease(session_id)
+            media = (
+                live_session.get("media")
+                if isinstance(live_session.get("media"), dict)
+                else {}
+            )
+            if str(media.get("source") or "") != "local_file":
+                watch_subtitle_store.reset_lookup(session_id)
+            job = watch_knowledge_store.retry_knowledge_job(live_session)
             return jsonify({"ok": True, "job": job}), 202
 
         return _handle_store_error(_retry)
@@ -344,25 +398,125 @@ def register_routes(bp):
                 "watch_subtitles_already_started",
                 409,
             )
+        media = session.get("media") if isinstance(session.get("media"), dict) else {}
+        if str(media.get("source") or "") == "local_file":
+            return _json_error(
+                "本地字幕由客户端选择并提交，请重新提交当前字幕轨",
+                "watch_local_subtitle_retry_not_supported",
+                409,
+            )
 
         def _retry():
-            job, _created = watch_subtitle_store.retry_lookup(session)
+            live_session = watch_runtime_store.touch_client_lease(session_id)
+            job, _created = watch_subtitle_store.retry_lookup(live_session)
             return jsonify({"ok": True, "job": job}), 202
 
         return _handle_store_error(_retry)
+
+    @bp.route("/watch/sessions/<session_id>/local-subtitles", methods=["POST"])
+    def miniapp_watch_local_subtitles(session_id: str):
+        session, error = _owned_session(session_id)
+        if error is not None:
+            return error
+        media = session.get("media") if isinstance(session.get("media"), dict) else {}
+        if str(media.get("source") or "") != "local_file":
+            return _json_error(
+                "本地字幕接口只适用于 local_file 会话",
+                "watch_local_subtitle_source_invalid",
+                400,
+            )
+        if request.content_length and request.content_length > int(WATCH_ANALYSIS_MAX_REQUEST_BYTES):
+            return _json_error(
+                "本地字幕请求体超过大小限制",
+                "watch_local_subtitle_too_large",
+                413,
+            )
+        if request.is_json:
+            body, error = _json_body()
+            if error is not None:
+                return error
+            subtitle_text = str(body.get("subtitle_text") or "")
+        else:
+            raw_metadata = str(request.form.get("metadata") or "").strip()
+            try:
+                body = json.loads(raw_metadata) if raw_metadata else {}
+            except Exception:
+                return _json_error(
+                    "本地字幕 metadata JSON 无效",
+                    "watch_local_subtitle_metadata_invalid",
+                    400,
+                )
+            if not isinstance(body, dict):
+                return _json_error(
+                    "本地字幕 metadata 必须是对象",
+                    "watch_local_subtitle_metadata_invalid",
+                    400,
+                )
+            uploaded = request.files.get("subtitle")
+            if uploaded is None:
+                return _json_error(
+                    "multipart 请求缺少 subtitle 文件",
+                    "watch_local_subtitle_file_required",
+                    400,
+                )
+            subtitle_payload = uploaded.stream.read(
+                int(WATCH_ANALYSIS_MAX_REQUEST_BYTES) + 1
+            )
+            if len(subtitle_payload) > int(WATCH_ANALYSIS_MAX_REQUEST_BYTES):
+                return _json_error(
+                    "本地字幕请求体超过大小限制",
+                    "watch_local_subtitle_too_large",
+                    413,
+                )
+            subtitle_text = decode_subtitle_bytes(subtitle_payload)
+
+        def _commit():
+            watch_runtime_store.touch_client_lease(session_id)
+            lookup = watch_subtitle_store.commit_local_subtitle(
+                session,
+                media_revision=str(body.get("media_revision") or "").strip(),
+                subtitle_text=subtitle_text,
+                subtitle_format=str(body.get("format") or "").strip().lower(),
+                track_id=str(body.get("track_id") or "").strip(),
+            )
+            return jsonify({"ok": True, "subtitle_lookup": lookup}), 201
+
+        return _handle_store_error(_commit)
 
     @bp.route("/watch/sessions/<session_id>/analysis/samples", methods=["POST"])
     def miniapp_watch_analysis_samples(session_id: str):
         session, error = _owned_session(session_id)
         if error is not None:
             return error
+        try:
+            session = watch_runtime_store.touch_client_lease(session_id)
+        except (KeyError, ValueError) as exc:
+            return _json_error(str(exc), "watch_session_lease_failed", 409)
         if not WATCH_ANALYSIS_ENABLED:
             return _json_error("一起看分析器未启用", "watch_analysis_disabled", 503)
         body, error = _analysis_upload_body()
         if error is not None:
             return error
         purpose = str(body.get("purpose") or "rolling").strip().lower()
+        raw_samples = body.get("samples")
+        if not isinstance(raw_samples, list):
+            return _json_error("samples 必须是数组", "watch_samples_invalid", 400)
+        media = session.get("media") if isinstance(session.get("media"), dict) else {}
+        is_local_file = str(media.get("source") or "") == "local_file"
+        client_plan: dict = {}
+        actual_range_start_ms: int | None = None
+        actual_range_end_ms: int | None = None
+        plan_id = ""
         idempotency_key = str(body.get("idempotency_key") or "").strip()
+        if is_local_file:
+            plan_id = str(body.get("plan_id") or "").strip()
+            if not plan_id:
+                return _json_error(
+                    "本地视频样本必须携带 plan_id",
+                    "watch_samples_plan_required",
+                    400,
+                )
+            idempotency_key = f"watch-local-plan:{plan_id}"
         if idempotency_key:
             existing = watch_analysis_store.get_job_by_idempotency(idempotency_key, public=True)
             if existing:
@@ -376,9 +530,66 @@ def register_routes(bp):
         current_epoch = int((session.get("playback") or {}).get("timeline_epoch") or 0)
         if requested_epoch != current_epoch:
             return _json_error("播放时间轴已经变化，请重新采样", "watch_samples_stale_epoch", 409)
-        raw_samples = body.get("samples")
-        if not isinstance(raw_samples, list):
-            return _json_error("samples 必须是数组", "watch_samples_invalid", 400)
+        if is_local_file:
+            try:
+                actual_range_start_ms = int(body.get("actual_range_start_ms"))
+                actual_range_end_ms = int(body.get("actual_range_end_ms"))
+            except (TypeError, ValueError):
+                return _json_error(
+                    "本地视频样本必须报告实际起止时间",
+                    "watch_samples_actual_range_required",
+                    400,
+                )
+            try:
+                client_plan = watch_analysis_store.validate_client_sample_plan(
+                    session,
+                    plan_id=plan_id,
+                    purpose=purpose,
+                    media_revision=str(body.get("media_revision") or "").strip(),
+                    actual_range_start_ms=actual_range_start_ms,
+                    actual_range_end_ms=actual_range_end_ms,
+                    sample_timestamps_ms=[
+                        int(item.get("at_ms") or 0)
+                        for item in raw_samples
+                        if isinstance(item, dict)
+                    ],
+                )
+            except (TypeError, ValueError) as exc:
+                return _json_error(str(exc), "watch_samples_plan_invalid", 409)
+            audio_samples = [
+                item
+                for item in raw_samples
+                if isinstance(item, dict)
+                and (
+                    str(item.get("kind") or "").strip().lower() == "audio"
+                    or item.get("audio_bytes") is not None
+                )
+            ]
+            selected_audio = (
+                (media.get("local_media") or {}).get("selected_audio")
+                if isinstance(media.get("local_media"), dict)
+                else {}
+            )
+            selected_audio_track_id = str((selected_audio or {}).get("track_id") or "")
+            if audio_samples and str(body.get("audio_track_id") or "") != selected_audio_track_id:
+                return _json_error(
+                    "上传音频轨与当前播放器选择不一致",
+                    "watch_samples_audio_track_mismatch",
+                    409,
+                )
+            current_plan = watch_analysis_store.build_sample_plan(session)
+            if current_plan.get("plan_id") != client_plan.get("plan_id"):
+                return _json_error(
+                    "本地取材计划已经更新，请按新计划重新导出",
+                    "watch_samples_plan_replaced",
+                    409,
+                )
+            if bool(current_plan.get("audio_required")) and not audio_samples:
+                return _json_error(
+                    "当前滚动计划需要所选音轨的短音频",
+                    "watch_samples_audio_required",
+                    400,
+                )
         prepared: list[dict] = []
         try:
             prepared = prepare_samples(
@@ -395,6 +606,9 @@ def register_routes(bp):
                 samples=prepared,
                 idempotency_key=idempotency_key,
                 priority=int(body.get("priority") or 0),
+                range_start_ms=actual_range_start_ms,
+                range_end_ms=actual_range_end_ms,
+                client_plan_id=plan_id if is_local_file else "",
             )
             if not created:
                 purge_prepared_samples(prepared)
@@ -404,7 +618,10 @@ def register_routes(bp):
             return _json_error(str(exc), "watch_samples_invalid", 400)
         except ValueError as exc:
             purge_prepared_samples(prepared)
-            status = 409 if "时间轴" in str(exc) else 400
+            status = 409 if any(
+                marker in str(exc)
+                for marker in ("时间轴", "取材计划", "客户端租约")
+            ) else 400
             return _json_error(str(exc), "watch_analysis_enqueue_failed", status)
         except Exception:
             purge_prepared_samples(prepared)
@@ -514,12 +731,14 @@ def register_routes(bp):
 
         def _end():
             session = watch_runtime_store.end_session(session_id)
-            watch_analysis_store.cancel_stale_jobs(
-                session_id,
-                current_epoch=None,
-                reason="session_ended",
-            )
+            samples_purged = watch_analysis_store.purge_session_samples(session_id)
             watch_visual_store.delete_session_frames(session_id)
-            return jsonify({"ok": True, "session": session})
+            return jsonify(
+                {
+                    "ok": True,
+                    "session": session,
+                    "samples_purged": samples_purged,
+                }
+            )
 
         return _handle_store_error(_end)

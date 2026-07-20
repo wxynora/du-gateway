@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -10,18 +12,22 @@ from uuid import uuid4
 from PIL import Image, ImageOps
 
 from config import (
+    WATCH_ANALYSIS_AUDIO_BITRATE_KBPS,
+    WATCH_ANALYSIS_AUDIO_SAMPLE_RATE,
+    WATCH_ANALYSIS_FFMPEG_BIN,
     WATCH_ANALYSIS_MAX_AUDIO_BYTES,
     WATCH_ANALYSIS_MAX_FRAMES_PER_JOB,
     WATCH_ANALYSIS_MAX_LONG_EDGE,
     WATCH_ANALYSIS_MAX_REQUEST_BYTES,
     WATCH_ANALYSIS_MAX_SAMPLE_BYTES,
     WATCH_ANALYSIS_SAMPLE_DIR,
+    WATCH_ANALYSIS_SOURCE_TIMEOUT_SECONDS,
 )
 
 
 ALLOWED_PURPOSES = {"identify", "timeline_prepass", "rolling"}
 ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
-ALLOWED_AUDIO_MIME_TYPES = {"audio/mpeg", "audio/mp3"}
+ALLOWED_AUDIO_MIME_TYPES = {"audio/mpeg", "audio/mp3", "audio/aac", "audio/mp4"}
 
 
 class WatchAnalysisSampleError(ValueError):
@@ -100,12 +106,56 @@ def _prepare_image(image_bytes: bytes, mime_type: str) -> tuple[bytes, int, int,
 def _prepare_audio(audio_bytes: bytes, mime_type: str) -> bytes:
     if not audio_bytes:
         raise WatchAnalysisSampleError("音频内容为空")
-    if len(audio_bytes) > int(WATCH_ANALYSIS_MAX_AUDIO_BYTES):
-        raise WatchAnalysisSampleError("单段音频超过大小限制")
     normalized_mime = str(mime_type or "audio/mpeg").strip().lower()
     if normalized_mime not in ALLOWED_AUDIO_MIME_TYPES:
-        raise WatchAnalysisSampleError("只接受 MP3 音频")
-    return bytes(audio_bytes)
+        raise WatchAnalysisSampleError("只接受 MP3、AAC 或 MP4 音频")
+    if normalized_mime in {"audio/mpeg", "audio/mp3"}:
+        if len(audio_bytes) > int(WATCH_ANALYSIS_MAX_AUDIO_BYTES):
+            raise WatchAnalysisSampleError("单段 MP3 音频超过大小限制")
+        return bytes(audio_bytes)
+    if len(audio_bytes) > int(WATCH_ANALYSIS_MAX_REQUEST_BYTES):
+        raise WatchAnalysisSampleError("待转换音频超过请求大小限制")
+    ffmpeg = WATCH_ANALYSIS_FFMPEG_BIN or shutil.which("ffmpeg") or ""
+    if not ffmpeg:
+        raise WatchAnalysisSampleError("后端未安装 ffmpeg，无法转换本地音频")
+    command = [
+        ffmpeg,
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        "pipe:0",
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(int(WATCH_ANALYSIS_AUDIO_SAMPLE_RATE)),
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        f"{int(WATCH_ANALYSIS_AUDIO_BITRATE_KBPS)}k",
+        "-f",
+        "mp3",
+        "pipe:1",
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            input=audio_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=int(WATCH_ANALYSIS_SOURCE_TIMEOUT_SECONDS),
+            check=False,
+        )
+    except Exception as exc:
+        raise WatchAnalysisSampleError("本地音频转换失败") from exc
+    prepared = bytes(completed.stdout or b"")
+    if completed.returncode != 0 or not prepared:
+        raise WatchAnalysisSampleError("本地音频无法解码或转换")
+    if len(prepared) > int(WATCH_ANALYSIS_MAX_AUDIO_BYTES):
+        raise WatchAnalysisSampleError("转换后的 MP3 音频超过大小限制")
+    return prepared
 
 
 def prepare_samples(

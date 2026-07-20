@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from config import (
+    WATCH_ANALYSIS_CLIENT_PLAN_TTL_SECONDS,
     WATCH_ANALYSIS_DAILY_MAX_COST_USD,
     WATCH_ANALYSIS_FEAR_READY_BUFFER_MS,
     WATCH_ANALYSIS_FORWARD_WINDOW_MS,
@@ -71,6 +72,9 @@ def _row_to_job(row: Any, *, public: bool = False) -> dict:
         "updated_at": str(row["updated_at"] or ""),
         "started_at": str(row["started_at"] or ""),
         "finished_at": str(row["finished_at"] or ""),
+        "cancel_requested": bool(row["cancel_requested"]),
+        "cancel_requested_at": str(row["cancel_requested_at"] or ""),
+        "cancel_reason": str(row["cancel_reason"] or ""),
         "error": str(row["error"] or ""),
     }
     if not public:
@@ -168,6 +172,9 @@ def enqueue_samples(
     samples: list[dict],
     idempotency_key: str = "",
     priority: int = 0,
+    range_start_ms: int | None = None,
+    range_end_ms: int | None = None,
+    client_plan_id: str = "",
 ) -> tuple[dict, bool]:
     session_id = str(session.get("session_id") or "").strip()
     media_id = str((session.get("media") or {}).get("id") or "").strip()
@@ -189,19 +196,28 @@ def enqueue_samples(
     now_iso = _iso(now)
     expires_at = _iso(now + timedelta(seconds=int(WATCH_ANALYSIS_SAMPLE_TTL_SECONDS)))
     sample_ids = [str(item.get("id") or "") for item in samples]
-    range_start = min(int(item.get("at_ms") or 0) for item in samples)
-    range_end = max(int(item.get("at_ms") or 0) for item in samples)
+    sample_range_start = min(int(item.get("at_ms") or 0) for item in samples)
+    sample_range_end = max(int(item.get("at_ms") or 0) for item in samples)
+    range_start = sample_range_start if range_start_ms is None else _int(range_start_ms, 0)
+    range_end = sample_range_end if range_end_ms is None else _int(range_end_ms, 0)
+    if range_end < range_start:
+        raise ValueError("分析任务结束时间不能早于开始时间")
     input_bytes = sum(int(item.get("byte_size") or 0) for item in samples)
     job_id = f"watch_analysis_{uuid4().hex}"
     with runtime_sqlite.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
             current = conn.execute(
-                "SELECT media_id, timeline_epoch, status FROM watch_sessions WHERE id = ? AND expires_at > ?",
+                "SELECT media_id, timeline_epoch, status, client_lease_expires_at FROM watch_sessions WHERE id = ? AND expires_at > ?",
                 (session_id, now_iso),
             ).fetchone()
             if current is None or str(current["status"] or "") == "ended":
                 raise ValueError("观看会话不可分析")
+            if (
+                not str(current["client_lease_expires_at"] or "")
+                or str(current["client_lease_expires_at"] or "") <= now_iso
+            ):
+                raise ValueError("客户端租约已过期，不能新建分析任务")
             if str(current["media_id"] or "") != media_id or int(current["timeline_epoch"] or 0) != timeline_epoch:
                 raise ValueError("播放时间轴已经变化，请重新采样")
             count = int(
@@ -220,6 +236,26 @@ def enqueue_samples(
             if duplicate is not None:
                 conn.execute("COMMIT")
                 return _row_to_job(duplicate, public=True), False
+            if client_plan_id:
+                consumed = conn.execute(
+                    """
+                    UPDATE watch_client_sample_plans
+                       SET status = 'consumed', job_id = ?, consumed_at = ?
+                     WHERE id = ? AND session_id = ? AND media_id = ?
+                       AND timeline_epoch = ? AND status = 'open' AND expires_at > ?
+                    """,
+                    (
+                        job_id,
+                        now_iso,
+                        _text(client_plan_id, 160),
+                        session_id,
+                        media_id,
+                        timeline_epoch,
+                        now_iso,
+                    ),
+                )
+                if not consumed.rowcount:
+                    raise ValueError("本地取材计划已经失效或被使用")
             for item in samples:
                 conn.execute(
                     """
@@ -313,11 +349,16 @@ def enqueue_source_plan(
         conn.execute("BEGIN IMMEDIATE")
         try:
             current = conn.execute(
-                "SELECT media_id, timeline_epoch, status FROM watch_sessions WHERE id = ? AND expires_at > ?",
+                "SELECT media_id, timeline_epoch, status, client_lease_expires_at FROM watch_sessions WHERE id = ? AND expires_at > ?",
                 (session_id, now_iso),
             ).fetchone()
             if current is None or str(current["status"] or "") == "ended":
                 raise ValueError("观看会话不可分析")
+            if (
+                not str(current["client_lease_expires_at"] or "")
+                or str(current["client_lease_expires_at"] or "") <= now_iso
+            ):
+                raise ValueError("客户端租约已过期，不能新建分析任务")
             if (
                 str(current["media_id"] or "") != media_id
                 or int(current["timeline_epoch"] or 0) != timeline_epoch
@@ -408,26 +449,47 @@ def attach_source_samples(job: dict, samples: list[dict]) -> tuple[dict | None, 
                 (job_id, lease_token),
             ).fetchone()
             session_row = conn.execute(
-                "SELECT media_id, timeline_epoch, status FROM watch_sessions WHERE id = ?",
+                "SELECT media_id, timeline_epoch, status, client_lease_expires_at FROM watch_sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
-            stale = (
-                job_row is None
-                or session_row is None
-                or str(session_row["status"] or "") == "ended"
-                or str(session_row["media_id"] or "") != media_id
+            if job_row is None:
+                rejection_reason = "lease_lost"
+            elif bool(job_row["cancel_requested"]):
+                rejection_reason = "cancel_requested"
+            elif session_row is None or str(session_row["status"] or "") == "ended":
+                rejection_reason = "session_ended"
+            elif (
+                not str(session_row["client_lease_expires_at"] or "")
+                or str(session_row["client_lease_expires_at"] or "") <= now_iso
+            ):
+                rejection_reason = "client_lease_expired"
+            elif (
+                str(session_row["media_id"] or "") != media_id
                 or int(session_row["timeline_epoch"] or 0) != timeline_epoch
-            )
-            if stale:
+            ):
+                rejection_reason = "stale_timeline"
+            else:
+                rejection_reason = ""
+            if rejection_reason:
                 if job_row is not None:
                     conn.execute(
                         """
                         UPDATE watch_analysis_jobs
-                           SET status = 'cancelled', error = 'stale_timeline',
-                               finished_at = ?, updated_at = ?, leased_until = '', lease_token = ''
+                           SET status = 'cancelled', cancel_requested = 1,
+                               cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END,
+                               cancel_reason = ?, error = ?, finished_at = ?, updated_at = ?,
+                               leased_until = '', lease_token = ''
                          WHERE id = ? AND status = 'running' AND lease_token = ?
                         """,
-                        (now_iso, now_iso, job_id, lease_token),
+                        (
+                            now_iso,
+                            rejection_reason,
+                            rejection_reason,
+                            now_iso,
+                            now_iso,
+                            job_id,
+                            lease_token,
+                        ),
                     )
                 conn.execute("COMMIT")
                 return None, False
@@ -516,16 +578,21 @@ def claim_next_job(*, stale_after_seconds: int) -> dict | None:
         try:
             row = conn.execute(
                 """
-                SELECT * FROM watch_analysis_jobs
-                 WHERE attempts < max_attempts
+                SELECT j.* FROM watch_analysis_jobs j
+                JOIN watch_sessions s ON s.id = j.session_id
+                 WHERE j.attempts < j.max_attempts
+                   AND j.cancel_requested = 0
+                   AND s.status != 'ended'
+                   AND s.client_lease_expires_at != ''
+                   AND s.client_lease_expires_at > ?
                    AND (
-                        (status = 'queued' AND available_at <= ?)
-                        OR (status = 'running' AND leased_until != '' AND leased_until <= ?)
+                        (j.status = 'queued' AND j.available_at <= ?)
+                        OR (j.status = 'running' AND j.leased_until != '' AND j.leased_until <= ?)
                    )
-                 ORDER BY priority DESC, created_at, id
+                 ORDER BY j.priority DESC, j.created_at, j.id
                  LIMIT 1
                 """,
-                (now_iso, now_iso),
+                (now_iso, now_iso, now_iso),
             ).fetchone()
             if row is None:
                 conn.execute("COMMIT")
@@ -537,7 +604,7 @@ def claim_next_job(*, stale_after_seconds: int) -> dict | None:
                    SET status = 'running', attempts = attempts + 1,
                        lease_token = ?, leased_until = ?, started_at = CASE WHEN started_at = '' THEN ? ELSE started_at END,
                        updated_at = ?, error = ''
-                 WHERE id = ?
+                 WHERE id = ? AND cancel_requested = 0
                 """,
                 (lease_token, lease_until, now_iso, now_iso, job_id),
             )
@@ -557,10 +624,100 @@ def heartbeat_job(job_id: str, lease_token: str, *, lease_seconds: int) -> bool:
             UPDATE watch_analysis_jobs
                SET leased_until = ?, updated_at = ?
              WHERE id = ? AND status = 'running' AND lease_token = ?
+               AND cancel_requested = 0
             """,
             (_iso(now + timedelta(seconds=max(30, lease_seconds))), _iso(now), job_id, lease_token),
         )
     return bool(result.rowcount)
+
+
+def execution_skip_reason(job: dict) -> str:
+    job_id = str(job.get("job_id") or "")
+    lease_token = str(job.get("lease_token") or "")
+    now_iso = _iso(_now())
+    with runtime_sqlite.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT j.status AS job_status, j.cancel_requested, j.lease_token,
+                   j.media_id AS job_media_id, j.timeline_epoch AS job_epoch,
+                   j.purpose, s.status AS session_status, s.ended_at,
+                   s.client_lease_expires_at, s.media_id AS session_media_id,
+                   s.timeline_epoch AS session_epoch
+              FROM watch_analysis_jobs j
+              LEFT JOIN watch_sessions s ON s.id = j.session_id
+             WHERE j.id = ?
+            """,
+            (_text(job_id, 160),),
+        ).fetchone()
+    if row is None:
+        return "cancel_requested"
+    if bool(row["cancel_requested"]):
+        return "cancel_requested"
+    if str(row["job_status"] or "") != "running" or str(row["lease_token"] or "") != lease_token:
+        return "lease_lost"
+    if not str(row["session_status"] or "") or str(row["session_status"] or "") == "ended" or str(row["ended_at"] or ""):
+        return "session_ended"
+    client_lease_expires_at = str(row["client_lease_expires_at"] or "")
+    if not client_lease_expires_at or client_lease_expires_at <= now_iso:
+        return "client_lease_expired"
+    if str(row["job_media_id"] or "") != str(row["session_media_id"] or ""):
+        return "stale_timeline"
+    if str(row["purpose"] or "") not in {"knowledge_card", "subtitle_lookup"} and int(
+        row["job_epoch"] or 0
+    ) != int(row["session_epoch"] or 0):
+        return "stale_timeline"
+    return ""
+
+
+def cancel_claimed_job(job: dict, *, reason: str) -> bool:
+    now_iso = _iso(_now())
+    with runtime_sqlite.connect() as conn:
+        result = conn.execute(
+            """
+            UPDATE watch_analysis_jobs
+               SET status = 'cancelled', cancel_requested = 1,
+                   cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END,
+                   cancel_reason = ?, error = ?, finished_at = ?, updated_at = ?,
+                   leased_until = '', lease_token = ''
+             WHERE id = ? AND status = 'running' AND lease_token = ?
+            """,
+            (
+                now_iso,
+                _text(reason, 1000),
+                _text(reason, 1000),
+                now_iso,
+                now_iso,
+                _text(job.get("job_id"), 160),
+                _text(job.get("lease_token"), 200),
+            ),
+        )
+    return bool(result.rowcount)
+
+
+def purge_session_samples(session_id: str) -> int:
+    now_iso = _iso(_now())
+    purged = 0
+    with runtime_sqlite.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, file_path FROM watch_analysis_samples
+             WHERE session_id = ? AND purged_at = ''
+            """,
+            (_text(session_id, 160),),
+        ).fetchall()
+        for row in rows:
+            path = str(row["file_path"] or "")
+            if path:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            conn.execute(
+                "UPDATE watch_analysis_samples SET file_path = '', purged_at = ? WHERE id = ?",
+                (now_iso, str(row["id"] or "")),
+            )
+            purged += 1
+    return purged
 
 
 def mark_job_cancelled(job_id: str, *, reason: str = "") -> bool:
@@ -569,11 +726,20 @@ def mark_job_cancelled(job_id: str, *, reason: str = "") -> bool:
         result = conn.execute(
             """
             UPDATE watch_analysis_jobs
-               SET status = 'cancelled', error = ?, finished_at = ?, updated_at = ?,
+               SET status = 'cancelled', cancel_requested = 1,
+                   cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END,
+                   cancel_reason = ?, error = ?, finished_at = ?, updated_at = ?,
                    leased_until = '', lease_token = ''
              WHERE id = ? AND status IN ('queued', 'running')
             """,
-            (_text(reason, 1000), now_iso, now_iso, job_id),
+            (
+                now_iso,
+                _text(reason, 1000),
+                _text(reason, 1000),
+                now_iso,
+                now_iso,
+                job_id,
+            ),
         )
     return bool(result.rowcount)
 
@@ -600,11 +766,20 @@ def cancel_stale_jobs(session_id: str, *, current_epoch: int | None = None, reas
         result = conn.execute(
             f"""
             UPDATE watch_analysis_jobs
-               SET status = 'cancelled', error = ?, finished_at = ?, updated_at = ?,
+               SET status = 'cancelled', cancel_requested = 1,
+                   cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END,
+                   cancel_reason = ?, error = ?, finished_at = ?, updated_at = ?,
                    leased_until = '', lease_token = ''
              WHERE {' AND '.join(clauses)}
             """,
-            (_text(reason, 1000), now_iso, now_iso, *where_params),
+            (
+                now_iso,
+                _text(reason, 1000),
+                _text(reason, 1000),
+                now_iso,
+                now_iso,
+                *where_params,
+            ),
         )
         if sample_ids:
             placeholders = ",".join("?" for _ in sample_ids)
@@ -627,6 +802,24 @@ def cancel_stale_jobs(session_id: str, *, current_epoch: int | None = None, reas
                 """,
                 (now_iso, *sample_ids),
             )
+        if current_epoch is None:
+            conn.execute(
+                """
+                UPDATE watch_client_sample_plans
+                   SET status = 'cancelled', cancelled_at = ?
+                 WHERE session_id = ? AND status = 'open'
+                """,
+                (now_iso, _text(session_id, 160)),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE watch_client_sample_plans
+                   SET status = 'cancelled', cancelled_at = ?
+                 WHERE session_id = ? AND timeline_epoch != ? AND status = 'open'
+                """,
+                (now_iso, _text(session_id, 160), _int(current_epoch, 0)),
+            )
     return int(result.rowcount or 0)
 
 
@@ -644,7 +837,7 @@ def fail_job(job: dict, error: str, *, retryable: bool) -> str:
         conn.execute("BEGIN IMMEDIATE")
         try:
             current_job = conn.execute(
-                "SELECT status, lease_token FROM watch_analysis_jobs WHERE id = ?",
+                "SELECT status, lease_token, cancel_requested FROM watch_analysis_jobs WHERE id = ?",
                 (job_id,),
             ).fetchone()
             if current_job is None:
@@ -659,29 +852,47 @@ def fail_job(job: dict, error: str, *, retryable: bool) -> str:
                 return current_status
             session = conn.execute(
                 """
-                SELECT media_id, timeline_epoch, status, analysis_covered_until_ms
+                SELECT media_id, timeline_epoch, status, analysis_covered_until_ms,
+                       client_lease_expires_at
                   FROM watch_sessions WHERE id = ?
                 """,
                 (job.get("session_id"),),
             ).fetchone()
-            stale = (
-                session is None
-                or str(session["status"] or "") == "ended"
-                or str(session["media_id"] or "") != str(job.get("media_id") or "")
-                or (
-                    purpose != "knowledge_card"
-                    and int(session["timeline_epoch"] or 0) != int(job.get("timeline_epoch") or 0)
-                )
-            )
-            if stale:
+            if bool(current_job["cancel_requested"]):
+                cancellation_reason = "cancel_requested"
+            elif session is None or str(session["status"] or "") == "ended":
+                cancellation_reason = "session_ended"
+            elif (
+                not str(session["client_lease_expires_at"] or "")
+                or str(session["client_lease_expires_at"] or "") <= _iso(now)
+            ):
+                cancellation_reason = "client_lease_expired"
+            elif str(session["media_id"] or "") != str(job.get("media_id") or "") or (
+                purpose not in {"knowledge_card", "subtitle_lookup"}
+                and int(session["timeline_epoch"] or 0) != int(job.get("timeline_epoch") or 0)
+            ):
+                cancellation_reason = "stale_timeline"
+            else:
+                cancellation_reason = ""
+            if cancellation_reason:
                 conn.execute(
                     """
                     UPDATE watch_analysis_jobs
-                       SET status = 'cancelled', error = 'stale_timeline',
+                       SET status = 'cancelled', cancel_requested = 1,
+                           cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END,
+                           cancel_reason = ?, error = ?,
                            finished_at = ?, updated_at = ?, leased_until = '', lease_token = ''
                      WHERE id = ? AND status = 'running' AND lease_token = ?
                     """,
-                    (_iso(now), _iso(now), job_id, lease_token),
+                    (
+                        _iso(now),
+                        cancellation_reason,
+                        cancellation_reason,
+                        _iso(now),
+                        _iso(now),
+                        job_id,
+                        lease_token,
+                    ),
                 )
                 conn.execute("COMMIT")
                 return "cancelled"
@@ -744,8 +955,23 @@ def defer_job(job: dict, *, available_at: datetime, reason: str) -> bool:
                SET status = 'queued', attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
                    available_at = ?, leased_until = '', lease_token = '', error = ?, updated_at = ?
              WHERE id = ? AND status = 'running' AND lease_token = ?
+               AND cancel_requested = 0
+               AND EXISTS (
+                    SELECT 1 FROM watch_sessions s
+                     WHERE s.id = watch_analysis_jobs.session_id
+                       AND s.status != 'ended'
+                       AND s.client_lease_expires_at != ''
+                       AND s.client_lease_expires_at > ?
+               )
             """,
-            (_iso(available_at), _text(reason, 1000), now_iso, job_id, lease_token),
+            (
+                _iso(available_at),
+                _text(reason, 1000),
+                now_iso,
+                job_id,
+                lease_token,
+                now_iso,
+            ),
         )
     return bool(result.rowcount)
 
@@ -761,6 +987,14 @@ def reset_for_epoch(session_id: str, *, timeline_epoch: int) -> None:
                    story_so_far_json = '{}', analysis_story_state_json = '{}',
                    updated_at = ?
              WHERE id = ? AND timeline_epoch = ? AND status != 'ended'
+            """,
+            (now_iso, _text(session_id, 160), _int(timeline_epoch, 0)),
+        )
+        conn.execute(
+            """
+            UPDATE watch_client_sample_plans
+               SET status = 'cancelled', cancelled_at = ?
+             WHERE session_id = ? AND timeline_epoch != ? AND status = 'open'
             """,
             (now_iso, _text(session_id, 160), _int(timeline_epoch, 0)),
         )
@@ -787,7 +1021,13 @@ def _series_key(session: dict) -> str:
     media = session.get("media") if isinstance(session.get("media"), dict) else {}
     source = _text(media.get("source"), 80).lower()
     title = " ".join(_text(media.get("title"), 300).lower().split())
-    return f"{source}:{title}" if title else ""
+    if not title:
+        return ""
+    if source == "local_file":
+        local_media = media.get("local_media") if isinstance(media.get("local_media"), dict) else {}
+        revision = str(local_media.get("media_revision") or "").strip()
+        return f"{source}:{title}:{revision}"
+    return f"{source}:{title}"
 
 
 def _hamming_distance(left: str, right: str) -> int:
@@ -928,24 +1168,43 @@ def commit_analysis_result(
                 "SELECT * FROM watch_sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
-            stale = (
-                session_row is None
-                or str(session_row["status"] or "") == "ended"
-                or str(session_row["media_id"] or "") != media_id
+            if bool(job_row["cancel_requested"]):
+                rejection_reason = "cancel_requested"
+            elif session_row is None or str(session_row["status"] or "") == "ended":
+                rejection_reason = "session_ended"
+            elif (
+                not str(session_row["client_lease_expires_at"] or "")
+                or str(session_row["client_lease_expires_at"] or "") <= now_iso
+            ):
+                rejection_reason = "client_lease_expired"
+            elif (
+                str(session_row["media_id"] or "") != media_id
                 or int(session_row["timeline_epoch"] or 0) != timeline_epoch
-            )
-            if stale:
+            ):
+                rejection_reason = "stale_timeline"
+            else:
+                rejection_reason = ""
+            if rejection_reason:
                 conn.execute(
                     """
                     UPDATE watch_analysis_jobs
-                       SET status = 'cancelled', error = 'stale_timeline', finished_at = ?, updated_at = ?,
+                       SET status = 'cancelled', cancel_requested = 1,
+                           cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END,
+                           cancel_reason = ?, error = ?, finished_at = ?, updated_at = ?,
                            leased_until = '', lease_token = ''
                      WHERE id = ?
                     """,
-                    (now_iso, now_iso, job_id),
+                    (
+                        now_iso,
+                        rejection_reason,
+                        rejection_reason,
+                        now_iso,
+                        now_iso,
+                        job_id,
+                    ),
                 )
                 conn.execute("COMMIT")
-                return {"applied": False, "reason": "stale_timeline"}
+                return {"applied": False, "reason": rejection_reason}
 
             current_sections = [
                 dict(row)
@@ -1073,6 +1332,9 @@ def commit_analysis_result(
                     "media": {
                         "source": session_row["source"],
                         "title": session_row["title"],
+                        "local_media": runtime_sqlite.json_loads(
+                            session_row["local_media_json"], {}
+                        ),
                     }
                 })
                 if series_key:
@@ -1269,15 +1531,6 @@ def _active_job(session_id: str, purpose: str, timeline_epoch: int) -> dict | No
     return _row_to_job(row, public=True) if row is not None else None
 
 
-def _in_flight_plan(job: dict) -> dict:
-    return _gateway_plan({
-        "purpose": "idle",
-        "reason": "analysis_in_flight",
-        "target_timestamps_ms": [],
-        "active_job": job,
-    })
-
-
 def _gateway_plan(plan: dict) -> dict:
     return {
         "managed_by": "gateway",
@@ -1286,6 +1539,300 @@ def _gateway_plan(plan: dict) -> dict:
         "audio_required": False,
         **plan,
     }
+
+
+def _local_media_state(session: dict) -> dict:
+    media = session.get("media") if isinstance(session.get("media"), dict) else {}
+    local_media = media.get("local_media")
+    return local_media if isinstance(local_media, dict) else {}
+
+
+def _row_to_client_plan(row: Any) -> dict:
+    return {
+        "plan_id": str(row["id"] or ""),
+        "session_id": str(row["session_id"] or ""),
+        "media_id": str(row["media_id"] or ""),
+        "media_revision": str(row["media_revision"] or ""),
+        "timeline_epoch": int(row["timeline_epoch"] or 0),
+        "purpose": str(row["purpose"] or ""),
+        "target_timestamps_ms": runtime_sqlite.json_loads(
+            row["target_timestamps_json"], []
+        ),
+        "allowed_start_ms": int(row["allowed_start_ms"] or 0),
+        "allowed_end_ms": int(row["allowed_end_ms"] or 0),
+        "status": str(row["status"] or ""),
+        "job_id": str(row["job_id"] or ""),
+        "issued_at": str(row["created_at"] or ""),
+        "expires_at": str(row["expires_at"] or ""),
+        "consumed_at": str(row["consumed_at"] or ""),
+    }
+
+
+def _issue_client_plan(session: dict, plan: dict) -> dict:
+    session_id = str(session.get("session_id") or "")
+    media = session.get("media") if isinstance(session.get("media"), dict) else {}
+    playback = session.get("playback") if isinstance(session.get("playback"), dict) else {}
+    local_media = _local_media_state(session)
+    media_id = str(media.get("id") or "")
+    media_revision = str(local_media.get("media_revision") or "")
+    timeline_epoch = int(playback.get("timeline_epoch") or 0)
+    purpose = str(plan.get("purpose") or "")
+    targets = sorted({_int(value, 0) for value in plan.get("target_timestamps_ms") or []})
+    allowed_start_ms = _int(
+        plan.get("audio_range_start_ms"),
+        min(targets) if targets else 0,
+    )
+    allowed_end_ms = _int(
+        plan.get("audio_range_end_ms"),
+        max(targets) if targets else allowed_start_ms,
+    )
+    if allowed_end_ms < allowed_start_ms:
+        allowed_end_ms = allowed_start_ms
+    digest_payload = "|".join(
+        [
+            session_id,
+            media_id,
+            media_revision,
+            str(timeline_epoch),
+            purpose,
+            ",".join(str(value) for value in targets),
+            str(allowed_start_ms),
+            str(allowed_end_ms),
+        ]
+    )
+    plan_digest = hashlib.sha256(digest_payload.encode("utf-8")).hexdigest()
+    now = _now()
+    now_iso = _iso(now)
+    expires_at = _iso(
+        now + timedelta(seconds=int(WATCH_ANALYSIS_CLIENT_PLAN_TTL_SECONDS))
+    )
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            current = conn.execute(
+                """
+                SELECT status, media_id, timeline_epoch, client_lease_expires_at
+                  FROM watch_sessions WHERE id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+            if current is None or str(current["status"] or "") == "ended":
+                raise ValueError("观看会话已经结束")
+            if (
+                not str(current["client_lease_expires_at"] or "")
+                or str(current["client_lease_expires_at"] or "") <= now_iso
+            ):
+                raise ValueError("客户端租约已过期，不能签发取材计划")
+            if (
+                str(current["media_id"] or "") != media_id
+                or int(current["timeline_epoch"] or 0) != timeline_epoch
+            ):
+                raise ValueError("播放时间轴已经变化，请重新获取取材计划")
+            conn.execute(
+                """
+                UPDATE watch_client_sample_plans
+                   SET status = 'expired', cancelled_at = ?
+                 WHERE status = 'open' AND expires_at <= ?
+                """,
+                (now_iso, now_iso),
+            )
+            existing = conn.execute(
+                """
+                SELECT * FROM watch_client_sample_plans
+                 WHERE session_id = ? AND timeline_epoch = ? AND plan_digest = ?
+                   AND status = 'open' AND expires_at > ?
+                 ORDER BY created_at DESC LIMIT 1
+                """,
+                (session_id, timeline_epoch, plan_digest, now_iso),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    UPDATE watch_client_sample_plans
+                       SET status = 'cancelled', cancelled_at = ?
+                     WHERE session_id = ? AND status = 'open'
+                    """,
+                    (now_iso, session_id),
+                )
+                plan_id = f"watch_plan_{uuid4().hex}"
+                conn.execute(
+                    """
+                    INSERT INTO watch_client_sample_plans (
+                        id, session_id, media_id, media_revision, timeline_epoch,
+                        purpose, plan_digest, target_timestamps_json,
+                        allowed_start_ms, allowed_end_ms, status,
+                        created_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                    """,
+                    (
+                        plan_id,
+                        session_id,
+                        media_id,
+                        media_revision,
+                        timeline_epoch,
+                        purpose,
+                        plan_digest,
+                        runtime_sqlite.json_dumps(targets),
+                        allowed_start_ms,
+                        allowed_end_ms,
+                        now_iso,
+                        expires_at,
+                    ),
+                )
+                existing = conn.execute(
+                    "SELECT * FROM watch_client_sample_plans WHERE id = ?",
+                    (plan_id,),
+                ).fetchone()
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return _row_to_client_plan(existing)
+
+
+def validate_client_sample_plan(
+    session: dict,
+    *,
+    plan_id: str,
+    purpose: str,
+    media_revision: str,
+    actual_range_start_ms: int,
+    actual_range_end_ms: int,
+    sample_timestamps_ms: list[int],
+) -> dict:
+    session_id = str(session.get("session_id") or "")
+    media = session.get("media") if isinstance(session.get("media"), dict) else {}
+    playback = session.get("playback") if isinstance(session.get("playback"), dict) else {}
+    local_media = _local_media_state(session)
+    if str(media.get("source") or "") != "local_file":
+        raise ValueError("客户端取材计划只适用于本地视频")
+    expected_revision = str(local_media.get("media_revision") or "")
+    if not media_revision or media_revision != expected_revision:
+        raise ValueError("本地文件版本已经变化，请重新选择文件并创建会话")
+    range_start_ms = _int(actual_range_start_ms, 0)
+    range_end_ms = _int(actual_range_end_ms, 0)
+    if range_end_ms < range_start_ms:
+        raise ValueError("actual_range_end_ms 必须不早于 actual_range_start_ms")
+    if range_end_ms - range_start_ms > int(WATCH_ANALYSIS_MAX_AUDIO_DURATION_MS):
+        raise ValueError("本地取材实际区间超过单批分析时长")
+    now_iso = _iso(_now())
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                """
+                UPDATE watch_client_sample_plans
+                   SET status = 'expired', cancelled_at = ?
+                 WHERE status = 'open' AND expires_at <= ?
+                """,
+                (now_iso, now_iso),
+            )
+            row = conn.execute(
+                "SELECT * FROM watch_client_sample_plans WHERE id = ?",
+                (_text(plan_id, 160),),
+            ).fetchone()
+            if row is None:
+                raise ValueError("本地取材计划不存在或已经过期")
+            if str(row["status"] or "") != "open":
+                raise ValueError("本地取材计划已经失效或被使用")
+            if (
+                str(row["session_id"] or "") != session_id
+                or str(row["media_id"] or "") != str(media.get("id") or "")
+                or str(row["media_revision"] or "") != expected_revision
+                or int(row["timeline_epoch"] or 0)
+                != int(playback.get("timeline_epoch") or 0)
+                or str(row["purpose"] or "") != str(purpose or "")
+            ):
+                raise ValueError("本地取材计划与当前媒体时间轴不一致")
+            allowed_start_ms = int(row["allowed_start_ms"] or 0)
+            allowed_end_ms = int(row["allowed_end_ms"] or 0)
+            if range_start_ms < allowed_start_ms or range_end_ms > allowed_end_ms:
+                raise ValueError("本地取材实际区间超出计划允许范围")
+            for timestamp_ms in sample_timestamps_ms:
+                normalized = _int(timestamp_ms, 0)
+                if normalized < allowed_start_ms or normalized > allowed_end_ms:
+                    raise ValueError("本地样本时间戳超出计划允许范围")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return _row_to_client_plan(row)
+
+
+def cancel_client_sample_plans(
+    session_id: str,
+    *,
+    current_epoch: int | None,
+) -> int:
+    clauses = ["session_id = ?", "status = 'open'"]
+    params: list[Any] = [_text(session_id, 160)]
+    if current_epoch is not None:
+        clauses.append("timeline_epoch != ?")
+        params.append(_int(current_epoch, 0))
+    now_iso = _iso(_now())
+    with runtime_sqlite.connect() as conn:
+        result = conn.execute(
+            f"UPDATE watch_client_sample_plans SET status = 'cancelled', cancelled_at = ? WHERE {' AND '.join(clauses)}",
+            (now_iso, *params),
+        )
+    return int(result.rowcount or 0)
+
+
+def _client_plan(session: dict, plan: dict) -> dict:
+    local_media = _local_media_state(session)
+    sampling = local_media.get("sampling") if isinstance(local_media.get("sampling"), dict) else {}
+    base = {
+        "managed_by": "client",
+        "input_origin": "local_device_window",
+        "client_upload_required": False,
+        "audio_required": False,
+        "local_sampling": sampling,
+        **plan,
+    }
+    if str(plan.get("purpose") or "") == "idle":
+        return base
+    if not bool(sampling.get("analysis_available")):
+        return {
+            **base,
+            "purpose": "idle",
+            "reason": "local_sampling_unavailable",
+            "target_timestamps_ms": [],
+        }
+    issued = _issue_client_plan(session, plan)
+    selected_audio = local_media.get("selected_audio") if isinstance(local_media.get("selected_audio"), dict) else {}
+    selected_subtitle = local_media.get("selected_subtitle") if isinstance(local_media.get("selected_subtitle"), dict) else {}
+    audio_required = bool(plan.get("audio_required") and sampling.get("audio_available"))
+    return {
+        **base,
+        **issued,
+        "client_upload_required": True,
+        "audio_required": audio_required,
+        "audio_degraded_reason": "" if audio_required else str(sampling.get("audio_degraded_reason") or ""),
+        "selected_audio_track_id": str(selected_audio.get("track_id") or ""),
+        "selected_subtitle_kind": str(selected_subtitle.get("kind") or "none"),
+        "accepted_image_mime_types": ["image/jpeg", "image/png", "image/webp"],
+        "accepted_audio_mime_types": ["audio/mpeg", "audio/aac", "audio/mp4"],
+        "max_audio_duration_ms": int(WATCH_ANALYSIS_MAX_AUDIO_DURATION_MS),
+    }
+
+
+def _delivery_plan(session: dict, plan: dict) -> dict:
+    media = session.get("media") if isinstance(session.get("media"), dict) else {}
+    if str(media.get("source") or "") == "local_file":
+        return _client_plan(session, plan)
+    return _gateway_plan(plan)
+
+
+def _in_flight_delivery_plan(session: dict, job: dict) -> dict:
+    return _delivery_plan(
+        session,
+        {
+            "purpose": "idle",
+            "reason": "analysis_in_flight",
+            "target_timestamps_ms": [],
+            "active_job": job,
+        },
+    )
 
 
 def _rolling_targets(start_ms: int, end_ms: int, *, interval_ms: int, max_frames: int) -> list[int]:
@@ -1344,13 +1891,13 @@ def build_sample_plan(session: dict) -> dict:
     familiarity = str(analysis.get("familiarity") or "pending")
     max_frames = int(WATCH_ANALYSIS_MAX_FRAMES_PER_JOB)
     if session.get("ended_at"):
-        return _gateway_plan(
+        return _delivery_plan(session,
             {"purpose": "idle", "reason": "session_ended", "target_timestamps_ms": []}
         )
     if familiarity == "pending":
         active = _active_job(session_id, "identify", timeline_epoch)
         if active:
-            return _in_flight_plan(active)
+            return _in_flight_delivery_plan(session, active)
         identify_anchor = playhead_ms
         if content_start_ms is not None and playhead_ms < content_start_ms:
             identify_anchor = content_start_ms
@@ -1363,7 +1910,7 @@ def build_sample_plan(session: dict) -> dict:
                 else identify_anchor + 2000,
             }
         )
-        return _gateway_plan({
+        return _delivery_plan(session, {
             "purpose": "identify",
             "reason": "identify_media",
             "target_timestamps_ms": targets[:max_frames],
@@ -1377,7 +1924,7 @@ def build_sample_plan(session: dict) -> dict:
     ):
         active = _active_job(session_id, "timeline_prepass", timeline_epoch)
         if active:
-            return _in_flight_plan(active)
+            return _in_flight_delivery_plan(session, active)
         edge = min(duration_ms // 2, int(WATCH_ANALYSIS_PREPASS_EDGE_MS))
         front_count = max_frames if content_end_ms is not None else max(1, max_frames // 2)
         back_count = max_frames if content_start_ms is not None else max(1, max_frames - front_count)
@@ -1396,7 +1943,7 @@ def build_sample_plan(session: dict) -> dict:
                 int(back_start + (duration_ms - back_start) * idx / max(1, back_count - 1))
                 for idx in range(back_count)
             ]
-        return _gateway_plan({
+        return _delivery_plan(session, {
             "purpose": "timeline_prepass",
             "reason": "detect_missing_content_bounds",
             "target_timestamps_ms": sorted(set(front + back))[:max_frames],
@@ -1412,13 +1959,13 @@ def build_sample_plan(session: dict) -> dict:
         "collecting",
         "building",
     }:
-        return _gateway_plan({
+        return _delivery_plan(session, {
             "purpose": "idle",
             "reason": "knowledge_card_pending",
             "target_timestamps_ms": [],
         })
     if not str(preparation.get("started_at") or "").strip():
-        return _gateway_plan({
+        return _delivery_plan(session, {
             "purpose": "idle",
             "reason": "waiting_for_start_confirmation",
             "target_timestamps_ms": [],
@@ -1428,7 +1975,7 @@ def build_sample_plan(session: dict) -> dict:
     if content_end_ms is not None:
         target_until = min(target_until, content_end_ms)
     if covered_until >= target_until:
-        return _gateway_plan({
+        return _delivery_plan(session, {
             "purpose": "idle",
             "reason": "coverage_ready",
             "target_timestamps_ms": [],
@@ -1437,7 +1984,7 @@ def build_sample_plan(session: dict) -> dict:
         })
     active = _active_job(session_id, "rolling", timeline_epoch)
     if active:
-        return _in_flight_plan(active)
+        return _in_flight_delivery_plan(session, active)
     interval = (
         int(WATCH_ANALYSIS_RECOGNIZED_INTERVAL_MS)
         if familiarity == "recognized"
@@ -1459,7 +2006,7 @@ def build_sample_plan(session: dict) -> dict:
     if duration_ms > 0:
         start = min(start, duration_ms)
     if start >= target_until:
-        return _gateway_plan({
+        return _delivery_plan(session, {
             "purpose": "idle",
             "reason": "coverage_ready",
             "target_timestamps_ms": [],
@@ -1481,7 +2028,7 @@ def build_sample_plan(session: dict) -> dict:
         interval_ms=interval,
         max_frames=max_frames,
     )
-    return _gateway_plan({
+    return _delivery_plan(session, {
         "purpose": "rolling",
         "reason": "extend_future_coverage",
         "target_timestamps_ms": targets,
@@ -1560,11 +2107,22 @@ def cleanup_expired_samples() -> dict:
              )
             """
         ).rowcount
+        plans_deleted = conn.execute(
+            """
+            DELETE FROM watch_client_sample_plans
+             WHERE expires_at <= ?
+                OR NOT EXISTS (
+                    SELECT 1 FROM watch_sessions WHERE watch_sessions.id = watch_client_sample_plans.session_id
+                )
+            """,
+            (now_iso,),
+        ).rowcount
         conn.execute("COMMIT")
     return {
         "samples_deleted": len(rows),
         "orphan_jobs_deleted": int(jobs_deleted or 0),
         "orphan_checkpoints_deleted": int(checkpoints_deleted or 0),
+        "client_plans_deleted": int(plans_deleted or 0),
     }
 
 

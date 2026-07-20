@@ -29,6 +29,7 @@ def _text(value: Any, limit: int = 500) -> str:
 def cache_key_for_session(session: dict) -> str:
     media = session.get("media") if isinstance(session.get("media"), dict) else {}
     analysis = session.get("analysis") if isinstance(session.get("analysis"), dict) else {}
+    local_media = media.get("local_media") if isinstance(media.get("local_media"), dict) else {}
     identity = "|".join(
         [
             _text(media.get("source"), 80).casefold(),
@@ -37,6 +38,7 @@ def cache_key_for_session(session: dict) -> str:
             _text(media.get("part_title"), 300).casefold(),
             _text(analysis.get("identity"), 500).casefold(),
             str(int(media.get("duration_ms") or 0)),
+            str(local_media.get("media_revision") or ""),
             WATCH_KNOWLEDGE_PROMPT_VERSION,
         ]
     )
@@ -148,6 +150,17 @@ def ensure_knowledge_job(session: dict) -> tuple[dict, bool]:
     with runtime_sqlite.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            session_row = conn.execute(
+                "SELECT status, client_lease_expires_at FROM watch_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if session_row is None or str(session_row["status"] or "") == "ended":
+                raise ValueError("观看会话已经结束")
+            if (
+                not str(session_row["client_lease_expires_at"] or "")
+                or str(session_row["client_lease_expires_at"] or "") <= now_iso
+            ):
+                raise ValueError("客户端租约已过期，不能新建知识卡任务")
             conn.execute(
                 """
                 INSERT INTO watch_analysis_jobs (
@@ -218,11 +231,25 @@ def retry_knowledge_job(session: dict) -> dict:
     with runtime_sqlite.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            session_row = conn.execute(
+                "SELECT status, started_at, client_lease_expires_at FROM watch_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if session_row is None or str(session_row["status"] or "") == "ended":
+                raise ValueError("观看会话已经结束")
+            if str(session_row["started_at"] or ""):
+                raise ValueError("作品知识卡只能在正式开始前重新生成")
+            if (
+                not str(session_row["client_lease_expires_at"] or "")
+                or str(session_row["client_lease_expires_at"] or "") <= now_iso
+            ):
+                raise ValueError("客户端租约已过期，不能重建知识卡任务")
             conn.execute(
                 """
                 UPDATE watch_analysis_jobs
                    SET status = 'queued', attempts = 0, available_at = ?,
                        leased_until = '', lease_token = '', started_at = '', finished_at = '',
+                       cancel_requested = 0, cancel_requested_at = '', cancel_reason = '',
                        error = '', result_json = '{}', usage_json = '{}', updated_at = ?
                  WHERE id = ? AND purpose = 'knowledge_card'
                 """,
@@ -272,29 +299,37 @@ def commit_knowledge_result(
         conn.execute("BEGIN IMMEDIATE")
         try:
             running = conn.execute(
-                "SELECT 1 FROM watch_analysis_jobs WHERE id = ? AND status = 'running' AND lease_token = ?",
+                "SELECT cancel_requested FROM watch_analysis_jobs WHERE id = ? AND status = 'running' AND lease_token = ?",
                 (job_id, lease_token),
             ).fetchone()
             session_row = conn.execute(
-                "SELECT status, media_id, knowledge_card_key FROM watch_sessions WHERE id = ?",
+                "SELECT status, media_id, knowledge_card_key, client_lease_expires_at FROM watch_sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
             cache_key = str(session_row["knowledge_card_key"] or "") if session_row is not None else ""
             if running is None:
                 conn.execute("ROLLBACK")
                 return {"applied": False, "reason": "lease_lost"}
-            if (
-                session_row is None
-                or str(session_row["status"] or "") == "ended"
-                or str(session_row["media_id"] or "") != str(job.get("media_id") or "")
-                or not cache_key
+            if bool(running["cancel_requested"]):
+                rejection_reason = "cancel_requested"
+            elif session_row is None or str(session_row["status"] or "") == "ended":
+                rejection_reason = "session_ended"
+            elif (
+                not str(session_row["client_lease_expires_at"] or "")
+                or str(session_row["client_lease_expires_at"] or "") <= now_iso
             ):
+                rejection_reason = "client_lease_expired"
+            elif str(session_row["media_id"] or "") != str(job.get("media_id") or "") or not cache_key:
+                rejection_reason = "stale_media"
+            else:
+                rejection_reason = ""
+            if rejection_reason:
                 conn.execute(
-                    "UPDATE watch_analysis_jobs SET status = 'cancelled', error = 'stale_media', finished_at = ?, updated_at = ?, lease_token = '', leased_until = '' WHERE id = ?",
-                    (now_iso, now_iso, job_id),
+                    "UPDATE watch_analysis_jobs SET status = 'cancelled', cancel_requested = 1, cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END, cancel_reason = ?, error = ?, finished_at = ?, updated_at = ?, lease_token = '', leased_until = '' WHERE id = ?",
+                    (now_iso, rejection_reason, rejection_reason, now_iso, now_iso, job_id),
                 )
                 conn.execute("COMMIT")
-                return {"applied": False, "reason": "stale_media"}
+                return {"applied": False, "reason": rejection_reason}
             conn.execute(
                 """
                 INSERT INTO watch_knowledge_cards (

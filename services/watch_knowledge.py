@@ -506,6 +506,7 @@ def build_work_knowledge_card(
     search_post: Callable[..., Any] = requests.post,
     model_post: Callable[..., Any] = requests.post,
     on_sources_ready: Callable[[], None] | None = None,
+    checkpoint: Callable[[str], None] | None = None,
 ) -> tuple[dict, list[dict], dict]:
     if not WATCH_KNOWLEDGE_API_KEY:
         raise WatchAnalysisProviderError("WATCH_KNOWLEDGE_API_KEY/DEEPSEEK_API_KEY 未配置", retryable=False)
@@ -515,6 +516,8 @@ def build_work_knowledge_card(
     search_started = time.perf_counter()
     requests_to_run = build_knowledge_search_requests(session)
     request = requests_to_run[0]
+    if checkpoint is not None:
+        checkpoint("before_search")
     try:
         search_response = search_post(
             WATCH_KNOWLEDGE_SEARCH_API_URL,
@@ -537,11 +540,15 @@ def build_work_knowledge_card(
     )
     if not sources:
         raise WatchAnalysisProviderError("知识卡搜索没有返回可用结果", retryable=True)
+    if checkpoint is not None:
+        checkpoint("after_search")
     if on_sources_ready is not None:
         on_sources_ready()
 
     payload = build_knowledge_request(session, sources)
     model_started = time.perf_counter()
+    if checkpoint is not None:
+        checkpoint("before_knowledge_model")
     try:
         response = model_post(
             WATCH_KNOWLEDGE_API_URL,
@@ -565,6 +572,8 @@ def build_work_knowledge_card(
             retryable=retryable,
             status_code=status_code,
         )
+    if checkpoint is not None:
+        checkpoint("after_knowledge_model")
     data = _response_json(response, "知识卡上游")
     card = normalize_knowledge_card(_extract_card_content(data), session=session, sources=sources)
     usage_raw = data.get("usage") if isinstance(data.get("usage"), dict) else {}

@@ -43,6 +43,7 @@ _RUNTIME_TABLES = (
     "watch_risk_feedback",
     "watch_analysis_samples",
     "watch_analysis_jobs",
+    "watch_client_sample_plans",
     "watch_timeline_fingerprints",
     "watch_story_checkpoints",
     "watch_knowledge_cards",
@@ -202,6 +203,7 @@ def ensure_schema() -> None:
                     duration_ms INTEGER NOT NULL DEFAULT 0,
                     content_start_ms INTEGER NOT NULL DEFAULT -1,
                     content_end_ms INTEGER NOT NULL DEFAULT -1,
+                    local_media_json TEXT NOT NULL DEFAULT '{}',
                     knowledge_mode TEXT NOT NULL DEFAULT 'known',
                     analysis_familiarity TEXT NOT NULL DEFAULT 'pending',
                     analysis_identity TEXT NOT NULL DEFAULT '',
@@ -226,6 +228,8 @@ def ensure_schema() -> None:
                     subtitle_asset_id TEXT NOT NULL DEFAULT '',
                     subtitle_confirmed_at TEXT NOT NULL DEFAULT '',
                     started_at TEXT NOT NULL DEFAULT '',
+                    playback_unlocked_at TEXT NOT NULL DEFAULT '',
+                    fear_unprotected_confirmed_at TEXT NOT NULL DEFAULT '',
                     visual_last_message_at TEXT NOT NULL DEFAULT '',
                     visual_last_message_epoch INTEGER NOT NULL DEFAULT -1,
                     visual_last_sent_at TEXT NOT NULL DEFAULT '',
@@ -244,6 +248,8 @@ def ensure_schema() -> None:
                     analysis_error TEXT NOT NULL DEFAULT '',
                     story_so_far_json TEXT NOT NULL DEFAULT '{}',
                     analysis_story_state_json TEXT NOT NULL DEFAULT '{}',
+                    client_seen_at TEXT NOT NULL DEFAULT '',
+                    client_lease_expires_at TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     ended_at TEXT NOT NULL DEFAULT '',
@@ -385,6 +391,9 @@ def ensure_schema() -> None:
                     updated_at TEXT NOT NULL,
                     started_at TEXT NOT NULL DEFAULT '',
                     finished_at TEXT NOT NULL DEFAULT '',
+                    cancel_requested INTEGER NOT NULL DEFAULT 0,
+                    cancel_requested_at TEXT NOT NULL DEFAULT '',
+                    cancel_reason TEXT NOT NULL DEFAULT '',
                     error TEXT NOT NULL DEFAULT '',
                     result_json TEXT NOT NULL DEFAULT '{}',
                     usage_json TEXT NOT NULL DEFAULT '{}',
@@ -397,6 +406,30 @@ def ensure_schema() -> None:
                     ON watch_analysis_jobs(status, available_at, priority DESC, created_at);
                 CREATE INDEX IF NOT EXISTS idx_watch_analysis_jobs_session
                     ON watch_analysis_jobs(session_id, timeline_epoch, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS watch_client_sample_plans (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    media_id TEXT NOT NULL,
+                    media_revision TEXT NOT NULL DEFAULT '',
+                    timeline_epoch INTEGER NOT NULL DEFAULT 0,
+                    purpose TEXT NOT NULL,
+                    plan_digest TEXT NOT NULL,
+                    target_timestamps_json TEXT NOT NULL DEFAULT '[]',
+                    allowed_start_ms INTEGER NOT NULL DEFAULT 0,
+                    allowed_end_ms INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    job_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    consumed_at TEXT NOT NULL DEFAULT '',
+                    cancelled_at TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY(session_id) REFERENCES watch_sessions(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_client_sample_plans_session
+                    ON watch_client_sample_plans(session_id, timeline_epoch, status, expires_at);
+                CREATE INDEX IF NOT EXISTS idx_watch_client_sample_plans_expiry
+                    ON watch_client_sample_plans(expires_at, status);
 
                 CREATE TABLE IF NOT EXISTS watch_timeline_fingerprints (
                     id TEXT PRIMARY KEY,
@@ -710,15 +743,27 @@ def ensure_schema() -> None:
                     "ALTER TABLE watch_analysis_jobs "
                     "ADD COLUMN planned_timestamps_json TEXT NOT NULL DEFAULT '[]'"
                 )
+            job_column_migrations = {
+                "cancel_requested": "INTEGER NOT NULL DEFAULT 0",
+                "cancel_requested_at": "TEXT NOT NULL DEFAULT ''",
+                "cancel_reason": "TEXT NOT NULL DEFAULT ''",
+            }
+            for column_name, column_sql in job_column_migrations.items():
+                if column_name not in job_columns:
+                    conn.execute(
+                        f"ALTER TABLE watch_analysis_jobs ADD COLUMN {column_name} {column_sql}"
+                    )
             session_columns = {
                 str(row["name"])
                 for row in conn.execute("PRAGMA table_info(watch_sessions)").fetchall()
             }
+            backfill_playback_unlock = "playback_unlocked_at" not in session_columns
             session_column_migrations = {
                 "reply_lead_ms": "INTEGER NOT NULL DEFAULT 30000",
                 "visual_context_mode": "TEXT NOT NULL DEFAULT 'text_only'",
                 "content_start_ms": "INTEGER NOT NULL DEFAULT -1",
                 "content_end_ms": "INTEGER NOT NULL DEFAULT -1",
+                "local_media_json": "TEXT NOT NULL DEFAULT '{}'",
                 "preparation_status": "TEXT NOT NULL DEFAULT 'identifying'",
                 "knowledge_card_key": "TEXT NOT NULL DEFAULT ''",
                 "knowledge_card_status": "TEXT NOT NULL DEFAULT 'pending'",
@@ -731,6 +776,10 @@ def ensure_schema() -> None:
                 "subtitle_asset_id": "TEXT NOT NULL DEFAULT ''",
                 "subtitle_confirmed_at": "TEXT NOT NULL DEFAULT ''",
                 "started_at": "TEXT NOT NULL DEFAULT ''",
+                "playback_unlocked_at": "TEXT NOT NULL DEFAULT ''",
+                "fear_unprotected_confirmed_at": "TEXT NOT NULL DEFAULT ''",
+                "client_seen_at": "TEXT NOT NULL DEFAULT ''",
+                "client_lease_expires_at": "TEXT NOT NULL DEFAULT ''",
                 "visual_last_message_at": "TEXT NOT NULL DEFAULT ''",
                 "visual_last_message_epoch": "INTEGER NOT NULL DEFAULT -1",
                 "visual_last_sent_at": "TEXT NOT NULL DEFAULT ''",
@@ -742,6 +791,11 @@ def ensure_schema() -> None:
                     conn.execute(
                         f"ALTER TABLE watch_sessions ADD COLUMN {column_name} {column_sql}"
                     )
+            if backfill_playback_unlock:
+                conn.execute(
+                    "UPDATE watch_sessions SET playback_unlocked_at = started_at "
+                    "WHERE started_at != '' AND playback_unlocked_at = ''"
+                )
             conn.execute("DROP TABLE IF EXISTS model_token_ratios")
         _SCHEMA_READY = True
 

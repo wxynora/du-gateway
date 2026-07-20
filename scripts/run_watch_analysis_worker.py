@@ -65,22 +65,73 @@ setup_logging()
 logger = get_logger("services.watch_analysis_worker")
 
 
+class WatchJobCancelled(RuntimeError):
+    def __init__(self, reason: str, stage: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.stage = stage
+
+
+def _schedule_allowed(session: dict, *, scheduler: str) -> bool:
+    allowed, reason = watch_runtime_store.schedule_eligibility(session)
+    if not allowed:
+        logger.info(
+            "跳过一起看调度 scheduler=%s session_id=%s skip_reason=%s",
+            scheduler,
+            session.get("session_id"),
+            reason,
+        )
+    return allowed
+
+
 def _next_budget_window() -> datetime:
     now = datetime.now(timezone.utc)
     tomorrow = (now + timedelta(days=1)).date()
     return datetime.combine(tomorrow, datetime.min.time(), tzinfo=timezone.utc) + timedelta(minutes=5)
 
 
-def _job_matches_session(job: dict, session: dict | None) -> bool:
-    if not session or session.get("ended_at"):
-        return False
-    media = session.get("media") if isinstance(session.get("media"), dict) else {}
-    playback = session.get("playback") if isinstance(session.get("playback"), dict) else {}
-    if str(media.get("id") or "") != str(job.get("media_id") or ""):
-        return False
-    if str(job.get("purpose") or "") in {"knowledge_card", "subtitle_lookup"}:
-        return True
-    return int(playback.get("timeline_epoch") or 0) == int(job.get("timeline_epoch") or 0)
+def cleanup_abandoned_sessions() -> dict:
+    cleanup = watch_runtime_store.expire_abandoned_sessions()
+    samples_purged = 0
+    visual_rows_deleted = 0
+    for session_id in cleanup.get("session_ids") or []:
+        samples_purged += watch_analysis_store.purge_session_samples(str(session_id))
+        visual_rows_deleted += int(
+            watch_visual_store.delete_session_frames(str(session_id)).get("rows_deleted") or 0
+        )
+    cleanup["samples_purged"] = samples_purged
+    cleanup["visual_rows_deleted"] = visual_rows_deleted
+    return cleanup
+
+
+def _require_job_live(job: dict, *, stage: str) -> dict:
+    reason = watch_analysis_store.execution_skip_reason(job)
+    if reason:
+        cancelled = watch_analysis_store.cancel_claimed_job(job, reason=reason)
+        if cancelled and reason != "lease_lost":
+            watch_analysis_store.purge_job_samples(job)
+        logger.info(
+            "跳过一起看任务 job_id=%s session_id=%s stage=%s skip_reason=%s",
+            job.get("job_id"),
+            job.get("session_id"),
+            stage,
+            reason,
+        )
+        raise WatchJobCancelled(reason, stage)
+    session = watch_runtime_store.get_session(str(job.get("session_id") or ""))
+    if session is None:
+        reason = "session_ended"
+        watch_analysis_store.cancel_claimed_job(job, reason=reason)
+        watch_analysis_store.purge_job_samples(job)
+        logger.info(
+            "跳过一起看任务 job_id=%s session_id=%s stage=%s skip_reason=%s",
+            job.get("job_id"),
+            job.get("session_id"),
+            stage,
+            reason,
+        )
+        raise WatchJobCancelled(reason, stage)
+    return session
 
 
 def _session_with_prepared_subtitles(session: dict) -> dict:
@@ -126,6 +177,8 @@ def schedule_source_jobs(*, limit: int = 4) -> dict:
     for session in watch_runtime_store.list_sessions(limit=100):
         if created >= max(1, int(limit or 1)):
             break
+        if not _schedule_allowed(session, scheduler="source"):
+            continue
         media = session.get("media") if isinstance(session.get("media"), dict) else {}
         if str(media.get("source") or "") != "bilibili_embed":
             continue
@@ -161,6 +214,8 @@ def schedule_knowledge_jobs(*, limit: int = 4) -> dict:
     for session in watch_runtime_store.list_sessions(limit=100):
         if created >= max(1, int(limit or 1)):
             break
+        if not _schedule_allowed(session, scheduler="knowledge"):
+            continue
         familiarity = str((session.get("analysis") or {}).get("familiarity") or "pending")
         if str((session.get("preparation") or {}).get("started_at") or "").strip():
             continue
@@ -201,6 +256,8 @@ def schedule_subtitle_jobs(*, limit: int = 4) -> dict:
     for session in watch_runtime_store.list_sessions(limit=100):
         if created >= max(1, int(limit or 1)):
             break
+        if not _schedule_allowed(session, scheduler="subtitle"):
+            continue
         preparation = session.get("preparation") if isinstance(session.get("preparation"), dict) else {}
         if str(preparation.get("started_at") or "").strip():
             continue
@@ -235,15 +292,15 @@ def process_claimed_job(
 ) -> dict:
     job_id = str(job.get("job_id") or "")
     session_id = str(job.get("session_id") or "")
-    session = watch_runtime_store.get_session(session_id)
-    if not _job_matches_session(job, session):
-        watch_analysis_store.mark_job_cancelled(job_id, reason="stale_timeline")
-        watch_analysis_store.purge_job_samples(job)
-        return {"status": "cancelled", "reason": "stale_timeline"}
+    try:
+        session = _require_job_live(job, stage="claimed")
+    except WatchJobCancelled as exc:
+        return {"status": "cancelled", "reason": exc.reason, "stage": exc.stage}
 
     purpose = str(job.get("purpose") or "")
     if purpose == "subtitle_lookup":
         try:
+            session = _require_job_live(job, stage="before_subtitle_provider")
             source_client = source or get_watch_analysis_source()
             original_title, year = watch_subtitle_store.identity_for_session(session)
             result = source_client.prepare_subtitles(
@@ -251,11 +308,14 @@ def process_claimed_job(
                 original_title=original_title,
                 year=year,
             )
+            _require_job_live(job, stage="after_subtitle_provider")
             committed = watch_subtitle_store.commit_lookup_result(job, result)
             return {
                 "status": "done" if committed.get("applied") else "cancelled",
                 **committed,
             }
+        except WatchJobCancelled as exc:
+            return {"status": "cancelled", "reason": exc.reason, "stage": exc.stage}
         except SubtitleLookupError as exc:
             status = watch_subtitle_store.fail_lookup_job(job, str(exc), retryable=True)
             return {"status": status, "reason": "subtitle_provider_error", "retryable": True}
@@ -283,6 +343,7 @@ def process_claimed_job(
         if str(job.get("purpose") or "") == "knowledge_card":
             kwargs: dict[str, Any] = {
                 "on_sources_ready": lambda: watch_knowledge_store.mark_building(session_id),
+                "checkpoint": lambda stage: _require_job_live(job, stage=stage),
             }
             if knowledge_search_post is not None:
                 kwargs["search_post"] = knowledge_search_post
@@ -291,6 +352,7 @@ def process_claimed_job(
             elif post is not None:
                 kwargs["model_post"] = post
             card, sources, usage = build_work_knowledge_card(session, **kwargs)
+            _require_job_live(job, stage="before_knowledge_commit")
             committed = watch_knowledge_store.commit_knowledge_result(
                 job,
                 card=card,
@@ -304,6 +366,7 @@ def process_claimed_job(
             }
         samples = watch_analysis_store.load_job_samples(job)
         if not samples and str(job.get("input_origin") or "") == "backend_source":
+            session = _require_job_live(job, stage="before_source_acquire")
             source_client = source or get_watch_analysis_source()
             raw_samples = source_client.acquire(
                 _session_with_prepared_subtitles(session),
@@ -313,6 +376,7 @@ def process_claimed_job(
                     for value in (job.get("planned_timestamps_ms") or [])
                 ],
             )
+            session = _require_job_live(job, stage="after_source_acquire")
             prepared_from_source = prepare_samples(
                 session_id=session_id,
                 media_id=str((session.get("media") or {}).get("id") or ""),
@@ -321,6 +385,7 @@ def process_claimed_job(
                 purpose=str(job.get("purpose") or "rolling"),
                 raw_samples=raw_samples,
             )
+            _require_job_live(job, stage="after_source_prepare")
             refreshed, attached = watch_analysis_store.attach_source_samples(
                 job,
                 prepared_from_source,
@@ -328,7 +393,15 @@ def process_claimed_job(
             if not attached:
                 purge_prepared_samples(prepared_from_source)
                 if refreshed is None:
-                    return {"status": "cancelled", "reason": "stale_timeline"}
+                    latest = watch_analysis_store.get_job(job_id, public=True) or {}
+                    reason = str(latest.get("cancel_reason") or "stale_timeline")
+                    logger.info(
+                        "跳过一起看任务 job_id=%s session_id=%s stage=attach_source_samples skip_reason=%s",
+                        job_id,
+                        session_id,
+                        reason,
+                    )
+                    return {"status": "cancelled", "reason": reason}
                 job = refreshed
                 samples = watch_analysis_store.load_job_samples(job)
             else:
@@ -342,6 +415,11 @@ def process_claimed_job(
             )
             watch_analysis_store.purge_job_samples(job)
             return {"status": status, "reason": "samples_missing"}
+        samples = watch_subtitle_store.enrich_samples_with_subtitles(
+            session,
+            job,
+            samples,
+        )
 
         result: dict
         usage: dict
@@ -359,10 +437,15 @@ def process_claimed_job(
                 "model": "local-fingerprint-reuse",
             }
         elif post is None:
+            session = _require_job_live(job, stage="before_gemini")
             result, usage = analyze_watch_samples(session, job, samples)
+            _require_job_live(job, stage="after_gemini")
         else:
+            session = _require_job_live(job, stage="before_gemini")
             result, usage = analyze_watch_samples(session, job, samples, post=post)
+            _require_job_live(job, stage="after_gemini")
 
+        _require_job_live(job, stage="before_result_commit")
         committed = watch_analysis_store.commit_analysis_result(
             job,
             result=result,
@@ -403,6 +486,9 @@ def process_claimed_job(
             "status": "done" if committed.get("applied") else "cancelled",
             **committed,
         }
+    except WatchJobCancelled as exc:
+        purge_prepared_samples(prepared_from_source)
+        return {"status": "cancelled", "reason": exc.reason, "stage": exc.stage}
     except WatchAnalysisSourceError as exc:
         purge_prepared_samples(prepared_from_source)
         status = watch_analysis_store.fail_job(job, str(exc), retryable=exc.retryable)
@@ -473,6 +559,12 @@ def run_worker_loop() -> None:
     if not WATCH_ANALYSIS_ENABLED:
         logger.error("一起看分析 worker 未启动：WATCH_ANALYSIS_ENABLED=0")
         return
+    abandoned = cleanup_abandoned_sessions()
+    if abandoned.get("sessions_ended"):
+        logger.info(
+            "结束一起看遗留会话 skip_reason=client_lease_expired stats=%s",
+            abandoned,
+        )
     logger.info(
         "一起看分析 worker 已启动 idle=%.1f stale_after=%s source=%s stats=%s",
         idle,
@@ -493,6 +585,12 @@ def run_worker_loop() -> None:
             subtitle_deleted = watch_subtitle_store.cleanup_expired_assets()
             if subtitle_deleted:
                 logger.info("清理一起看过期字幕资产 count=%s", subtitle_deleted)
+            abandoned = cleanup_abandoned_sessions()
+            if abandoned.get("sessions_ended"):
+                logger.info(
+                    "结束一起看失联会话 skip_reason=client_lease_expired stats=%s",
+                    abandoned,
+                )
             watch_runtime_store.cleanup_expired_sessions()
             last_cleanup = now
         knowledge_scheduled = schedule_knowledge_jobs()
