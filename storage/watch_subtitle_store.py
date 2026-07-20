@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from config import WATCH_ANALYSIS_JOB_MAX_ATTEMPTS
+from config import WATCH_SUBTITLE_JOB_MAX_ATTEMPTS
 from services.watch_subtitles import parse_subtitle_cues
 from storage import runtime_sqlite, watch_analysis_store, watch_knowledge_store
 
@@ -153,7 +153,7 @@ def ensure_lookup_job(session: dict, *, force: bool = False) -> tuple[dict, bool
                     idempotency_key,
                     session_id,
                     _text(row["media_id"], 240),
-                    int(WATCH_ANALYSIS_JOB_MAX_ATTEMPTS),
+                    int(WATCH_SUBTITLE_JOB_MAX_ATTEMPTS),
                     now_iso,
                     now_iso,
                     now_iso,

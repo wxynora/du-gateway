@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
+import time
 import zipfile
 from typing import Any, Callable
 from urllib.parse import urljoin, urlsplit
 
 import requests
 
-from config import WATCH_ANALYSIS_SOURCE_TIMEOUT_SECONDS, WATCH_SUBDL_API_URL
+from config import (
+    WATCH_SUBDL_API_URL,
+    WATCH_SUBTITLE_LOOKUP_TIMEOUT_SECONDS,
+    WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS,
+)
 
 
 SUBDL_DOWNLOAD_BASE_URL = "https://dl.subdl.com"
 SUPPORTED_TEXT_EXTENSIONS = (".srt", ".vtt")
+logger = logging.getLogger(__name__)
 
 
 class SubtitleLookupError(RuntimeError):
@@ -128,6 +135,15 @@ def _safe_download_url(value: Any) -> str:
 
 def _candidate_downloads(data: dict) -> list[dict]:
     candidates: list[dict] = []
+    seen_urls: set[str] = set()
+
+    def append_candidate(candidate: dict) -> None:
+        url = str(candidate.get("url") or "")
+        if not url or url in seen_urls:
+            return
+        seen_urls.add(url)
+        candidates.append(candidate)
+
     for subtitle in data.get("subtitles") if isinstance(data.get("subtitles"), list) else []:
         if not isinstance(subtitle, dict):
             continue
@@ -141,7 +157,7 @@ def _candidate_downloads(data: dict) -> list[dict]:
                 continue
             url = _safe_download_url(item.get("url"))
             if url:
-                candidates.append(
+                append_candidate(
                     {
                         "url": url,
                         "name": str(item.get("name") or release_name).strip(),
@@ -157,7 +173,7 @@ def _candidate_downloads(data: dict) -> list[dict]:
                 )
         url = _safe_download_url(subtitle.get("url"))
         if url:
-            candidates.append(
+            append_candidate(
                 {
                     "url": url,
                     "name": release_name,
@@ -213,6 +229,15 @@ def fetch_subdl_subtitle(
     year = _year_from_media(media)
     saw_valid_response = False
     download_failed = False
+    started_at = time.monotonic()
+    deadline = started_at + float(WATCH_SUBTITLE_LOOKUP_TIMEOUT_SECONDS)
+
+    def request_timeout() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SubtitleLookupError("SubDL 字幕准备超时")
+        return min(float(WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS), remaining)
+
     for title in titles:
         params: dict[str, Any] = {
             "api_key": key,
@@ -227,8 +252,10 @@ def fetch_subdl_subtitle(
                 WATCH_SUBDL_API_URL,
                 params=params,
                 headers={"Accept": "application/json"},
-                timeout=int(WATCH_ANALYSIS_SOURCE_TIMEOUT_SECONDS),
+                timeout=request_timeout(),
             )
+        except SubtitleLookupError:
+            raise
         except Exception as exc:
             raise SubtitleLookupError("SubDL 查询请求失败") from exc
         if int(getattr(response, "status_code", 0) or 0) >= 400:
@@ -242,24 +269,53 @@ def fetch_subdl_subtitle(
         if not isinstance(data, dict) or data.get("status") is not True:
             raise SubtitleLookupError("SubDL 查询返回失败状态")
         saw_valid_response = True
-        for candidate in _candidate_downloads(data):
+        candidates = _candidate_downloads(data)
+        logger.info(
+            "SubDL 字幕搜索完成 title=%r year=%s candidates=%s elapsed_ms=%s",
+            title,
+            year or 0,
+            len(candidates),
+            round((time.monotonic() - started_at) * 1000),
+        )
+        for attempt, candidate in enumerate(candidates, start=1):
             try:
                 response = http_get(
                     candidate["url"],
                     headers={"Accept": "application/octet-stream"},
-                    timeout=int(WATCH_ANALYSIS_SOURCE_TIMEOUT_SECONDS),
+                    timeout=request_timeout(),
                 )
+            except SubtitleLookupError:
+                raise
             except Exception:
                 download_failed = True
+                logger.warning(
+                    "SubDL 字幕候选下载失败 title=%r attempt=%s elapsed_ms=%s",
+                    title,
+                    attempt,
+                    round((time.monotonic() - started_at) * 1000),
+                )
                 continue
             if int(getattr(response, "status_code", 0) or 0) >= 400:
                 download_failed = True
+                logger.warning(
+                    "SubDL 字幕候选返回失败 title=%r attempt=%s status=%s elapsed_ms=%s",
+                    title,
+                    attempt,
+                    int(getattr(response, "status_code", 0) or 0),
+                    round((time.monotonic() - started_at) * 1000),
+                )
                 continue
             text = _subtitle_text_from_download(
                 _response_bytes(response),
                 name=str(candidate.get("name") or ""),
             )
             if "-->" in text:
+                logger.info(
+                    "SubDL 字幕准备完成 title=%r attempt=%s elapsed_ms=%s",
+                    title,
+                    attempt,
+                    round((time.monotonic() - started_at) * 1000),
+                )
                 return {
                     "text": text,
                     "query_title": title,
@@ -269,6 +325,12 @@ def fetch_subdl_subtitle(
                 }
     if saw_valid_response and download_failed:
         raise SubtitleLookupError("SubDL 找到字幕但下载或解析失败")
+    logger.info(
+        "SubDL 字幕未命中 titles=%s year=%s elapsed_ms=%s",
+        len(titles),
+        year or 0,
+        round((time.monotonic() - started_at) * 1000),
+    )
     return {}
 
 

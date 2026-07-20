@@ -9,8 +9,8 @@ from uuid import uuid4
 from config import (
     WATCH_ANALYSIS_CLIENT_PLAN_TTL_SECONDS,
     WATCH_ANALYSIS_DAILY_MAX_COST_USD,
-    WATCH_ANALYSIS_FEAR_READY_BUFFER_MS,
     WATCH_ANALYSIS_FORWARD_WINDOW_MS,
+    WATCH_ANALYSIS_INITIAL_READY_BUFFER_MS,
     WATCH_ANALYSIS_JOB_MAX_ATTEMPTS,
     WATCH_ANALYSIS_MAX_AUDIO_DURATION_MS,
     WATCH_ANALYSIS_MAX_FRAMES_PER_JOB,
@@ -1390,10 +1390,21 @@ def commit_analysis_result(
                         ),
                     )
 
-            story_so_far = result.get("story_so_far") if isinstance(result.get("story_so_far"), dict) else {}
-            story_state = result.get("story_state") if isinstance(result.get("story_state"), dict) else {}
-            if purpose == "rolling" and story_so_far and _text(story_so_far.get("summary"), 8000):
-                through_ms = int(story_so_far.get("through_ms") or result.get("covered_until_ms") or 0)
+            story_background = (
+                result.get("story_background")
+                if isinstance(result.get("story_background"), dict)
+                else {}
+            )
+            has_story_background = bool(
+                _text(story_background.get("background"), 5000)
+                or (
+                    story_background.get("characters")
+                    if isinstance(story_background.get("characters"), list)
+                    else []
+                )
+            )
+            if purpose == "rolling" and has_story_background:
+                through_ms = int(story_background.get("through_ms") or result.get("covered_until_ms") or 0)
                 checkpoint_digest = hashlib.sha256(
                     f"{session_id}:{timeline_epoch}:{through_ms}:{analysis_version}".encode()
                 ).hexdigest()[:20]
@@ -1406,8 +1417,8 @@ def commit_analysis_result(
                     """,
                     (
                         f"watch_story_{checkpoint_digest}", session_id, media_id, timeline_epoch,
-                        through_ms, runtime_sqlite.json_dumps(story_so_far),
-                        runtime_sqlite.json_dumps(story_state), analysis_version, now_iso,
+                        through_ms, runtime_sqlite.json_dumps(story_background),
+                        "{}", analysis_version, now_iso,
                     ),
                 )
 
@@ -1475,7 +1486,7 @@ def commit_analysis_result(
                 covered_until = min(covered_until, int(session_row["duration_ms"] or 0))
             playhead_ms = int(session_row["playhead_ms"] or 0)
             duration_ms = int(session_row["duration_ms"] or 0)
-            required_buffer = int(WATCH_ANALYSIS_FEAR_READY_BUFFER_MS) if bool(session_row["fear_mode"]) else 0
+            required_buffer = int(WATCH_ANALYSIS_INITIAL_READY_BUFFER_MS)
             ready_until = playhead_ms + required_buffer
             content_end_ms = int(session_row["content_end_ms"] or -1)
             if content_end_ms >= 0:
@@ -1498,17 +1509,15 @@ def commit_analysis_result(
             should_unlock_playback = bool(
                 str(session_row["started_at"] or "").strip()
                 and not str(session_row["playback_unlocked_at"] or "").strip()
-                and (not bool(session_row["fear_mode"]) or ready)
+                and ready
             )
-            persisted_story_so_far = runtime_sqlite.json_loads(
+            persisted_story_background = runtime_sqlite.json_loads(
                 session_row["story_so_far_json"], {}
             )
-            persisted_story_state = runtime_sqlite.json_loads(
-                session_row["analysis_story_state_json"], {}
-            )
-            if purpose == "rolling" and _text(story_so_far.get("summary"), 8000):
-                persisted_story_so_far = story_so_far
-                persisted_story_state = story_state
+            persisted_story_state = runtime_sqlite.json_loads(session_row["analysis_story_state_json"], {})
+            if purpose == "rolling":
+                persisted_story_background = story_background if has_story_background else {}
+                persisted_story_state = {}
             conn.execute(
                 """
                 UPDATE watch_sessions
@@ -1523,7 +1532,7 @@ def commit_analysis_result(
                 (
                     familiarity, identity, original_title, identity_year, analysis_status,
                     covered_from, covered_until,
-                    runtime_sqlite.json_dumps(persisted_story_so_far),
+                    runtime_sqlite.json_dumps(persisted_story_background),
                     runtime_sqlite.json_dumps(persisted_story_state),
                     int(should_unlock_playback), now_iso,
                     now_iso, session_id,

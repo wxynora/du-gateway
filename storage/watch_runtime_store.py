@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from config import (
     WATCH_ANALYSIS_FEAR_READY_BUFFER_MS,
+    WATCH_ANALYSIS_INITIAL_READY_BUFFER_MS,
     WATCH_ANALYSIS_PROMPT_VERSION,
     WATCH_CLIENT_LEASE_SECONDS,
     WATCH_CONTEXT_REPLY_LEAD_MS,
@@ -838,7 +839,9 @@ def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
             is_playing = _bool(snapshot.get("is_playing"))
             if is_playing and not str(row["playback_unlocked_at"] or "").strip():
                 if str(row["started_at"] or "").strip():
-                    raise ValueError("胆小模式初始保护尚未就绪，请等待或明确无保护继续")
+                    if bool(row["fear_mode"]):
+                        raise ValueError("首段剧情与胆小模式保护尚未就绪，请等待或明确无保护继续")
+                    raise ValueError("首段剧情分析尚未覆盖到开播所需的五分钟")
                 raise ValueError("请先确认开播前资料，再正式开始一起看")
             playback_rate = min(4.0, max(0.25, _float(snapshot.get("playback_rate"), 1.0)))
             captured_at = _text(snapshot.get("captured_at"), 80) or now_iso
@@ -966,15 +969,6 @@ def update_mode(session_id: str, changes: dict) -> dict:
                     session_id,
                 ),
             )
-            if (
-                not fear_mode
-                and str(row["started_at"] or "").strip()
-                and not str(row["playback_unlocked_at"] or "").strip()
-            ):
-                conn.execute(
-                    "UPDATE watch_sessions SET playback_unlocked_at = ? WHERE id = ?",
-                    (now_iso, session_id),
-                )
             if force_unknown and not old_force_unknown:
                 conn.execute(
                     """
@@ -1084,11 +1078,9 @@ def update_preparation_state(
     return _row_to_session(updated)
 
 
-def _fear_coverage_ready_row(row: Any) -> bool:
-    if not bool(row["fear_mode"]):
-        return True
+def _initial_coverage_ready_row(row: Any) -> bool:
     playhead_ms = int(row["playhead_ms"] or 0)
-    required_until_ms = playhead_ms + int(WATCH_ANALYSIS_FEAR_READY_BUFFER_MS)
+    required_until_ms = playhead_ms + int(WATCH_ANALYSIS_INITIAL_READY_BUFFER_MS)
     content_end_ms = int(row["content_end_ms"])
     duration_ms = int(row["duration_ms"] or 0)
     if content_end_ms >= 0:
@@ -1111,7 +1103,7 @@ def get_start_gate(session: dict) -> dict:
     unlocked_at = str(preparation.get("playback_unlocked_at") or "")
     unprotected_at = str(preparation.get("fear_unprotected_confirmed_at") or "")
     playhead_ms = int(playback.get("playhead_ms") or 0)
-    required_until_ms = playhead_ms + int(WATCH_ANALYSIS_FEAR_READY_BUFFER_MS)
+    required_until_ms = playhead_ms + int(WATCH_ANALYSIS_INITIAL_READY_BUFFER_MS)
     content_end_ms = media.get("content_end_ms")
     duration_ms = int(media.get("duration_ms") or 0)
     if content_end_ms is not None:
@@ -1138,13 +1130,13 @@ def get_start_gate(session: dict) -> dict:
         reason = (
             "local_sampling_unavailable"
             if str(local_sampling.get("status") or "") == "unavailable"
-            else "initial_fear_coverage_pending"
+            else "initial_analysis_coverage_pending"
         )
     return {
         "status": status,
         "reason": reason,
         "can_play": bool(unlocked_at),
-        "can_unlock": bool(started_at and (coverage_ready or not bool(mode.get("fear_mode")))),
+        "can_unlock": bool(started_at and coverage_ready),
         "can_continue_unprotected": bool(started_at and mode.get("fear_mode") and not unlocked_at),
         "required_until_ms": required_until_ms,
         "covered_until_ms": int(analysis.get("covered_until_ms") or 0),
@@ -1181,11 +1173,13 @@ def start_session(
                 raise ValueError("观看会话已结束")
             if str(row["started_at"] or "").strip():
                 if not str(row["playback_unlocked_at"] or "").strip():
-                    coverage_ready = _fear_coverage_ready_row(row)
+                    coverage_ready = _initial_coverage_ready_row(row)
                     should_unlock = (
-                        not bool(row["fear_mode"])
-                        or coverage_ready
-                        or normalized_protection_action == "continue_unprotected"
+                        coverage_ready
+                        or (
+                            bool(row["fear_mode"])
+                            and normalized_protection_action == "continue_unprotected"
+                        )
                     )
                     if should_unlock:
                         conn.execute(
@@ -1261,11 +1255,13 @@ def start_session(
                     """,
                     (now_iso, now_iso, session_id),
                 )
-            coverage_ready = _fear_coverage_ready_row(row)
+            coverage_ready = _initial_coverage_ready_row(row)
             should_unlock = (
-                not bool(row["fear_mode"])
-                or coverage_ready
-                or normalized_protection_action == "continue_unprotected"
+                coverage_ready
+                or (
+                    bool(row["fear_mode"])
+                    and normalized_protection_action == "continue_unprotected"
+                )
             )
             unprotected_at = (
                 now_iso

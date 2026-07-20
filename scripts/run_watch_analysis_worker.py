@@ -158,8 +158,7 @@ def _fingerprint_reuse_result(session: dict, sections: list[dict]) -> dict:
         "familiarity_confidence": 0.0,
         "timeline_sections": sections,
         "plot_chunks": [],
-        "story_so_far": {},
-        "story_state": {},
+        "story_background": {},
         "risk_events": [],
         "covered_from_ms": 0,
         "covered_until_ms": 0,
@@ -299,14 +298,29 @@ def process_claimed_job(
 
     purpose = str(job.get("purpose") or "")
     if purpose == "subtitle_lookup":
+        provider_started_at = time.monotonic()
         try:
             session = _require_job_live(job, stage="before_subtitle_provider")
             source_client = source or get_watch_analysis_source()
             original_title, year = watch_subtitle_store.identity_for_session(session)
+            logger.info(
+                "开始一起看字幕准备 job_id=%s session_id=%s title=%r year=%s",
+                job_id,
+                session_id,
+                original_title,
+                year,
+            )
             result = source_client.prepare_subtitles(
                 session,
                 original_title=original_title,
                 year=year,
+            )
+            logger.info(
+                "完成一起看字幕 provider job_id=%s status=%s provider=%s elapsed_ms=%s",
+                job_id,
+                result.get("status") or "",
+                result.get("provider") or "",
+                round((time.monotonic() - provider_started_at) * 1000),
             )
             _require_job_live(job, stage="after_subtitle_provider")
             committed = watch_subtitle_store.commit_lookup_result(job, result)
@@ -317,9 +331,21 @@ def process_claimed_job(
         except WatchJobCancelled as exc:
             return {"status": "cancelled", "reason": exc.reason, "stage": exc.stage}
         except SubtitleLookupError as exc:
+            logger.warning(
+                "一起看字幕 provider 失败 job_id=%s elapsed_ms=%s reason=%s",
+                job_id,
+                round((time.monotonic() - provider_started_at) * 1000),
+                exc,
+            )
             status = watch_subtitle_store.fail_lookup_job(job, str(exc), retryable=True)
             return {"status": status, "reason": "subtitle_provider_error", "retryable": True}
         except WatchAnalysisSourceError as exc:
+            logger.warning(
+                "一起看字幕来源失败 job_id=%s elapsed_ms=%s reason=%s",
+                job_id,
+                round((time.monotonic() - provider_started_at) * 1000),
+                exc,
+            )
             status = watch_subtitle_store.fail_lookup_job(job, str(exc), retryable=exc.retryable)
             return {"status": status, "reason": "subtitle_source_error", "retryable": exc.retryable}
         except Exception as exc:

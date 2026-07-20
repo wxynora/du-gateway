@@ -25,6 +25,7 @@ from config import (
     WATCH_ANALYSIS_SOURCE_TIMEOUT_SECONDS,
     WATCH_ANALYSIS_SOURCE_USER_AGENT,
     WATCH_SUBDL_API_KEY,
+    WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS,
 )
 from services.watch_subtitles import SubtitleLookupError, fetch_subdl_subtitle
 
@@ -195,13 +196,21 @@ class BilibiliApiAnalysisSource:
         self._subdl_get = subdl_get or self._http_get
         self._cache: dict[str, tuple[float, dict]] = {}
 
-    def _api_data(self, url: str, *, params: dict, headers: dict, label: str) -> dict:
+    def _api_data(
+        self,
+        url: str,
+        *,
+        params: dict,
+        headers: dict,
+        label: str,
+        timeout_seconds: int | None = None,
+    ) -> dict:
         try:
             response = self._http_get(
                 url,
                 params=params,
                 headers=headers,
-                timeout=int(WATCH_ANALYSIS_SOURCE_TIMEOUT_SECONDS),
+                timeout=int(timeout_seconds or WATCH_ANALYSIS_SOURCE_TIMEOUT_SECONDS),
             )
         except Exception as exc:
             raise WatchAnalysisSourceError(f"Bilibili {label}请求失败", retryable=True) from exc
@@ -237,9 +246,16 @@ class BilibiliApiAnalysisSource:
         params: dict,
         headers: dict,
         label: str,
+        timeout_seconds: int | None = None,
     ) -> tuple[dict, dict]:
         try:
-            return self._api_data(url, params=params, headers=headers, label=label), headers
+            return self._api_data(
+                url,
+                params=params,
+                headers=headers,
+                label=label,
+                timeout_seconds=timeout_seconds,
+            ), headers
         except WatchAnalysisSourceError:
             if not self._cookie or headers.get("Cookie"):
                 raise
@@ -250,6 +266,7 @@ class BilibiliApiAnalysisSource:
                 params=params,
                 headers=authenticated_headers,
                 label=label,
+                timeout_seconds=timeout_seconds,
             ),
             authenticated_headers,
         )
@@ -407,6 +424,7 @@ class BilibiliApiAnalysisSource:
                 params={"bvid": bvid, "cid": cid},
                 headers=headers,
                 label="字幕信息",
+                timeout_seconds=int(WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS),
             )
         except WatchAnalysisSourceError:
             return {}
@@ -421,6 +439,7 @@ class BilibiliApiAnalysisSource:
                     params={"bvid": bvid, "cid": cid},
                     headers=subtitle_headers,
                     label="字幕信息",
+                    timeout_seconds=int(WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS),
                 )
             except WatchAnalysisSourceError:
                 return {}
@@ -450,7 +469,7 @@ class BilibiliApiAnalysisSource:
             response = self._http_get(
                 subtitle_url,
                 headers=subtitle_headers,
-                timeout=int(WATCH_ANALYSIS_SOURCE_TIMEOUT_SECONDS),
+                timeout=int(WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS),
             )
             if int(getattr(response, "status_code", 0) or 0) >= 400:
                 return {}
@@ -506,6 +525,7 @@ class BilibiliApiAnalysisSource:
             params={"bvid": bvid},
             headers=headers,
             label="视频信息",
+            timeout_seconds=int(WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS),
         )
         page_info = self._page_info(view_data, page)
         cid = int(page_info.get("cid") or 0)

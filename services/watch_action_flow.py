@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from typing import Any
 
@@ -9,6 +10,7 @@ from services.hidden_blocks import HiddenBlockParser
 from storage import watch_runtime_store
 
 
+logger = logging.getLogger(__name__)
 MARKER_START = "<<<DU_WATCH_ACTION>>>"
 MARKER_END = "<<<END_DU_WATCH_ACTION>>>"
 SHORT_MARKER = "[du:danmaku 00:32:18 弹幕内容]"
@@ -72,6 +74,8 @@ def split_watch_actions(text: str) -> tuple[str, list[dict]]:
         item = _parse_action(raw)
         if isinstance(item, dict):
             actions.append(item)
+        else:
+            logger.info("一起看弹幕标记未解析 reason=invalid_or_missing_media_time")
     return visible, actions
 
 
@@ -112,7 +116,25 @@ def build_watch_danmaku_event(action: dict, *, context: dict | None) -> dict | N
             return None
     if snapshot_epoch != current_epoch:
         return None
-    if target_ms <= max(seen_ms, current_playhead_ms) or target_ms > seen_ms + 120_000:
+    if target_ms <= max(seen_ms, current_playhead_ms):
+        logger.info(
+            "一起看弹幕未发出 reason=target_not_future session_id=%s target_ms=%s "
+            "snapshot_playhead_ms=%s current_playhead_ms=%s reply_until_ms=%s",
+            session_id,
+            target_ms,
+            seen_ms,
+            current_playhead_ms,
+            int(context.get("reply_until_ms") or 0),
+        )
+        return None
+    if target_ms > seen_ms + 120_000:
+        logger.info(
+            "一起看弹幕未发出 reason=target_outside_future_window session_id=%s "
+            "target_ms=%s snapshot_playhead_ms=%s",
+            session_id,
+            target_ms,
+            seen_ms,
+        )
         return None
 
     text = str(action.get("text") or "").replace("\x00", "").strip()

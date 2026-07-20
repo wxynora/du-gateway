@@ -379,6 +379,9 @@ def build_watch_context(
     reply_arrival = [
         item for item in future if _int(item.get("start_ms"), 0) <= reply_until_ms
     ]
+    danmaku_future = [
+        item for item in future if _int(item.get("end_ms"), 0) > reply_until_ms
+    ]
     story_summary = _eligible_story_summary(
         session,
         session_id=session_id,
@@ -392,6 +395,7 @@ def build_watch_context(
         "session_id": session_id,
         "media_id": str(media.get("id") or ""),
         "snapshot": snapshot,
+        "reply_until_ms": reply_until_ms,
         "future_until_ms": playhead_ms + FUTURE_WINDOW_MS,
         "visual": {
             "timeline_epoch": timeline_epoch,
@@ -411,6 +415,7 @@ def build_watch_context(
         f"你正在和小玥一起看{_work_name(media, analysis)}。",
         "",
         "视频不会停下来等你回复，所以本轮另外提供了预计回复抵达前会播放到的少量内容。",
+        "不要和小玥照搬复述你看到的剧情内容",
     ]
     story_characters = [
         _compact_text(item, 120)
@@ -438,16 +443,23 @@ def build_watch_context(
         )
     if str(analysis.get("status") or "pending") != "ready":
         lines.extend(["", "没有可靠描述的部分不要自行补写。"])
-    if bool(mode.get("danmaku_enabled")) and future:
+    if bool(mode.get("danmaku_enabled")) and danmaku_future:
+        first_action_chunk = danmaku_future[0]
+        example_target_ms = max(
+            reply_until_ms,
+            _int(first_action_chunk.get("start_ms"), reply_until_ms),
+        )
         lines.extend(
             [
                 "",
                 "【定时观看反应】",
-                "下面是发送位置后两分钟内可用于弹幕的剧情：",
-                *_format_chunks(future),
-                f"晚于 {_clock(reply_until_ms)} 的内容只能用于定时弹幕，不能写进当前可见回复。",
+                f"预计当前可见回复抵达时，视频约播放到 {_clock(reply_until_ms)}。",
+                "下面是抵达位置之后仍会发生、只可用于定时弹幕的剧情：",
+                *_format_chunks(danmaku_future),
+                "这些内容不能写进当前可见回复，也不能提前暗示给小玥。",
                 "如果你想发送弹幕，可以在回复末尾追加一行短隐藏标记：[du:danmaku 媒体时间 弹幕内容]。",
-                f"媒体时间必须晚于 {_clock(playhead_ms)} 且不超过 {_clock(playhead_ms + FUTURE_WINDOW_MS)}，例如：[du:danmaku {_clock(min(playhead_ms + 30_000, playhead_ms + FUTURE_WINDOW_MS))} 这里先别盯太紧]。没有想发的就不要写。",
+                "媒体时间是希望弹幕实际出现在画面上的时间，不是小玥发消息或你写回复时的时间。",
+                f"优先选择不早于 {_clock(reply_until_ms)}、且落在上面可靠剧情片段内的时间；片段允许时再留 5 到 10 秒抵达余量。例如：[du:danmaku {_clock(example_target_ms)} 这里先别盯太紧]。没有想发的就不要写。",
             ]
         )
     else:
