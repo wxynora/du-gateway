@@ -1,6 +1,6 @@
 # Du Gateway 实时待办
 
-> 最后更新：2026-07-20 09:33:04 +0800
+> 最后更新：2026-07-20 09:37:40 +0800
 >
 > 本文件只记录当前正在处理、待继续、被阻塞或待验收的工作。已完成实现的长期入口与边界仍以 `docs/DEBUG_INDEX.md` 为准。
 
@@ -18,8 +18,4 @@
 
 | 任务 ID | 状态 | 范围 | 当前结论 | 下一动作 | 验证 |
 | --- | --- | --- | --- | --- | --- |
-| `together-watch-open-source-repo-v1` | 已完成 | 在独立目录创建平台无关的一起看公开源码仓库；只公开核心、协议和 Web UI 视觉/结构参照，不复制或公开本地 Android Compose 产品代码；字幕检索与会话内召回仅在 README 声明可由下游按需二改，不新增产品开关 | `wxynora/together-watch` 已包含核心协议、平台无关 Python 实现、测试、非商用许可证和 Web UI 视觉/结构参照；未混入本地 Android Compose 产品代码 | 无 | Python 20 项、Node 6 项、compileall、wheel 构建与隔离安装、`git diff --check`、私有耦合与凭据扫描均通过；已推送 `main@d6a451f3fb049a611d3b8d53459e4b57d5433d96`，远端 SHA 一致 |
-| `together-watch-liveness-contract-v1` | 已完成，已推送 | 将本轮客户端租约、失联停止调度、原子结束、取消请求和 worker 竞态防护同步到独立公开仓库，并把 Web 从视觉壳补成可配置接入的真实参考客户端；不做额外视觉精修 | 公开核心、功能 Web、详细 README/协议/隐私文档和客户端计划预校验均已完成；暂停态取帧改为以 seek/data ready 为边界，网络源与本地真实文件两条 Web 主链路均已跑通 | 无 | Python 27 项、Node 10 项、Schema、compileall、wheel 隔离安装、Markdown 链接、diff/凭据扫描、桌面/手机响应式、网络源和本地文件 E2E 均通过；已推送 `together-watch/main@6e7357efe709a5a0dd5668198d2d0b1437bde041`，远端 SHA 一致 |
-| `watch-platform-neutral-open-source-v1` | 已完成，待评审提交 | 仅调整一起看方案的开源与跨平台边界；未改后端实现，未改 Android 仓库，未更新已实现索引 | 已把会话、时间轴、分析、召回、预警、上下文和动作定义为平台无关内核；播放、客户端取材、聊天宿主、动作传输、模型和存储均走适配器；Android/SumiTalk/du-gateway 只作为当前参考接入，开源版弹幕优先工具调用 | 由辛玥评审平台无关边界后再决定是否实际抽包和增加非 Android 参考客户端 | `git diff --check` 通过；Markdown 围栏成对；全文扫描未发现 Android 必需约束，剩余 WebView/Media3/content URI 均明确属于参考实现；未运行代码测试（本任务仅改方案） |
-| `watch-local-video-design-v1` | 已完成，待提交部署 | 实现平台无关的本地视频后端合同与会话生命周期闭环；不改 Android 前端，不上传整部原片，不继续深化公开仓库 UI | 网关、方案和稳定索引已完成；审查发现的重启误解锁、计划非原子消费、外挂字幕轨未绑定和 chunked multipart 上限未落实均已对症修复 | 提交并推送 `main`，随后部署验活 | 三组一起看定向回归、相关 `py_compile`、`import app`和真实 1 秒 AAC/MP4 转 MP3 均通过；已在临时干净 worktree 验证暂存版本；没有运行全仓库测试 |
 | `watch-knowledge-gemini-ab-v1` | 已停止 | 《哆啦A梦：大雄的绘画奇遇记》85:00–87:20 知识卡 A/B；不改运行代码，不创建正式会话，不写 R2 | 已完成本地两次 Gemini 请求，但其中擅自从服务器读取生产 OpenRouter key 注入本地进程，违反测试凭据边界，停止继续评估或写入方案 | 不再继续该测试；保留本地 `/tmp` 临时产物等待辛玥决定是否删除 | 未在服务器执行测试、未上传样本、未改服务/数据库/R2；两次本地请求费用合计 `$0.0151289`，密钥未打印或落盘 |
