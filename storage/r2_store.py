@@ -1022,6 +1022,63 @@ def touch_dynamic_memory_mentions(memory_ids: list[str]) -> int:
     return touched
 
 
+def retain_dynamic_memory_by_id(memory_id: str) -> dict:
+    """保留单条动态记忆，并返回可区分未命中与写入失败的结果。"""
+    clean_id = str(memory_id or "").strip()
+    if not clean_id:
+        return {"status": "not_found", "id": ""}
+
+    client = _s3_client()
+    if not client:
+        logger.error("动态记忆保留失败：R2 未配置 memory_id=%s", clean_id)
+        return {"status": "write_failed", "id": clean_id}
+
+    updated_memory = None
+    try:
+        with _global_write_lock:
+            data = _read_json(client, R2_KEY_DYNAMIC_MEMORY)
+            memories = data.get("memories") if isinstance(data, dict) else None
+            if not isinstance(memories, list):
+                return {"status": "not_found", "id": clean_id}
+
+            updated_memories = list(memories)
+            for index, raw_memory in enumerate(memories):
+                if not isinstance(raw_memory, dict):
+                    continue
+                if str(raw_memory.get("id") or "").strip() != clean_id:
+                    continue
+                updated_memory = dict(raw_memory)
+                try:
+                    mention_count = int(updated_memory.get("mention_count") or 0)
+                except (TypeError, ValueError):
+                    mention_count = 0
+                updated_memory["mention_count"] = mention_count + 1
+                updated_memory["last_mentioned"] = now_beijing_iso()
+                updated_memories[index] = updated_memory
+                break
+
+            if updated_memory is None:
+                return {"status": "not_found", "id": clean_id}
+
+            _write_json(client, R2_KEY_DYNAMIC_MEMORY, {"memories": updated_memories})
+    except Exception as e:
+        logger.error("动态记忆保留写入失败 memory_id=%s error=%s", clean_id, e, exc_info=True)
+        return {"status": "write_failed", "id": clean_id}
+
+    _invalidate_memory_recall_cache_safe()
+    logger.info(
+        "动态记忆保留完成 memory_id=%s mention_count=%s last_mentioned=%s",
+        clean_id,
+        updated_memory.get("mention_count"),
+        updated_memory.get("last_mentioned"),
+    )
+    return {
+        "status": "ok",
+        "id": clean_id,
+        "memory": updated_memory,
+    }
+
+
 def get_dynamic_recall_debug_events(limit: int = 30) -> list[dict]:
     """读取动态记忆召回调试事件（按时间倒序取最近 N 条）。"""
     client = _s3_client()

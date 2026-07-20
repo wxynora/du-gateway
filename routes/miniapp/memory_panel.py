@@ -276,6 +276,49 @@ def register_routes(bp) -> None:
         ok = r2_store.delete_dynamic_memory_by_id(memory_id)
         return jsonify({"ok": ok, "layer": "dynamic", "id": memory_id})
 
+    @bp.route("/dynamic-memory/<memory_id>/retain", methods=["POST"])
+    def miniapp_retain_dynamic_memory(memory_id: str):
+        clean_id = str(memory_id or "").strip()
+        if not clean_id:
+            return jsonify({"ok": False, "error": "缺少 memory_id"}), 400
+
+        try:
+            result = r2_store.retain_dynamic_memory_by_id(clean_id)
+        except Exception as e:
+            logger.error("动态记忆保留失败 memory_id=%s error=%s", clean_id, e, exc_info=True)
+            result = {"status": "write_failed", "id": clean_id}
+        status = str((result or {}).get("status") or "")
+        if status == "not_found":
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "未找到该动态记忆",
+                    "layer": "dynamic",
+                    "id": clean_id,
+                }
+            ), 404
+        if status != "ok":
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "动态记忆保留写入失败",
+                    "layer": "dynamic",
+                    "id": clean_id,
+                }
+            ), 500
+
+        memory = result.get("memory") if isinstance(result.get("memory"), dict) else {}
+        return jsonify(
+            {
+                "ok": True,
+                "layer": "dynamic",
+                "id": clean_id,
+                "mention_count": int(memory.get("mention_count") or 0),
+                "last_mentioned": str(memory.get("last_mentioned") or ""),
+                "memory": memory,
+            }
+        )
+
     @bp.route("/memory-trash", methods=["GET"])
     def miniapp_memory_trash():
         layer = str(request.args.get("layer") or "").strip().lower()
