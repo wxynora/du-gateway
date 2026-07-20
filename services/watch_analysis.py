@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -18,6 +17,10 @@ from config import (
     WATCH_ANALYSIS_TIMEOUT_SECONDS,
 )
 from storage import watch_knowledge_store
+from utils.log import get_logger
+
+
+logger = get_logger(__name__)
 
 
 TIMELINE_KINDS = {
@@ -221,10 +224,18 @@ ANALYSIS_SCHEMA = {
 
 
 class WatchAnalysisProviderError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool, status_code: int = 0) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        status_code: int = 0,
+        usage: dict | None = None,
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.status_code = int(status_code or 0)
+        self.usage = dict(usage or {})
 
 
 def _text(value: Any, limit: int) -> str:
@@ -256,25 +267,160 @@ def _strings(value: Any, *, limit: int = 20, item_limit: int = 200) -> list[str]
     return out[:limit]
 
 
-def _extract_json_object(content: Any) -> dict:
+def _without_trailing_json_commas(text: str) -> str:
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            index += 1
+            continue
+        if char == ",":
+            next_index = index + 1
+            while next_index < len(text) and text[next_index].isspace():
+                next_index += 1
+            if next_index < len(text) and text[next_index] in "}]":
+                index += 1
+                continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _balanced_json_objects(text: str) -> tuple[list[str], bool]:
+    candidates: list[str] = []
+    saw_incomplete = False
+    for start, char in enumerate(text):
+        if char != "{":
+            continue
+        stack: list[str] = []
+        in_string = False
+        escaped = False
+        for index in range(start, len(text)):
+            current = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif current == "\\":
+                    escaped = True
+                elif current == '"':
+                    in_string = False
+                continue
+            if current == '"':
+                in_string = True
+                continue
+            if current in "{[":
+                stack.append(current)
+                continue
+            if current not in "}]":
+                continue
+            expected = "{" if current == "}" else "["
+            if not stack or stack[-1] != expected:
+                break
+            stack.pop()
+            if not stack:
+                candidates.append(text[start : index + 1])
+                break
+        else:
+            saw_incomplete = True
+    return candidates, saw_incomplete
+
+
+def _json_text_candidates(content: Any) -> tuple[list[dict], list[str]]:
+    objects: list[dict] = []
+    texts: list[str] = []
     if isinstance(content, dict):
-        return content
-    text = str(content or "").strip()
-    if not text:
-        raise WatchAnalysisProviderError("分析模型返回空内容", retryable=True)
-    try:
-        parsed = json.loads(text)
-    except Exception:
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            raise WatchAnalysisProviderError("分析模型没有返回 JSON", retryable=True)
+        parsed = content.get("parsed")
+        json_value = content.get("json")
+        if isinstance(parsed, dict):
+            objects.append(parsed)
+        if isinstance(json_value, dict):
+            objects.append(json_value)
+        if isinstance(content.get("text"), str):
+            texts.append(content["text"])
+        elif isinstance(content.get("content"), (str, list, dict)):
+            nested_objects, nested_texts = _json_text_candidates(content["content"])
+            objects.extend(nested_objects)
+            texts.extend(nested_texts)
+        elif not objects:
+            objects.append(content)
+        return objects, texts
+    if isinstance(content, list):
+        combined: list[str] = []
+        for item in content:
+            nested_objects, nested_texts = _json_text_candidates(item)
+            objects.extend(nested_objects)
+            texts.extend(nested_texts)
+            combined.extend(nested_texts)
+        if len(combined) > 1:
+            texts.append("".join(combined))
+        return objects, texts
+    if isinstance(content, str):
+        texts.append(content)
+    return objects, texts
+
+
+def _parse_json_dict(text: str) -> dict | None:
+    candidate = text.strip().lstrip("\ufeff")
+    if not candidate:
+        return None
+    for attempt in (candidate, _without_trailing_json_commas(candidate)):
         try:
-            parsed = json.loads(match.group(0))
-        except Exception as exc:
-            raise WatchAnalysisProviderError("分析模型 JSON 无法解析", retryable=True) from exc
-    if not isinstance(parsed, dict):
-        raise WatchAnalysisProviderError("分析模型 JSON 顶层不是对象", retryable=True)
-    return parsed
+            parsed = json.loads(attempt, strict=False)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(parsed, str) and parsed != attempt:
+            nested = _parse_json_dict(parsed)
+            if nested is not None:
+                return nested
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _extract_json_object(content: Any) -> dict:
+    objects, texts = _json_text_candidates(content)
+    if not any(text.strip() for text in texts):
+        if not objects:
+            raise WatchAnalysisProviderError("分析模型返回空内容", retryable=True)
+    parsed_objects: list[dict] = list(objects)
+    saw_object_marker = False
+    saw_incomplete = False
+    for text in texts:
+        parsed = _parse_json_dict(text)
+        if parsed is not None:
+            parsed_objects.append(parsed)
+            continue
+        candidates, incomplete = _balanced_json_objects(text)
+        saw_object_marker = saw_object_marker or "{" in text
+        saw_incomplete = saw_incomplete or incomplete
+        for candidate in candidates:
+            parsed = _parse_json_dict(candidate)
+            if parsed is not None:
+                parsed_objects.append(parsed)
+    required = set(ANALYSIS_SCHEMA["required"])
+    root_objects = [item for item in parsed_objects if required.intersection(item)]
+    if root_objects:
+        return max(root_objects, key=lambda item: (len(required.intersection(item)), len(item)))
+    if saw_incomplete:
+        raise WatchAnalysisProviderError("分析模型 JSON 不完整", retryable=True)
+    if saw_object_marker:
+        raise WatchAnalysisProviderError("分析模型 JSON 无法解析", retryable=True)
+    raise WatchAnalysisProviderError("分析模型没有返回可解析的结构化结果", retryable=True)
 
 
 def _knowledge_mode(session: dict) -> str:
@@ -540,12 +686,16 @@ def normalize_watch_analysis_result(raw: dict, *, session: dict, job: dict, samp
 
 def _usage_from_response(data: dict, *, elapsed_ms: int) -> dict:
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-    cost_usd = _float(usage.get("cost") or usage.get("cost_usd"), 0)
+    cost_reported = "cost" in usage or "cost_usd" in usage
+    cost_value = usage.get("cost") if "cost" in usage else usage.get("cost_usd")
+    cost_usd = _float(cost_value, 0)
     return {
         "input_tokens": _int(usage.get("prompt_tokens") or usage.get("input_tokens"), 0),
         "output_tokens": _int(usage.get("completion_tokens") or usage.get("output_tokens"), 0),
         "total_tokens": _int(usage.get("total_tokens"), 0),
         "cost_usd": max(0.0, cost_usd),
+        "provider_called": True,
+        "cost_reported": cost_reported,
         "elapsed_ms": max(0, int(elapsed_ms)),
         "model": _text(data.get("model") or WATCH_ANALYSIS_MODEL, 160),
     }
@@ -589,8 +739,43 @@ def analyze_watch_samples(
     try:
         data = response.json()
     except Exception as exc:
+        logger.warning(
+            "一起看分析响应包解析失败 session_id=%s job_id=%s purpose=%s range_ms=%s-%s raw_response=%s",
+            session.get("session_id") or "",
+            job.get("job_id") or "",
+            job.get("purpose") or "rolling",
+            job.get("range_start_ms") or 0,
+            job.get("range_end_ms") or 0,
+            getattr(response, "text", ""),
+        )
         raise WatchAnalysisProviderError("分析上游响应不是 JSON", retryable=True) from exc
+    if not isinstance(data, dict):
+        logger.warning(
+            "一起看分析响应包顶层无效 session_id=%s job_id=%s purpose=%s range_ms=%s-%s raw_response=%s",
+            session.get("session_id") or "",
+            job.get("job_id") or "",
+            job.get("purpose") or "rolling",
+            job.get("range_start_ms") or 0,
+            job.get("range_end_ms") or 0,
+            json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str),
+        )
+        raise WatchAnalysisProviderError("分析上游响应顶层不是对象", retryable=True)
+    usage = _usage_from_response(data, elapsed_ms=elapsed_ms)
     message = (((data.get("choices") or [{}])[0] or {}).get("message") or {})
-    raw = _extract_json_object(message.get("content"))
+    try:
+        raw = _extract_json_object(message)
+    except WatchAnalysisProviderError as exc:
+        logger.warning(
+            "一起看剧情结果解析失败 session_id=%s job_id=%s purpose=%s range_ms=%s-%s error=%s raw_response=%s",
+            session.get("session_id") or "",
+            job.get("job_id") or "",
+            job.get("purpose") or "rolling",
+            job.get("range_start_ms") or 0,
+            job.get("range_end_ms") or 0,
+            exc,
+            json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str),
+        )
+        exc.usage = usage
+        raise
     result = normalize_watch_analysis_result(raw, session=session, job=job, samples=samples)
-    return result, _usage_from_response(data, elapsed_ms=elapsed_ms)
+    return result, usage

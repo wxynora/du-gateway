@@ -24,11 +24,9 @@ def test_r2_store_keeps_conversation_exports() -> None:
         "get_conversation_round_by_index",
         "get_conversation_rounds",
         "get_next_round_index",
-        "get_pseudo_cot_state",
         "list_conversation_rounds_preview",
         "normalize_window_id",
         "overwrite_conversation_rounds",
-        "save_pseudo_cot_state",
     )
     for name in names:
         assert getattr(r2_store, name) is getattr(conversation_store, name), name
@@ -188,21 +186,6 @@ def test_round_by_index_prefers_compact_object() -> None:
     sqlite.upsert_round.assert_called_once()
 
 
-def test_pseudo_cot_state_writes_normalized_window() -> None:
-    client = object()
-    writer = Mock()
-    with (
-        patch.object(conversation_store, "_s3_client", return_value=client),
-        patch.object(conversation_store, "_write_json", writer),
-    ):
-        assert r2_store.save_pseudo_cot_state("", {"enabled": True}) is True
-    writer.assert_called_once_with(
-        client,
-        "windows/__default__/pseudo_cot_state.json",
-        {"enabled": True, "window_id": "__default__"},
-    )
-
-
 def test_preview_text_and_truncation_contract() -> None:
     content = [{"type": "text", "text": "hello"}, {"type": "image_url"}]
     assert r2_store._content_to_text_for_preview(content) == "hello [image_url]"
@@ -262,7 +245,6 @@ def main() -> None:
         test_append_refuses_blind_write_after_meta_read_failure,
         test_append_writes_round_recent_meta_backup_and_sqlite,
         test_round_by_index_prefers_compact_object,
-        test_pseudo_cot_state_writes_normalized_window,
         test_preview_text_and_truncation_contract,
         test_delete_round_rebuilds_compact_and_sqlite,
     ]

@@ -1,20 +1,44 @@
 """R2 storage helpers for MiniApp schedule/reminder items."""
+from contextlib import contextmanager
 import threading
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from uuid import uuid4
 
+from config import DATA_DIR
 from storage import schedule_sqlite_store
 from utils.log import get_logger
 from utils.time_aware import BEIJING_TZ, now_beijing_iso
+
+try:
+    import fcntl
+except Exception:  # pragma: no cover - production Linux and local macOS provide fcntl.
+    fcntl = None
 
 R2_KEY_SCHEDULE_ITEMS = "schedule/items.json"
 R2_KEY_SCHEDULE_FIRED = "schedule/fired.json"
 SCHEDULE_FIRED_RETENTION_HOURS = 48
 
 _schedule_write_lock = threading.Lock()
+_schedule_lock_path = DATA_DIR / "schedule_items.lock"
 
 logger = get_logger(__name__)
+
+
+@contextmanager
+def _schedule_write_guard():
+    """Serialize schedule read/modify/write across gateway and proactive processes."""
+    with _schedule_write_lock:
+        if fcntl is None:
+            yield
+            return
+        _schedule_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with _schedule_lock_path.open("a+b") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _r2_store():
@@ -93,20 +117,61 @@ def get_schedule_items() -> list[dict]:
     return items
 
 
-def save_schedule_items(items: list[dict]) -> bool:
-    """保存日历/提醒条目列表（覆盖）。"""
+def _save_schedule_items_unlocked(items: list[dict]) -> bool:
     client = _s3_client()
     if not client:
         return False
     payload = {"items": items or []}
-    with _schedule_write_lock:
-        try:
-            _write_json(client, R2_KEY_SCHEDULE_ITEMS, payload)
-            schedule_sqlite_store.replace_items(payload["items"])
-            return True
-        except Exception as e:
-            logger.error("save_schedule_items 失败 error=%s", e, exc_info=True)
-            return False
+    try:
+        _write_json(client, R2_KEY_SCHEDULE_ITEMS, payload)
+        schedule_sqlite_store.replace_items(payload["items"])
+        return True
+    except Exception as e:
+        logger.error("save_schedule_items 失败 error=%s", e, exc_info=True)
+        return False
+
+
+def save_schedule_items(items: list[dict]) -> bool:
+    """保存日历/提醒条目列表（覆盖）。"""
+    with _schedule_write_guard():
+        return _save_schedule_items_unlocked(items)
+
+
+def _mutate_schedule_items(mutator) -> tuple[bool, Any]:
+    """Run one R2 schedule read/modify/write transaction under the process-shared lock."""
+    with _schedule_write_guard():
+        current = _read_schedule_items_from_r2()
+        next_items, result = mutator([dict(item) for item in current])
+        if next_items is None:
+            return False, result
+        return _save_schedule_items_unlocked(next_items), result
+
+
+def patch_schedule_items(item_patches: dict[str, dict], deleted_item_ids: set[str] | list[str] = ()) -> bool:
+    """Patch only fields changed by one tick while preserving concurrent schedule edits."""
+    updates = {
+        str(item_id or "").strip(): dict(fields)
+        for item_id, fields in (item_patches or {}).items()
+        if str(item_id or "").strip() and isinstance(fields, dict)
+    }
+    deleted = {str(item_id or "").strip() for item_id in (deleted_item_ids or []) if str(item_id or "").strip()}
+    if not updates and not deleted:
+        return True
+
+    def _apply(items: list[dict]):
+        out: list[dict] = []
+        for item in items:
+            item_id = str(item.get("id") or "").strip()
+            if item_id in deleted:
+                continue
+            merged = dict(item)
+            if item_id in updates:
+                merged.update(updates[item_id])
+            out.append(merged)
+        return out, None
+
+    ok, _ = _mutate_schedule_items(_apply)
+    return ok
 
 
 def disable_schedule_item(item_id: str) -> bool:
@@ -114,22 +179,21 @@ def disable_schedule_item(item_id: str) -> bool:
     iid = (item_id or "").strip()
     if not iid:
         return False
-    items = get_schedule_items()
-    if not items:
-        return False
-    changed = False
-    now_iso = now_beijing_iso()
-    for it in items:
-        if str(it.get("id") or "").strip() != iid:
-            continue
-        if bool(it.get("enabled")):
-            it["enabled"] = False
-            it["disabled_at"] = now_iso
-            changed = True
-        break
-    if not changed:
-        return False
-    return save_schedule_items(items)
+    def _disable(items: list[dict]):
+        changed = False
+        now_iso = now_beijing_iso()
+        for it in items:
+            if str(it.get("id") or "").strip() != iid:
+                continue
+            if bool(it.get("enabled")):
+                it["enabled"] = False
+                it["disabled_at"] = now_iso
+                changed = True
+            break
+        return (items if changed else None), changed
+
+    ok, changed = _mutate_schedule_items(_disable)
+    return bool(ok and changed)
 
 
 def enable_schedule_item(item_id: str) -> bool:
@@ -137,22 +201,21 @@ def enable_schedule_item(item_id: str) -> bool:
     iid = (item_id or "").strip()
     if not iid:
         return False
-    items = get_schedule_items()
-    if not items:
-        return False
-    changed = False
-    now_iso = now_beijing_iso()
-    for it in items:
-        if str(it.get("id") or "").strip() != iid:
-            continue
-        if not bool(it.get("enabled")):
-            it["enabled"] = True
-            it["enabled_at"] = now_iso
-            changed = True
-        break
-    if not changed:
-        return False
-    return save_schedule_items(items)
+    def _enable(items: list[dict]):
+        changed = False
+        now_iso = now_beijing_iso()
+        for it in items:
+            if str(it.get("id") or "").strip() != iid:
+                continue
+            if not bool(it.get("enabled")):
+                it["enabled"] = True
+                it["enabled_at"] = now_iso
+                changed = True
+            break
+        return (items if changed else None), changed
+
+    ok, changed = _mutate_schedule_items(_enable)
+    return bool(ok and changed)
 
 
 def create_schedule_item(
@@ -257,9 +320,11 @@ def create_schedule_item(
         item["weekly_time"] = wtime
     if rep == "daily":
         item["daily_time"] = dtime
-    items = get_schedule_items()
-    items.append(item)
-    ok = save_schedule_items(items)
+    def _append(items: list[dict]):
+        items.append(dict(item))
+        return items, None
+
+    ok, _ = _mutate_schedule_items(_append)
     return item if ok else None
 
 
@@ -268,13 +333,13 @@ def delete_schedule_item(item_id: str) -> bool:
     iid = (item_id or "").strip()
     if not iid:
         return False
-    items = get_schedule_items()
-    if not items:
-        return False
-    new_items = [it for it in items if str(it.get("id") or "").strip() != iid]
-    if len(new_items) == len(items):
-        return False
-    return save_schedule_items(new_items)
+    def _delete(items: list[dict]):
+        new_items = [it for it in items if str(it.get("id") or "").strip() != iid]
+        changed = len(new_items) != len(items)
+        return (new_items if changed else None), changed
+
+    ok, changed = _mutate_schedule_items(_delete)
+    return bool(ok and changed)
 
 
 def _read_schedule_fired_keys_from_r2() -> set[str]:

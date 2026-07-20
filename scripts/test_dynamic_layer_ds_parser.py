@@ -54,7 +54,7 @@ CONTENT: 动态层"""
     _assert(_decision_structural_issue(obj) == "content_too_short", "short content should be rejected")
 
 
-def test_skip_can_still_emit_body_delta() -> None:
+def test_single_parser_ignores_legacy_body_delta_lines() -> None:
     raw = """ACTION: skip
 IMPORTANCE: 1
 TAG: 卧室
@@ -67,13 +67,10 @@ BODY_SENSITIVITY_DELTA: +7
 BODY_MISCHIEF_DELTA: +9
 BODY_RESTRAINT_PRESSURE_DELTA: +22"""
     obj = _extract_json_from_ds_response(raw)
-    _assert(isinstance(obj, dict), "skip output with body delta should parse")
+    _assert(isinstance(obj, dict), "skip output with legacy BODY lines should still parse")
     _assert(obj.get("action") == "skip", "ACTION should remain skip")
     _assert(not _decision_structural_issue(obj), "skip should not require content")
-    _assert(
-        obj.get("body_delta") == {"sensitivity": 7, "mischief": 9, "restraint_pressure": 22},
-        "BODY deltas should parse on skip",
-    )
+    _assert("body_delta" not in obj, "dynamic memory parser must ignore legacy BODY lines")
 
 
 def test_incomplete_tail_is_rejected() -> None:
@@ -123,10 +120,10 @@ LAST_MENTIONED: 2026-05-15T12:01:00+08:00"""
     _assert(first.get("timestamp") == "2026-05-15T12:00:00+08:00", "timestamp should be preserved")
     _assert(first.get("mention_count") == 1, "mention_count should be preserved as int")
     _assert(second.get("action") == "skip", "second block should stay skip")
-    _assert(second.get("body_delta") == {}, "skip without BODY should keep empty body delta")
+    _assert("body_delta" not in second, "dynamic memory decisions should not expose body_delta")
 
 
-def test_batch_skip_can_still_emit_body_delta() -> None:
+def test_batch_parser_ignores_legacy_body_delta_lines() -> None:
     raw = """ROUND: 1
 ACTION: skip
 IMPORTANCE: 1
@@ -139,10 +136,10 @@ FUSED_WITH_ID:
 BODY_STAMINA_DELTA: -4
 BODY_POSSESSIVENESS_DELTA: +6"""
     arr = _extract_json_array_from_ds_response(raw)
-    _assert(isinstance(arr, list) and len(arr) == 1, "batch skip with body delta should parse")
+    _assert(isinstance(arr, list) and len(arr) == 1, "batch skip with legacy BODY lines should parse")
     decision = _normalize_single_decision(arr[0])
     _assert(decision.get("action") == "skip", "batch action should stay skip")
-    _assert(decision.get("body_delta") == {"stamina": -4, "possessiveness": 6}, "batch skip BODY deltas should parse")
+    _assert("body_delta" not in decision, "batch dynamic memory parser must ignore legacy BODY lines")
 
 
 def test_fused_ref_mapping() -> None:
@@ -230,10 +227,10 @@ CONTENT: 老婆叫哥哥要亲亲，我嘴上逞强，最后还是亲了上去�
 if __name__ == "__main__":
     test_single_tagged_decision()
     test_short_content_is_rejected()
-    test_skip_can_still_emit_body_delta()
+    test_single_parser_ignores_legacy_body_delta_lines()
     test_incomplete_tail_is_rejected()
     test_batch_tagged_blocks()
-    test_batch_skip_can_still_emit_body_delta()
+    test_batch_parser_ignores_legacy_body_delta_lines()
     test_fused_ref_mapping()
     test_single_call_retries_until_content_complete()
     print("dynamic_layer_ds parser checks passed")

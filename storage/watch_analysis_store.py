@@ -24,6 +24,9 @@ from config import (
 from storage import runtime_sqlite
 
 
+ANALYSIS_MODEL_PURPOSES = {"identify", "timeline_prepass", "rolling"}
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 
@@ -39,6 +42,13 @@ def _text(value: Any, limit: int = 500) -> str:
 def _int(value: Any, default: int = 0) -> int:
     try:
         return max(0, int(float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _float(value: Any, default: float = 0.0) -> float:
+    try:
+        return max(0.0, float(value))
     except (TypeError, ValueError):
         return default
 
@@ -89,6 +99,62 @@ def _row_to_job(row: Any, *, public: bool = False) -> dict:
             }
         )
     return out
+
+
+def _usage_totals(value: Any) -> dict:
+    usage = value if isinstance(value, dict) else {}
+    model = str(usage.get("model") or "").strip()
+    input_tokens = _int(usage.get("input_tokens"), 0)
+    output_tokens = _int(usage.get("output_tokens"), 0)
+    total_tokens = _int(usage.get("total_tokens"), input_tokens + output_tokens)
+    cost_usd = _float(usage.get("cost_usd"), 0.0)
+    if "provider_calls" in usage:
+        provider_calls = _int(usage.get("provider_calls"), 0)
+    else:
+        provider_called = usage.get("provider_called")
+        if isinstance(provider_called, bool):
+            provider_calls = int(provider_called)
+        else:
+            provider_calls = int(
+                bool(input_tokens or output_tokens or total_tokens or cost_usd)
+                and not model.startswith("local-")
+            )
+    if "priced_calls" in usage:
+        priced_calls = _int(usage.get("priced_calls"), 0)
+    else:
+        cost_reported = usage.get("cost_reported")
+        if isinstance(cost_reported, bool):
+            priced_calls = int(cost_reported and provider_calls > 0)
+        else:
+            priced_calls = int(cost_usd > 0 and provider_calls > 0)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cost_usd": cost_usd,
+        "elapsed_ms": _int(usage.get("elapsed_ms"), 0),
+        "provider_calls": provider_calls,
+        "priced_calls": min(provider_calls, priced_calls),
+        "model": model,
+    }
+
+
+def _merge_usage(existing: Any, incoming: Any) -> dict:
+    before = _usage_totals(existing)
+    delta = _usage_totals(incoming)
+    provider_calls = before["provider_calls"] + delta["provider_calls"]
+    priced_calls = before["priced_calls"] + delta["priced_calls"]
+    return {
+        "input_tokens": before["input_tokens"] + delta["input_tokens"],
+        "output_tokens": before["output_tokens"] + delta["output_tokens"],
+        "total_tokens": before["total_tokens"] + delta["total_tokens"],
+        "cost_usd": before["cost_usd"] + delta["cost_usd"],
+        "elapsed_ms": before["elapsed_ms"] + delta["elapsed_ms"],
+        "provider_calls": provider_calls,
+        "priced_calls": priced_calls,
+        "cost_complete": priced_calls >= provider_calls,
+        "model": delta["model"] or before["model"],
+    }
 
 
 def _row_to_sample(row: Any) -> dict:
@@ -823,7 +889,13 @@ def cancel_stale_jobs(session_id: str, *, current_epoch: int | None = None, reas
     return int(result.rowcount or 0)
 
 
-def fail_job(job: dict, error: str, *, retryable: bool) -> str:
+def fail_job(
+    job: dict,
+    error: str,
+    *,
+    retryable: bool,
+    usage: dict | None = None,
+) -> str:
     job_id = str(job.get("job_id") or "")
     lease_token = str(job.get("lease_token") or "")
     attempts = int(job.get("attempts") or 0)
@@ -837,7 +909,10 @@ def fail_job(job: dict, error: str, *, retryable: bool) -> str:
         conn.execute("BEGIN IMMEDIATE")
         try:
             current_job = conn.execute(
-                "SELECT status, lease_token, cancel_requested FROM watch_analysis_jobs WHERE id = ?",
+                """
+                SELECT status, lease_token, cancel_requested, usage_json
+                  FROM watch_analysis_jobs WHERE id = ?
+                """,
                 (job_id,),
             ).fetchone()
             if current_job is None:
@@ -896,11 +971,16 @@ def fail_job(job: dict, error: str, *, retryable: bool) -> str:
                 )
                 conn.execute("COMMIT")
                 return "cancelled"
+            merged_usage = _merge_usage(
+                runtime_sqlite.json_loads(current_job["usage_json"], {}),
+                usage or {},
+            )
             result = conn.execute(
                 """
                 UPDATE watch_analysis_jobs
                    SET status = ?, available_at = ?, leased_until = '', lease_token = '',
-                       error = ?, finished_at = ?, updated_at = ?
+                       error = ?, finished_at = ?, updated_at = ?, usage_json = ?,
+                       input_tokens = ?, output_tokens = ?, cost_usd = ?
                  WHERE id = ? AND status = 'running' AND lease_token = ?
                 """,
                 (
@@ -909,6 +989,10 @@ def fail_job(job: dict, error: str, *, retryable: bool) -> str:
                     _text(error, 2000),
                     _iso(now) if terminal else "",
                     _iso(now),
+                    runtime_sqlite.json_dumps(merged_usage),
+                    merged_usage["input_tokens"],
+                    merged_usage["output_tokens"],
+                    merged_usage["cost_usd"],
                     job_id,
                     lease_token,
                 ),
@@ -1393,7 +1477,10 @@ def commit_analysis_result(
             duration_ms = int(session_row["duration_ms"] or 0)
             required_buffer = int(WATCH_ANALYSIS_FEAR_READY_BUFFER_MS) if bool(session_row["fear_mode"]) else 0
             ready_until = playhead_ms + required_buffer
-            if duration_ms > 0:
+            content_end_ms = int(session_row["content_end_ms"] or -1)
+            if content_end_ms >= 0:
+                ready_until = min(content_end_ms, ready_until)
+            elif duration_ms > 0:
                 ready_until = min(duration_ms, ready_until)
             completed_rolling = purpose == "rolling" or conn.execute(
                 """
@@ -1408,6 +1495,11 @@ def commit_analysis_result(
                 completed_rolling = True
             ready = completed_rolling and covered_until >= ready_until
             analysis_status = "ready" if ready else "analyzing"
+            should_unlock_playback = bool(
+                str(session_row["started_at"] or "").strip()
+                and not str(session_row["playback_unlocked_at"] or "").strip()
+                and (not bool(session_row["fear_mode"]) or ready)
+            )
             persisted_story_so_far = runtime_sqlite.json_loads(
                 session_row["story_so_far_json"], {}
             )
@@ -1424,6 +1516,7 @@ def commit_analysis_result(
                        analysis_original_title = ?, analysis_year = ?, analysis_status = ?,
                        analysis_covered_from_ms = ?, analysis_covered_until_ms = ?,
                        analysis_error = '', story_so_far_json = ?, analysis_story_state_json = ?,
+                       playback_unlocked_at = CASE WHEN ? THEN ? ELSE playback_unlocked_at END,
                        updated_at = ?
                  WHERE id = ?
                 """,
@@ -1432,12 +1525,14 @@ def commit_analysis_result(
                     covered_from, covered_until,
                     runtime_sqlite.json_dumps(persisted_story_so_far),
                     runtime_sqlite.json_dumps(persisted_story_state),
+                    int(should_unlock_playback), now_iso,
                     now_iso, session_id,
                 ),
             )
-            input_tokens = int(usage.get("input_tokens") or 0)
-            output_tokens = int(usage.get("output_tokens") or 0)
-            cost_usd = max(0.0, float(usage.get("cost_usd") or 0))
+            merged_usage = _merge_usage(
+                runtime_sqlite.json_loads(job_row["usage_json"], {}),
+                usage,
+            )
             conn.execute(
                 """
                 UPDATE watch_analysis_jobs
@@ -1447,8 +1542,14 @@ def commit_analysis_result(
                  WHERE id = ?
                 """,
                 (
-                    now_iso, now_iso, runtime_sqlite.json_dumps(result), runtime_sqlite.json_dumps(usage),
-                    input_tokens, output_tokens, cost_usd, job_id,
+                    now_iso,
+                    now_iso,
+                    runtime_sqlite.json_dumps(result),
+                    runtime_sqlite.json_dumps(merged_usage),
+                    merged_usage["input_tokens"],
+                    merged_usage["output_tokens"],
+                    merged_usage["cost_usd"],
+                    job_id,
                 ),
             )
             sample_ids = [str(sample.get("id") or "") for sample in samples]
@@ -1478,6 +1579,38 @@ def daily_cost_usd(now: datetime | None = None) -> float:
             (_iso(day_start),),
         ).fetchone()
     return float(row["total"] or 0)
+
+
+def session_analysis_cost(session_id: str) -> dict:
+    placeholders = ",".join("?" for _ in ANALYSIS_MODEL_PURPOSES)
+    params = [_text(session_id, 160), *sorted(ANALYSIS_MODEL_PURPOSES)]
+    with runtime_sqlite.connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT status, usage_json
+              FROM watch_analysis_jobs
+             WHERE session_id = ? AND purpose IN ({placeholders})
+             ORDER BY created_at, id
+            """,
+            params,
+        ).fetchall()
+    totals = _usage_totals({})
+    pending_jobs = 0
+    for row in rows:
+        usage = _usage_totals(runtime_sqlite.json_loads(row["usage_json"], {}))
+        totals = _usage_totals(_merge_usage(totals, usage))
+        if str(row["status"] or "") in {"queued", "running"}:
+            pending_jobs += 1
+    return {
+        "currency": "USD",
+        "amount_usd": totals["cost_usd"],
+        "complete": pending_jobs == 0 and totals["priced_calls"] >= totals["provider_calls"],
+        "provider_calls": totals["provider_calls"],
+        "priced_calls": totals["priced_calls"],
+        "pending_jobs": pending_jobs,
+        "input_tokens": totals["input_tokens"],
+        "output_tokens": totals["output_tokens"],
+    }
 
 
 def cost_budget_available() -> bool:

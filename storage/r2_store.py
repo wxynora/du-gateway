@@ -249,6 +249,7 @@ from storage.schedule_store import (
     enable_schedule_item,
     get_schedule_fired_keys,
     get_schedule_items,
+    patch_schedule_items,
     save_schedule_items,
 )
 from storage.stay_with_du_store import (

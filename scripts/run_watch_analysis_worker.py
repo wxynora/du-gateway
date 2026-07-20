@@ -433,6 +433,8 @@ def process_claimed_job(
                 "output_tokens": 0,
                 "total_tokens": 0,
                 "cost_usd": 0.0,
+                "provider_called": False,
+                "cost_reported": True,
                 "elapsed_ms": 0,
                 "model": "local-fingerprint-reuse",
             }
@@ -500,7 +502,12 @@ def process_claimed_job(
             "retryable": exc.retryable,
         }
     except WatchAnalysisProviderError as exc:
-        status = watch_analysis_store.fail_job(job, str(exc), retryable=exc.retryable)
+        status = watch_analysis_store.fail_job(
+            job,
+            str(exc),
+            retryable=exc.retryable,
+            usage=exc.usage,
+        )
         if status in {"failed", "cancelled"}:
             watch_analysis_store.purge_job_samples(job)
         return {

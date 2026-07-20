@@ -731,12 +731,14 @@ def register_routes(bp):
 
         def _end():
             session = watch_runtime_store.end_session(session_id)
+            analysis_cost = watch_analysis_store.session_analysis_cost(session_id)
             samples_purged = watch_analysis_store.purge_session_samples(session_id)
             watch_visual_store.delete_session_frames(session_id)
             return jsonify(
                 {
                     "ok": True,
                     "session": session,
+                    "analysis_cost": analysis_cost,
                     "samples_purged": samples_purged,
                 }
             )

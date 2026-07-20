@@ -1158,6 +1158,8 @@ def schedule_tick(target_user_id: int = 0) -> dict:
     disabled_once = 0
     deleted_once_expired = 0
     changed = False
+    item_patches: dict[str, dict] = {}
+    deleted_item_ids: set[str] = set()
 
     for it in items:
         if not isinstance(it, dict):
@@ -1169,6 +1171,7 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             if disabled_at and (now_dt - disabled_at).total_seconds() >= 3600:
                 it["_deleted"] = True
                 changed = True
+                deleted_item_ids.add(str(it.get("id") or "").strip())
                 deleted_once_expired += 1
                 continue
         if rep0 == "once" and bool(it.get("enabled", True)):
@@ -1186,6 +1189,10 @@ def schedule_tick(target_user_id: int = 0) -> dict:
                 it["enabled"] = False
                 it["disabled_at"] = now_iso
                 changed = True
+                item_patches[str(it.get("id") or "").strip()] = {
+                    "enabled": False,
+                    "disabled_at": now_iso,
+                }
                 disabled_once += 1
                 continue
         if not _is_schedule_due_now(it, now_dt):
@@ -1313,16 +1320,27 @@ def schedule_tick(target_user_id: int = 0) -> dict:
         it["last_fired_at"] = now_iso
         it["last_fired_occurrence_key"] = occ_key
         changed = True
+        item_id = str(it.get("id") or "").strip()
+        item_patches[item_id] = {
+            "last_fired_at": now_iso,
+            "last_fired_occurrence_key": occ_key,
+        }
         # 一次性提醒触发后自动禁用，避免重复参与检查
         if rep == "once" and bool(it.get("enabled", True)):
             it["enabled"] = False
             it["disabled_at"] = now_iso
+            item_patches[item_id].update({"enabled": False, "disabled_at": now_iso})
             changed = True
             disabled_once += 1
 
     if changed:
-        kept = [x for x in items if isinstance(x, dict) and not bool(x.get("_deleted"))]
-        r2_store.save_schedule_items(kept)
+        item_patches.pop("", None)
+        if not r2_store.patch_schedule_items(item_patches, deleted_item_ids):
+            logger.error(
+                "闹钟状态补丁写回失败 updated=%s deleted=%s",
+                sorted(item_patches),
+                sorted(deleted_item_ids),
+            )
     return {
         "ok": True,
         "sent": sent,
