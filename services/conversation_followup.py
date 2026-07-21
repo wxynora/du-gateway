@@ -702,16 +702,6 @@ def _archive_wakeup_after_delivery(
                 skip_dynamic_memory_write=True,
                 skip_body_delta=False,
             )
-            if str(reply_channel or "").strip().lower() == "sumitalk":
-                try:
-                    from services.sumitalk_block_mode import maybe_auto_reply_after_sumitalk_assistant
-
-                    maybe_auto_reply_after_sumitalk_assistant(
-                        incoming_message_id=f"wakeup-{str(wakeup_kind or '').strip()}-{int(archived.get('round_index') or 0)}",
-                        created_at=now_beijing_iso(),
-                    )
-                except Exception as e:
-                    sumitalk_logger.warning("block_mode_wakeup_auto_reply_failed window_id=%s error=%s", window_id, e)
             return True
     except Exception:
         logger.warning("后端事件投递后归档失败 window_id=%s kind=%s", window_id, kind, exc_info=True)
@@ -984,6 +974,26 @@ def _send_wakeup_event(
                         wakeup_kind=kind,
                         reply_channel=channel,
                     )
+                if (
+                    channel == "sumitalk"
+                    and archive
+                    and (not archive_after_delivery or archive_ok)
+                ):
+                    try:
+                        from services.sumitalk_block_mode import maybe_auto_reply_after_sumitalk_assistant
+
+                        maybe_auto_reply_after_sumitalk_assistant(
+                            incoming_message_id=(
+                                f"wakeup-{kind or 'event'}-{created_at or now_beijing_iso()}"
+                            ),
+                            created_at=now_beijing_iso(),
+                        )
+                    except Exception as e:
+                        sumitalk_logger.warning(
+                            "block_mode_wakeup_auto_reply_failed window_id=%s error=%s",
+                            context_window_id,
+                            e,
+                        )
                 spring_archive = _archive_generated_spring_dream(
                     delivery_status="sent",
                     archive_channel=channel,

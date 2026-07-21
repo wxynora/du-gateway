@@ -68,6 +68,11 @@ def _static_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
     if not content:
         return []
     marker_labels = [
+        ("【入口风格：QQ】", "QQ入口风格"),
+        ("【入口风格：TG】", "TG入口风格"),
+        ("【入口风格：微信】", "微信入口风格"),
+        ("【入口风格：SumiTalk】", "SumiTalk入口风格"),
+        ("【入口风格：小爱音箱】", "小爱音箱入口风格"),
         ("【核心XP与互动逻辑】", "NSFW规则"),
         ("【渡的拟态心跳", "拟态心跳规则"),
         ("【小家状态写入规则】", "小家规则"),

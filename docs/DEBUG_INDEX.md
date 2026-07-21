@@ -70,7 +70,7 @@
 | 身体状态四轮评估 | `services/du_body_evaluator.py`、`storage/du_body_eval_store.py`、`services/pixel_home.py` | 真实归档轮次独立进入 SQLite pending，每 4 轮或最旧等待 30 分钟时由 DS 逐轮输出 delta；保留模型默认 thinking、不设置人为输出上限并启用 JSON Output，解析失败日志只记录结束原因和 token/字符统计；apply 使用稳定幂等键并记录 before/delta/after 审计，最终失败仍保留原轮次供人工恢复，进程重启按 lease 接手；不改变动态记忆、近期总结或压缩移位计数，动态记忆 DS 不再请求、解析或返回 BODY delta |
 | Claude thinking 连续性 | `services/claude_thinking_carryover.py` | 普通对话回传 opaque signature，不回灌转写 thinking 文本 |
 | Claude OAuth Proxy 输出额度 | `scripts/claude_oauth_proxy.js` | Anthropic 协议必填的默认 `max_tokens` 使用当前 Claude 主模型 128k 输出上限；旧式 extended thinking 继续强制保证总额度不少于 `thinking budget + 1`，该保护是辛玥明确设计，不得删除或弱化 |
-| Prompt Cache 诊断 | `services/prompt_cache_debug.py` | 记录静态/动态构成与上游 usage 元数据 |
+| Prompt Cache 诊断 | `services/prompt_cache_debug.py` | 记录静态/动态构成与上游 usage 元数据；合并后的静态尾段仍按内容拆分 QQ、TG、微信、SumiTalk、小爱音箱入口风格，不会被近期记忆块标记吞掉 |
 
 当前 Claude 缓存前缀顺序固定为：tools → 第 1 个断点 → 固定静态子块 → 第 2 个断点 → 工具摘要 → 第 3 个断点 → 入口风格 → SumiTalk Real/App 互斥提示 → play 小纸条 → 较稳定近期记忆 → 最近记忆 → 第 4 个断点 → 动态区 → 对话消息。固定静态、工具摘要、入口风格、Real/App、play、较稳定近期和最近记忆都属于静态提示前缀的子块；它们按唯一顺序表独立收集，再合并为对应缓存段，不为每个小注入额外生成 system。动态区仍单独保留，不会被拼进静态区。工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑。
 
@@ -92,7 +92,7 @@
 - 原生普通聊天使用 rich SSE；旧 MiniApp、其他平台和共同游戏豁免继续走现有非流路径，共用同一提示词、工具、记忆与通道注入。
 - Worker 事件先经 `realtime_publish -> realtime_app -> SumiTalkRunEventBroker` 到活跃 SSE；独立 FIFO 落库队列随后写 `sumitalk_chat_run_events`。SQLite 只用于首次连接、断线重连、sequence 缺口和 realtime 不可用时的 40ms 兜底。
 - SumiTalk 的 `assistant_final` 不等待 R2、摘要或动态记忆；这些工作进入单一 FIFO 后台归档队列，保证多轮顺序。其他入口的归档时序不变。
-- SumiTalk 拉黑模式状态与固定通知文案由 `storage/sumitalk_block_mode_store.py` 管理；首次开启通知和后续自动回复统一读取 `BLOCK_NOTICE_TEXT`，不另外生成或改写文案。
+- SumiTalk 拉黑模式状态与固定通知文案由 `storage/sumitalk_block_mode_store.py` 管理；首次开启通知、成功投递的 SumiTalk 主动唤醒和定时续话后的自动回复统一读取 `BLOCK_NOTICE_TEXT`，不另外生成或改写文案；独立归档路径只在归档成功后追加，避免重复追加。
 - 仅流式 SumiTalk 聊天会在 queue 入口跨 delta 识别并剥离 `<voice>...</voice>`；独立 sidecar 用 `job_id + source_part_id + voice_index` 在同一队列 SQLite 持久幂等，直接复用 MiniMax TTS、上传现有聊天媒体，并允许 `assistant_audio_ready` / `assistant_audio_failed` 晚于 `assistant_final`。`/voice-call/*`、通话分段 TTS、取消和播放状态不共用这套任务。
 - 一起看聊天仍走同一 SumiTalk job。请求顶层附带 `watch_session_id` 和完整 `watch_snapshot` 后，`services/watch_context.py` 按消息发送时 playhead 注入当前剧情、当会话已播缓存的相关片段和可配置的回复抵达窗口，并明确要求“小玥正在和你看同一段，不需要和她照搬复述你看到的剧情内容以及逐项描述剧情画面。”；当前相关片段召回只在本会话、本 timeline epoch、发送位置前已完整播放的 `watch_plot_chunks` 内按最近三条用户消息做会话内 BM25/IDF 排序，剧情/对白、标签、人物字段依次降权，人物名作为全片高频词自动降权，只命中人物名时最多取一段，有事件词命中时剔除仅靠同名进入的候选，最多注入四段且不进入网关长期记忆。当前只持久化剧情片段，不单独保存每轮召回 query、候选分数或最终命中项。`knowledge_mode` 只在网关内部决定是否附加截止快照的剧情背景，不作为标签传给主模型。回复抵达位置前的少量剧情可用于当轮正常回复；动作区只提供预计回复抵达后仍未结束、且位于快照后两分钟内的可靠片段，弹幕示例从这些片段选择并明确目标是实际显示时间，不再固定使用发送位置加 30 秒。`services/watch_action_flow.py` 在流式与非流式链路剥离短标记并发出 `watch_danmaku_action`；旧长 JSON 块只保留解析兼容，无效时间标记和既有时间窗口拒绝会记录 reason，但不增加新的动作拒绝条件。事件不使用主动消息 channel，seek 后旧 epoch 动作失效。
 - 事件契约和定向验证入口见 `docs/SumiTalk原生安卓后端流式接入.md`、`scripts/test_sumitalk_native_stream_backend.py` 与 `scripts/test_sumitalk_stream_voice_sidecar.py`。
