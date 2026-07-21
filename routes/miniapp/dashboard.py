@@ -18,6 +18,7 @@ from services.pixel_home import (
     save_du_body_state,
 )
 from services.spring_dream import (
+    delete_spring_dream_archive,
     draw_spring_dream_inspiration_pack,
     get_spring_dream_archive,
     get_spring_dream_inspiration,
@@ -454,6 +455,18 @@ def register_routes(bp) -> None:
         if not item:
             return jsonify({"ok": False, "error": "not_found"}), 404
         return jsonify({"ok": True, "item": item})
+
+    @bp.route("/spring-dream-archives/<archive_id>", methods=["DELETE"])
+    def miniapp_spring_dream_archive_delete(archive_id: str):
+        result = delete_spring_dream_archive(archive_id)
+        if bool(result.get("ok")):
+            return jsonify(result)
+        error = str(result.get("error") or "delete_failed")
+        if error == "not_found":
+            return jsonify(result), 404
+        if error == "invalid_archive_id":
+            return jsonify(result), 400
+        return jsonify(result), 500
 
     @bp.route("/spring-dream-inspiration", methods=["GET"])
     def miniapp_spring_dream_inspiration_get():

@@ -51,6 +51,7 @@ _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
+_ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
 _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 _PLAY_NOTE_PENDING_BODY_KEY = "__play_note_pending__"
@@ -437,6 +438,7 @@ def step_inject_tool_result_cache(body: dict) -> dict:
         rest_start = len(messages)
 
     static_systems: list[dict] = []
+    entry_style_systems: list[dict] = []
     real_mode_systems: list[dict] = []
     play_note_systems: list[dict] = []
     stable_summary_systems: list[dict] = []
@@ -447,6 +449,8 @@ def step_inject_tool_result_cache(body: dict) -> dict:
             continue
         if msg.get(_DYNAMIC_SYSTEM_MARKER):
             dynamic_systems.append(msg)
+        elif msg.get(_ENTRY_STYLE_SYSTEM_MARKER):
+            entry_style_systems.append(msg)
         elif msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER):
             real_mode_systems.append(msg)
         elif msg.get(_PLAY_NOTE_SYSTEM_MARKER):
@@ -470,6 +474,7 @@ def step_inject_tool_result_cache(body: dict) -> dict:
     body["messages"] = [
         *static_systems,
         *blocks,
+        *entry_style_systems,
         *real_mode_systems,
         *play_note_systems,
         *stable_summary_systems,

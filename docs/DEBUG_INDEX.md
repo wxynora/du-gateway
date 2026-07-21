@@ -61,7 +61,7 @@
 | 请求清洗 | `pipeline/cleaner.py` | 统一清洗入口消息与上游消息结构 |
 | 上游策略 | `services/upstream_policy.py` | active upstream / model 只由 App 明确保存更新 |
 | 上游持久选择 | `storage/upstream_store.py` | 探活、拉模型和普通请求不能覆盖已保存选择 |
-| 提示词管理 | `services/prompt_manager.py` | App 可编辑的静态 Prompt 分区统一从这里管理 |
+| 提示词管理 | `services/prompt_manager.py`、`storage/r2_store.py` | App 可编辑的静态 Prompt 分区统一从这里管理；详情最多返回当前分区最新 3 个备份，配置写成功后按 `created_at` 清理到最新 3 个，写失败不删旧备份，回滚复用同一保存与保留链路 |
 | 入口风格 | `services/entry_style_prompt.py` | 按真实聊天入口注入对应风格 |
 | 语音台词规范 | `services/voice_line_prompt.py` | 语音输出场景统一使用该规范 |
 | 工具定义与执行 | `services/chat_tools.py` | 当前网关原生工具集中入口 |
@@ -72,9 +72,9 @@
 | Claude OAuth Proxy 输出额度 | `scripts/claude_oauth_proxy.js` | Anthropic 协议必填的默认 `max_tokens` 使用当前 Claude 主模型 128k 输出上限；旧式 extended thinking 继续强制保证总额度不少于 `thinking budget + 1`，该保护是辛玥明确设计，不得删除或弱化 |
 | Prompt Cache 诊断 | `services/prompt_cache_debug.py` | 记录静态/动态构成与上游 usage 元数据 |
 
-当前 Claude 缓存前缀顺序固定为：工具定义 → 静态 system → 最近工具使用摘要 → SumiTalk Real/App 互斥提示 → play 小纸条 → 较稳定近期记忆 → 最近记忆。四个断点依次落在工具定义、静态 system、工具摘要和最近记忆末尾；工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑。
+当前 Claude 缓存前缀顺序固定为：工具定义 → 固定静态 system → 最近工具使用摘要 → 入口风格 → SumiTalk Real/App 互斥提示 → play 小纸条 → 较稳定近期记忆 → 最近记忆。四个断点依次落在工具定义、固定静态 system、工具摘要和最近记忆末尾；入口风格固定使用独立 marker 放在工具摘要断点之后、Real/App 之前，因此入口或唤醒风格变化不会连带重建前面的工具、固定静态和工具摘要缓存。工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑。
 
-`step_inject_tool_result_cache()` 固定的是缓存分区的相对顺序，不锁死静态 Prompt 的具体内容。修改或新增普通静态 system 无需调整该函数；新增 Real、Play、记忆、动态事件等非静态 system 时必须设置对应 marker，否则会被归入静态区并移动到工具摘要之前。修改静态内容会让下一次请求重建一次缓存，后续请求按新前缀继续命中。
+`step_inject_tool_result_cache()` 固定的是缓存分区的相对顺序，不锁死静态 Prompt 的具体内容。修改或新增普通静态 system 无需调整该函数；入口风格必须保留 `__entry_style__` marker，新增 Real、Play、记忆、动态事件等非静态 system 也必须设置对应 marker，否则会被归入固定静态区并移动到工具摘要之前。修改固定静态内容会让下一次请求重建一次缓存，后续请求按新前缀继续命中。
 
 ## 4. 对话入口与异步 worker
 
@@ -115,7 +115,7 @@
 
 半小时硬触发严格从全局 `last_user_activity_at` 重新计时：真实聊天、小家操作和游戏互动都算用户互动，任一新互动都会重置计时；聊天归档只用于识别本次互动是否明确表达要离开。入睡意图按分句识别，过去或背景叙述中的“我睡觉”不会被当成当前要去睡觉。
 
-春梦本体提示词由 Prompt 管理区 `spring_dream_wakeup` 提供，模板中的 `{{fragments}}` 会替换为本轮抽到的梦境碎片；自定义模板漏写占位符时，后端会把碎片补在模板末尾。春梦后唤醒只消费当前睡眠 session 中六小时内的 pending 状态，其他旧 session 会失效清理；网关空回复时使用同一梦境重试一次，成功后仍只记录一次发送。
+春梦本体提示词由 Prompt 管理区 `spring_dream_wakeup` 提供，模板中的 `{{fragments}}` 会替换为本轮抽到的梦境碎片；自定义模板漏写占位符时，后端会把碎片补在模板末尾。春梦后唤醒只消费当前睡眠 session 中六小时内的 pending 状态，其他旧 session 会失效清理；网关空回复时使用同一梦境重试一次，成功后仍只记录一次发送。只要主模型生成了非空春梦正文，专用梦境归档都会保存，并用 `sent`、`unconfirmed` 或 `not_dispatched` 标记投递状态；普通对话归档仍只记录确认投递成功的消息。梦境归档由 `GET /miniapp-api/spring-dream-archives`、`GET /miniapp-api/spring-dream-archives/<id>` 查询，`DELETE /miniapp-api/spring-dream-archives/<id>` 单条删除；删除会同步清理 SQLite、R2 正文对象、当天索引与最近索引，不存在返回 404，任一删除步骤失败返回 500。
 
 ### 4.3 QQ 与微信
 

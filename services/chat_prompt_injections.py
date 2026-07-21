@@ -15,6 +15,7 @@ logger = get_logger(__name__)
 _NSFW_PROMPT_CACHE = {"text": None, "ts": 0.0}
 _NSFW_REPLY_CHANNELS = {"tg", "qq", "wechat", "sumitalk"}
 _MILLION_PLAN_PLAYER_MARKER = "【百万计划游戏模式：玩家固定规则】"
+_ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _MILLION_PLAN_ACTION_MENU_CACHE = {
     "fixed": {
         "life_basics": "LB_FRUGAL:节制生活|LB_EXTREME:极限生存|LB_NORMAL:普通生活",
@@ -110,7 +111,14 @@ def inject_entry_style_system(body: dict, *, reply_channel: str, is_miniapp: boo
         if msg.get("__dynamic__") or msg.get("__summary_cache__") or msg.get("__summary_recent__"):
             break
         insert_idx = i + 1
-    messages.insert(insert_idx, {"role": "system", "content": style_system})
+    messages.insert(
+        insert_idx,
+        {
+            "role": "system",
+            "content": style_system,
+            _ENTRY_STYLE_SYSTEM_MARKER: True,
+        },
+    )
     body = dict(body)
     body["messages"] = messages
     return body

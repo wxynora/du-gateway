@@ -2814,6 +2814,7 @@ def chat_completions():
             msg.pop("__summary_cache__", None)
             msg.pop("__summary_recent__", None)
             msg.pop("__tool_result_cache__", None)
+            msg.pop("__entry_style__", None)
             msg.pop("__sumitalk_real_mode__", None)
             msg.pop("__play_note__", None)
     if body.get("stream"):

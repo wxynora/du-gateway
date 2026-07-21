@@ -1525,6 +1525,106 @@ def get_spring_dream_archive(archive_id: str) -> dict:
     return _archive_row_to_dict(row, include_content=True)
 
 
+def _archive_index_without_entry(payload, archive_id: str) -> dict:
+    current = payload if isinstance(payload, dict) else {}
+    items = current.get("items") if isinstance(current.get("items"), list) else []
+    return {
+        "schema_version": int(current.get("schema_version") or 1),
+        "updated_at": now_beijing_iso(),
+        "items": [
+            item
+            for item in items
+            if isinstance(item, dict) and str(item.get("id") or "") != archive_id
+        ],
+    }
+
+
+def delete_spring_dream_archive(archive_id: str) -> dict:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id or "/" in clean_id or ".." in clean_id:
+        return {"ok": False, "error": "invalid_archive_id"}
+
+    _ensure_schema()
+    with runtime_sqlite.connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM spring_dream_archives WHERE id=?",
+            (clean_id,),
+        ).fetchone()
+    if row is None:
+        return {"ok": False, "error": "not_found"}
+
+    previous = _archive_row_to_dict(row, include_content=True)
+    previous_r2_key = str(previous.get("r2_key") or "").strip()
+    sent_at = str(previous.get("sent_at") or "").strip()
+    day = sent_at[:10] if len(sent_at) >= 10 else now_beijing_iso()[:10]
+    expected_r2_key = (
+        previous_r2_key
+        or f"{SPRING_DREAM_ARCHIVE_R2_PREFIX}/{day}/{_safe_key_part(clean_id)}.json"
+    )
+    r2_deleted = False
+    previous_indexes: dict[str, dict] = {}
+
+    try:
+        from storage import r2_store
+
+        client = r2_store._s3_client()
+        if previous_r2_key and not client:
+            raise RuntimeError("r2_unavailable")
+        if client:
+            day_index_key = f"{SPRING_DREAM_ARCHIVE_R2_PREFIX}/{day}/index.json"
+            recent_index_key = f"{SPRING_DREAM_ARCHIVE_R2_PREFIX}/recent.json"
+            for index_key in (day_index_key, recent_index_key):
+                current = r2_store._read_json(client, index_key)
+                previous_indexes[index_key] = current if isinstance(current, dict) else {}
+                r2_store._write_json(
+                    client,
+                    index_key,
+                    _archive_index_without_entry(current, clean_id),
+                )
+            client.delete_objects(
+                Bucket=r2_store.R2_BUCKET_NAME,
+                Delete={"Objects": [{"Key": expected_r2_key}], "Quiet": True},
+            )
+            r2_deleted = True
+    except Exception as e:
+        logger.warning("春梦专用归档删除 R2 失败 id=%s error=%s", clean_id, e)
+        if previous_indexes:
+            try:
+                from storage import r2_store
+
+                client = r2_store._s3_client()
+                if client:
+                    for index_key, payload in previous_indexes.items():
+                        r2_store._write_json(client, index_key, payload)
+            except Exception:
+                logger.error("春梦专用归档删除索引回滚失败 id=%s", clean_id, exc_info=True)
+        return {"ok": False, "error": "delete_failed"}
+
+    try:
+        with runtime_sqlite.connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM spring_dream_archives WHERE id=?",
+                (clean_id,),
+            )
+        if int(cursor.rowcount or 0) <= 0:
+            raise RuntimeError("sqlite_row_missing")
+    except Exception as e:
+        logger.warning("春梦专用归档删除 SQLite 失败 id=%s error=%s", clean_id, e)
+        if r2_deleted:
+            try:
+                restore_entry = dict(previous)
+                restore_entry["schema_version"] = 1
+                _write_spring_dream_archive_r2(restore_entry)
+            except Exception:
+                logger.error("春梦专用归档删除 R2 回滚失败 id=%s", clean_id, exc_info=True)
+        return {"ok": False, "error": "delete_failed"}
+
+    return {
+        "ok": True,
+        "id": clean_id,
+    }
+
+
 def _strip_prompt_comment_lines(text: str) -> str:
     lines = []
     for raw in str(text or "").splitlines():

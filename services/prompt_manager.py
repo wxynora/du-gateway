@@ -221,7 +221,7 @@ def get_prompt_section_detail(section_id: str) -> dict | None:
         "content_length": len(content),
         "max_chars": definition.max_chars,
         "allow_empty": bool(definition.allow_empty),
-        "backups": r2_store.list_prompt_manager_backups(definition.id, limit=20),
+        "backups": r2_store.list_prompt_manager_backups(definition.id, limit=3),
     }
 
 

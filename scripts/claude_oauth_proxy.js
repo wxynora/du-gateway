@@ -68,6 +68,8 @@ const BETA_HEADER = [
 const DYNAMIC_SYSTEM_MARKER = "__dynamic__";
 const SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__";
 const SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__";
+const TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__";
+const ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__";
 const SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__";
 const PLAY_NOTE_SYSTEM_MARKER = "__play_note__";
 const GATEWAY_DYNAMIC_SYSTEM_HINTS = [
@@ -697,6 +699,8 @@ async function openaiToAnthropic(oai) {
         if (msg[DYNAMIC_SYSTEM_MARKER]) block[DYNAMIC_SYSTEM_MARKER] = true;
         if (msg[SUMMARY_CACHE_SYSTEM_MARKER]) block[SUMMARY_CACHE_SYSTEM_MARKER] = true;
         if (msg[SUMMARY_RECENT_SYSTEM_MARKER]) block[SUMMARY_RECENT_SYSTEM_MARKER] = true;
+        if (msg[TOOL_RESULT_CACHE_SYSTEM_MARKER]) block[TOOL_RESULT_CACHE_SYSTEM_MARKER] = true;
+        if (msg[ENTRY_STYLE_SYSTEM_MARKER]) block[ENTRY_STYLE_SYSTEM_MARKER] = true;
         if (msg[SUMITALK_REAL_MODE_SYSTEM_MARKER]) block[SUMITALK_REAL_MODE_SYSTEM_MARKER] = true;
         if (msg[PLAY_NOTE_SYSTEM_MARKER]) block[PLAY_NOTE_SYSTEM_MARKER] = true;
         systemBlocks.push(block);
@@ -1072,11 +1076,21 @@ function applyPromptCache(body) {
   if (Array.isArray(body.system) && body.system.length > 0) {
     splitGatewaySummaryBlocks(body.system);
 
+    const toolCacheIndices = body.system
+      .map((item, idx) => (item?.[TOOL_RESULT_CACHE_SYSTEM_MARKER] ? idx : -1))
+      .filter((idx) => idx >= 0);
+
     const summaryIdx = body.system.findIndex(
       (item, idx) => idx > 0 && (item?.[SUMMARY_CACHE_SYSTEM_MARKER] || looksLikeGatewaySummaryCacheBlock(item))
     );
 
-    if (summaryIdx > 0) {
+    if (toolCacheIndices.length > 0) {
+      const firstToolIdx = toolCacheIndices[0];
+      const lastToolIdx = toolCacheIndices[toolCacheIndices.length - 1];
+      setCacheControl(findCacheableSystemBefore(body.system, firstToolIdx));
+      setCacheControl(body.system[lastToolIdx]);
+      setCacheControl(findFinalCacheableSystemAfter(body.system, lastToolIdx));
+    } else if (summaryIdx > 0) {
       setCacheControl(findCacheableSystemBefore(body.system, summaryIdx));
       setCacheControl(body.system[summaryIdx]);
       const recentIdx = body.system.findIndex(
@@ -1117,6 +1131,8 @@ function applyPromptCache(body) {
         delete item[DYNAMIC_SYSTEM_MARKER];
         delete item[SUMMARY_CACHE_SYSTEM_MARKER];
         delete item[SUMMARY_RECENT_SYSTEM_MARKER];
+        delete item[TOOL_RESULT_CACHE_SYSTEM_MARKER];
+        delete item[ENTRY_STYLE_SYSTEM_MARKER];
         delete item[SUMITALK_REAL_MODE_SYSTEM_MARKER];
         delete item[PLAY_NOTE_SYSTEM_MARKER];
       }
@@ -1174,6 +1190,16 @@ function findCacheableSystemBefore(systemBlocks, endIdx) {
     ) {
       return item;
     }
+  }
+  return null;
+}
+
+function findFinalCacheableSystemAfter(systemBlocks, startIdx) {
+  for (let i = systemBlocks.length - 1; i > startIdx; i -= 1) {
+    const item = systemBlocks[i];
+    if (!item || typeof item !== "object") continue;
+    if (item[DYNAMIC_SYSTEM_MARKER] || looksLikeGatewayDynamicSystemBlock(item)) continue;
+    return item;
   }
   return null;
 }

@@ -16,6 +16,7 @@ DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
+ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 GATEWAY_DYNAMIC_SYSTEM_HINTS = (
     "【渡的心事",
@@ -143,6 +144,8 @@ def _system_blocks_from_message(msg: dict) -> list[dict]:
             block[SUMMARY_RECENT_SYSTEM_MARKER] = True
         if msg.get(TOOL_RESULT_CACHE_SYSTEM_MARKER):
             block[TOOL_RESULT_CACHE_SYSTEM_MARKER] = True
+        if msg.get(ENTRY_STYLE_SYSTEM_MARKER):
+            block[ENTRY_STYLE_SYSTEM_MARKER] = True
         if msg.get(PLAY_NOTE_SYSTEM_MARKER):
             block[PLAY_NOTE_SYSTEM_MARKER] = True
     return text_blocks
@@ -347,6 +350,17 @@ def _find_cacheable_system_before(system_blocks: list[dict], end_idx: int) -> di
     return None
 
 
+def _find_final_cacheable_system_after(system_blocks: list[dict], start_idx: int) -> dict | None:
+    for idx in range(len(system_blocks) - 1, start_idx, -1):
+        item = system_blocks[idx]
+        if not isinstance(item, dict):
+            continue
+        if item.get(DYNAMIC_SYSTEM_MARKER) or _looks_like_dynamic_block(item):
+            continue
+        return item
+    return None
+
+
 def apply_prompt_cache(body: dict, ttl: str) -> None:
     if isinstance(body.get("tools"), list) and body["tools"]:
         _set_cache_control(body["tools"][-1], ttl)
@@ -354,12 +368,23 @@ def apply_prompt_cache(body: dict, ttl: str) -> None:
     system_blocks = body.get("system") if isinstance(body.get("system"), list) else []
     if system_blocks:
         _split_gateway_summary_blocks(system_blocks)
+        tool_cache_indices = [
+            idx
+            for idx, item in enumerate(system_blocks)
+            if isinstance(item, dict) and item.get(TOOL_RESULT_CACHE_SYSTEM_MARKER)
+        ]
         summary_idx = -1
         for idx, item in enumerate(system_blocks):
             if idx > 0 and (item.get(SUMMARY_CACHE_SYSTEM_MARKER) or _looks_like_summary_cache_block(item)):
                 summary_idx = idx
                 break
-        if summary_idx > 0:
+        if tool_cache_indices:
+            first_tool_idx = tool_cache_indices[0]
+            last_tool_idx = tool_cache_indices[-1]
+            _set_cache_control(_find_cacheable_system_before(system_blocks, first_tool_idx), ttl)
+            _set_cache_control(system_blocks[last_tool_idx], ttl)
+            _set_cache_control(_find_final_cacheable_system_after(system_blocks, last_tool_idx), ttl)
+        elif summary_idx > 0:
             _set_cache_control(_find_cacheable_system_before(system_blocks, summary_idx), ttl)
             _set_cache_control(system_blocks[summary_idx], ttl)
             final_breakpoint = None
@@ -383,6 +408,7 @@ def apply_prompt_cache(body: dict, ttl: str) -> None:
                 item.pop(SUMMARY_CACHE_SYSTEM_MARKER, None)
                 item.pop(SUMMARY_RECENT_SYSTEM_MARKER, None)
                 item.pop(TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
+                item.pop(ENTRY_STYLE_SYSTEM_MARKER, None)
                 item.pop(PLAY_NOTE_SYSTEM_MARKER, None)
 
 

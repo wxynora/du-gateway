@@ -274,6 +274,7 @@ R2_KEY_CORE_PROMPT_CONFIG = "global/core_prompt_config.json"
 # MiniApp Prompt 管理（多提示词 + 自动备份）
 R2_KEY_PROMPT_MANAGER_CONFIG = "global/prompt_manager_config.json"
 R2_KEY_PROMPT_MANAGER_BACKUP_PREFIX = "global/prompt_manager_backups/"
+PROMPT_MANAGER_BACKUP_KEEP = 3
 # 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
 R2_KEY_DU_MEMORY_DOC = "docs/du_memory_doc_v1.txt"
 # 主动发消息：上一次成功主动联系的时间（北京时间 ISO）
@@ -1882,6 +1883,71 @@ def _backup_prompt_manager_section(
     return {k: v for k, v in payload.items() if k != "content"}
 
 
+def _list_prompt_manager_backups_with_client(client, section_id: str) -> list[dict]:
+    prefix = f"{R2_KEY_PROMPT_MANAGER_BACKUP_PREFIX}{section_id}/"
+    rows: list[dict] = []
+    kwargs: dict[str, Any] = {"Bucket": R2_BUCKET_NAME, "Prefix": prefix}
+    while True:
+        resp = client.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents") or []:
+            key = str(obj.get("Key") or "")
+            if not key.endswith(".json"):
+                continue
+            data = _read_json(client, key)
+            if not isinstance(data, dict):
+                continue
+            item = {k: v for k, v in data.items() if k != "content"}
+            item["key"] = key
+            rows.append(item)
+        token = resp.get("NextContinuationToken")
+        if not token:
+            break
+        kwargs["ContinuationToken"] = token
+    rows.sort(
+        key=lambda x: (str(x.get("created_at") or ""), str(x.get("backup_id") or "")),
+        reverse=True,
+    )
+    return rows
+
+
+def _prune_prompt_manager_backups_with_client(
+    client,
+    section_id: str,
+    *,
+    keep: int = PROMPT_MANAGER_BACKUP_KEEP,
+) -> dict:
+    sid = str(section_id or "").strip()
+    if not sid:
+        return {"ok": False, "deleted": 0, "error": "section_id 不能为空"}
+    prefix = f"{R2_KEY_PROMPT_MANAGER_BACKUP_PREFIX}{sid}/"
+    try:
+        rows = _list_prompt_manager_backups_with_client(client, sid)
+        stale_rows = rows[max(0, int(keep)) :]
+        deleted = 0
+        for item in stale_rows:
+            key = str(item.get("key") or "")
+            if not key.startswith(prefix) or not key.endswith(".json"):
+                logger.warning("跳过异常 Prompt Manager 备份 key section_id=%s key=%s", sid, key)
+                continue
+            client.delete_object(Bucket=R2_BUCKET_NAME, Key=key)
+            deleted += 1
+        return {"ok": True, "deleted": deleted, "remaining": len(rows) - deleted}
+    except Exception as e:
+        logger.error("清理 Prompt Manager 备份失败 section_id=%s error=%s", sid, e, exc_info=True)
+        return {"ok": False, "deleted": 0, "error": str(e)}
+
+
+def prune_prompt_manager_backups(
+    section_id: str,
+    *,
+    keep: int = PROMPT_MANAGER_BACKUP_KEEP,
+) -> dict:
+    client = _s3_client()
+    if not client:
+        return {"ok": False, "deleted": 0, "error": "R2 未配置"}
+    return _prune_prompt_manager_backups_with_client(client, section_id, keep=keep)
+
+
 def save_prompt_manager_section(
     section_id: str,
     content: str,
@@ -1949,6 +2015,9 @@ def save_prompt_manager_section(
             sections[sid] = section
             payload = {"schema_version": 1, "sections": sections}
             _write_json(client, R2_KEY_PROMPT_MANAGER_CONFIG, payload)
+            cleanup = _prune_prompt_manager_backups_with_client(client, sid)
+            if not cleanup.get("ok"):
+                logger.warning("Prompt Manager 配置已保存，但备份清理失败 section_id=%s", sid)
             return {"ok": True, "section": section, "backup": backup}
         except Exception as e:
             logger.error("save_prompt_manager_section 失败 section_id=%s error=%s", sid, e, exc_info=True)
@@ -1962,30 +2031,11 @@ def list_prompt_manager_backups(section_id: str, limit: int = 30) -> list[dict]:
     sid = str(section_id or "").strip()
     if not sid:
         return []
-    prefix = f"{R2_KEY_PROMPT_MANAGER_BACKUP_PREFIX}{sid}/"
-    rows: list[dict] = []
     try:
-        kwargs: dict[str, Any] = {"Bucket": R2_BUCKET_NAME, "Prefix": prefix}
-        while True:
-            resp = client.list_objects_v2(**kwargs)
-            for obj in resp.get("Contents") or []:
-                key = str(obj.get("Key") or "")
-                if not key.endswith(".json"):
-                    continue
-                data = _read_json(client, key)
-                if not isinstance(data, dict):
-                    continue
-                item = {k: v for k, v in data.items() if k != "content"}
-                item["key"] = key
-                rows.append(item)
-            token = resp.get("NextContinuationToken")
-            if not token:
-                break
-            kwargs["ContinuationToken"] = token
+        rows = _list_prompt_manager_backups_with_client(client, sid)
     except Exception as e:
         logger.error("list_prompt_manager_backups 失败 section_id=%s error=%s", sid, e, exc_info=True)
         return []
-    rows.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
     return rows[: max(1, int(limit or 30))]
 
 

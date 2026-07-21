@@ -883,6 +883,55 @@ def _send_wakeup_event(
             outbound = str(outbound or "").strip()
         if not outbound:
             return {"ok": False, "error": "empty_after_sanitize"}
+
+        def _archive_generated_spring_dream(
+            *,
+            delivery_status: str,
+            archive_channel: str = "",
+            archive_target: str = "",
+            attempted: list[str] | None = None,
+        ) -> dict:
+            if kind not in {"spring_dream", "random_spring_dream"}:
+                return {}
+            try:
+                from services.spring_dream import archive_spring_dream_body
+
+                archive_meta = (
+                    dict(spring_dream_archive_meta)
+                    if isinstance(spring_dream_archive_meta, dict)
+                    else {}
+                )
+                archive_meta["delivery_status"] = str(delivery_status or "").strip()
+                archive_meta["attempted_channels"] = [
+                    str(item).strip() for item in (attempted or []) if str(item).strip()
+                ]
+                result = archive_spring_dream_body(
+                    window_id=context_window_id,
+                    target=str(archive_target or preferred_target or target or "").strip(),
+                    channel=str(archive_channel or preferred_channel or generation_channel or "").strip(),
+                    content=outbound,
+                    prompt=prompt,
+                    created_at=created_at or "",
+                    sent_at=now_beijing_iso(),
+                    meta=archive_meta,
+                )
+                if not bool(result.get("ok")):
+                    logger.warning(
+                        "春梦专用存档失败 window_id=%s delivery_status=%s archive=%s",
+                        context_window_id,
+                        delivery_status,
+                        result,
+                    )
+                return result
+            except Exception:
+                logger.warning(
+                    "春梦专用存档异常 window_id=%s delivery_status=%s",
+                    context_window_id,
+                    delivery_status,
+                    exc_info=True,
+                )
+                return {"ok": False, "error": "exception"}
+
         if return_only:
             return {
                 "ok": True,
@@ -904,7 +953,17 @@ def _send_wakeup_event(
             available_channels = _available_channels()
         channels = _choice_dialog_delivery_channels(preferred_channel, available_channels, preferred_target)
         if not channels:
-            return {"ok": False, "error": "no_proactive_channel", "reply_preview": outbound[:120]}
+            spring_archive = _archive_generated_spring_dream(
+                delivery_status="not_dispatched",
+            )
+            return {
+                "ok": False,
+                "error": "no_proactive_channel",
+                "reply_preview": outbound[:120],
+                "spring_dream_archive_ok": bool(spring_archive.get("ok")) if spring_archive else True,
+                "spring_dream_archive_id": str(spring_archive.get("id") or "") if spring_archive else "",
+                "spring_dream_archive_r2_key": str(spring_archive.get("r2_key") or "") if spring_archive else "",
+            }
         attempted_channels = []
         for channel in channels:
             attempted_channels.append(channel)
@@ -925,31 +984,12 @@ def _send_wakeup_event(
                         wakeup_kind=kind,
                         reply_channel=channel,
                     )
-                spring_archive: dict = {}
-                if kind in {"spring_dream", "random_spring_dream"}:
-                    try:
-                        from services.spring_dream import archive_spring_dream_body
-
-                        spring_archive = archive_spring_dream_body(
-                            window_id=context_window_id,
-                            target=send_target,
-                            channel=channel,
-                            content=outbound,
-                            prompt=prompt,
-                            created_at=created_at or "",
-                            sent_at=now_beijing_iso(),
-                            meta=spring_dream_archive_meta if isinstance(spring_dream_archive_meta, dict) else {},
-                        )
-                        if not bool(spring_archive.get("ok")):
-                            logger.warning(
-                                "春梦专用存档失败 window_id=%s channel=%s archive=%s",
-                                context_window_id,
-                                channel,
-                                spring_archive,
-                            )
-                    except Exception:
-                        spring_archive = {"ok": False, "error": "exception"}
-                        logger.warning("春梦专用存档异常 window_id=%s channel=%s", context_window_id, channel, exc_info=True)
+                spring_archive = _archive_generated_spring_dream(
+                    delivery_status="sent",
+                    archive_channel=channel,
+                    archive_target=send_target,
+                    attempted=attempted_channels,
+                )
                 if post_spring_prompt_override:
                     try:
                         from services.spring_dream import record_post_spring_dream_wakeup_sent
@@ -971,6 +1011,12 @@ def _send_wakeup_event(
                     "reply_preview": outbound[:120],
                     "error": "",
                 }
+        spring_archive = _archive_generated_spring_dream(
+            delivery_status="unconfirmed",
+            archive_channel=attempted_channels[-1] if attempted_channels else "",
+            archive_target=preferred_target or target,
+            attempted=attempted_channels,
+        )
         return {
             "ok": False,
             "channel": attempted_channels[-1] if attempted_channels else "",
@@ -980,6 +1026,9 @@ def _send_wakeup_event(
             "locked_channel": bool(lock_preferred_channel),
             "reply_preview": outbound[:120],
             "error": "dispatch_failed",
+            "spring_dream_archive_ok": bool(spring_archive.get("ok")) if spring_archive else True,
+            "spring_dream_archive_id": str(spring_archive.get("id") or "") if spring_archive else "",
+            "spring_dream_archive_r2_key": str(spring_archive.get("r2_key") or "") if spring_archive else "",
         }
     except Exception as e:
         logger.warning("后端事件唤醒异常", exc_info=True)

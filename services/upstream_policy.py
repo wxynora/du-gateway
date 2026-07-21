@@ -24,6 +24,7 @@ _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
+_ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
 _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 
@@ -215,6 +216,7 @@ def _append_text_blocks_without_cache(target: list, content) -> None:
         item.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         item.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
         item.pop(_TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
+        item.pop(_ENTRY_STYLE_SYSTEM_MARKER, None)
         item.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
         item.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
         target.append(item)
@@ -252,6 +254,7 @@ def _strip_gateway_cache_markers(messages: list[dict]) -> None:
         msg.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         msg.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
         msg.pop(_TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
+        msg.pop(_ENTRY_STYLE_SYSTEM_MARKER, None)
         msg.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
         msg.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
 
@@ -284,6 +287,7 @@ def _pioneer_clean_volatile_context_blocks(blocks: list[dict]) -> list[dict]:
         item.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         item.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
         item.pop(_TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
+        item.pop(_ENTRY_STYLE_SYSTEM_MARKER, None)
         item.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
         item.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
         if str(item.get("type") or "").strip().lower() not in {"text", "input_text"}:
