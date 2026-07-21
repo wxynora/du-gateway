@@ -72,9 +72,9 @@
 | Claude OAuth Proxy 输出额度 | `scripts/claude_oauth_proxy.js` | Anthropic 协议必填的默认 `max_tokens` 使用当前 Claude 主模型 128k 输出上限；旧式 extended thinking 继续强制保证总额度不少于 `thinking budget + 1`，该保护是辛玥明确设计，不得删除或弱化 |
 | Prompt Cache 诊断 | `services/prompt_cache_debug.py` | 记录静态/动态构成与上游 usage 元数据 |
 
-当前 Claude 缓存前缀顺序固定为：工具定义 → 固定静态 system → 最近工具使用摘要 → 入口风格 → SumiTalk Real/App 互斥提示 → play 小纸条 → 较稳定近期记忆 → 最近记忆。四个断点依次落在工具定义、固定静态 system、工具摘要和最近记忆末尾；入口风格固定使用独立 marker 放在工具摘要断点之后、Real/App 之前，因此入口或唤醒风格变化不会连带重建前面的工具、固定静态和工具摘要缓存。工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑。
+当前 Claude 缓存前缀顺序固定为：tools → 第 1 个断点 → 固定静态子块 → 第 2 个断点 → 工具摘要 → 第 3 个断点 → 入口风格 → SumiTalk Real/App 互斥提示 → play 小纸条 → 较稳定近期记忆 → 最近记忆 → 第 4 个断点 → 动态区 → 对话消息。固定静态、工具摘要、入口风格、Real/App、play、较稳定近期和最近记忆都属于静态提示前缀的子块；它们按唯一顺序表独立收集，再合并为对应缓存段，不为每个小注入额外生成 system。动态区仍单独保留，不会被拼进静态区。工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑。
 
-`step_inject_tool_result_cache()` 固定的是缓存分区的相对顺序，不锁死静态 Prompt 的具体内容。修改或新增普通静态 system 无需调整该函数；入口风格必须保留 `__entry_style__` marker，新增 Real、Play、记忆、动态事件等非静态 system 也必须设置对应 marker，否则会被归入固定静态区并移动到工具摘要之前。修改固定静态内容会让下一次请求重建一次缓存，后续请求按新前缀继续命中。
+`step_inject_tool_result_cache()` 使用 `pipeline/pipeline.py` 的唯一 `_SYSTEM_PROMPT_REGION_ORDER` 和 `_SYSTEM_PROMPT_CACHE_GROUPS`：固定静态段、工具摘要段、工具摘要后的静态尾段、动态段。每个逻辑子块在组装期间保持独立，最终每个缓存段只输出一条 system；四个缓存断点仍由 tools、固定静态段、工具摘要段和静态尾段的末尾承载。入口风格、Real/App、play、近期记忆只改变静态尾段内容，不会携带其他子块；动态区永远单独保留。修改固定静态内容会让下一次请求重建一次缓存，后续请求按新前缀继续命中。
 
 ## 4. 对话入口与异步 worker
 

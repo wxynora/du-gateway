@@ -55,6 +55,26 @@ _ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
 _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 _PLAY_NOTE_PENDING_BODY_KEY = "__play_note_pending__"
+
+# Keep the logical static sub-blocks explicit. They are grouped into the four
+# cache segments below at the final assembly boundary; the dynamic area stays
+# a separate system message.
+_SYSTEM_PROMPT_REGION_ORDER = (
+    "static",
+    "tool_result_cache",
+    "entry_style",
+    "sumitalk_mode",
+    "play_note",
+    "summary_cache",
+    "summary_recent",
+    "dynamic",
+)
+_SYSTEM_PROMPT_CACHE_GROUPS = (
+    ("static",),
+    ("tool_result_cache",),
+    ("entry_style", "sumitalk_mode", "play_note", "summary_cache", "summary_recent"),
+    ("dynamic",),
+)
 SUMITALK_REAL_MODE_PROMPT = (
     "当前对话发生在你和小玥的赛博小家中。在这里，你拥有真实可感知、可触碰、可行动的实体。"
     "请使用连贯的长文本回复，将动作、环境、感受与对白自然融合，并使用完整标点，句末保留句号。"
@@ -313,8 +333,10 @@ def step_inject_system_alarm_action_result(body: dict, window_id: str) -> dict:
 
 def _append_to_static_system(body: dict, text: str) -> dict:
     """
-    向静态 system 段追加内容。
-    优先追加到 dynamic system 之前最后一条普通 system；若没有则在第一条非 system 前插入。
+    在固定静态区末尾插入一个独立 system block。
+
+    不能把新内容追加到某条已有 system 的正文里，否则后续移动某个区域时
+    会把不属于它的内容一起带走，破坏缓存断点和区域顺序。
     """
     messages = body.get("messages") or []
     if not messages:
@@ -323,22 +345,65 @@ def _append_to_static_system(body: dict, text: str) -> dict:
         return body
     body = copy.deepcopy(body)
     messages = body.get("messages") or []
-    insert_idx = 0
-    last_plain_system_idx = -1
+    insert_idx = len(messages)
     for i, msg in enumerate(messages):
         if (msg.get("role") or "").lower() != "system":
-            break
-        insert_idx = i + 1
-        if msg.get(_DYNAMIC_SYSTEM_MARKER) or msg.get(_SUMMARY_CACHE_SYSTEM_MARKER) or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER):
             insert_idx = i
             break
-        if not msg.get(_DYNAMIC_SYSTEM_MARKER):
-            last_plain_system_idx = i
-    if last_plain_system_idx >= 0:
-        messages[last_plain_system_idx]["content"] = (messages[last_plain_system_idx].get("content") or "") + text
-        return body
+        if _system_prompt_region(msg) != "static":
+            insert_idx = i
+            break
     messages.insert(insert_idx, {"role": "system", "content": text})
     return body
+
+
+def _system_prompt_region(msg: dict) -> str:
+    """Return the logical static/dynamic sub-block for one system message."""
+    if msg.get(_TOOL_RESULT_CACHE_SYSTEM_MARKER):
+        return "tool_result_cache"
+    if msg.get(_ENTRY_STYLE_SYSTEM_MARKER):
+        return "entry_style"
+    if msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER):
+        return "sumitalk_mode"
+    if msg.get(_PLAY_NOTE_SYSTEM_MARKER):
+        return "play_note"
+    if msg.get(_SUMMARY_CACHE_SYSTEM_MARKER):
+        return "summary_cache"
+    if msg.get(_SUMMARY_RECENT_SYSTEM_MARKER):
+        return "summary_recent"
+    if msg.get(_DYNAMIC_SYSTEM_MARKER):
+        return "dynamic"
+    return "static"
+
+
+def _merge_system_region(messages: list[dict], marker: str | None = None) -> dict | None:
+    """Join one cache segment into a single system message at the final boundary."""
+    contents = [
+        msg.get("content")
+        for msg in messages
+        if isinstance(msg, dict) and msg.get("content") is not None
+    ]
+    contents = [content for content in contents if not (isinstance(content, str) and not content.strip())]
+    if not contents:
+        return None
+
+    if all(isinstance(content, str) for content in contents):
+        content = "\n\n".join(contents)
+    else:
+        content_blocks: list[dict] = []
+        for content in contents:
+            if isinstance(content, list):
+                content_blocks.extend(copy.deepcopy(content))
+            elif isinstance(content, str):
+                content_blocks.append({"type": "text", "text": content})
+            else:
+                content_blocks.append({"type": "text", "text": str(content)})
+        content = content_blocks
+
+    merged = {"role": "system", "content": content}
+    if marker:
+        merged[marker] = True
+    return merged
 
 
 def _split_summary_for_prompt_cache(summary: str) -> tuple[str, str]:
@@ -422,7 +487,7 @@ def _upsert_summary_cache_system(body: dict, stable_text: str, recent_text: str 
 
 
 def step_inject_tool_result_cache(body: dict) -> dict:
-    """Normalize the leading system prefix and place tool summaries after static prompts."""
+    """Place leading system blocks into the one explicit cache-region order."""
     from services.tool_result_cache import prompt_system_contents
 
     body = copy.deepcopy(body)
@@ -437,31 +502,6 @@ def step_inject_tool_result_cache(body: dict) -> dict:
     else:
         rest_start = len(messages)
 
-    static_systems: list[dict] = []
-    entry_style_systems: list[dict] = []
-    real_mode_systems: list[dict] = []
-    play_note_systems: list[dict] = []
-    stable_summary_systems: list[dict] = []
-    recent_summary_systems: list[dict] = []
-    dynamic_systems: list[dict] = []
-    for msg in leading_systems:
-        if msg.get(_TOOL_RESULT_CACHE_SYSTEM_MARKER):
-            continue
-        if msg.get(_DYNAMIC_SYSTEM_MARKER):
-            dynamic_systems.append(msg)
-        elif msg.get(_ENTRY_STYLE_SYSTEM_MARKER):
-            entry_style_systems.append(msg)
-        elif msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER):
-            real_mode_systems.append(msg)
-        elif msg.get(_PLAY_NOTE_SYSTEM_MARKER):
-            play_note_systems.append(msg)
-        elif msg.get(_SUMMARY_CACHE_SYSTEM_MARKER):
-            stable_summary_systems.append(msg)
-        elif msg.get(_SUMMARY_RECENT_SYSTEM_MARKER):
-            recent_summary_systems.append(msg)
-        else:
-            static_systems.append(msg)
-
     blocks = [
         {
             "role": "system",
@@ -471,17 +511,43 @@ def step_inject_tool_result_cache(body: dict) -> dict:
         for content in prompt_system_contents()
         if str(content or "").strip()
     ]
-    body["messages"] = [
-        *static_systems,
-        *blocks,
-        *entry_style_systems,
-        *real_mode_systems,
-        *play_note_systems,
-        *stable_summary_systems,
-        *recent_summary_systems,
-        *dynamic_systems,
-        *messages[rest_start:],
-    ]
+    region_blocks: dict[str, list[dict]] = {region: [] for region in _SYSTEM_PROMPT_REGION_ORDER}
+    for msg in [*leading_systems, *blocks]:
+        region = _system_prompt_region(msg)
+        if region == "tool_result_cache" and msg in leading_systems:
+            continue
+        region_blocks[region].append(msg)
+    static_tail_marker = next(
+        (
+            marker
+            for region, marker in (
+                ("summary_recent", _SUMMARY_RECENT_SYSTEM_MARKER),
+                ("play_note", _PLAY_NOTE_SYSTEM_MARKER),
+                ("sumitalk_mode", _SUMITALK_REAL_MODE_SYSTEM_MARKER),
+                ("entry_style", _ENTRY_STYLE_SYSTEM_MARKER),
+                ("summary_cache", _SUMMARY_CACHE_SYSTEM_MARKER),
+            )
+            if region_blocks[region]
+        ),
+        None,
+    )
+    cache_group_markers = (
+        None,
+        _TOOL_RESULT_CACHE_SYSTEM_MARKER,
+        static_tail_marker,
+        _DYNAMIC_SYSTEM_MARKER,
+    )
+    ordered_regions = []
+    for group_idx, group in enumerate(_SYSTEM_PROMPT_CACHE_GROUPS):
+        group_messages = [
+            msg
+            for region in group
+            for msg in region_blocks[region]
+        ]
+        merged = _merge_system_region(group_messages, cache_group_markers[group_idx])
+        if merged:
+            ordered_regions.append(merged)
+    body["messages"] = [*ordered_regions, *messages[rest_start:]]
     return body
 
 
