@@ -36,12 +36,12 @@ def _resolve_global_archive_window_id() -> str:
     return "sumitalk-main"
 
 
-def _append_block_notice_to_global_context(created_at: str, reason: str = "") -> bool:
+def _append_block_notice_to_global_context(created_at: str, content: str, reason: str = "") -> bool:
     window_id = _resolve_global_archive_window_id()
     message = {
         "role": "user",
         "archive_label": "小玥",
-        "content": sumitalk_block_mode_store.BLOCK_NOTICE_TEXT,
+        "content": content,
         "skip_memory_summary": True,
         "skip_dynamic_memory": True,
         "source": "sumitalk_block_mode",
@@ -71,7 +71,8 @@ def _append_block_notice_to_global_context(created_at: str, reason: str = "") ->
 
 def send_block_notice(*, created_at: str | None = None, reason: str = "") -> dict:
     ts = str(created_at or now_beijing_iso()).strip() or now_beijing_iso()
-    context_ok = _append_block_notice_to_global_context(ts, reason=reason)
+    content = sumitalk_block_mode_store.get_notice_text()
+    context_ok = _append_block_notice_to_global_context(ts, content, reason=reason)
     return {"context_ok": bool(context_ok), "created_at": ts}
 
 

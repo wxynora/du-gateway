@@ -241,7 +241,13 @@ def register_routes(bp) -> None:
         else:
             enabled = bool(raw)
         previous = sumitalk_block_mode_store.get_state()
-        state = sumitalk_block_mode_store.set_enabled(enabled, updated_at=now_beijing_iso())
+        state = sumitalk_block_mode_store.set_configuration(
+            enabled,
+            prompt_version_id=data.get("prompt_version_id") if "prompt_version_id" in data else None,
+            prompt_version_name=data.get("prompt_version_name") if "prompt_version_name" in data else None,
+            prompt_text=data.get("prompt_text") if "prompt_text" in data else None,
+            updated_at=now_beijing_iso(),
+        )
         notice = {"context_ok": False, "created_at": ""}
         if enabled and not previous.get("enabled"):
             notice = sumitalk_block_mode.send_block_notice(
