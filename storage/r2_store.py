@@ -1478,6 +1478,7 @@ def stage_core_memory_merge(
     window_id: str,
     round_index: int,
     field_updates: dict,
+    merge_reason: str = "",
 ) -> bool:
     """暂存核心记忆 merge 候选；不修改当前生效正文，等待人工审核。"""
     clean_id = str(entry_id or "").strip()
@@ -1499,6 +1500,7 @@ def stage_core_memory_merge(
             "proposed_at": str(proposed_at or "").strip() or now_beijing_iso(),
             "window_id": str(window_id or "").strip(),
             "round_index": int(round_index or 0),
+            "merge_reason": str(merge_reason or "").strip(),
             "field_updates": dict(field_updates or {}),
         }
         pending[index] = updated

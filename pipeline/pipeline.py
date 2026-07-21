@@ -2532,7 +2532,8 @@ def _memory_weight(m: dict, now=None) -> float:
     days_since = (now - dt).days
     if days_since < 0:
         days_since = 0
-    time_decay = min(days_since * 0.5, 10)  # 每天 0.5，上限 10
+    decay_days = max(0, days_since - 15)
+    time_decay = min(decay_days * 0.1, 2.0)
     return float(importance + mention_count - time_decay)
 
 
@@ -2579,6 +2580,8 @@ def _is_marginal_dynamic_memory_for_prune(mem: dict, now) -> bool:
     - 其它 tag 仍沿用综合权重低且距上次提及已久的边缘化规则。
     与注入侧 _is_dynamic_memory_valid 独立。
     """
+    if _dynamic_memory_tag(mem) == "图书馆":
+        return False
     if _is_tag_expired_dynamic_memory_for_prune(mem, now):
         return True
     if not DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED:
@@ -2590,6 +2593,27 @@ def _is_marginal_dynamic_memory_for_prune(mem: dict, now) -> bool:
     if days_since < DYNAMIC_MEMORY_MARGINAL_PRUNE_MIN_DAYS:
         return False
     return _memory_weight(mem, now) <= DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT
+
+
+def _core_protected_dynamic_memory_ids(core_pending: list) -> set[str]:
+    protected_ids: set[str] = set()
+    for item in core_pending or []:
+        if not isinstance(item, dict):
+            continue
+        entry_id = str(item.get("id") or "").strip()
+        source_memory_id = str(item.get("source_memory_id") or "").strip()
+        if entry_id:
+            protected_ids.add(entry_id)
+        if source_memory_id:
+            protected_ids.add(source_memory_id)
+    return protected_ids
+
+
+def _should_prune_dynamic_memory(mem: dict, now, protected_ids: set[str]) -> bool:
+    memory_id = str((mem or {}).get("id") or "").strip()
+    if memory_id and memory_id in protected_ids:
+        return False
+    return _is_marginal_dynamic_memory_for_prune(mem, now)
 
 
 def _is_dynamic_memory_valid(mem: dict, now=None) -> bool:
@@ -2796,19 +2820,21 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
         return body
     du_request_id = normalize_debug_request_id((body or {}).get(DU_REQUEST_ID_BODY_KEY))
     memories = r2_store.get_dynamic_memory_list()
-    if not memories and not r2_store.get_core_cache_pending():
+    core_pending = r2_store.get_core_cache_pending() or []
+    if not memories and not core_pending:
         return body
     # 动态层边缘落盘淘汰：权重很低且时间已久 → 从 current.json 物理删除并同步向量索引（不碰 core_cache）
     from utils.time_aware import _now_beijing, now_beijing_iso
 
     now = _now_beijing()
     before_n = len(memories)
-    pruned = [mem for mem in memories if not _is_marginal_dynamic_memory_for_prune(mem, now)]
+    protected_ids = _core_protected_dynamic_memory_ids(core_pending)
+    pruned = [mem for mem in memories if not _should_prune_dynamic_memory(mem, now, protected_ids)]
     if len(pruned) < before_n:
         removed_ids = {
             str(m.get("id"))
             for m in memories
-            if m.get("id") and _is_marginal_dynamic_memory_for_prune(m, now)
+            if m.get("id") and _should_prune_dynamic_memory(m, now, protected_ids)
         }
         if r2_store.save_dynamic_memory_list(pruned):
             provenance_deleted = 0
@@ -3552,6 +3578,7 @@ def _apply_one_decision(
     action = (decision.get("action") or "skip").lower()
     content = (decision.get("content") or "").strip()
     fused_with_id = decision.get("fused_with_id")
+    merge_reason = str(decision.get("merge_reason") or "").strip()
     importance = int(decision.get("importance") or 0)
     emotion_label, scene_type, target_type = _normalize_memory_labels(decision)
     round_ts = decision.get("timestamp") or decision.get("last_mentioned")
@@ -3698,6 +3725,7 @@ def _apply_one_decision(
                     "target_type": target_type,
                     "last_mentioned": now_iso,
                 },
+                merge_reason=merge_reason,
             )
             if staged:
                 logger.info("核心层 merge 已生成待审核候选 window_id=%s fused_with_id=%s", window_id, fused_with_id)

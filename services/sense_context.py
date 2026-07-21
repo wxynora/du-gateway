@@ -176,6 +176,25 @@ def _recent_sleep_summary(summary: dict, min_minutes: int) -> tuple[int, Any, An
     return total_minutes, start_dt, end_dt
 
 
+def _format_sleep_time_range(start_dt: Any, end_dt: Any) -> str:
+    if not start_dt or not end_dt:
+        return ""
+    if start_dt.date() != end_dt.date():
+        return f"{start_dt.month}月{start_dt.day}日 {start_dt.strftime('%H:%M')}–{end_dt.month}月{end_dt.day}日 {end_dt.strftime('%H:%M')}"
+
+    now_dt = parse_iso_to_beijing(now_beijing_iso())
+    relative_day = ""
+    if now_dt:
+        day_delta = (now_dt.date() - start_dt.date()).days
+        if day_delta == 0:
+            relative_day = "今天"
+        elif day_delta == 1:
+            relative_day = "昨天"
+    calendar_day = f"{start_dt.month}月{start_dt.day}日"
+    day_label = f"{relative_day}（{calendar_day}）" if relative_day else calendar_day
+    return f"{day_label} {start_dt.strftime('%H:%M')}–{end_dt.strftime('%H:%M')}"
+
+
 def _format_sleep_summary_piece(label: str, summary: dict, total_minutes: int, start_dt: Any, end_dt: Any) -> str:
     duration = _format_duration_minutes(total_minutes)
     try:
@@ -186,10 +205,8 @@ def _format_sleep_summary_piece(label: str, summary: dict, total_minutes: int, s
         awake_gap_minutes = int(summary.get("awakeGapMinutes") or 0)
     except Exception:
         awake_gap_minutes = 0
-    time_range = ""
-    if start_dt and end_dt:
-        time_range = f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')} "
-    parts = [f"{label} {time_range}累计 {duration}"]
+    time_range = _format_sleep_time_range(start_dt, end_dt)
+    parts = [f"{time_range} {label}，累计 {duration}" if time_range else f"{label}，累计 {duration}"]
     if segment_count > 1:
         parts.append(f"分 {segment_count} 段")
     if awake_gap_minutes > 0:

@@ -193,18 +193,15 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
     from memory_vector.vector_index_store import remove_memory_ids_from_all_indices
     from pipeline.pipeline import (
         _build_retrieval_text,
-        _is_marginal_dynamic_memory_for_prune,
+        _core_protected_dynamic_memory_ids,
+        _should_prune_dynamic_memory,
         _upsert_dynamic_memory_index,
     )
 
     memories = r2_store.get_dynamic_memory_list() or []
     current_memories, changed = r2_store.ensure_dynamic_memory_ids(memories)
     core_pending = r2_store.get_core_cache_pending() or []
-    protected_ids = {
-        str((item or {}).get("id") or "").strip()
-        for item in core_pending
-        if str((item or {}).get("id") or "").strip()
-    }
+    protected_ids = _core_protected_dynamic_memory_ids(core_pending)
     now = _now_beijing()
 
     before_count = len(current_memories)
@@ -223,7 +220,7 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
             mem["retrieval_text"] = _build_retrieval_text(content)
             backfilled_ids.append(mid)
             changed = True
-        if mid not in protected_ids and _is_marginal_dynamic_memory_for_prune(mem, now):
+        if _should_prune_dynamic_memory(mem, now, protected_ids):
             removed_ids.add(mid)
             changed = True
             continue

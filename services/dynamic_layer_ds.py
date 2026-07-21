@@ -1,6 +1,6 @@
 """
 动态层 DS 调用（与「终稿」prompt 对接）：
-- DS 每轮返回单条固定标签决策：ACTION(new/merge/skip)、IMPORTANCE(1-4)、TAG(单值)、CONTENT、FUSED_WITH_ID(merge 时)。
+- DS 每轮返回单条固定标签决策：ACTION(new/merge/skip)、IMPORTANCE(1-4)、TAG(单值)、CONTENT、FUSED_WITH_ID 与 MERGE_REASON（merge 时）。
 - 同时返回 emotion_label / scene_type / target_type 三个稳定标签。
 - 网关按 tag 判定房间；按 action 单条应用：new 追加、merge 按 id 更新+mention_count+1、skip 不写。卧室内容不自动 skip。
 """
@@ -19,6 +19,13 @@ from utils.log import get_logger
 logger = get_logger(__name__)
 
 _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS = 5
+_MERGE_REASONS = {
+    "consolidate",
+    "correction",
+    "invalidate",
+    "supersede",
+    "temporal_update",
+}
 
 # 动态层 DS prompt（简短便签版，禁止散文）
 _DYNAMIC_LAYER_PROMPT = """你叫渡。
@@ -73,6 +80,15 @@ _DYNAMIC_LAYER_PROMPT = """你叫渡。
 同一件事提到多次 → 用现在的理解重新说一遍。
 不是拼接，是重讲。
 
+若 action 是 merge，必须选择一种 MERGE_REASON：
+- consolidate：同一件事的重复、补充或延续，合成一条当前理解
+- correction：老婆明确指出旧记忆里的判断或事实本来就是错的
+- invalidate：老婆明确说明旧记忆已经无效、不能再当作当前事实；仍要在 CONTENT 写出当前正确理解，没有可替代内容就先不要 merge
+- supersede：出现了新的明确结论，新结论取代旧结论
+- temporal_update：旧记忆过去成立，但现在发生了变化；CONTENT 要保留“过去怎样、现在怎样”的时间关系
+
+不要仅凭我的推测使用 correction / invalidate / supersede；这些原因必须有老婆当前明确表达的依据。普通补充一律使用 consolidate。
+
 ---
 
 tag：
@@ -112,6 +128,7 @@ EMOTION: positive / negative / neutral
 SCENE: problem_solving / learning / planning / emotional_venting / heart_to_heart / casual_chat / affection / conflict
 TARGET: external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic
 FUSED_WITH_ID: （仅 merge 时填写当前记忆列表里的 ref，如 M01；否则留空）
+MERGE_REASON: consolidate / correction / invalidate / supersede / temporal_update（仅 merge 时填写；否则留空）
 CONTENT: 记忆正文（new/merge 必填，简短一句，至少 12 个有效字符，禁止只写几个字、半句话、标题词或散文；skip 可留空）
 
 ---
@@ -156,6 +173,13 @@ def _round_messages_preview(round_messages: Any, limit: int = 360) -> str:
 
 
 def _dynamic_layer_retry_instruction(issue: str, previous_content: str = "", *, batch: bool = False) -> str:
+    if issue == "merge_missing_or_invalid_reason":
+        return (
+            "\n\n【上一次输出需要重写】\n"
+            "ACTION 是 merge，但 MERGE_REASON 缺失或不在允许值中。\n"
+            "请只从 consolidate / correction / invalidate / supersede / temporal_update 选择一个；"
+            "保持原来的 FUSED_WITH_ID 和完整 CONTENT，只输出固定标签格式，不要解释，不要 Markdown。"
+        )
     scope = "本批里有记忆" if batch else "上一条记忆"
     prev = _one_line_preview(previous_content, limit=220)
     prev_line = f"\n上一版 CONTENT：{prev}" if prev else ""
@@ -309,6 +333,7 @@ _FIELD_ALIASES = {
     "content": "content",
     "fused": "fused_with_id",
     "fused_with_id": "fused_with_id",
+    "merge_reason": "merge_reason",
     "timestamp": "timestamp",
     "mention_count": "mention_count",
     "last_mentioned": "last_mentioned",
@@ -392,6 +417,11 @@ def _normalize_fused_with_id(value: Any) -> Optional[str]:
     if "仅 merge 时填写" in value:
         return None
     return value
+
+
+def _normalize_merge_reason(value: Any) -> str:
+    reason = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return reason if reason in _MERGE_REASONS else ""
 
 
 def _resolve_fused_with_id(value: Any, ref_to_id: dict[str, str], valid_ids: set[str]) -> Optional[str]:
@@ -496,6 +526,8 @@ def _decision_structural_issue(obj: dict) -> str:
         return "new_missing_content"
     if action == "merge" and not content_text and not fused_with_id:
         return "merge_missing_content_and_id"
+    if action == "merge" and not _normalize_merge_reason(obj.get("merge_reason")):
+        return "merge_missing_or_invalid_reason"
     if action in ("new", "merge"):
         issue = _content_quality_issue(content_text)
         if issue:
@@ -596,6 +628,7 @@ def call_dynamic_layer_ds(
         "importance": 0,
         "content": "",
         "fused_with_id": None,
+        "merge_reason": "",
         "emotion_label": "",
         "scene_type": "",
         "target_type": "",
@@ -761,6 +794,7 @@ def call_dynamic_layer_ds(
         content_text = (obj.get("content") or "").strip()
         raw_fused_with_id = _normalize_fused_with_id(obj.get("fused_with_id"))
         fused_with_id = _resolve_fused_with_id(raw_fused_with_id, ref_to_id, valid_ids)
+        merge_reason = _normalize_merge_reason(obj.get("merge_reason"))
         emotion_label = str(obj.get("emotion_label") or "").strip().lower()
         scene_type = str(obj.get("scene_type") or "").strip()
         target_type = str(obj.get("target_type") or "").strip()
@@ -776,6 +810,8 @@ def call_dynamic_layer_ds(
         elif action == "new" and not content_text:
             logger.warning("动态层 DS 返回 action=new 但 content 缺失，按 skip 处理")
             action = "skip"
+        if action != "merge":
+            merge_reason = ""
 
         result = {
             "tag": tag,
@@ -783,6 +819,7 @@ def call_dynamic_layer_ds(
             "importance": importance,
             "content": content_text,
             "fused_with_id": fused_with_id,
+            "merge_reason": merge_reason,
             "emotion_label": emotion_label if emotion_label in ("positive", "negative", "neutral") else "neutral",
             "scene_type": scene_type,
             "target_type": target_type,
@@ -799,6 +836,7 @@ def call_dynamic_layer_ds(
                 "final_importance": result["importance"],
                 "final_content": result["content"],
                 "final_fused_with_id": result["fused_with_id"],
+                "final_merge_reason": result["merge_reason"],
                 "attempt_count": len(attempts),
                 "retry_count": max(0, len(attempts) - 1),
                 "attempts": attempts,
@@ -832,6 +870,7 @@ def _normalize_single_decision(obj: Any) -> dict:
         "importance": 0,
         "content": "",
         "fused_with_id": None,
+        "merge_reason": "",
         "emotion_label": "",
         "scene_type": "",
         "target_type": "",
@@ -844,6 +883,7 @@ def _normalize_single_decision(obj: Any) -> dict:
     importance = _coerce_int_1_to_4(obj.get("importance"), default=0)
     content_text = (obj.get("content") or "").strip()
     fused_with_id = obj.get("fused_with_id")
+    merge_reason = _normalize_merge_reason(obj.get("merge_reason")) if action == "merge" else ""
     emotion_label = str(obj.get("emotion_label") or "").strip().lower()
     scene_type = str(obj.get("scene_type") or "").strip()
     target_type = str(obj.get("target_type") or "").strip()
@@ -858,12 +898,14 @@ def _normalize_single_decision(obj: Any) -> dict:
             action = "skip"
             content_text = ""
             fused_with_id = None
+            merge_reason = ""
     return {
         "tag": tag,
         "action": action,
         "importance": importance,
         "content": content_text,
         "fused_with_id": fused_with_id,
+        "merge_reason": merge_reason,
         "emotion_label": emotion_label if emotion_label in ("positive", "negative", "neutral") else "neutral",
         "scene_type": scene_type,
         "target_type": target_type,

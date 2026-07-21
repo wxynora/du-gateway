@@ -1438,6 +1438,16 @@ def _stream_with_r2_archive(
         except Exception:
             logger.debug("SumiTalk 流式事件回调失败 kind=%s", kind, exc_info=True)
 
+    def _request_reasoning_enabled(request_body: dict) -> bool:
+        if not sumitalk_event_sink or not isinstance(request_body, dict):
+            return False
+        for key in ("reasoning", "thinking", "output_config"):
+            value = request_body.get(key)
+            if isinstance(value, dict) and value:
+                return True
+        effort = str(request_body.get("reasoning_effort") or "").strip().lower()
+        return bool(effort and effort not in {"none", "off", "disabled"})
+
     def _emit_listen_invite_actions(raw_text: str, messages: list[dict] | None) -> None:
         if not sumitalk_event_sink:
             return
@@ -1491,10 +1501,11 @@ def _stream_with_r2_archive(
         part_id: str,
         state: dict,
     ) -> None:
-        if not update or state.get("finished"):
+        if not update:
             return
         mode, text = update
-        _start_reasoning_stream_event(round_no, part_id, state, mode)
+        if not state.get("started"):
+            _start_reasoning_stream_event(round_no, part_id, state, mode)
         if mode == "snapshot":
             _emit_stream_event(
                 "reasoning_delta",
@@ -1517,6 +1528,16 @@ def _stream_with_r2_archive(
                     "text": event_text,
                 },
             )
+
+    def _finish_reasoning_before_assistant_text(
+        round_no: int,
+        reasoning_part_id: str,
+        reasoning_state: dict | None,
+    ) -> None:
+        if reasoning_state is None or not reasoning_part_id:
+            return
+        if reasoning_state.get("started") and not reasoning_state.get("finished"):
+            _finish_reasoning_stream_event(round_no, reasoning_part_id, reasoning_state)
 
     def _finish_reasoning_stream_event(round_no: int, part_id: str, state: dict) -> None:
         if not state.get("started") or state.get("finished"):
@@ -1556,8 +1577,6 @@ def _stream_with_r2_archive(
 
     def _emit_reasoning_chunk(chunk, round_no: int, part_id: str, state: dict) -> None:
         try:
-            if state.get("finished"):
-                return
             if not chunk.startswith(b"data: "):
                 return
             raw = chunk[6:].strip()
@@ -1623,6 +1642,7 @@ def _stream_with_r2_archive(
                 delta = (((packet.get("choices") or [{}])[0] or {}).get("delta") or {})
                 content = delta.get("content")
                 if isinstance(content, str) and content:
+                    _finish_reasoning_before_assistant_text(round_no, reasoning_part_id, reasoning_state)
                     _emit_assistant_text_value(content, round_no, part_id, state)
         except Exception:
             return
@@ -1736,6 +1756,8 @@ def _stream_with_r2_archive(
             "snapshot": False,
             "stream": _ReasoningStreamAccumulator(),
         }
+        if _request_reasoning_enabled(body):
+            _start_reasoning_stream_event(1, reasoning_part_id, reasoning_event_state, "delta")
 
         def _prepare_no_tool_chunk(raw_chunk):
             _collect_content_from_chunk(raw_chunk)
@@ -1886,6 +1908,8 @@ def _stream_with_r2_archive(
                     "stream": _ReasoningStreamAccumulator(),
                 },
             )
+            if _request_reasoning_enabled(current_body):
+                _start_reasoning_stream_event(event_round, reasoning_part_id, round_event_state, "delta")
             assistant_part_id = f"assistant-text-{event_round}-{stream_attempt_no}"
             assistant_event_state = {"started": False, "finished": False}
             assistant_du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
