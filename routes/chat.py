@@ -1094,10 +1094,31 @@ def _is_delayed_followup_generation_request() -> bool:
     return False
 
 
+_QQ_GROUP_ACTIVITY_WAKEUP_KINDS = frozenset({
+    "proactive_trigger",
+    "calendar_event",
+    "system_alarm",
+})
+
+
+def _qq_group_activity_context_allowed(headers) -> bool:
+    truthy = ("1", "true", "yes")
+
+    def enabled(name: str) -> bool:
+        return str((headers or {}).get(name) or "").strip().lower() in truthy
+
+    if enabled("X-Skip-QQ-Group-Activity"):
+        return False
+    if enabled("X-DU-PROACTIVE-DECISION"):
+        return True
+    if not enabled("X-DU-GATEWAY-WAKEUP"):
+        return False
+    wakeup_kind = str((headers or {}).get("X-DU-WAKEUP-KIND") or "").strip().lower()
+    return wakeup_kind in _QQ_GROUP_ACTIVITY_WAKEUP_KINDS
+
+
 def _inject_qq_group_activity_context(body: dict) -> dict:
-    if _is_du_daily_maintenance_request() or not _is_gateway_wakeup_request():
-        return body
-    if (request.headers.get("X-Skip-QQ-Group-Activity") or "").strip().lower() in ("1", "true", "yes"):
+    if _is_du_daily_maintenance_request() or not _qq_group_activity_context_allowed(request.headers):
         return body
     group_context = _build_qq_group_activity_context_for_wakeup()
     if not group_context:
