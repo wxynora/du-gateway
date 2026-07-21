@@ -28,6 +28,7 @@ from services.watch_analysis_source import (
 )
 from services.watch_subtitles import decode_subtitle_bytes
 from storage import (
+    stay_with_du_store,
     watch_analysis_store,
     watch_knowledge_store,
     watch_runtime_store,
@@ -35,6 +36,7 @@ from storage import (
     watch_viewing_store,
     watch_visual_store,
 )
+from utils.time_aware import now_beijing_iso
 
 
 def _json_error(error: str, code: str, status: int):
@@ -224,6 +226,59 @@ def register_routes(bp):
     @bp.route("/watch/tickets", methods=["GET"])
     def miniapp_watch_ticket_list():
         return jsonify({"ok": True, "tickets": watch_viewing_store.list_tickets()})
+
+    @bp.route("/watch/tickets/<ticket_id>", methods=["PUT"])
+    def miniapp_watch_ticket_update(ticket_id: str):
+        body, error = _json_body()
+        if error is not None:
+            return error
+        title = str(body.get("title") or "").replace("\x00", "").strip()
+        if not title:
+            return _json_error("票根作品名不能为空", "watch_ticket_title_required", 400)
+        archive_to_stay_with_du = body.get("archive_to_stay_with_du", False)
+        if not isinstance(archive_to_stay_with_du, bool):
+            return _json_error(
+                "archive_to_stay_with_du 必须是布尔值",
+                "watch_ticket_archive_choice_invalid",
+                400,
+            )
+        viewing = watch_viewing_store.get_by_ticket_id(ticket_id)
+        if viewing is None:
+            return _json_error("观影票根不存在", "watch_ticket_not_found", 404)
+        if archive_to_stay_with_du and not bool(viewing.get("completed")):
+            return _json_error(
+                "作品尚未达到正片完成条件，不能加入一起看过",
+                "watch_ticket_work_incomplete",
+                409,
+            )
+        ticket = dict(viewing.get("ticket") or {})
+        ticket["title"] = title
+        stay_entry = None
+        if archive_to_stay_with_du:
+            stay_entry = stay_with_du_store.archive_watch_ticket(ticket)
+            if stay_entry is None:
+                return _json_error(
+                    "票根暂时无法写入一起看过",
+                    "watch_ticket_archive_failed",
+                    502,
+                )
+        saved = watch_viewing_store.update_ticket_title(
+            ticket_id,
+            title=title,
+            now_iso=now_beijing_iso(),
+            stay_with_du_entry=stay_entry,
+        )
+        if saved is None:
+            return _json_error("观影票根不存在", "watch_ticket_not_found", 404)
+        return jsonify(
+            {
+                "ok": True,
+                "viewing_summary": saved,
+                "ticket": saved.get("ticket"),
+                "archived_to_stay_with_du": archive_to_stay_with_du,
+                "stay_with_du_entry": stay_entry,
+            }
+        )
 
     @bp.route("/watch/sessions/<session_id>/playback", methods=["PUT"])
     def miniapp_watch_session_playback(session_id: str):
@@ -757,6 +812,14 @@ def register_routes(bp):
 
     @bp.route("/watch/sessions/<session_id>", methods=["DELETE"])
     def miniapp_watch_session_end(session_id: str):
+        finalize_raw = str(request.args.get("finalize_viewing") or "").strip().lower()
+        if finalize_raw not in {"", "0", "1", "false", "true"}:
+            return _json_error(
+                "finalize_viewing 必须是布尔值",
+                "watch_finalize_viewing_invalid",
+                400,
+            )
+        finalize_viewing = finalize_raw in {"1", "true"}
         _session, error = _owned_session(session_id)
         if error is not None:
             return error
@@ -764,7 +827,14 @@ def register_routes(bp):
         def _end():
             session = watch_runtime_store.end_session(session_id)
             analysis_cost = watch_analysis_store.session_analysis_cost(session_id)
-            viewing_summary = watch_viewing_store.get_for_session(session_id)
+            viewing_summary = (
+                watch_viewing_store.finalize_viewing_for_session(
+                    session_id,
+                    now_iso=now_beijing_iso(),
+                )
+                if finalize_viewing
+                else watch_viewing_store.get_for_session(session_id)
+            )
             samples_purged = watch_analysis_store.purge_session_samples(session_id)
             watch_visual_store.delete_session_frames(session_id)
             return jsonify(

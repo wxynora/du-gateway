@@ -4,7 +4,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from utils.log import get_logger
-from utils.time_aware import now_beijing_iso, today_beijing
+from utils.time_aware import now_beijing_iso, parse_iso_to_beijing, today_beijing
 
 R2_KEY_STAY_WITH_DU = "global/stay_with_du.json"
 
@@ -86,6 +86,30 @@ def _normalize_stay_media(items: Any) -> list[dict]:
         date = _normalize_stay_text(item.get("date"), 32)
         if date:
             row["date"] = date
+        for key in ("work_key", "watch_session_id", "watched_at"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                row[key] = value
+        ticket = item.get("ticket")
+        if isinstance(ticket, dict):
+            normalized_ticket = {
+                key: str(ticket.get(key) or "").strip()
+                for key in (
+                    "ticket_id",
+                    "viewing_id",
+                    "created_at",
+                    "completed_at",
+                    "part_title",
+                )
+                if str(ticket.get(key) or "").strip()
+            }
+            for key in ("duration_ms", "played_duration_ms", "part_count"):
+                try:
+                    normalized_ticket[key] = max(0, int(ticket.get(key) or 0))
+                except (TypeError, ValueError):
+                    continue
+            if normalized_ticket.get("ticket_id"):
+                row["ticket"] = normalized_ticket
         out.append(row)
     return out[:300]
 
@@ -228,3 +252,89 @@ def delete_stay_with_du_entry(kind: str, entry_id: str = "", title: str = "", da
     data[target] = items[:delete_index] + items[delete_index + 1:]
     ok = save_stay_with_du_data(data)
     return deleted if ok else None
+
+
+def archive_watch_ticket(ticket: dict) -> Optional[dict]:
+    """把已确认标题的观影票根幂等归档到 moviesDone。"""
+    if not isinstance(ticket, dict):
+        return None
+    title = _normalize_stay_text(ticket.get("title"), 160)
+    ticket_id = str(ticket.get("ticket_id") or "").strip()
+    if not title or not ticket_id:
+        return None
+    work_key = str(ticket.get("work_key") or "").strip()
+    watched_at = str(ticket.get("completed_at") or ticket.get("created_at") or "").strip()
+    watched_date = parse_iso_to_beijing(watched_at)
+    date = watched_date.strftime("%Y-%m-%d") if watched_date else today_beijing()
+    normalized_title = title.casefold()
+
+    def same_work(item: Any) -> bool:
+        if not isinstance(item, dict):
+            return False
+        item_ticket = item.get("ticket")
+        item_ticket_id = (
+            str(item_ticket.get("ticket_id") or "").strip()
+            if isinstance(item_ticket, dict)
+            else ""
+        )
+        if item_ticket_id and item_ticket_id == ticket_id:
+            return True
+        item_work_key = str(item.get("work_key") or "").strip()
+        if work_key and item_work_key:
+            return item_work_key == work_key
+        return str(item.get("title") or "").strip().casefold() == normalized_title
+
+    completed_parts = ticket.get("completed_parts")
+    part_titles = [
+        str(item.get("part_title") or "").strip()
+        for item in completed_parts
+        if isinstance(item, dict) and str(item.get("part_title") or "").strip()
+    ] if isinstance(completed_parts, list) else []
+    archived_ticket = {
+        "ticket_id": ticket_id,
+        "viewing_id": str(ticket.get("viewing_id") or "").strip(),
+        "created_at": str(ticket.get("created_at") or "").strip(),
+        "completed_at": watched_at,
+        "duration_ms": max(0, int(ticket.get("played_duration_ms") or 0)),
+        "part_count": max(0, int(ticket.get("part_count") or 0)),
+        "part_title": " / ".join(part_titles),
+    }
+
+    client = _s3_client()
+    if not client:
+        return None
+    with _stay_with_du_write_lock:
+        try:
+            stored = _read_json(client, R2_KEY_STAY_WITH_DU)
+            raw = (
+                stored.get("data")
+                if isinstance(stored, dict) and isinstance(stored.get("data"), dict)
+                else stored
+            )
+            data = normalize_stay_with_du_data(raw)
+            todo = data.get("moviesTodo") if isinstance(data.get("moviesTodo"), list) else []
+            done = data.get("moviesDone") if isinstance(data.get("moviesDone"), list) else []
+            existing_done = next((dict(item) for item in done if same_work(item)), None)
+            existing_todo = next((dict(item) for item in todo if same_work(item)), None)
+            existing = existing_done or existing_todo or {}
+            entry = {
+                "id": str(existing.get("id") or uuid4()),
+                "title": title,
+                "note": str(existing.get("note") or "").strip(),
+                "date": date,
+                "work_key": work_key,
+                "watch_session_id": str(ticket.get("last_session_id") or "").strip(),
+                "watched_at": watched_at,
+                "ticket": archived_ticket,
+            }
+            data["moviesTodo"] = [item for item in todo if not same_work(item)]
+            data["moviesDone"] = [entry] + [item for item in done if not same_work(item)]
+            payload = {
+                "data": normalize_stay_with_du_data(data),
+                "updated_at": now_beijing_iso(),
+            }
+            _write_json(client, R2_KEY_STAY_WITH_DU, payload)
+            return payload["data"]["moviesDone"][0]
+        except Exception as exc:
+            logger.error("archive_watch_ticket 失败 ticket_id=%s error=%s", ticket_id, exc, exc_info=True)
+            return None

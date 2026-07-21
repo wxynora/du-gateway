@@ -988,7 +988,6 @@ def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
             if (
                 incoming_epoch == current_epoch
                 and bool(row["is_playing"])
-                and not str(row["completed_at"] or "").strip()
                 and previous_observed_at is not None
             ):
                 server_elapsed_ms = max(

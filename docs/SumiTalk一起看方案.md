@@ -1164,6 +1164,7 @@ unknown            无法可靠判断，按正片分析
 | 恢复单个会话 | `GET /miniapp-api/watch/sessions/<session_id>` |
 | 恢复跨分 P 观看与票根 | `GET /miniapp-api/watch/viewings/<viewing_id>` |
 | 查询服务端票夹 | `GET /miniapp-api/watch/tickets` |
+| 保存票根最终作品名，并可选归档到一起看过 | `PUT /miniapp-api/watch/tickets/<ticket_id>` |
 | 确认知识卡或明确跳过并正式开始 | `POST /miniapp-api/watch/sessions/<session_id>/start` |
 | 知识卡失败后重新生成 | `POST /miniapp-api/watch/sessions/<session_id>/knowledge-card/regenerate` |
 | 字幕未命中或失败后重新查询 | `POST /miniapp-api/watch/sessions/<session_id>/subtitles/retry` |
@@ -1176,7 +1177,8 @@ unknown            无法可靠判断，按正片分析
 | 查询分析队列诊断 | `GET /miniapp-api/watch/analysis/health` |
 | 修改知识/胆小模式 | `PUT /miniapp-api/watch/sessions/<session_id>/mode` |
 | 纠正片头片尾/正片边界 | `PUT /miniapp-api/watch/sessions/<session_id>/timeline-sections` |
-| 结束观看会话 | `DELETE /miniapp-api/watch/sessions/<session_id>` |
+| 普通收尾（切 P、页面销毁、异常清理） | `DELETE /miniapp-api/watch/sessions/<session_id>` |
+| 使用者明确结束本次一起看并生成票根 | `DELETE /miniapp-api/watch/sessions/<session_id>?finalize_viewing=true` |
 | 提交高能误报/漏报 | `POST /miniapp-api/watch/sessions/<session_id>/risk-feedback` |
 
 正常聊天不调用单独的 `/watch/chat`。SumiTalk chat job 请求附带观看快照，网关在统一聊天入口注入动态上下文并通过现有 rich SSE 返回隐藏动作事件。
@@ -1222,9 +1224,11 @@ unknown            无法可靠判断，按正片分析
 
 首次创建返回 `201`；同一设备、窗口、媒体、模式与能力参数的超时重放会在事务内复用仍有有效客户端租约的活跃 session，返回 `200` 且 `session.create_reused=true`，不得重复建立准备和分析流水线。首个分 P 未传 `viewing_id` 时由后端生成；后续分 P 使用独立 session，但必须复用同一个 `viewing_id`，并提交一致的 `work_key` 及真实 `part_index/part_count`，服务端才会把播放时长和完成状态归到同一次观看。旧客户端不传这些字段时按单 P viewing 兼容。新 session 固定为暂停的 `preparation.status=identifying`，不代表已正式开播。`content_start_ms/content_end_ms` 均为可选的媒体绝对毫秒时间，分别表示人工确认的正片开始，以及正片结束或片尾曲开始；可以只填一侧，填写时必须位于媒体时长内且开始早于结束。人工边界会作为 `source=manual` 的 `non_story/outro` 时间段跨 seek 保留，滚动分析不得越界。`knowledge_mode` 只能是 `known | needs_summary`；`fear_action` 只能是 `warn_only | cover_video`；`visual_context_mode` 只能是 `text_only | text_plus_contact_sheet`；`reply_lead_ms` 必须是 0 到 120000 的整数，省略时使用 30000 默认值。`force_unknown_analysis=true` 是识图结果不可靠时的人工降级，会同时把知识模式降为 `needs_summary`，将分析熟悉度改为 `unknown` 并重新进入知识卡准备。该降级只允许在正式开始前从 false 改为 true，不允许直接改回 false 伪造升级。
 
-播放快照的服务端接收时间作为累计基准，只累计相邻、同 `timeline_epoch`、上一快照确实处于播放状态的确认区间；累计值取服务端经过时间与媒体前进量按上一播放倍速换算值中较小者。准备、暂停和 seek 均不计入 `played_duration_ms`。客户端可在真实媒体结束快照附加 `media_ended=true`；会话只有在已正式解锁、最新可信位置达到 `content_end_ms`（未提供时为媒体终点），并且本轮为连续播放或真实结束事件时才写 `completion_event_id`。`DELETE session` 只结束会话，不能制造完成事件。
+播放快照的服务端接收时间作为累计基准，只累计相邻、同 `timeline_epoch`、上一快照确实处于播放状态的确认区间；累计值取服务端经过时间与媒体前进量按上一播放倍速换算值中较小者。准备、暂停和 seek 均不计入 `played_duration_ms`。客户端可在真实媒体结束快照附加 `media_ended=true`；会话只有在已正式解锁、最新可信位置达到 `content_end_ms`（未提供时为媒体终点），并且本轮为连续播放或真实结束事件时才写 `completion_event_id`。达到正片完成边界后如果仍连续播放，可信累计继续增加到显式结束，不会在片尾或过审占位图之前冻结。`DELETE session` 只结束会话，不能制造完成事件。
 
-创建、单会话恢复、播放更新、状态和 DELETE 响应都会返回 `viewing_summary`。最后一个目标分 P 完成后，后端在长期 `watch_viewings` 表生成稳定 `ticket_id/ticket`；重复快照和重复 DELETE 复用同一张票根。DELETE 仍原样返回本 session 的 `analysis_cost`，并额外返回 `viewing_summary` 与 `ticket`。`GET /watch/viewings/<viewing_id>` 恢复单次观看，`GET /watch/tickets` 按完成时间返回服务端持久化票根，供受信任的另一设备恢复。
+创建、单会话恢复、播放更新、状态和 DELETE 响应都会返回 `viewing_summary`。作品完成和票根生成是两个独立状态：全部目标分 P 到达正片终点后只把 `viewing_summary.completed` 置为 `true`；只有使用者明确结束本次一起看并发送 `finalize_viewing=true` 时，后端才按当前服务端可信累计生成稳定 `ticket_id/ticket`，即使作品尚未看完也会出票。切 P、`pagehide` 和异常清理使用不带参数的普通 DELETE，不会提前出票；重复显式结束复用同一张票根。DELETE 仍原样返回本 session 的 `analysis_cost`，并额外返回 `viewing_summary` 与可空 `ticket`。`GET /watch/viewings/<viewing_id>` 恢复单次观看，`GET /watch/tickets` 按出票时间返回服务端持久化票根，供受信任的另一设备恢复。
+
+票根生成后，客户端通过 `PUT /watch/tickets/<ticket_id>` 提交编辑后的最终 `title`。请求中的 `archive_to_stay_with_du` 是显式布尔选择，省略时默认为 `false`：`false` 只保存票根标题，不读取或写入 Stay with Du；只有作品 `completed=true` 且显式传入 `true` 时，才把同一标题幂等写入 `moviesDone`。提前结束生成的票根可以保存到票夹，但不能冒充已经看完。成功响应返回更新后的 `viewing_summary/ticket`、`archived_to_stay_with_du` 和可空的 `stay_with_du_entry`。
 
 ### 14.2 开播前状态与确认
 
@@ -1790,33 +1794,34 @@ Lean In/
 
 ### 观看完成与票根的当前边界
 
-网关已经实现可信播放累计、跨分 P `viewing_id`、真实完成门禁、稳定票根和服务端票夹恢复；票根只保存结构化元数据，不延长音频、截图、字幕或剧情缓存 TTL。当前没有把票根或完成事件写入 Stay with Du，也没有实现观后感、收藏或评分的服务端同步。原生现有本地票夹可以继续使用，接入服务端恢复时以上述 viewing/ticket 接口为准。
+网关已经实现可信播放累计、跨分 P `viewing_id`、真实完成门禁、稳定票根、服务端票夹恢复，以及保存最终票根标题时可选写入 Stay with Du。票根只保存结构化元数据，不延长音频、截图、字幕或剧情缓存 TTL。当前没有实现观后感、收藏或评分的服务端同步。原生现有本地票夹可以继续使用，接入服务端恢复时以上述 viewing/ticket 接口为准。
 
 ### 后续本地联动：看完归档、观后感与观影票根
 
 这部分属于 SumiTalk 私有宿主能力，不进入 Lean In 的平台无关核心。联动方向只有一个：从“一起看”完成状态回填 Stay with Du。现有 Stay with Du 使用 `moviesTodo / moviesDone` 展示“想一起看 / 一起看过”，原生入口为 `WatchReadListDetailScreen`，网关数据源仍是 `/miniapp-api/stay-with-du` 和 `global/stay_with_du.json`。不增加从想看清单启动一起看的入口，也不另建第二套片单。
 
-#### 看完后自动补进 Stay with Du
+#### 看完后可选补进 Stay with Du
 
 - 单 P、单集或本地单文件在最新可信播放位置达到人工正片终点 `content_end_ms`（没有人工终点时使用媒体终点）后，生成一次可归档的完成事件。仅仅退出或 `DELETE session` 不等于看完，不能把只看了几分钟的内容记进“一起看过”。
-- 达到完成条件后，Stay with Du 页面自动出现这部作品：已有同一作品的 `moviesTodo` 记录时，保留原 `id` 并原子地移到 `moviesDone`；原来不在想看清单时，直接在 `moviesDone` 新建；已经存在于 `moviesDone` 时只更新本次完成信息，不产生重复卡片。
-- 完成事件以 `session_id + media_id + timeline_epoch` 幂等。重复结束、返回重试、网络重放和 App 恢复不能重复迁移或新增。
-- 正常结束页在费用结算旁显示“已记入一起看过”，Stay with Du 的数据随后自动刷新。`pagehide` 仍只做尽力收尾、不弹窗，但达到完成条件时允许后台幂等归档。
+- 完成事件本身不出票，也不自动改动 Stay with Du。使用者明确结束一起看后生成票根，结束页允许编辑票根作品名，并在作品确实完成时单独选择是否“加入一起看过”；未选择时只保存票根。
+- 选择加入时，后端以编辑后的最终作品名归档：已有同一作品的 `moviesTodo` 记录时，保留原 `id` 并原子地移到 `moviesDone`；原来不在想看清单时，直接在 `moviesDone` 新建；已经存在于 `moviesDone` 时只更新本次完成信息，不产生重复卡片。
+- 归档以稳定 `ticket_id` 为第一幂等键，并结合 `work_key` 和规范化作品名识别旧条目。重复保存、返回重试、网络重放和 App 恢复不能重复迁移或新增。
+- 正常结束页只有在选择加入并保存成功后才显示“已记入一起看过”，Stay with Du 的数据随后刷新。`pagehide` 仍只做尽力收尾，不弹窗也不替使用者选择归档。
 - 剧情分析失败、没有字幕或没有拼图不影响“是否看完”的判定；归档只读取可信播放进度和正片范围，不读取 Gemini 的剧情结论。
 
 #### 分 P、季集和版本
 
-- 每个分 P 仍是独立观看 session。单集或指定 P 播完后可以生成对应的看过记录和票根。
-- 多个 P 共同组成一部完整作品时，记录已经完成的目标 P；只有全部目标部分完成后才生成整部作品的完成记录和总票根。无法判断投稿里的多个 P 是否属于同一部正片时，不擅自标成整部看完，结束页提供一次“这部已经看完”的明确确认。
+- 每个分 P 仍是独立观看 session。到达正片终点只记录该 P 已完成；切换到下一 P 时普通收尾，不生成中途票根。
+- 多个 P 共同组成一部完整作品时，持续记录已经完成的目标 P；全部目标部分完成后生成整部作品的完成状态，使用者最终结束整次观看时才生成汇总票根。无法判断投稿里的多个 P 是否属于同一部正片时，不擅自标成整部看完。
 - 同名不同年份、重制版、季集或剪辑版优先使用标准作品身份和来源版本生成 `work_key`；只有缺少身份时才退化到规范化片名匹配，避免把不同版本合并。
 
 #### 观影票根
 
-- 每次作品完成归档时自动生成一张观影票根，不要求先写观后感。票根首先出现在正常结束页，同时保存在 Stay with Du 的“一起看过”卡片详情中，之后可以随时重新打开。
-- 票根展示真实信息：片名、季集或分 P、一起观看的对象、完成日期和时间、实际正片时长，以及稳定的票根编号。没有的数据直接省略，不编造影院、影厅、座位或场次。
+- 每次明确结束一起看时生成一张观影票根，不要求整部看完、先写观后感或加入 Stay with Du。票根首先出现在正常结束页；只有作品确实达到完成条件并选择加入一起看过后，同一票根的结构化引用才保存在对应卡片中。
+- 票根作品名可以在结束页编辑，保存后服务端票夹使用最终名称；选择加入一起看过时，`moviesDone.title` 必须使用同一个最终名称。其余展示真实信息包括季集或分 P、一起观看的对象、完成日期和时间、实际正片时长，以及稳定的票根编号。没有的数据直接省略，不编造影院、影厅、座位或场次。
 - 票根以结构化元数据为长期源数据，样式由原生端即时渲染；需要分享或保存时再在设备本地导出 PNG，不把整张图片长期写入 R2。
 - 已有可靠封面时可以作为票根视觉元素；没有封面时使用纯排版版本。不能为了票根延长原始截图、音频或剧情拼图的 TTL，也不能把含剧透的随机电影帧长期归档。
-- 同一个完成事件只生成一个稳定 `ticket_id`。结束重试或跨设备刷新复用同一张票根，不生成多张副本。
+- 同一次 `viewing_id` 的明确结束只生成一个稳定 `ticket_id`。结束重试或跨设备刷新复用同一张票根，不生成多张副本。
 
 #### 看完后写观后感
 
