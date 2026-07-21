@@ -1,6 +1,6 @@
 # Du Gateway 实时待办
 
-> 最后更新：2026-07-22 00:07:35 +0800
+> 最后更新：2026-07-22 00:10:14 +0800
 >
 > 本文件只记录当前正在处理、待继续、被阻塞或待验收的工作。已完成实现的长期入口与边界仍以 `docs/DEBUG_INDEX.md` 为准。
 
@@ -18,7 +18,7 @@
 
 | 任务 ID | 状态 | 范围 | 当前结论 | 下一动作 | 验证 |
 | --- | --- | --- | --- | --- | --- |
-| `diary-comment-reply-notification-20260722` | 部署中 | 交换日记评论通知的父评论 id 透传与标题文案；证据读取 `services/chat_tools.py`、`storage/app_action_store.py`、相关测试与索引；精确写入同运行文件、必要定向测试、`docs/CURRENT_WORK.md`、`docs/DEBUG_INDEX.md`；不新增事件类型/接口，不改 App、R2、通话、提示词或其他脏测试 | `services/chat_tools.py` 创建 `diary_comment` 通知时已带 `reply_to_comment_id`；回复目标评论作者为 `xy` 时标题为“渡回复了你的评论”，其他情况保持“渡评论了你的日记”；`storage/app_action_store.py` 已允许四种父评论 id alias | 只提交本任务四个文件到 `main`，VPS 拉取后重启相关服务并核对健康状态 | `py_compile` 通过；纯函数验证通知白名单通过；mock `exchange_diary_store/r2_store` 验证标题与 `reply_to_comment_id` 通过；未写 R2 |
+| `diary-comment-reply-notification-20260722` | 已完成 | 交换日记评论通知的父评论 id 透传与标题文案；证据读取 `services/chat_tools.py`、`storage/app_action_store.py`、相关测试与索引；精确写入同运行文件、必要定向测试、`docs/CURRENT_WORK.md`、`docs/DEBUG_INDEX.md`；不新增事件类型/接口，不改 App、R2、通话、提示词或其他脏测试 | `services/chat_tools.py` 创建 `diary_comment` 通知时已带 `reply_to_comment_id`；回复目标评论作者为 `xy` 时标题为“渡回复了你的评论”，其他情况保持“渡评论了你的日记”；`storage/app_action_store.py` 已允许四种父评论 id alias；运行提交 `ab75b168` 已部署 | 无 | 暂存快照 `py_compile`、通知 alias 定向验证与 `diff --check` 通过；远端 8 个 `du-*` 服务和 nginx 均 active，5000/5010、公网 health 与 MiniApp 均正常，启动后无 traceback/error/failed；未写 R2 |
 | `app-home-game-sumitalk-assembly-20260721` | 已完成 | 小家事件与 App 游戏 `sync-du` 请求复用 SumiTalk 提示词组装表面；只改 `services/conversation_followup.py`、`routes/chat.py` 与两份状态文档；不改游戏规则、工具执行、投递/归档渠道、原生 App、R2 或现有脏测试 | 小家、涩涩走格棋和囚禁模拟器同步现在显式请求 SumiTalk 提示词组装；入口风格、App 提示及 SumiTalk 相关上下文按 App 表面生成，但实际回复/归档渠道仍保持最近渠道。小家事件已进入动态 system，游戏/小家继续使用各自 user 内容；后续新增 App 游戏只要存在发给渡的模型消息，也必须沿用这一组装边界；运行提交 `e5402563` 已部署 | 无 | 干净 worktree 中两个运行文件 `py_compile`、`import app`、mock 请求边界和 `diff --check` 通过；线上 8 个 `du-*` 服务均在本次重启后 active，5000/5010、本机与公网 health、MiniApp 反代均正常，启动日志无运行错误；未发额外测试模型请求、未写 R2 |
 | `qq-context-wakeup-whitelist-20260721` | 已完成 | Q 群近期上下文只允许后端随机主动唤醒、半小时硬触发和日历闹钟使用；写入限 `routes/chat.py`、独立回归测试与两份状态文档；不碰已有脏测试、App、R2 | 已将宽泛 backend wakeup 条件收紧为显式白名单：随机主动决策、`proactive_trigger`、`calendar_event`、`system_alarm`；`pixel_home` 等其他事件与普通聊天不再注入；运行提交 `0a4f6c82` 已部署 | 无 | 干净 worktree 的独立回归、既有 QQ 群上下文测试、`py_compile`、入口 `import app` 与 `diff --check` 均通过；线上 8 服务 active，5000/5010 health、公网 health 与 MiniApp 200、启动后 warning 日志均通过 |
 | `gateway-ship-completed-20260721` | 已完成 | 仅收束并发布当前已完成的 6 个后端运行文件与 `docs/CURRENT_WORK.md`、`docs/DEBUG_INDEX.md`；测试文件不提交、不部署；不改 R2 数据、原生 App 或隔壁改动 | 运行提交 `16c60e06` 已推送 `origin/main` 并部署到 `/root/du-gateway`；标准 8 服务已重启且 active | 无 | 远端运行提交、5000/5010 health、公网 health、MiniApp 200 与网关/SumiTalk worker 启动日志均通过；未调用 DS、未写 R2 |
