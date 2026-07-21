@@ -733,6 +733,7 @@ def _send_wakeup_event(
     return_only: bool = False,
     skip_post_archive_body_delta: bool = False,
     tools: list[dict] | None = None,
+    sumitalk_prompt_assembly: bool = False,
 ) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。事件唤醒默认归档，避免后续对话断层。"""
     try:
@@ -818,6 +819,8 @@ def _send_wakeup_event(
     }
     if kind:
         headers["X-DU-WAKEUP-KIND"] = kind
+    if sumitalk_prompt_assembly:
+        headers["X-DU-SUMITALK-PROMPT-ASSEMBLY"] = "1"
     if skip_post_archive_body_delta:
         headers["X-Skip-Post-Archive-Body-Delta"] = "1"
     if archive and not archive_after_delivery:
@@ -1161,6 +1164,7 @@ def send_private_board_wakeup(
         lock_preferred_channel=bool(preferred_channel),
         allow_followup=not return_only,
         return_only=return_only,
+        sumitalk_prompt_assembly=True,
     )
 
 
@@ -1204,6 +1208,7 @@ def send_captivity_simulator_wakeup(
         return_only=return_only,
         skip_post_archive_body_delta=True,
         tools=[get_reference_tool_schema()],
+        sumitalk_prompt_assembly=True,
     )
 
 
@@ -1262,10 +1267,12 @@ def send_pixel_home_wakeup(
         ),
         wakeup_kind="pixel_home",
         system_event=True,
+        dynamic_system_event=True,
         preferred_channel_override=preferred_channel,
         preferred_target_override=target,
         preferred_meta_override=preferred_meta,
         lock_preferred_channel=bool(preferred_channel),
+        sumitalk_prompt_assembly=True,
     )
 
 

@@ -74,6 +74,8 @@
 
 当前 Claude 缓存前缀顺序固定为：tools → 第 1 个断点 → 固定静态子块 → 第 2 个断点 → 工具摘要 → 第 3 个断点 → 入口风格 → SumiTalk Real/App 互斥提示 → play 小纸条 → 较稳定近期记忆 → 最近记忆 → 第 4 个断点 → 动态区 → 对话消息。固定静态、工具摘要、入口风格、Real/App、play、较稳定近期和最近记忆都属于静态提示前缀的子块；它们按唯一顺序表独立收集，再合并为对应缓存段，不为每个小注入额外生成 system。动态区仍单独保留，不会被拼进静态区。工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑。
 
+小家事件及 App 内涩涩走格棋、囚禁模拟器的 `sync-du` 请求通过 `X-DU-SUMITALK-PROMPT-ASSEMBLY` 复用 SumiTalk 的提示词组装表面，但不改实际回复、投递和归档渠道；小家/游戏状态作为动态 system，各入口保留自己的 user 内容。实现入口为 `services/conversation_followup.py::_send_wakeup_event` 与 `routes/chat.py::chat_completions`，`return_only`、游戏工具和续跑规则不受影响。以后新注册的 App 游戏，只要存在发给渡的模型消息，也必须复用该 SumiTalk 组装表面：不得自行拼静态 system，不得把游戏状态塞进静态缓存前缀，只允许替换本游戏的动态 system 与 user 内容；纯查看或本地状态变更接口不触发模型请求。
+
 `step_inject_tool_result_cache()` 使用 `pipeline/pipeline.py` 的唯一 `_SYSTEM_PROMPT_REGION_ORDER` 和 `_SYSTEM_PROMPT_CACHE_GROUPS`：固定静态段、工具摘要段、工具摘要后的静态尾段、动态段。每个逻辑子块在组装期间保持独立，最终每个缓存段只输出一条 system；四个缓存断点仍由 tools、固定静态段、工具摘要段和静态尾段的末尾承载。入口风格、Real/App、play、近期记忆只改变静态尾段内容，不会携带其他子块；动态区永远单独保留。修改固定静态内容会让下一次请求重建一次缓存，后续请求按新前缀继续命中。
 
 ## 4. 对话入口与异步 worker

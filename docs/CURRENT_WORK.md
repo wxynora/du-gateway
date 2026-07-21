@@ -1,6 +1,6 @@
 # Du Gateway 实时待办
 
-> 最后更新：2026-07-21 18:20:37 +0800
+> 最后更新：2026-07-21 23:57:13 +0800
 >
 > 本文件只记录当前正在处理、待继续、被阻塞或待验收的工作。已完成实现的长期入口与边界仍以 `docs/DEBUG_INDEX.md` 为准。
 
@@ -18,6 +18,7 @@
 
 | 任务 ID | 状态 | 范围 | 当前结论 | 下一动作 | 验证 |
 | --- | --- | --- | --- | --- | --- |
+| `app-home-game-sumitalk-assembly-20260721` | 发布中 | 小家事件与 App 游戏 `sync-du` 请求复用 SumiTalk 提示词组装表面；只改 `services/conversation_followup.py`、`routes/chat.py` 与两份状态文档；不改游戏规则、工具执行、投递/归档渠道、原生 App、R2 或现有脏测试 | 小家、涩涩走格棋和囚禁模拟器同步现在显式请求 SumiTalk 提示词组装；入口风格、App 提示及 SumiTalk 相关上下文按 App 表面生成，但实际回复/归档渠道仍保持最近渠道。小家事件已进入动态 system，游戏/小家继续使用各自 user 内容；后续新增 App 游戏只要存在发给渡的模型消息，也必须沿用这一组装边界 | 提交并推送 `main`，随后拉取线上并重启全部相关服务 | 两个运行文件 `py_compile`、mock 内部 POST 边界检查及限定范围 `diff --check` 通过；未发真实请求、未写 R2 |
 | `qq-context-wakeup-whitelist-20260721` | 已完成 | Q 群近期上下文只允许后端随机主动唤醒、半小时硬触发和日历闹钟使用；写入限 `routes/chat.py`、独立回归测试与两份状态文档；不碰已有脏测试、App、R2 | 已将宽泛 backend wakeup 条件收紧为显式白名单：随机主动决策、`proactive_trigger`、`calendar_event`、`system_alarm`；`pixel_home` 等其他事件与普通聊天不再注入；运行提交 `0a4f6c82` 已部署 | 无 | 干净 worktree 的独立回归、既有 QQ 群上下文测试、`py_compile`、入口 `import app` 与 `diff --check` 均通过；线上 8 服务 active，5000/5010 health、公网 health 与 MiniApp 200、启动后 warning 日志均通过 |
 | `gateway-ship-completed-20260721` | 已完成 | 仅收束并发布当前已完成的 6 个后端运行文件与 `docs/CURRENT_WORK.md`、`docs/DEBUG_INDEX.md`；测试文件不提交、不部署；不改 R2 数据、原生 App 或隔壁改动 | 运行提交 `16c60e06` 已推送 `origin/main` 并部署到 `/root/du-gateway`；标准 8 服务已重启且 active | 无 | 远端运行提交、5000/5010 health、公网 health、MiniApp 200 与网关/SumiTalk worker 启动日志均通过；未调用 DS、未写 R2 |
 | `sumitalk-reasoning-rich-order-20260721` | 已完成 | SumiTalk 流式 rich event 中 reasoning part 预留、正文即时发送、reasoning 结束边界与对应回归测试；读写范围扩到 `routes/chat.py` 的 SumiTalk rich event emit 段；不改 App、MiniApp UI、通话链路、R2 或提示词 | 启用 reasoning 的请求会在流开始时预留稳定 reasoning part；首次正文到达前立即结束该 reasoning 阶段并继续发送正文；后到 reasoning 只更新同一 part，不在正文后新建 reasoning part；测试已区分上游原始交错顺序和 rich event 逻辑展示顺序 | 无；已随 `16c60e06` 部署 | `.venv/bin/python scripts/test_sumitalk_native_stream_backend.py`、`py_compile`、限定范围 `git diff --check` 与线上健康检查通过 |

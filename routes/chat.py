@@ -2491,6 +2491,11 @@ def chat_completions():
     reply_channel = _reply_channel()
     reply_target = _reply_target()
     is_sumitalk_request = reply_channel == "sumitalk"
+    sumitalk_prompt_assembly = bool(
+        is_sumitalk_request
+        or _truthy_header("X-DU-SUMITALK-PROMPT-ASSEMBLY")
+    )
+    prompt_reply_channel = "sumitalk" if sumitalk_prompt_assembly else reply_channel
     wenyou_player_tools_enabled = _wenyou_player_tool_mode_enabled()
     app_mode = str(body.pop("app_mode", "") or "").strip().lower()
     sumitalk_real_mode = bool(
@@ -2721,14 +2726,14 @@ def chat_completions():
     body = step_inject_pending_thought_rules(body)
     body = _inject_entry_style_system(
         body,
-        reply_channel=reply_channel,
+        reply_channel=prompt_reply_channel,
         is_miniapp=_is_miniapp_request(),
         speaker=_xiaoai_speaker_from_request(),
     )
     body = _inject_million_plan_player_prompt_if_enabled(body)
     body = _inject_codex_oauth_prompt_system(body, upstream_url=_get_active_upstream_url())
-    body = _inject_channel_nsfw_system(body, reply_channel=reply_channel)
-    if reply_channel != "xiaoai" and not _disable_followup_request():
+    body = _inject_channel_nsfw_system(body, reply_channel=prompt_reply_channel)
+    if prompt_reply_channel != "xiaoai" and not _disable_followup_request():
         body = _inject_followup_instruction(
             body,
             is_followup_generation=_is_followup_generation_request(),
@@ -2771,7 +2776,7 @@ def chat_completions():
     body = step_inject_sumitalk_real_mode(
         body,
         enabled=sumitalk_real_mode,
-        app_request=is_sumitalk_request,
+        app_request=sumitalk_prompt_assembly,
     )
     body = step_inject_play_note(body)
     body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
@@ -2792,12 +2797,12 @@ def chat_completions():
     body = step_inject_websearch_tools(body)
     body = step_inject_reference_note(body)
     body = step_inject_du_midterm_memory(body, window_id)
-    body = _inject_music_bgm_context(body, reply_channel=reply_channel)
-    body = _inject_listen_invite_protocol(body, reply_channel=reply_channel)
+    body = _inject_music_bgm_context(body, reply_channel=prompt_reply_channel)
+    body = _inject_listen_invite_protocol(body, reply_channel=prompt_reply_channel)
     body, watch_action_context = _inject_watch_context(
         body,
         window_id=window_id,
-        reply_channel=reply_channel,
+        reply_channel=prompt_reply_channel,
     )
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
