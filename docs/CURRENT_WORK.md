@@ -1,6 +1,6 @@
 # Du Gateway 实时待办
 
-> 最后更新：2026-07-21 18:18:02 +0800
+> 最后更新：2026-07-21 18:20:37 +0800
 >
 > 本文件只记录当前正在处理、待继续、被阻塞或待验收的工作。已完成实现的长期入口与边界仍以 `docs/DEBUG_INDEX.md` 为准。
 
@@ -18,7 +18,7 @@
 
 | 任务 ID | 状态 | 范围 | 当前结论 | 下一动作 | 验证 |
 | --- | --- | --- | --- | --- | --- |
-| `qq-context-wakeup-whitelist-20260721` | 进行中 | Q 群近期上下文只允许后端随机主动唤醒、半小时硬触发和日历闹钟使用；写入限 `routes/chat.py`、独立回归测试与两份状态文档；不碰已有脏测试、App、R2 | 已将宽泛 backend wakeup 条件收紧为显式白名单：随机主动决策、`proactive_trigger`、`calendar_event`、`system_alarm`；`pixel_home` 等其他事件与普通聊天不再注入 | 提交运行代码与文档，推送 `main` 并重启线上服务 | 独立回归、既有 QQ 群上下文测试、`py_compile`、入口 `import app` 与限定范围 `diff --check` 均已在应用暂存补丁的干净 worktree 通过；待线上验收 |
+| `qq-context-wakeup-whitelist-20260721` | 已完成 | Q 群近期上下文只允许后端随机主动唤醒、半小时硬触发和日历闹钟使用；写入限 `routes/chat.py`、独立回归测试与两份状态文档；不碰已有脏测试、App、R2 | 已将宽泛 backend wakeup 条件收紧为显式白名单：随机主动决策、`proactive_trigger`、`calendar_event`、`system_alarm`；`pixel_home` 等其他事件与普通聊天不再注入；运行提交 `0a4f6c82` 已部署 | 无 | 干净 worktree 的独立回归、既有 QQ 群上下文测试、`py_compile`、入口 `import app` 与 `diff --check` 均通过；线上 8 服务 active，5000/5010 health、公网 health 与 MiniApp 200、启动后 warning 日志均通过 |
 | `gateway-ship-completed-20260721` | 已完成 | 仅收束并发布当前已完成的 6 个后端运行文件与 `docs/CURRENT_WORK.md`、`docs/DEBUG_INDEX.md`；测试文件不提交、不部署；不改 R2 数据、原生 App 或隔壁改动 | 运行提交 `16c60e06` 已推送 `origin/main` 并部署到 `/root/du-gateway`；标准 8 服务已重启且 active | 无 | 远端运行提交、5000/5010 health、公网 health、MiniApp 200 与网关/SumiTalk worker 启动日志均通过；未调用 DS、未写 R2 |
 | `sumitalk-reasoning-rich-order-20260721` | 已完成 | SumiTalk 流式 rich event 中 reasoning part 预留、正文即时发送、reasoning 结束边界与对应回归测试；读写范围扩到 `routes/chat.py` 的 SumiTalk rich event emit 段；不改 App、MiniApp UI、通话链路、R2 或提示词 | 启用 reasoning 的请求会在流开始时预留稳定 reasoning part；首次正文到达前立即结束该 reasoning 阶段并继续发送正文；后到 reasoning 只更新同一 part，不在正文后新建 reasoning part；测试已区分上游原始交错顺序和 rich event 逻辑展示顺序 | 无；已随 `16c60e06` 部署 | `.venv/bin/python scripts/test_sumitalk_native_stream_backend.py`、`py_compile`、限定范围 `git diff --check` 与线上健康检查通过 |
 | `memory-retain-latency-investigation-20260721` | 已完成 | 保留/淘汰接口、SQLite mirror、R2 active 记忆、后台整理任务与原生前端等待状态；只读调查，不调用真实接口、不写 R2、不跑模型 | 根因在原生 App：retain POST 同秒成功且已返回更新后的记忆，但 `MemoryDebugDetailScreen` 丢弃返回值并等待 `client.load()` 全量重拉约 718 KB `memory-debug` 与 mirror 后才清除 `retainingId`。SQLite 是 R2 单向镜像，不应反向承担权威写回；正确修复是用 POST 返回局部更新卡片并取消成功后的全量 reload | 无；原生修复需按原生仓库规则另行确认后实施 | 已核对网关代码、线上只读日志及原生客户端/UI调用链；未改运行代码 |
