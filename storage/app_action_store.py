@@ -617,6 +617,12 @@ def _normalize_system_notification_payload(payload: dict) -> tuple[Optional[dict
             "message_id": ("message_id", "messageId"),
             "entry_id": ("entry_id", "entryId", "diary_entry_id", "diaryEntryId"),
             "comment_id": ("comment_id", "commentId"),
+            "reply_to_comment_id": (
+                "reply_to_comment_id",
+                "replyToCommentId",
+                "parent_comment_id",
+                "parentCommentId",
+            ),
             "sender": ("sender", "sender_name", "senderName"),
         }
         for target, aliases in field_aliases.items():

@@ -242,6 +242,11 @@ def _execute_exchange_diary_comment_create(arguments: dict) -> str:
         if isinstance(c, dict) and not str(c.get("deleted_at") or "").strip()
     ]
     latest = comments[-1] if comments else {}
+    comments_by_id = {str(c.get("id") or "").strip(): c for c in comments if str(c.get("id") or "").strip()}
+    reply_to_comment_id = str(latest.get("reply_to_comment_id") or "").strip()
+    reply_to_comment = comments_by_id.get(reply_to_comment_id) if reply_to_comment_id else {}
+    reply_target_author = str((reply_to_comment or {}).get("author") or "").strip().lower()
+    notification_title = "渡回复了你的评论" if reply_target_author == "xy" else "渡评论了你的日记"
     if str(latest.get("author") or "").strip().lower() == "du" and str(latest.get("id") or "").strip():
         try:
             from storage import r2_store
@@ -249,11 +254,12 @@ def _execute_exchange_diary_comment_create(arguments: dict) -> str:
             _action, notification_error = r2_store.append_app_action(
                 "show_system_notification",
                 {
-                    "title": "渡评论了你的日记",
+                    "title": notification_title,
                     "message": str(latest.get("content") or content).strip(),
                     "notification_kind": "diary_comment",
                     "entry_id": str(item.get("id") or entry_id).strip(),
                     "comment_id": str(latest.get("id") or "").strip(),
+                    "reply_to_comment_id": reply_to_comment_id,
                     "sender": "渡",
                     "openApp": True,
                 },
