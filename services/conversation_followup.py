@@ -39,6 +39,7 @@ logger = get_logger(__name__)
 sumitalk_logger = get_logger("sumitalk")
 
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
+_TEMPORARY_DYNAMIC_SYSTEM_MARKER = "__temporary_dynamic__"
 _SUMITALK_FALLBACK_WINDOW_ID = "sumitalk-main"
 
 FOLLOWUP_AFTER_MINUTES = 5
@@ -794,6 +795,7 @@ def _send_wakeup_event(
         system_msg = {"role": "system", "content": message_content}
         if dynamic_system_event:
             system_msg[_DYNAMIC_SYSTEM_MARKER] = True
+            system_msg[_TEMPORARY_DYNAMIC_SYSTEM_MARKER] = True
         body["messages"].append(system_msg)
         body["messages"].append(
             {
@@ -1094,6 +1096,7 @@ def send_private_draw_wakeup(
         ),
         wakeup_kind="private_draw",
         system_event=True,
+        dynamic_system_event=True,
         preferred_channel_override=preferred_channel,
         preferred_target_override=target,
         preferred_meta_override=preferred_meta,
@@ -1122,6 +1125,7 @@ def send_listen_invite_response_wakeup(
         ),
         wakeup_kind="listen_invite_response",
         system_event=True,
+        dynamic_system_event=True,
         preferred_channel_override=preferred_channel,
         preferred_target_override=target,
         preferred_meta_override=preferred_meta,
@@ -1215,27 +1219,41 @@ def send_captivity_simulator_wakeup(
 def send_exchange_diary_comment_wakeup(
     window_id: str,
     target: str,
-    event_text: str,
+    diary_title: str,
+    entry_id: str,
+    comment_id: str,
+    comment_content: str,
     created_at: str | None = None,
     preferred_channel: str = "",
     preferred_meta: dict | None = None,
 ) -> dict:
     """立即让渡看到小玥的新日记评论，并自己决定回评论或直接发消息。"""
+    title = str(diary_title or "").strip() or "没有标题的小纸条"
+    diary_entry_id = str(entry_id or "").strip()
+    diary_comment_id = str(comment_id or "").strip()
+    dynamic_system = (
+        "这是交换日记评论事件，不是聊天正文，也不是小玥在主聊天框里说的话。\n"
+        f"日记标题：{title}\n"
+        f"entry_id：{diary_entry_id}\n"
+        f"comment_id：{diary_comment_id}\n"
+        "你可以自己决定回复日记评论，或者直接发消息给小玥。"
+        "如果回复日记评论，请调用 exchange_diary_comment_create，"
+        f"参数使用 entry_id={diary_entry_id}、reply_to_comment_id={diary_comment_id}，"
+        "content 填写你要回复的内容；调用工具后不要再额外输出聊天正文。"
+        "如果直接找她说话，就不要调用工具，只输出要发给她的话。"
+        "不要解释工具或系统流程。"
+    )
+    user_content = f"小玥评论了你的日记：{str(comment_content or '')}"
     return _send_wakeup_event(
         window_id=window_id,
         target=target,
-        event_text=event_text,
+        event_text=dynamic_system,
         created_at=created_at,
         archive=True,
-        extra_instruction=(
-            "这是小玥刚刚写在交换日记下面的评论，不是聊天框正文。"
-            "请你自己决定：如果想回在日记下面，就调用 exchange_diary_comment_create 回复这条评论，"
-            "调用工具后不要再额外输出聊天正文；如果想直接找她说话，就不要调用工具，"
-            "直接写要发给她的一两句话。不要解释工具或系统流程。"
-        ),
         wakeup_kind="exchange_diary_comment",
         system_event=True,
-        system_event_user_summary=event_text,
+        system_event_user_summary=user_content,
+        dynamic_system_event=True,
         preferred_channel_override=preferred_channel,
         preferred_target_override=target,
         preferred_meta_override=preferred_meta,
@@ -1339,6 +1357,7 @@ def send_spring_dream_wakeup(
         stable_proactive_channel=True,
         wakeup_kind="spring_dream",
         system_event=True,
+        dynamic_system_event=True,
         allow_followup=False,
         archive_after_delivery=True,
         spring_dream_archive_meta=archive_meta,
@@ -1360,6 +1379,7 @@ def send_post_spring_dream_wakeup(window_id: str, target: str, event_text: str, 
         stable_proactive_channel=True,
         wakeup_kind="post_spring_dream",
         system_event=True,
+        dynamic_system_event=True,
         allow_followup=False,
         archive_after_delivery=True,
         extra_instruction=(

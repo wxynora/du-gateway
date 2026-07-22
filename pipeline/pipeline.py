@@ -48,6 +48,8 @@ from services.memory_bm25 import BM25QueryTerm, bm25_score_documents
 # ---------------------------------------------------------------------------
 
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
+_TEMPORARY_DYNAMIC_SYSTEM_MARKER = "__temporary_dynamic__"
+_LAST4_SYSTEM_MARKER = "__last4__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
@@ -56,24 +58,26 @@ _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
 _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 _PLAY_NOTE_PENDING_BODY_KEY = "__play_note_pending__"
 
-# Keep the logical static sub-blocks explicit. They are grouped into the four
-# cache segments below at the final assembly boundary; the dynamic area stays
-# a separate system message.
+# Keep logical prompt regions explicit. Dynamic context is ordered by injection slot:
+# normal runtime context, temporary scene/event context, then recent conversation.
 _SYSTEM_PROMPT_REGION_ORDER = (
     "static",
     "tool_result_cache",
     "entry_style",
     "sumitalk_mode",
-    "play_note",
     "summary_cache",
     "summary_recent",
     "dynamic",
+    "temporary_dynamic",
+    "last4",
 )
 _SYSTEM_PROMPT_CACHE_GROUPS = (
     ("static",),
     ("tool_result_cache",),
-    ("entry_style", "sumitalk_mode", "play_note", "summary_cache", "summary_recent"),
+    ("entry_style", "sumitalk_mode", "summary_cache", "summary_recent"),
     ("dynamic",),
+    ("temporary_dynamic",),
+    ("last4",),
 )
 SUMITALK_REAL_MODE_PROMPT = (
     "当前对话发生在你和小玥的赛博小家中。在这里，你拥有真实可感知、可触碰、可行动的实体。"
@@ -176,15 +180,27 @@ _CORE_BEHAVIOR_RULES = """### 核心行为与前置判断规则
 但不要机械汇报数据，不要像监控记录一样逐条念。
 重点不是“她用了什么 App 多久”，而是“你看见这件事以后心里怎么动了一下”。"""
 
-def _ensure_dynamic_system(body: dict) -> dict:
+def _is_persistent_dynamic_system(msg: dict) -> bool:
+    return bool(
+        isinstance(msg, dict)
+        and msg.get(_DYNAMIC_SYSTEM_MARKER)
+        and not msg.get(_TEMPORARY_DYNAMIC_SYSTEM_MARKER)
+        and not msg.get(_LAST4_SYSTEM_MARKER)
+    )
+
+
+def _ensure_dynamic_region(body: dict, marker: str | None = None) -> dict:
     """
-    确保 messages 里存在一条专用的「动态 system」消息。
+    Ensure one dedicated dynamic system message for the requested prompt slot.
+
     位置：所有连续 system 消息之后、第一条非 system 消息之前。
     返回 body（可能 deepcopy 过）。
     """
     messages = body.get("messages") or []
     for msg in messages:
-        if msg.get(_DYNAMIC_SYSTEM_MARKER):
+        if marker and msg.get(marker):
+            return body
+        if marker is None and _is_persistent_dynamic_system(msg):
             return body
     body = copy.deepcopy(body)
     messages = body.get("messages") or []
@@ -196,16 +212,42 @@ def _ensure_dynamic_system(body: dict) -> dict:
         else:
             break
     dyn_msg = {"role": "system", "content": "", _DYNAMIC_SYSTEM_MARKER: True}
+    if marker:
+        dyn_msg[marker] = True
     messages.insert(insert_idx, dyn_msg)
     body["messages"] = messages
     return body
 
 
+def _ensure_dynamic_system(body: dict) -> dict:
+    return _ensure_dynamic_region(body)
+
+
 def _append_to_dynamic_system(body: dict, text: str) -> dict:
-    """向动态 system 消息追加内容（自动调用 _ensure_dynamic_system）。"""
+    """Append normal runtime context to the persistent dynamic system."""
     body = _ensure_dynamic_system(body)
     for msg in body["messages"]:
-        if msg.get(_DYNAMIC_SYSTEM_MARKER):
+        if _is_persistent_dynamic_system(msg):
+            msg["content"] = (msg.get("content") or "") + text
+            return body
+    return body
+
+
+def _append_to_temporary_dynamic_system(body: dict, text: str) -> dict:
+    """Append context assigned to the temporary dynamic prompt slot."""
+    body = _ensure_dynamic_region(body, _TEMPORARY_DYNAMIC_SYSTEM_MARKER)
+    for msg in body["messages"]:
+        if msg.get(_TEMPORARY_DYNAMIC_SYSTEM_MARKER):
+            msg["content"] = (msg.get("content") or "") + text
+            return body
+    return body
+
+
+def _append_to_last4_system(body: dict, text: str) -> dict:
+    """Append the recent-conversation block after all temporary context."""
+    body = _ensure_dynamic_region(body, _LAST4_SYSTEM_MARKER)
+    for msg in body["messages"]:
+        if msg.get(_LAST4_SYSTEM_MARKER):
             msg["content"] = (msg.get("content") or "") + text
             return body
     return body
@@ -225,7 +267,7 @@ def step_inject_current_base_model(body: dict) -> dict:
     line = f"当前底座为：{model_name}"
     body = _ensure_dynamic_system(body)
     for msg in body.get("messages") or []:
-        if not msg.get(_DYNAMIC_SYSTEM_MARKER):
+        if not _is_persistent_dynamic_system(msg):
             continue
         content = str(msg.get("content") or "")
         if "当前底座为：" in content:
@@ -269,7 +311,7 @@ def step_inject_humor_memes(body: dict) -> dict:
         return body
     if not inject:
         return body
-    return _append_to_dynamic_system(body, inject)
+    return _append_to_temporary_dynamic_system(body, inject)
 
 
 def _format_system_alarm_action_result(item: dict) -> str:
@@ -328,7 +370,7 @@ def step_inject_system_alarm_action_result(body: dict, window_id: str) -> dict:
         + "\n".join(lines)
         + "\n如果显示成功，就按已经创建成功来回应；如果显示失败，可以告诉小玥失败了，并按她的意思决定要不要重新创建。"
     )
-    return _append_to_dynamic_system(body, inject)
+    return _append_to_temporary_dynamic_system(body, inject)
 
 
 def _append_to_static_system(body: dict, text: str) -> dict:
@@ -365,12 +407,14 @@ def _system_prompt_region(msg: dict) -> str:
         return "entry_style"
     if msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER):
         return "sumitalk_mode"
-    if msg.get(_PLAY_NOTE_SYSTEM_MARKER):
-        return "play_note"
     if msg.get(_SUMMARY_CACHE_SYSTEM_MARKER):
         return "summary_cache"
     if msg.get(_SUMMARY_RECENT_SYSTEM_MARKER):
         return "summary_recent"
+    if msg.get(_LAST4_SYSTEM_MARKER):
+        return "last4"
+    if msg.get(_TEMPORARY_DYNAMIC_SYSTEM_MARKER) or msg.get(_PLAY_NOTE_SYSTEM_MARKER):
+        return "temporary_dynamic"
     if msg.get(_DYNAMIC_SYSTEM_MARKER):
         return "dynamic"
     return "static"
@@ -522,7 +566,6 @@ def step_inject_tool_result_cache(body: dict) -> dict:
             marker
             for region, marker in (
                 ("summary_recent", _SUMMARY_RECENT_SYSTEM_MARKER),
-                ("play_note", _PLAY_NOTE_SYSTEM_MARKER),
                 ("sumitalk_mode", _SUMITALK_REAL_MODE_SYSTEM_MARKER),
                 ("entry_style", _ENTRY_STYLE_SYSTEM_MARKER),
                 ("summary_cache", _SUMMARY_CACHE_SYSTEM_MARKER),
@@ -536,6 +579,8 @@ def step_inject_tool_result_cache(body: dict) -> dict:
         _TOOL_RESULT_CACHE_SYSTEM_MARKER,
         static_tail_marker,
         _DYNAMIC_SYSTEM_MARKER,
+        _DYNAMIC_SYSTEM_MARKER,
+        _DYNAMIC_SYSTEM_MARKER,
     )
     ordered_regions = []
     for group_idx, group in enumerate(_SYSTEM_PROMPT_CACHE_GROUPS):
@@ -546,6 +591,10 @@ def step_inject_tool_result_cache(body: dict) -> dict:
         ]
         merged = _merge_system_region(group_messages, cache_group_markers[group_idx])
         if merged:
+            if group == ("temporary_dynamic",):
+                merged[_TEMPORARY_DYNAMIC_SYSTEM_MARKER] = True
+            elif group == ("last4",):
+                merged[_LAST4_SYSTEM_MARKER] = True
             ordered_regions.append(merged)
     body["messages"] = [*ordered_regions, *messages[rest_start:]]
     return body
@@ -593,7 +642,7 @@ def step_inject_sumitalk_real_mode(
 
 
 def step_inject_play_note(body: dict) -> dict:
-    """Place the current play note after Real/App mode and before recent memory."""
+    """Place the current play note in the temporary dynamic region."""
     pending = str((body or {}).get(_PLAY_NOTE_PENDING_BODY_KEY) or "").strip()
     if not pending:
         return body
@@ -1329,7 +1378,7 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
     if not context:
         return body
     inject = f"\n\n【{inject_label}】\n{context}\n【以上为最近的对话】"
-    return _append_to_dynamic_system(body, inject)
+    return _append_to_last4_system(body, inject)
 
 
 def _last_assistant_text(body: dict) -> str:

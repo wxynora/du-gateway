@@ -70,7 +70,12 @@ def inject_listen_invite_protocol(body: dict, *, reply_channel: str = "") -> dic
         )
     next_body = dict(body)
     next_body["messages"] = [
-        {"role": "system", "content": "\n".join(lines), "__dynamic__": True},
+        {
+            "role": "system",
+            "content": "\n".join(lines),
+            "__dynamic__": True,
+            "__temporary_dynamic__": True,
+        },
         *list(messages),
     ]
     return next_body

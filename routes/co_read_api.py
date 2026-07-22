@@ -28,6 +28,15 @@ from storage import r2_store, upstream_store
 bp = Blueprint("co_read_api", __name__, url_prefix="/api/co-read")
 
 
+def _co_read_card_system_message(card_context: str) -> dict:
+    return {
+        "role": "system",
+        "content": card_context,
+        "__dynamic__": True,
+        "__temporary_dynamic__": True,
+    }
+
+
 def _extract_chat_completion_result(result) -> tuple[int, dict]:
     response = result
     status = 200
@@ -264,7 +273,7 @@ def handle_co_read_section_complete(book_key: str, section_id: str):
     card_context = _build_card_system_context(card)
     messages = []
     if card_context:
-        messages.append({"role": "system", "content": card_context})
+        messages.append(_co_read_card_system_message(card_context))
     messages.append({"role": "system", "content": CO_READ_DU_VOICE_SYSTEM})
     messages.append({"role": "user", "content": _build_section_complete_user_message(book, section)})
     chat_body = {
@@ -402,7 +411,7 @@ def handle_co_read_session():
     user_prompt = _build_co_read_user_message(book_title, chapter_label, snippet, user_note)
     messages = []
     if card_context:
-        messages.append({"role": "system", "content": card_context})
+        messages.append(_co_read_card_system_message(card_context))
     messages.append({"role": "user", "content": user_prompt})
     chat_body = {
         "model": model,

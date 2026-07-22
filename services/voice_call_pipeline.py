@@ -75,6 +75,8 @@ def _build_voice_user_messages(user_text, audio_observations=""):
         messages.append(
             {
                 "role": "system",
+                "__dynamic__": True,
+                "__temporary_dynamic__": True,
                 "content": (
                     "【用户语音的客观声音旁白】\n"
                     f"{observations}\n"

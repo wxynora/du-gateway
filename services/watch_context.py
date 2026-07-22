@@ -491,7 +491,12 @@ def inject_watch_context(
         return next_body, {}
     prompt, action_context = built
     output_messages = [
-        {"role": "system", "content": prompt, "__dynamic__": True},
+        {
+            "role": "system",
+            "content": prompt,
+            "__dynamic__": True,
+            "__temporary_dynamic__": True,
+        },
         *list(messages),
     ]
     session = watch_runtime_store.get_session(session_id)

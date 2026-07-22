@@ -175,7 +175,15 @@ def inject_tool_retry_instruction(body: dict, instruction: str) -> dict:
             body["messages"] = messages
             return body
         insert_idx += 1
-    messages.insert(insert_idx, {"role": "system", "content": instruction})
+    messages.insert(
+        insert_idx,
+        {
+            "role": "system",
+            "content": instruction,
+            "__dynamic__": True,
+            "__temporary_dynamic__": True,
+        },
+    )
     body["messages"] = messages
     return body
 

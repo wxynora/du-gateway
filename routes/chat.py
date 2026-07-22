@@ -207,6 +207,7 @@ from services.upstream_policy import (
     get_active_upstream_url as _get_active_upstream_url,
     get_forward_targets as _get_forward_targets,
     is_local_claude_oauth_proxy_url as _is_local_claude_oauth_proxy_url,
+    strip_internal_prompt_region_markers as _strip_internal_prompt_region_markers,
 )
 from storage.upstream_store import pioneer_claude_model_options as _pioneer_claude_model_options
 from utils.log import get_logger
@@ -610,7 +611,15 @@ def _inject_music_bgm_context(body: dict, *, reply_channel: str = "") -> dict:
             _music_bgm_float((raw_context or {}).get("current_time")),
         )
     messages = body.get("messages") if isinstance(body.get("messages"), list) else []
-    body["messages"] = [{"role": "system", "content": system_text, "__dynamic__": True}] + list(messages)
+    body["messages"] = [
+        {
+            "role": "system",
+            "content": system_text,
+            "__dynamic__": True,
+            "__temporary_dynamic__": True,
+        },
+        *list(messages),
+    ]
     return body
 
 
@@ -2814,6 +2823,7 @@ def chat_completions():
     body = step_trim_messages_if_over_limit(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
     prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
+    _strip_internal_prompt_region_markers(body.get("messages") or [])
     client_requested_stream = bool(body.get("stream"))
     openrouter_forced_nonstream = client_requested_stream and is_openrouter_url(active_upstream_url)
     if openrouter_forced_nonstream:

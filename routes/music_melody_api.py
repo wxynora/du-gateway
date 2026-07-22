@@ -578,7 +578,14 @@ def music_listen_chat():
         window_id = SUMITALK_MAIN_WINDOW_ID
     reply_target = str(body.get("reply_target") or request.headers.get("X-Reply-Target") or panel_device_id or "").strip()
 
-    messages = [{"role": "system", "content": _build_listen_context_system(entry, segment, current_time, duration), "__dynamic__": True}]
+    messages = [
+        {
+            "role": "system",
+            "content": _build_listen_context_system(entry, segment, current_time, duration),
+            "__dynamic__": True,
+            "__temporary_dynamic__": True,
+        }
+    ]
     messages.extend(_sanitize_recent_listen_messages(body.get("recent_messages")))
     messages.append({"role": "user", "content": text})
     chat_body = {

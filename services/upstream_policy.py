@@ -21,6 +21,8 @@ _CLAUDE_ADAPTIVE_THINKING_RE = re.compile(
 )
 _CLAUDE_OPUS_46_RE = re.compile(r"claude-opus-4-6(?:\b|-|$)", re.IGNORECASE)
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
+_TEMPORARY_DYNAMIC_SYSTEM_MARKER = "__temporary_dynamic__"
+_LAST4_SYSTEM_MARKER = "__last4__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
@@ -246,7 +248,17 @@ def _set_cache_control_on_last_tool(body: dict, ttl: str) -> None:
             return
 
 
+def strip_internal_prompt_region_markers(messages: list[dict]) -> None:
+    """Remove markers used only to order prompt regions inside the gateway."""
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        msg.pop(_TEMPORARY_DYNAMIC_SYSTEM_MARKER, None)
+        msg.pop(_LAST4_SYSTEM_MARKER, None)
+
+
 def _strip_gateway_cache_markers(messages: list[dict]) -> None:
+    strip_internal_prompt_region_markers(messages)
     for msg in messages:
         if not isinstance(msg, dict):
             continue

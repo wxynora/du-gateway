@@ -25,32 +25,11 @@ def _get_panel_device_id() -> str:
     return str(payload.get("device_id") or "").strip()
 
 
-def _clip_text(value: object, limit: int = 800) -> str:
-    text = str(value or "").strip()
-    if limit <= 0 or len(text) <= limit:
-        return text
-    return text[:limit].rstrip() + "..."
-
-
-def _build_comment_wakeup_text(item: dict, comment: dict) -> str:
+def _queue_comment_wakeup(item: dict, comment: dict) -> dict:
     entry_id = str(item.get("id") or "").strip()
     comment_id = str(comment.get("id") or "").strip()
-    title = str(item.get("title") or "").strip() or "没有标题的小纸条"
-    content = _clip_text(comment.get("content"), 800)
-    return (
-        "小玥刚刚评论了你的交换日记。\n"
-        f"日记标题：{title}\n"
-        f"日记 entry_id：{entry_id}\n"
-        f"评论 comment_id：{comment_id}\n"
-        f"评论内容：{content}\n\n"
-        "你可以选择回复评论，也可以直接发消息给她。"
-        "如果回复评论，请用 exchange_diary_comment_create，"
-        f"entry_id={entry_id}，reply_to_comment_id={comment_id}。"
-    )
-
-
-def _queue_comment_wakeup(item: dict, comment: dict) -> dict:
-    event_text = _build_comment_wakeup_text(item, comment)
+    diary_title = str(item.get("title") or "").strip() or "没有标题的小纸条"
+    comment_content = str(comment.get("content") or "")
     panel_target = _get_panel_device_id()
     context = resolve_recent_reply_context(default_target=panel_target)
     channel = str(context.get("channel") or "").strip().lower()
@@ -67,7 +46,10 @@ def _queue_comment_wakeup(item: dict, comment: dict) -> dict:
             result = send_exchange_diary_comment_wakeup(
                 window_id=window_id,
                 target=target,
-                event_text=event_text,
+                diary_title=diary_title,
+                entry_id=entry_id,
+                comment_id=comment_id,
+                comment_content=comment_content,
                 preferred_channel=channel,
                 preferred_meta=meta,
             )
