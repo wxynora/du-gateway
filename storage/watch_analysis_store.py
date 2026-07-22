@@ -305,6 +305,28 @@ def _source_idempotency_key(
     return f"watch-analysis-source:{session_id}:{timeline_epoch}:{purpose}:{digest}"
 
 
+def _source_retry_idempotency_key(previous_key: str, cancelled_job_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{previous_key}|retry-after|{cancelled_job_id}".encode("utf-8")
+    ).hexdigest()
+    return f"watch-analysis-source-retry:{digest}"
+
+
+def _available_source_idempotency_key(base_key: str) -> tuple[str, dict | None]:
+    key = base_key
+    seen: set[str] = set()
+    while key not in seen:
+        seen.add(key)
+        existing = get_job_by_idempotency(key, public=True)
+        if not existing or str(existing.get("status") or "") != "cancelled":
+            return key, existing
+        key = _source_retry_idempotency_key(
+            key,
+            str(existing.get("job_id") or ""),
+        )
+    return key, get_job_by_idempotency(key, public=True)
+
+
 def enqueue_samples(
     *,
     session: dict,
@@ -463,14 +485,14 @@ def enqueue_source_plan(
     )
     if not timestamps_ms:
         raise ValueError("后端分析计划没有目标时间")
-    key = _source_idempotency_key(
+    base_key = _source_idempotency_key(
         session_id,
         media_id,
         timeline_epoch,
         purpose,
         timestamps_ms,
     )
-    existing = get_job_by_idempotency(key, public=True)
+    key, existing = _available_source_idempotency_key(base_key)
     if existing:
         return existing, False
 
@@ -2056,7 +2078,11 @@ def session_job_runtime(session_id: str) -> dict:
             (_text(session_id, 160),),
         ).fetchall()
         latest = conn.execute(
-            "SELECT * FROM watch_analysis_jobs WHERE session_id = ? ORDER BY created_at DESC LIMIT 1",
+            """
+            SELECT * FROM watch_analysis_jobs
+             WHERE session_id = ? AND status != 'cancelled'
+             ORDER BY created_at DESC LIMIT 1
+            """,
             (_text(session_id, 160),),
         ).fetchone()
     return {
