@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
@@ -40,6 +41,7 @@ MEDIA_ID_RE = re.compile(r"(?i)^bili:(BV[0-9A-Za-z]{10}):p([1-9][0-9]*)$")
 BILIBILI_VIEW_API = "https://api.bilibili.com/x/web-interface/view"
 BILIBILI_PLAYURL_API = "https://api.bilibili.com/x/player/playurl"
 BILIBILI_PLAYER_API = "https://api.bilibili.com/x/player/v2"
+logger = logging.getLogger(__name__)
 
 
 class WatchAnalysisSourceError(RuntimeError):
@@ -72,6 +74,19 @@ def canonical_bilibili_url(media: dict) -> tuple[str, str, int]:
 
 def _clean_header(value: Any, limit: int = 1000) -> str:
     return str(value or "").replace("\r", " ").replace("\n", " ").strip()[:limit]
+
+
+def _sanitized_ffmpeg_stderr(value: Any) -> str:
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="replace")
+    else:
+        text = str(value or "")
+    text = re.sub(r"https?://[^\s\]\[<>'\"]+", "<url>", text, flags=re.I)
+    return re.sub(
+        r"(?im)\b(cookie|authorization|referer|user-agent)\s*:\s*[^\r\n]*",
+        r"\1: <redacted>",
+        text,
+    ).strip()
 
 
 def _timestamp_seconds(value: str) -> float | None:
@@ -722,7 +737,7 @@ class BilibiliApiAnalysisSource:
         ]
         if not stream_urls:
             raise WatchAnalysisSourceError("Bilibili 没有可用于取帧的视频流", retryable=True)
-        for stream_url in stream_urls:
+        for stream_index, stream_url in enumerate(stream_urls, start=1):
             command = [
                 self._ffmpeg(),
                 "-nostdin",
@@ -759,11 +774,42 @@ class BilibiliApiAnalysisSource:
                     timeout=int(WATCH_ANALYSIS_SOURCE_TIMEOUT_SECONDS),
                     check=False,
                 )
-            except Exception:
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "一起看关键帧 ffmpeg 超时 at_ms=%s stream_index=%s stream_count=%s timeout_seconds=%s",
+                    int(at_ms),
+                    stream_index,
+                    len(stream_urls),
+                    int(WATCH_ANALYSIS_SOURCE_TIMEOUT_SECONDS),
+                )
+                continue
+            except Exception as exc:
+                logger.warning(
+                    "一起看关键帧 ffmpeg 异常 at_ms=%s stream_index=%s stream_count=%s exception_type=%s",
+                    int(at_ms),
+                    stream_index,
+                    len(stream_urls),
+                    type(exc).__name__,
+                )
                 continue
             output = bytes(getattr(completed, "stdout", b"") or b"")
-            if int(getattr(completed, "returncode", 1) or 0) == 0 and output:
+            returncode = int(getattr(completed, "returncode", 1) or 0)
+            if returncode == 0 and output:
                 return output
+            logger.warning(
+                "一起看关键帧 ffmpeg 失败 at_ms=%s stream_index=%s stream_count=%s returncode=%s output_bytes=%s stderr=%s",
+                int(at_ms),
+                stream_index,
+                len(stream_urls),
+                returncode,
+                len(output),
+                _sanitized_ffmpeg_stderr(getattr(completed, "stderr", b"")) or "<empty>",
+            )
+        logger.error(
+            "一起看关键帧候选流全部失败 at_ms=%s stream_count=%s",
+            int(at_ms),
+            len(stream_urls),
+        )
         raise WatchAnalysisSourceError("视频关键帧提取失败", retryable=True)
 
     def _extract_audio(self, resolved: dict, start_ms: int, end_ms: int) -> bytes:
