@@ -1777,6 +1777,9 @@ def _plot_to_dict(row: Any) -> dict:
         "tags": runtime_sqlite.json_loads(row["tags_json"], []),
         "confidence": float(row["confidence"] or 0),
         "analysis_version": str(row["analysis_version"] or ""),
+        "recall_embedding": runtime_sqlite.json_loads(row["recall_embedding_json"], []),
+        "recall_embedding_model": str(row["recall_embedding_model"] or ""),
+        "recall_embedding_hash": str(row["recall_embedding_hash"] or ""),
     }
 
 
@@ -1903,6 +1906,52 @@ def get_completed_plot_chunks(
             ),
         ).fetchall()
     return [_plot_to_dict(row) for row in rows]
+
+
+def save_plot_chunk_recall_embeddings(
+    session_id: str,
+    *,
+    model: str,
+    embeddings: Iterable[dict],
+) -> int:
+    """Persist feature-specific vectors without changing plot chunk content."""
+    selected_model = _text(model, 240)
+    if not selected_model:
+        return 0
+    updated = 0
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for item in embeddings:
+                if not isinstance(item, dict):
+                    continue
+                chunk_id = _text(item.get("id"), 160)
+                content_hash = _text(item.get("content_hash"), 160)
+                vector = item.get("embedding")
+                if not chunk_id or not content_hash or not isinstance(vector, list) or not vector:
+                    continue
+                normalized_vector = [float(value) for value in vector]
+                cursor = conn.execute(
+                    """
+                    UPDATE watch_plot_chunks
+                       SET recall_embedding_json = ?, recall_embedding_model = ?,
+                           recall_embedding_hash = ?
+                     WHERE id = ? AND session_id = ?
+                    """,
+                    (
+                        runtime_sqlite.json_dumps(normalized_vector),
+                        selected_model,
+                        content_hash,
+                        chunk_id,
+                        _text(session_id, 160),
+                    ),
+                )
+                updated += max(0, int(cursor.rowcount or 0))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return updated
 
 
 def upsert_risk_events(session_id: str, events: Iterable[dict]) -> list[dict]:

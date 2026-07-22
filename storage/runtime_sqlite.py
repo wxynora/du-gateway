@@ -332,6 +332,9 @@ def ensure_schema() -> None:
                     tags_json TEXT NOT NULL DEFAULT '[]',
                     confidence REAL NOT NULL DEFAULT 0,
                     analysis_version TEXT NOT NULL DEFAULT '',
+                    recall_embedding_json TEXT NOT NULL DEFAULT '[]',
+                    recall_embedding_model TEXT NOT NULL DEFAULT '',
+                    recall_embedding_hash TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES watch_sessions(id) ON DELETE CASCADE
@@ -861,6 +864,20 @@ def ensure_schema() -> None:
                 if column_name not in session_columns:
                     conn.execute(
                         f"ALTER TABLE watch_sessions ADD COLUMN {column_name} {column_sql}"
+                    )
+            plot_chunk_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(watch_plot_chunks)").fetchall()
+            }
+            plot_chunk_column_migrations = {
+                "recall_embedding_json": "TEXT NOT NULL DEFAULT '[]'",
+                "recall_embedding_model": "TEXT NOT NULL DEFAULT ''",
+                "recall_embedding_hash": "TEXT NOT NULL DEFAULT ''",
+            }
+            for column_name, column_sql in plot_chunk_column_migrations.items():
+                if column_name not in plot_chunk_columns:
+                    conn.execute(
+                        f"ALTER TABLE watch_plot_chunks ADD COLUMN {column_name} {column_sql}"
                     )
             viewing_columns = {
                 str(row["name"])

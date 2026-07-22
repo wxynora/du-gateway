@@ -159,6 +159,116 @@ def _embed_via_cloudflare(text: str) -> list[float]:
     return [float(x) for x in emb]
 
 
+def _embed_many_via_cloudflare(texts: list[str], *, model: str) -> list[list[float]]:
+    if not (CF_ACCOUNT_ID and CF_API_TOKEN):
+        raise RuntimeError("CF_ACCOUNT_ID / CLOUDFLARE_API_TOKEN 未配置")
+    selected_model = str(model or "").strip()
+    if not selected_model:
+        raise ValueError("Cloudflare embedding model 不能为空")
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{selected_model}"
+    headers = {"Authorization": f"Bearer {CF_API_TOKEN}"}
+    payload = {"text": texts, "truncate_inputs": True}
+    started = time.time()
+    resp = requests.post(url, headers=headers, json=payload, timeout=_timeout_seconds())
+    elapsed_ms = int((time.time() - started) * 1000)
+    if resp.status_code >= 400:
+        body_preview = (resp.text or "")[:400]
+        logger.warning(
+            "Cloudflare batch embeddings 异常 status=%s elapsed_ms=%s model=%s count=%s body=%s",
+            resp.status_code,
+            elapsed_ms,
+            selected_model,
+            len(texts),
+            body_preview,
+        )
+        raise RuntimeError(f"Cloudflare AI embeddings HTTP {resp.status_code}: {body_preview}")
+    data = resp.json()
+    result = data.get("result") if isinstance(data, dict) else None
+    obj = result if isinstance(result, dict) else (data if isinstance(data, dict) else {})
+    rows = obj.get("data")
+    if not isinstance(rows, list) or len(rows) != len(texts):
+        raise RuntimeError("Cloudflare AI batch embeddings 返回数量不匹配")
+    vectors: list[list[float]] = []
+    for row in rows:
+        if not isinstance(row, list):
+            raise RuntimeError("Cloudflare AI batch embeddings 含非向量结果")
+        vectors.append([float(value) for value in row])
+    logger.info(
+        "Cloudflare batch embeddings 成功 elapsed_ms=%s model=%s count=%s dim=%s",
+        elapsed_ms,
+        selected_model,
+        len(vectors),
+        len(vectors[0]) if vectors else 0,
+    )
+    return vectors
+
+
+def embed_texts_with_cloudflare_model(texts: list[str], *, model: str) -> list[list[float]]:
+    """Embed an ordered batch with an explicit Cloudflare model.
+
+    The explicit model is part of the cache key, so feature-specific vectors
+    cannot be reused by the default dynamic-memory embedding path.
+    """
+    selected_model = str(model or "").strip()
+    normalized = [normalize_text(text) for text in texts]
+    results: list[list[float] | None] = [None] * len(normalized)
+    missing_indices: list[int] = []
+    missing_texts: list[str] = []
+    for index, text in enumerate(normalized):
+        if not text:
+            results[index] = []
+            continue
+        cache_key = f"cloudflare:{selected_model}:{content_hash(text)}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            results[index] = cached
+            continue
+        missing_indices.append(index)
+        missing_texts.append(text)
+
+    if missing_texts:
+        last_err = None
+        max_retries = max(1, int(EMBED_MAX_RETRIES or 3))
+        logger.info(
+            "embed_texts_with_cloudflare_model 开始 model=%s count=%s chars=%s timeout_s=%s max_retries=%s",
+            selected_model,
+            len(missing_texts),
+            sum(len(text) for text in missing_texts),
+            _timeout_seconds(),
+            max_retries,
+        )
+        for attempt in range(max_retries):
+            started = time.time()
+            try:
+                vectors = _embed_many_via_cloudflare(missing_texts, model=selected_model)
+                for index, text, vector in zip(missing_indices, missing_texts, vectors):
+                    cache_key = f"cloudflare:{selected_model}:{content_hash(text)}"
+                    _cache_set(cache_key, vector)
+                    results[index] = vector
+                break
+            except Exception as exc:
+                last_err = exc
+                elapsed_ms = int((time.time() - started) * 1000)
+                logger.warning(
+                    "embed_texts_with_cloudflare_model 失败 model=%s attempt=%s/%s elapsed_ms=%s error=%s",
+                    selected_model,
+                    attempt + 1,
+                    max_retries,
+                    elapsed_ms,
+                    exc,
+                )
+                if attempt != max_retries - 1:
+                    backoff_s = max(
+                        0.2,
+                        float(EMBED_RETRY_BACKOFF_SECONDS or 1.0) * (attempt + 1),
+                    )
+                    time.sleep(backoff_s)
+        if last_err is not None and any(results[index] is None for index in missing_indices):
+            raise last_err
+
+    return [vector if isinstance(vector, list) else [] for vector in results]
+
+
 def _embed_via_openai(text: str) -> list[float]:
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY 未配置")

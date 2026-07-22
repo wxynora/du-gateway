@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from math import log
+from hashlib import sha256
+from math import log, sqrt
 from typing import Any
 
-from config import WATCH_CONTEXT_REPLY_LEAD_MS
+from config import WATCH_CONTEXT_REPLY_LEAD_MS, WATCH_RECALL_EMBEDDING_MODEL
+from memory_vector.embedding_client import embed_texts_with_cloudflare_model
 from services.watch_visual_context import build_contact_sheet
 from storage import watch_analysis_store, watch_runtime_store
 from storage import watch_visual_store
+from utils.log import get_logger
+
+
+logger = get_logger(__name__)
 
 
 WATCH_SESSION_BODY_KEY = "watch_session_id"
@@ -94,6 +100,17 @@ def _chunk_view(chunk: dict) -> dict:
         "summary": _compact_text(chunk.get("summary")),
         "characters": chunk.get("characters") if isinstance(chunk.get("characters"), list) else [],
     }
+
+
+def _current_context_source(chunks: list[dict], playhead_ms: int) -> list[dict]:
+    playhead = max(0, int(playhead_ms))
+    lookback_start = max(0, playhead - CURRENT_LOOKBACK_MS)
+    return [
+        item
+        for item in chunks
+        if _int(item.get("start_ms")) <= playhead
+        and _int(item.get("end_ms")) > lookback_start
+    ][-4:]
 
 
 def _clock(milliseconds: int) -> str:
@@ -194,10 +211,145 @@ def _bm25_tf(term_frequency: int, document_length: int, average_length: float) -
     return term_frequency * (_BM25_K1 + 1.0) / denominator
 
 
+def _semantic_query_text(query: str | list[str]) -> str:
+    texts = [query] if isinstance(query, str) else [str(item or "") for item in query]
+    texts = [text.strip() for text in texts[-3:] if text.strip()]
+    if not texts:
+        return ""
+    conversation = "\n".join(
+        f"{'Current message' if index == len(texts) - 1 else 'Recent message'}: {text}"
+        for index, text in enumerate(texts)
+    )
+    return (
+        "Instruct: During co-watching, retrieve previously watched plot passages "
+        "that are relevant to the current conversation.\n"
+        f"Query: {conversation}"
+    )
+
+
+def _chunk_semantic_text(chunk: dict) -> str:
+    characters = chunk.get("characters") if isinstance(chunk.get("characters"), list) else []
+    tags = chunk.get("tags") if isinstance(chunk.get("tags"), list) else []
+    parts = [
+        f"剧情：{str(chunk.get('summary') or '').strip()}",
+        f"对白：{str(chunk.get('dialogue_summary') or '').strip()}",
+        "人物：" + "、".join(str(item) for item in characters),
+        "标签：" + "、".join(str(item) for item in tags),
+    ]
+    return "\n".join(part for part in parts if part.rsplit("：", 1)[-1].strip())
+
+
+def _semantic_content_hash(text: str) -> str:
+    return "sha256:" + sha256(str(text or "").encode("utf-8")).hexdigest()
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    dot = sum(a * b for a, b in zip(left, right))
+    left_norm = sqrt(sum(value * value for value in left))
+    right_norm = sqrt(sum(value * value for value in right))
+    if left_norm <= 0 or right_norm <= 0:
+        return 0.0
+    return max(-1.0, min(1.0, dot / (left_norm * right_norm)))
+
+
+def _semantic_scores_for_chunks(
+    query: str | list[str],
+    chunks: list[dict],
+    *,
+    session_id: str,
+) -> dict[str, float]:
+    query_text = _semantic_query_text(query)
+    if not query_text or not chunks:
+        return {}
+
+    chunk_vectors: dict[str, list[float]] = {}
+    missing_chunks: list[tuple[dict, str, str]] = []
+    for chunk in chunks:
+        chunk_id = str(chunk.get("id") or "").strip()
+        document_text = _chunk_semantic_text(chunk)
+        if not chunk_id or not document_text:
+            continue
+        content_hash = _semantic_content_hash(document_text)
+        stored_vector = chunk.get("recall_embedding")
+        if (
+            str(chunk.get("recall_embedding_model") or "") == WATCH_RECALL_EMBEDDING_MODEL
+            and str(chunk.get("recall_embedding_hash") or "") == content_hash
+            and isinstance(stored_vector, list)
+            and stored_vector
+        ):
+            chunk_vectors[chunk_id] = [float(value) for value in stored_vector]
+        else:
+            missing_chunks.append((chunk, document_text, content_hash))
+
+    inputs = [query_text, *(item[1] for item in missing_chunks)]
+    try:
+        vectors = embed_texts_with_cloudflare_model(
+            inputs,
+            model=WATCH_RECALL_EMBEDDING_MODEL,
+        )
+    except Exception as exc:
+        logger.warning(
+            "watch semantic recall unavailable session_id=%s model=%s candidates=%s error=%s",
+            session_id,
+            WATCH_RECALL_EMBEDDING_MODEL,
+            len(chunks),
+            exc,
+        )
+        return {}
+    if not vectors or not vectors[0]:
+        return {}
+
+    persisted: list[dict] = []
+    for (chunk, _, content_hash), vector in zip(missing_chunks, vectors[1:]):
+        chunk_id = str(chunk.get("id") or "").strip()
+        if not chunk_id or not vector:
+            continue
+        chunk_vectors[chunk_id] = vector
+        persisted.append(
+            {
+                "id": chunk_id,
+                "content_hash": content_hash,
+                "embedding": vector,
+            }
+        )
+    if persisted:
+        try:
+            watch_runtime_store.save_plot_chunk_recall_embeddings(
+                session_id,
+                model=WATCH_RECALL_EMBEDDING_MODEL,
+                embeddings=persisted,
+            )
+        except Exception as exc:
+            logger.warning(
+                "watch semantic recall cache write failed session_id=%s model=%s count=%s error=%s",
+                session_id,
+                WATCH_RECALL_EMBEDDING_MODEL,
+                len(persisted),
+                exc,
+            )
+
+    query_vector = vectors[0]
+    scores = {
+        chunk_id: _cosine_similarity(query_vector, vector)
+        for chunk_id, vector in chunk_vectors.items()
+    }
+    logger.info(
+        "watch semantic recall scored session_id=%s model=%s candidates=%s embedded=%s",
+        session_id,
+        WATCH_RECALL_EMBEDDING_MODEL,
+        len(scores),
+        len(missing_chunks),
+    )
+    return scores
+
+
 def _recall_related_chunks(
     query: str | list[str],
     chunks: list[dict],
     *,
+    session_id: str,
     excluded_ids: set[str],
 ) -> list[dict]:
     query_terms = _weighted_query_terms(query)
@@ -264,6 +416,31 @@ def _recall_related_chunks(
         limit = RELATED_CHUNK_LIMIT
     else:
         limit = 1
+    semantic_scores = _semantic_scores_for_chunks(
+        query,
+        [item[3] for item in candidates],
+        session_id=session_id,
+    )
+    if semantic_scores:
+        maximum_bm25 = max(item[0] for item in candidates)
+        earliest_end = min(item[1] for item in candidates)
+        latest_end = max(item[1] for item in candidates)
+        time_span = max(1, latest_end - earliest_end)
+
+        def _combined_score(item: tuple[float, int, bool, dict]) -> float:
+            bm25_score, end_ms, _, chunk = item
+            semantic_score = max(
+                0.0,
+                semantic_scores.get(str(chunk.get("id") or ""), 0.0),
+            )
+            bm25_normalized = bm25_score / max(maximum_bm25, 1e-9)
+            recency = (end_ms - earliest_end) / time_span
+            return semantic_score * 0.72 + bm25_normalized * 0.23 + recency * 0.05
+
+        candidates.sort(
+            key=lambda item: (_combined_score(item), item[0], item[1]),
+            reverse=True,
+        )
     selected = [
         item[3]
         for item in candidates[:limit]
@@ -329,19 +506,8 @@ def build_watch_context(
         end_after_ms=max(0, playhead_ms - CURRENT_LOOKBACK_MS),
         limit=24,
     )
-    current_source = [
-        item
-        for item in chunks
-        if _int(item.get("start_ms")) <= playhead_ms < _int(item.get("end_ms"))
-    ]
-    if not current_source:
-        current_source = [
-            item
-            for item in chunks
-            if _int(item.get("end_ms")) <= playhead_ms
-            and _int(item.get("end_ms")) >= max(0, playhead_ms - CURRENT_LOOKBACK_MS)
-        ][-2:]
-    current = [_chunk_view(item) for item in current_source][-4:]
+    current_source = _current_context_source(chunks, playhead_ms)
+    current = [_chunk_view(item) for item in current_source]
     completed_chunks = watch_runtime_store.get_completed_plot_chunks(
         session_id,
         timeline_epoch=timeline_epoch,
@@ -350,6 +516,7 @@ def build_watch_context(
     related = _recall_related_chunks(
         recall_query,
         completed_chunks,
+        session_id=session_id,
         excluded_ids={str(item.get("id") or "") for item in current_source},
     )
     future = [
