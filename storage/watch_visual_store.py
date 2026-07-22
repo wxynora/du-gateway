@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from config import (
+    WATCH_VISUAL_CACHE_DIR,
     WATCH_VISUAL_CONTEXT_INTERVAL_SECONDS,
     WATCH_VISUAL_FRAME_FUTURE_WINDOW_MS,
     WATCH_VISUAL_FRAME_MAX_PER_SESSION,
@@ -120,6 +122,66 @@ def list_frames(
         if path.is_file():
             frames.append(item)
     return frames
+
+
+def get_session_frame(session_id: str, frame_id: str) -> dict | None:
+    now_iso = _iso(_now())
+    with runtime_sqlite.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM watch_visual_frames
+             WHERE id = ? AND session_id = ? AND expires_at > ?
+            """,
+            (_text(frame_id, 160), _text(session_id, 160), now_iso),
+        ).fetchone()
+    if row is None:
+        return None
+    item = dict(row)
+    return item if Path(str(item.get("file_path") or "")).is_file() else None
+
+
+def persist_ticket_frame(viewing_id: str, frame: dict) -> dict:
+    source_path = Path(str(frame.get("file_path") or ""))
+    if not source_path.is_file():
+        raise ValueError("所选剧情画面已经失效")
+    clean_viewing_id = _text(viewing_id, 160)
+    if not clean_viewing_id:
+        raise ValueError("viewing_id 不能为空")
+    digest = _text(frame.get("sha256"), 80) or source_path.stem
+    output_dir = Path(WATCH_VISUAL_CACHE_DIR) / "tickets" / clean_viewing_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target_path = output_dir / f"{digest}.webp"
+    temporary_path = output_dir / f".{digest}.tmp"
+    shutil.copyfile(source_path, temporary_path)
+    temporary_path.replace(target_path)
+    return {
+        "frame_id": _text(frame.get("id"), 160),
+        "media_id": _text(frame.get("media_id"), 240),
+        "at_ms": max(0, int(frame.get("at_ms") or 0)),
+        "mime_type": _text(frame.get("mime_type"), 80) or "image/webp",
+        "width": max(0, int(frame.get("width") or 0)),
+        "height": max(0, int(frame.get("height") or 0)),
+        "file_path": str(target_path),
+    }
+
+
+def delete_persisted_ticket_frame(frame: dict | None) -> bool:
+    if not isinstance(frame, dict):
+        return False
+    raw_path = str(frame.get("file_path") or "").strip()
+    if not raw_path:
+        return False
+    path = Path(raw_path)
+    ticket_root = (Path(WATCH_VISUAL_CACHE_DIR) / "tickets").resolve()
+    try:
+        path.resolve().relative_to(ticket_root)
+    except (OSError, ValueError):
+        return False
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True
 
 
 def frame_cache_status(session_id: str, *, timeline_epoch: int) -> dict:

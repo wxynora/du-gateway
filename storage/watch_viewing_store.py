@@ -40,13 +40,24 @@ def normalize_part(media: dict) -> dict:
         raise ValueError("media.part_index 不能大于 media.part_count")
     media_id = _clean_text(media.get("id"))
     part_key = _clean_text(media.get("part_key")) or media_id
+    duration_ms = max(0, int(float(media.get("duration_ms") or 0)))
+    raw_start = media.get("content_start_ms")
+    raw_end = media.get("content_end_ms")
+    content_start_ms = max(0, int(float(raw_start or 0)))
+    content_end_ms = (
+        max(0, int(float(raw_end)))
+        if raw_end is not None and int(float(raw_end)) >= 0
+        else duration_ms
+    )
     return {
         "part_key": part_key,
         "media_id": media_id,
         "part_index": part_index,
         "part_count": part_count,
         "part_title": _clean_text(media.get("part_title")),
-        "duration_ms": max(0, int(float(media.get("duration_ms") or 0))),
+        "duration_ms": duration_ms,
+        "content_start_ms": min(content_start_ms, duration_ms),
+        "content_end_ms": min(content_end_ms, duration_ms),
     }
 
 
@@ -94,6 +105,80 @@ def _merge_part(parts: list[dict], incoming: dict) -> list[dict]:
     )
 
 
+def _session_progress(session_row: Any) -> dict:
+    duration_ms = max(0, int(session_row["duration_ms"] or 0))
+    content_start_ms = max(0, int(session_row["content_start_ms"] or 0))
+    raw_content_end_ms = int(session_row["content_end_ms"] or -1)
+    content_end_ms = raw_content_end_ms if raw_content_end_ms >= 0 else duration_ms
+    content_end_ms = min(duration_ms, max(content_start_ms, content_end_ms))
+    playhead_ms = min(duration_ms, max(0, int(session_row["playhead_ms"] or 0)))
+    local_media = runtime_sqlite.json_loads(session_row["local_media_json"], {})
+    if not isinstance(local_media, dict):
+        local_media = {}
+    return {
+        "session_id": _clean_text(session_row["id"]),
+        "media": {
+            "id": _clean_text(session_row["media_id"]),
+            "source": _clean_text(session_row["source"]),
+            "url": _clean_text(session_row["source_url"]),
+            "title": _clean_text(session_row["title"]),
+            "part_title": _clean_text(session_row["part_title"]),
+            "part_key": _clean_text(session_row["part_key"]),
+            "part_index": int(session_row["part_index"] or 1),
+            "part_count": int(session_row["part_count"] or 1),
+            "duration_ms": duration_ms,
+            "content_start_ms": content_start_ms,
+            "content_end_ms": content_end_ms,
+            "local_media": local_media,
+        },
+        "playback": {
+            "playhead_ms": playhead_ms,
+            "played_duration_ms": max(0, int(session_row["played_duration_ms"] or 0)),
+            "timeline_epoch": max(0, int(session_row["timeline_epoch"] or 0)),
+            "snapshot_seq": max(0, int(session_row["snapshot_seq"] or 0)),
+            "captured_at": _clean_text(session_row["captured_at"]),
+        },
+        "analysis": {
+            "status": _clean_text(session_row["analysis_status"]) or "pending",
+            "covered_from_ms": max(0, int(session_row["analysis_covered_from_ms"] or 0)),
+            "covered_until_ms": max(0, int(session_row["analysis_covered_until_ms"] or 0)),
+            "retained": True,
+        },
+    }
+
+
+def _watched_percent(progress: dict, *, completed: bool) -> int:
+    if completed:
+        return 100
+    media = progress.get("media") if isinstance(progress.get("media"), dict) else {}
+    playback = (
+        progress.get("playback") if isinstance(progress.get("playback"), dict) else {}
+    )
+    start_ms = max(0, int(media.get("content_start_ms") or 0))
+    end_ms = max(start_ms, int(media.get("content_end_ms") or media.get("duration_ms") or 0))
+    playhead_ms = max(start_ms, int(playback.get("playhead_ms") or 0))
+    if end_ms <= start_ms:
+        return 0
+    percent = round((min(playhead_ms, end_ms) - start_ms) * 100 / (end_ms - start_ms))
+    return min(99, max(0, int(percent)))
+
+
+def _public_ticket_frame(value: Any, *, viewing_id: str) -> dict | None:
+    frame = runtime_sqlite.json_loads(value, {}) if isinstance(value, str) else value
+    if not isinstance(frame, dict) or not _clean_text(frame.get("frame_id")):
+        return None
+    return {
+        "frame_id": _clean_text(frame.get("frame_id")),
+        "media_id": _clean_text(frame.get("media_id")),
+        "at_ms": max(0, int(frame.get("at_ms") or 0)),
+        "mime_type": _clean_text(frame.get("mime_type")) or "image/webp",
+        "width": max(0, int(frame.get("width") or 0)),
+        "height": max(0, int(frame.get("height") or 0)),
+        "selected_at": _clean_text(frame.get("selected_at")),
+        "image_url": f"/miniapp-api/watch/viewings/{viewing_id}/ticket-frame/image",
+    }
+
+
 def ensure_viewing(
     conn,
     *,
@@ -138,7 +223,7 @@ def ensure_viewing(
 
     if _clean_text(row["work_key"]) != work_key:
         raise ValueError("viewing_id 已属于其他作品")
-    if _clean_text(row["status"]) in {"completed", "finalized"}:
+    if _clean_text(row["status"]) == "completed" or _clean_text(row["ticket_id"]):
         raise ValueError("这次一起看已经结束，请创建新的 viewing_id")
     parts = _merge_part(_parts(row["parts_json"]), part)
     conn.execute(
@@ -184,6 +269,8 @@ def record_session_progress(
             "part_count": session_row["part_count"],
             "part_title": session_row["part_title"],
             "duration_ms": session_row["duration_ms"],
+            "content_start_ms": session_row["content_start_ms"],
+            "content_end_ms": session_row["content_end_ms"],
         }
     )
     parts = _merge_part(_parts(row["parts_json"]), part)
@@ -212,14 +299,20 @@ def record_session_progress(
     final_completed_at = _clean_text(row["completed_at"])
     status = _clean_text(row["status"]) or "active"
     if viewing_completed:
-        status = "completed"
         final_completed_at = final_completed_at or completed_at or now_iso
+    progress_json = _clean_text(row["progress_json"]) or "{}"
+    if status == "saved":
+        progress_json = runtime_sqlite.json_dumps(_session_progress(session_row))
+        conn.execute(
+            "UPDATE watch_sessions SET retained_for_resume = 1 WHERE id = ?",
+            (_clean_text(session_row["id"]),),
+        )
     conn.execute(
         """
         UPDATE watch_viewings
            SET part_count = ?, parts_json = ?, played_duration_ms = ?, status = ?,
                completed_at = ?, last_session_id = ?, ticket_id = ?, ticket_json = ?,
-               updated_at = ?
+               progress_json = ?, updated_at = ?
          WHERE id = ?
         """,
         (
@@ -231,98 +324,216 @@ def record_session_progress(
             _clean_text(session_row["id"]),
             _clean_text(row["ticket_id"]),
             _clean_text(row["ticket_json"]) or "{}",
+            progress_json,
             now_iso,
             viewing_id,
         ),
     )
 
 
-def finalize_viewing_for_session(session_id: str, *, now_iso: str) -> dict | None:
+def save_progress_for_session(session_id: str, *, now_iso: str) -> dict | None:
     clean_session_id = _clean_text(session_id)
     if not clean_session_id:
         raise ValueError("session_id 不能为空")
     with runtime_sqlite.connect() as conn:
-        row = conn.execute(
-            """
-            SELECT v.* FROM watch_viewings AS v
-            JOIN watch_sessions AS s ON s.viewing_id = v.id
-            WHERE s.id = ?
-            """,
-            (clean_session_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        existing_ticket = runtime_sqlite.json_loads(row["ticket_json"], {})
-        if _clean_text(row["ticket_id"]) and isinstance(existing_ticket, dict) and existing_ticket:
-            return _row_to_viewing(row)
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            session_row = conn.execute(
+                "SELECT * FROM watch_sessions WHERE id = ?",
+                (clean_session_id,),
+            ).fetchone()
+            if session_row is None:
+                conn.execute("COMMIT")
+                return None
+            row = conn.execute(
+                "SELECT * FROM watch_viewings WHERE id = ?",
+                (_clean_text(session_row["viewing_id"]),),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+            if _clean_text(row["ticket_id"]) or _clean_text(row["status"]) == "completed":
+                raise ValueError("已看完的观看记录不能再保存为续播进度")
+            progress = _session_progress(session_row)
+            conn.execute(
+                """
+                UPDATE watch_viewings
+                   SET status = 'saved', progress_json = ?, saved_at = ?,
+                       analysis_cache_expires_at = '', last_session_id = ?, updated_at = ?
+                 WHERE id = ?
+                """,
+                (
+                    runtime_sqlite.json_dumps(progress),
+                    _clean_text(now_iso),
+                    clean_session_id,
+                    _clean_text(now_iso),
+                    _clean_text(row["id"]),
+                ),
+            )
+            conn.execute(
+                "UPDATE watch_sessions SET retained_for_resume = 1 WHERE viewing_id = ?",
+                (_clean_text(row["id"]),),
+            )
+            saved = conn.execute(
+                "SELECT * FROM watch_viewings WHERE id = ?",
+                (_clean_text(row["id"]),),
+            ).fetchone()
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return _row_to_viewing(saved) if saved is not None else None
 
-        viewing_id = _clean_text(row["id"])
-        parts = _parts(row["parts_json"])
-        ticket_id = "watch_ticket_" + hashlib.sha256(viewing_id.encode("utf-8")).hexdigest()
-        work_completed = _clean_text(row["status"]) == "completed"
-        ticket = {
-            "ticket_id": ticket_id,
-            "viewing_id": viewing_id,
-            "work_key": _clean_text(row["work_key"]),
-            "title": _clean_text(row["title"]),
-            "cover_url": _clean_text(row["cover_url"]),
-            "companion": {
-                "id": _clean_text(row["companion_id"]),
-                "name": _clean_text(row["companion_name"]),
-            },
-            "created_at": _clean_text(now_iso),
-            "ended_at": _clean_text(now_iso),
-            "completed_at": _clean_text(now_iso),
-            "work_completed": work_completed,
-            "work_completed_at": _clean_text(row["completed_at"]),
-            "played_duration_ms": int(row["played_duration_ms"] or 0),
-            "part_count": int(row["part_count"] or 1),
-            "completed_parts": [
+
+def complete_viewing_for_session(
+    session_id: str,
+    *,
+    now_iso: str,
+    analysis_cache_expires_at: str,
+) -> dict | None:
+    clean_session_id = _clean_text(session_id)
+    if not clean_session_id:
+        raise ValueError("session_id 不能为空")
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                """
+                SELECT v.* FROM watch_viewings AS v
+                JOIN watch_sessions AS s ON s.viewing_id = v.id
+                WHERE s.id = ?
+                """,
+                (clean_session_id,),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+            existing_ticket = runtime_sqlite.json_loads(row["ticket_json"], {})
+            if (
+                _clean_text(row["status"]) == "completed"
+                and _clean_text(row["ticket_id"])
+                and isinstance(existing_ticket, dict)
+                and existing_ticket
+            ):
+                conn.execute("COMMIT")
+                return _row_to_viewing(row)
+
+            viewing_id = _clean_text(row["id"])
+            parts = _parts(row["parts_json"])
+            ticket_id = _clean_text(row["ticket_id"]) or (
+                "watch_ticket_"
+                + hashlib.sha256(viewing_id.encode("utf-8")).hexdigest()
+            )
+            playback_completed_at = _clean_text(row["completed_at"])
+            ticket = dict(existing_ticket) if isinstance(existing_ticket, dict) else {}
+            ticket.update(
                 {
-                    "part_key": _clean_text(item.get("part_key")),
-                    "media_id": _clean_text(item.get("media_id")),
-                    "part_index": _positive_int(item.get("part_index"), 1),
-                    "part_title": _clean_text(item.get("part_title")),
-                    "played_duration_ms": int(item.get("played_duration_ms") or 0),
-                    "completed_at": _clean_text(item.get("completed_at")),
-                    "completion_event_id": _clean_text(item.get("completion_event_id")),
-                    "last_session_id": _clean_text(item.get("last_session_id")),
+                    "ticket_id": ticket_id,
+                    "viewing_id": viewing_id,
+                    "work_key": _clean_text(row["work_key"]),
+                    "title": _clean_text(row["title"]),
+                    "cover_url": _clean_text(row["cover_url"]),
+                    "companion": {
+                        "id": _clean_text(row["companion_id"]),
+                        "name": _clean_text(row["companion_name"]),
+                    },
+                    "created_at": _clean_text(ticket.get("created_at"))
+                    or _clean_text(now_iso),
+                    "ended_at": _clean_text(now_iso),
+                    "completed_at": _clean_text(now_iso),
+                    "work_completed": True,
+                    "playback_completed": bool(playback_completed_at),
+                    "work_completed_at": playback_completed_at or _clean_text(now_iso),
+                    "played_duration_ms": int(row["played_duration_ms"] or 0),
+                    "part_count": int(row["part_count"] or 1),
+                    "completed_parts": [
+                        {
+                            "part_key": _clean_text(item.get("part_key")),
+                            "media_id": _clean_text(item.get("media_id")),
+                            "part_index": _positive_int(item.get("part_index"), 1),
+                            "part_title": _clean_text(item.get("part_title")),
+                            "played_duration_ms": int(
+                                item.get("played_duration_ms") or 0
+                            ),
+                            "completed_at": _clean_text(item.get("completed_at")),
+                            "completion_event_id": _clean_text(
+                                item.get("completion_event_id")
+                            ),
+                            "last_session_id": _clean_text(
+                                item.get("last_session_id")
+                            ),
+                        }
+                        for item in parts
+                        if _clean_text(item.get("completed_at"))
+                    ],
+                    "last_session_id": clean_session_id,
+                    "back_frame": _public_ticket_frame(
+                        row["ticket_frame_json"], viewing_id=viewing_id
+                    ),
                 }
-                for item in parts
-                if _clean_text(item.get("completed_at"))
-            ],
-            "last_session_id": clean_session_id,
-        }
-        status = "completed" if work_completed else "finalized"
-        conn.execute(
-            """
-            UPDATE watch_viewings
-               SET status = ?, last_session_id = ?, ticket_id = ?, ticket_json = ?,
-                   updated_at = ?
-             WHERE id = ?
-            """,
-            (
-                status,
-                clean_session_id,
-                ticket_id,
-                runtime_sqlite.json_dumps(ticket),
-                _clean_text(now_iso),
-                viewing_id,
-            ),
-        )
-        saved = conn.execute(
-            "SELECT * FROM watch_viewings WHERE id = ?",
-            (viewing_id,),
-        ).fetchone()
+            )
+            conn.execute(
+                """
+                UPDATE watch_viewings
+                   SET status = ?, last_session_id = ?, ticket_id = ?, ticket_json = ?,
+                       completed_at = ?, progress_json = '{}', saved_at = '',
+                       analysis_cache_expires_at = ?, updated_at = ?
+                 WHERE id = ?
+                """,
+                (
+                    "completed",
+                    clean_session_id,
+                    ticket_id,
+                    runtime_sqlite.json_dumps(ticket),
+                    playback_completed_at or _clean_text(now_iso),
+                    _clean_text(analysis_cache_expires_at),
+                    _clean_text(now_iso),
+                    viewing_id,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE watch_sessions
+                   SET retained_for_resume = 0, expires_at = ?
+                 WHERE viewing_id = ?
+                """,
+                (_clean_text(analysis_cache_expires_at), viewing_id),
+            )
+            saved = conn.execute(
+                "SELECT * FROM watch_viewings WHERE id = ?",
+                (viewing_id,),
+            ).fetchone()
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     return _row_to_viewing(saved) if saved is not None else None
 
 
 def _row_to_viewing(row: Any) -> dict:
     if row is None:
         return {}
+    viewing_id = _clean_text(row["id"])
+    status = _clean_text(row["status"]) or "active"
+    completed = status == "completed"
+    progress = runtime_sqlite.json_loads(row["progress_json"], {})
+    if not isinstance(progress, dict) or not progress:
+        progress = None
+    ticket_frame = _public_ticket_frame(row["ticket_frame_json"], viewing_id=viewing_id)
     ticket = runtime_sqlite.json_loads(row["ticket_json"], {})
+    if isinstance(ticket, dict) and ticket:
+        ticket = dict(ticket)
+        ticket["back_frame"] = ticket_frame
+    else:
+        ticket = None
+    playback_completed = (
+        bool(ticket.get("playback_completed"))
+        if completed and isinstance(ticket, dict)
+        else bool(_clean_text(row["completed_at"]))
+    )
+    watched_percent = _watched_percent(progress or {}, completed=completed)
     return {
-        "viewing_id": _clean_text(row["id"]),
+        "viewing_id": viewing_id,
         "work_key": _clean_text(row["work_key"]),
         "title": _clean_text(row["title"]),
         "cover_url": _clean_text(row["cover_url"]),
@@ -333,15 +544,42 @@ def _row_to_viewing(row: Any) -> dict:
         "part_count": int(row["part_count"] or 1),
         "parts": _parts(row["parts_json"]),
         "played_duration_ms": int(row["played_duration_ms"] or 0),
-        "status": _clean_text(row["status"]) or "active",
-        "completed": _clean_text(row["status"]) == "completed",
+        "status": status,
+        "completed": completed,
+        "playback_completed": playback_completed,
+        "recent_status": "completed" if completed else "in_progress",
+        "watched_percent": watched_percent,
+        "status_text": "已看完" if completed else f"已看{watched_percent}%",
+        "can_resume": status == "saved" and progress is not None,
+        "progress": progress,
+        "saved_at": _clean_text(row["saved_at"]),
+        "analysis_cache_expires_at": _clean_text(row["analysis_cache_expires_at"]),
+        "ticket_back_frame": ticket_frame,
         "completed_at": _clean_text(row["completed_at"]),
         "last_session_id": _clean_text(row["last_session_id"]),
         "ticket_id": _clean_text(row["ticket_id"]),
-        "ticket": ticket if isinstance(ticket, dict) and ticket else None,
+        "ticket": ticket,
         "created_at": _clean_text(row["created_at"]),
         "updated_at": _clean_text(row["updated_at"]),
+        "recent_at": (
+            _clean_text(row["completed_at"])
+            if completed
+            else _clean_text(row["saved_at"]) or _clean_text(row["updated_at"])
+        ),
     }
+
+
+def saved_resume_state(conn, viewing_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM watch_viewings WHERE id = ? AND status = 'saved'",
+        (_clean_text(viewing_id),),
+    ).fetchone()
+    if row is None or _clean_text(row["ticket_id"]):
+        return None
+    progress = runtime_sqlite.json_loads(row["progress_json"], {})
+    if not isinstance(progress, dict) or not progress:
+        return None
+    return {"viewing": row, "progress": progress}
 
 
 def get_viewing(viewing_id: str) -> dict | None:
@@ -376,6 +614,154 @@ def get_by_ticket_id(ticket_id: str) -> dict | None:
             (_clean_text(ticket_id),),
         ).fetchone()
     return _row_to_viewing(row) if row is not None else None
+
+
+def list_recent_viewings(*, status: str = "recent") -> list[dict]:
+    normalized = _clean_text(status).lower() or "recent"
+    if normalized not in {"recent", "resumable", "completed"}:
+        raise ValueError("status 必须是 recent、resumable 或 completed")
+    if normalized == "resumable":
+        where = "v.status = 'saved'"
+    elif normalized == "completed":
+        where = "v.status = 'completed'"
+    else:
+        where = "v.status IN ('saved', 'completed')"
+    with runtime_sqlite.connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT v.* FROM watch_viewings AS v
+             WHERE {where}
+               AND (
+                    v.status = 'completed'
+                    OR NOT EXISTS (
+                        SELECT 1 FROM watch_sessions AS s
+                         WHERE s.viewing_id = v.id AND s.status != 'ended'
+                    )
+               )
+             ORDER BY CASE
+                        WHEN v.status = 'completed' THEN v.completed_at
+                        ELSE v.saved_at
+                      END DESC,
+                      v.updated_at DESC
+            """
+        ).fetchall()
+    return [_row_to_viewing(row) for row in rows]
+
+
+def set_ticket_frame(
+    viewing_id: str,
+    *,
+    frame: dict,
+    now_iso: str,
+) -> dict | None:
+    clean_viewing_id = _clean_text(viewing_id)
+    if not clean_viewing_id:
+        raise ValueError("viewing_id 不能为空")
+    stored = {
+        "frame_id": _clean_text(frame.get("frame_id")),
+        "media_id": _clean_text(frame.get("media_id")),
+        "at_ms": max(0, int(frame.get("at_ms") or 0)),
+        "mime_type": _clean_text(frame.get("mime_type")) or "image/webp",
+        "width": max(0, int(frame.get("width") or 0)),
+        "height": max(0, int(frame.get("height") or 0)),
+        "file_path": _clean_text(frame.get("file_path")),
+        "selected_at": _clean_text(now_iso),
+    }
+    if not stored["frame_id"] or not stored["file_path"]:
+        raise ValueError("票根画面无效")
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT * FROM watch_viewings WHERE id = ?",
+                (clean_viewing_id,),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+            ticket = runtime_sqlite.json_loads(row["ticket_json"], {})
+            if isinstance(ticket, dict) and ticket:
+                ticket = dict(ticket)
+                ticket["back_frame"] = _public_ticket_frame(
+                    stored, viewing_id=clean_viewing_id
+                )
+            conn.execute(
+                """
+                UPDATE watch_viewings
+                   SET ticket_frame_json = ?, ticket_json = ?, updated_at = ?
+                 WHERE id = ?
+                """,
+                (
+                    runtime_sqlite.json_dumps(stored),
+                    runtime_sqlite.json_dumps(ticket if isinstance(ticket, dict) else {}),
+                    _clean_text(now_iso),
+                    clean_viewing_id,
+                ),
+            )
+            saved = conn.execute(
+                "SELECT * FROM watch_viewings WHERE id = ?",
+                (clean_viewing_id,),
+            ).fetchone()
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return _row_to_viewing(saved) if saved is not None else None
+
+
+def clear_ticket_frame(viewing_id: str, *, now_iso: str) -> tuple[dict | None, dict | None]:
+    clean_viewing_id = _clean_text(viewing_id)
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT * FROM watch_viewings WHERE id = ?",
+                (clean_viewing_id,),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None, None
+            previous = runtime_sqlite.json_loads(row["ticket_frame_json"], {})
+            ticket = runtime_sqlite.json_loads(row["ticket_json"], {})
+            if isinstance(ticket, dict) and ticket:
+                ticket = dict(ticket)
+                ticket["back_frame"] = None
+            conn.execute(
+                """
+                UPDATE watch_viewings
+                   SET ticket_frame_json = '{}', ticket_json = ?, updated_at = ?
+                 WHERE id = ?
+                """,
+                (
+                    runtime_sqlite.json_dumps(ticket if isinstance(ticket, dict) else {}),
+                    _clean_text(now_iso),
+                    clean_viewing_id,
+                ),
+            )
+            saved = conn.execute(
+                "SELECT * FROM watch_viewings WHERE id = ?",
+                (clean_viewing_id,),
+            ).fetchone()
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return (
+        _row_to_viewing(saved) if saved is not None else None,
+        previous if isinstance(previous, dict) and previous else None,
+    )
+
+
+def get_ticket_frame_file(viewing_id: str) -> dict | None:
+    with runtime_sqlite.connect() as conn:
+        row = conn.execute(
+            "SELECT ticket_frame_json FROM watch_viewings WHERE id = ?",
+            (_clean_text(viewing_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    frame = runtime_sqlite.json_loads(row["ticket_frame_json"], {})
+    return frame if isinstance(frame, dict) and frame else None
 
 
 def update_ticket_title(

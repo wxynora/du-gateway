@@ -253,6 +253,7 @@ def ensure_schema() -> None:
                     played_duration_ms INTEGER NOT NULL DEFAULT 0,
                     completed_at TEXT NOT NULL DEFAULT '',
                     completion_event_id TEXT NOT NULL DEFAULT '',
+                    retained_for_resume INTEGER NOT NULL DEFAULT 0,
                     analysis_status TEXT NOT NULL DEFAULT 'pending',
                     analysis_covered_from_ms INTEGER NOT NULL DEFAULT 0,
                     analysis_covered_until_ms INTEGER NOT NULL DEFAULT 0,
@@ -289,6 +290,10 @@ def ensure_schema() -> None:
                     last_session_id TEXT NOT NULL DEFAULT '',
                     ticket_id TEXT NOT NULL DEFAULT '',
                     ticket_json TEXT NOT NULL DEFAULT '{}',
+                    progress_json TEXT NOT NULL DEFAULT '{}',
+                    saved_at TEXT NOT NULL DEFAULT '',
+                    analysis_cache_expires_at TEXT NOT NULL DEFAULT '',
+                    ticket_frame_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -829,12 +834,32 @@ def ensure_schema() -> None:
                 "played_duration_ms": "INTEGER NOT NULL DEFAULT 0",
                 "completed_at": "TEXT NOT NULL DEFAULT ''",
                 "completion_event_id": "TEXT NOT NULL DEFAULT ''",
+                "retained_for_resume": "INTEGER NOT NULL DEFAULT 0",
             }
             for column_name, column_sql in session_column_migrations.items():
                 if column_name not in session_columns:
                     conn.execute(
                         f"ALTER TABLE watch_sessions ADD COLUMN {column_name} {column_sql}"
                     )
+            viewing_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(watch_viewings)").fetchall()
+            }
+            viewing_column_migrations = {
+                "progress_json": "TEXT NOT NULL DEFAULT '{}'",
+                "saved_at": "TEXT NOT NULL DEFAULT ''",
+                "analysis_cache_expires_at": "TEXT NOT NULL DEFAULT ''",
+                "ticket_frame_json": "TEXT NOT NULL DEFAULT '{}'",
+            }
+            for column_name, column_sql in viewing_column_migrations.items():
+                if column_name not in viewing_columns:
+                    conn.execute(
+                        f"ALTER TABLE watch_viewings ADD COLUMN {column_name} {column_sql}"
+                    )
+            conn.execute(
+                "UPDATE watch_viewings SET status = 'completed' "
+                "WHERE status = 'finalized'"
+            )
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_watch_sessions_active_creation "
                 "ON watch_sessions(device_id, window_id, creation_key) "

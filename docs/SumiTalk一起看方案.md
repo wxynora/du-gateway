@@ -1163,8 +1163,12 @@ unknown            无法可靠判断，按正片分析
 | 查询当前设备会话 | `GET /miniapp-api/watch/sessions?window_id=...` |
 | 恢复单个会话 | `GET /miniapp-api/watch/sessions/<session_id>` |
 | 恢复跨分 P 观看与票根 | `GET /miniapp-api/watch/viewings/<viewing_id>` |
+| 查询最近观看（保存进度与已看完） | `GET /miniapp-api/watch/viewings?status=recent` |
+| 仅查询可续播记录 | `GET /miniapp-api/watch/viewings?status=resumable` |
 | 查询服务端票夹 | `GET /miniapp-api/watch/tickets` |
 | 保存票根最终作品名，并可选归档到一起看过 | `PUT /miniapp-api/watch/tickets/<ticket_id>` |
+| 查询可选作票根背面的剧情帧 | `GET /miniapp-api/watch/sessions/<session_id>/ticket-frame-candidates` |
+| 选择或清除票根剧情帧 | `PUT/DELETE /miniapp-api/watch/viewings/<viewing_id>/ticket-frame` |
 | 确认知识卡或明确跳过并正式开始 | `POST /miniapp-api/watch/sessions/<session_id>/start` |
 | 知识卡失败后重新生成 | `POST /miniapp-api/watch/sessions/<session_id>/knowledge-card/regenerate` |
 | 字幕未命中或失败后重新查询 | `POST /miniapp-api/watch/sessions/<session_id>/subtitles/retry` |
@@ -1178,7 +1182,8 @@ unknown            无法可靠判断，按正片分析
 | 修改知识/胆小模式 | `PUT /miniapp-api/watch/sessions/<session_id>/mode` |
 | 纠正片头片尾/正片边界 | `PUT /miniapp-api/watch/sessions/<session_id>/timeline-sections` |
 | 普通收尾（切 P、页面销毁、异常清理） | `DELETE /miniapp-api/watch/sessions/<session_id>` |
-| 使用者明确结束本次一起看并生成票根 | `DELETE /miniapp-api/watch/sessions/<session_id>?finalize_viewing=true` |
+| 保存进度，不生成票根 | `DELETE /miniapp-api/watch/sessions/<session_id>?viewing_action=save_progress` |
+| 标为已看完并生成或复用票根 | `DELETE /miniapp-api/watch/sessions/<session_id>?viewing_action=complete` |
 | 提交高能误报/漏报 | `POST /miniapp-api/watch/sessions/<session_id>/risk-feedback` |
 
 正常聊天不调用单独的 `/watch/chat`。SumiTalk chat job 请求附带观看快照，网关在统一聊天入口注入动态上下文并通过现有 rich SSE 返回隐藏动作事件。
@@ -1226,9 +1231,13 @@ unknown            无法可靠判断，按正片分析
 
 播放快照的服务端接收时间作为累计基准，只累计相邻、同 `timeline_epoch`、上一快照确实处于播放状态的确认区间；累计值取服务端经过时间与媒体前进量按上一播放倍速换算值中较小者。准备、暂停和 seek 均不计入 `played_duration_ms`。客户端可在真实媒体结束快照附加 `media_ended=true`；会话只有在已正式解锁、最新可信位置达到 `content_end_ms`（未提供时为媒体终点），并且本轮为连续播放或真实结束事件时才写 `completion_event_id`。达到正片完成边界后如果仍连续播放，可信累计继续增加到显式结束，不会在片尾或过审占位图之前冻结。`DELETE session` 只结束会话，不能制造完成事件。
 
-创建、单会话恢复、播放更新、状态和 DELETE 响应都会返回 `viewing_summary`。作品完成和票根生成是两个独立状态：全部目标分 P 到达正片终点后只把 `viewing_summary.completed` 置为 `true`；只有使用者明确结束本次一起看并发送 `finalize_viewing=true` 时，后端才按当前服务端可信累计生成稳定 `ticket_id/ticket`，即使作品尚未看完也会出票。切 P、`pagehide` 和异常清理使用不带参数的普通 DELETE，不会提前出票；重复显式结束复用同一张票根。DELETE 仍原样返回本 session 的 `analysis_cost`，并额外返回 `viewing_summary` 与可空 `ticket`。`GET /watch/viewings/<viewing_id>` 恢复单次观看，`GET /watch/tickets` 按出票时间返回服务端持久化票根，供受信任的另一设备恢复。
+创建、单会话恢复、播放更新、状态和 DELETE 响应都会返回 `viewing_summary`。自然到达正片终点只记录 `playback_completed=true`，不替使用者点击“已看完”，也不生成票根。点击“结束一起看”后由前端展示“继续看 / 保存进度 / 已看完”：继续看不请求结束接口；保存进度发送 `viewing_action=save_progress`，保留同一 `viewing_id`、准确播放位置和已生成剧情分析，但不出票；已看完发送 `viewing_action=complete`，清除续播状态并生成或复用唯一票根。切 P、`pagehide` 和异常清理使用默认 `cleanup`，不保存新的续播点、不出票。旧 `finalize_viewing` 参数已经删除，客户端不得继续发送。
 
-票根生成后，客户端通过 `PUT /watch/tickets/<ticket_id>` 提交编辑后的最终 `title`。请求中的 `archive_to_stay_with_du` 是显式布尔选择，省略时默认为 `false`：`false` 只保存票根标题，不读取或写入 Stay with Du；只有作品 `completed=true` 且显式传入 `true` 时，才把同一标题幂等写入 `moviesDone`。提前结束生成的票根可以保存到票夹，但不能冒充已经看完。成功响应返回更新后的 `viewing_summary/ticket`、`archived_to_stay_with_du` 和可空的 `stay_with_du_entry`。
+`GET /watch/viewings?status=recent` 同时返回保存进度和已看完记录。每项直接带 `cover_url`、`recent_status`、`watched_percent`、`status_text` 与 `can_resume`：已看完固定返回 `watched_percent=100/status_text=已看完`；保存进度按当前分 P 的人工正片范围计算并返回例如 `status_text=已看67%`。保存进度记录的 `progress` 含来源、分 P、本地媒体 revision、playhead 和分析覆盖；使用同一 `viewing_id` 及同一媒体重新创建会话时，后端恢复原 session 和剧情缓存。本地文件 revision 变化时拒绝复用旧分析。最近观看中的已看完项只用于查看票根，不可续播。
+
+保存进度会删除已产出的原始音频、临时截图和普通视觉帧，只保留剧情/风险/字幕等可续播分析。选择已看完后，这些剧情分析进入 `WATCH_COMPLETED_ANALYSIS_TTL_SECONDS`，默认 86400 秒；票根和使用者明确选定的票根背面帧不随该 TTL 删除。重复 `complete` 不生成新票根，也不延长已经开始计算的分析 TTL。DELETE 仍返回本 session 的 `analysis_cost`、`viewing_summary` 与可空 `ticket`。
+
+票根生成后，客户端通过 `PUT /watch/tickets/<ticket_id>` 提交编辑后的最终 `title`。请求中的 `archive_to_stay_with_du` 是显式布尔选择，省略时默认为 `false`：`false` 只保存票根标题，不读取或写入 Stay with Du；只有 `completed=true` 且显式传入 `true` 时，才把同一标题幂等写入 `moviesDone`。成功响应返回更新后的 `viewing_summary/ticket`、`archived_to_stay_with_du` 和可空的 `stay_with_du_entry`。
 
 ### 14.2 开播前状态与确认
 
@@ -1794,7 +1803,7 @@ Lean In/
 
 ### 观看完成与票根的当前边界
 
-网关已经实现可信播放累计、跨分 P `viewing_id`、真实完成门禁、稳定票根、服务端票夹恢复，以及保存最终票根标题时可选写入 Stay with Du。票根只保存结构化元数据，不延长音频、截图、字幕或剧情缓存 TTL。当前没有实现观后感、收藏或评分的服务端同步。原生现有本地票夹可以继续使用，接入服务端恢复时以上述 viewing/ticket 接口为准。
+网关已经实现可信播放累计、跨分 P `viewing_id`、`cleanup/save_progress/complete` 三种退出、最近观看恢复、稳定票根、可选票根剧情帧、服务端票夹恢复，以及保存最终票根标题时可选写入 Stay with Du。保存进度不生成票根；选择已看完才生成或复用票根。原始音频和临时画面不会因续播或票根而长期保留；已看完后的剧情分析默认再保留 24 小时，明确选定的票根帧独立持久化。当前没有实现观后感、收藏或评分的服务端同步。原生现有本地票夹可以继续使用，接入服务端恢复时以上述 viewing/ticket 接口为准。
 
 ### 后续本地联动：看完归档、观后感与观影票根
 
@@ -1803,7 +1812,7 @@ Lean In/
 #### 看完后可选补进 Stay with Du
 
 - 单 P、单集或本地单文件在最新可信播放位置达到人工正片终点 `content_end_ms`（没有人工终点时使用媒体终点）后，生成一次可归档的完成事件。仅仅退出或 `DELETE session` 不等于看完，不能把只看了几分钟的内容记进“一起看过”。
-- 完成事件本身不出票，也不自动改动 Stay with Du。使用者明确结束一起看后生成票根，结束页允许编辑票根作品名，并在作品确实完成时单独选择是否“加入一起看过”；未选择时只保存票根。
+- 完成事件本身不出票，也不自动改动 Stay with Du。使用者在结束弹窗选择“已看完”后生成票根，结束页允许编辑票根作品名，并单独选择是否“加入一起看过”；选择“保存进度”时不出票。
 - 选择加入时，后端以编辑后的最终作品名归档：已有同一作品的 `moviesTodo` 记录时，保留原 `id` 并原子地移到 `moviesDone`；原来不在想看清单时，直接在 `moviesDone` 新建；已经存在于 `moviesDone` 时只更新本次完成信息，不产生重复卡片。
 - 归档以稳定 `ticket_id` 为第一幂等键，并结合 `work_key` 和规范化作品名识别旧条目。重复保存、返回重试、网络重放和 App 恢复不能重复迁移或新增。
 - 正常结束页只有在选择加入并保存成功后才显示“已记入一起看过”，Stay with Du 的数据随后刷新。`pagehide` 仍只做尽力收尾，不弹窗也不替使用者选择归档。
@@ -1817,10 +1826,10 @@ Lean In/
 
 #### 观影票根
 
-- 每次明确结束一起看时生成一张观影票根，不要求整部看完、先写观后感或加入 Stay with Du。票根首先出现在正常结束页；只有作品确实达到完成条件并选择加入一起看过后，同一票根的结构化引用才保存在对应卡片中。
+- 只有在结束弹窗选择“已看完”时生成观影票根；选择“保存进度”、切 P、页面销毁和异常清理均不出票。票根首先出现在正常结束页；选择加入一起看过后，同一票根的结构化引用才保存在对应卡片中。
 - 票根作品名可以在结束页编辑，保存后服务端票夹使用最终名称；选择加入一起看过时，`moviesDone.title` 必须使用同一个最终名称。其余展示真实信息包括季集或分 P、一起观看的对象、完成日期和时间、实际正片时长，以及稳定的票根编号。没有的数据直接省略，不编造影院、影厅、座位或场次。
 - 票根以结构化元数据为长期源数据，样式由原生端即时渲染；需要分享或保存时再在设备本地导出 PNG，不把整张图片长期写入 R2。
-- 已有可靠封面时可以作为票根视觉元素；没有封面时使用纯排版版本。不能为了票根延长原始截图、音频或剧情拼图的 TTL，也不能把含剧透的随机电影帧长期归档。
+- 已有可靠封面时可以作为票根视觉元素；没有封面时使用纯排版版本。观看中可以从后端已有剧情帧里明确选择一帧作为票根背面，后端只持久化这一帧；没有选择时不保存随机画面。原始截图、音频和剧情拼图仍按原清理路径删除。
 - 同一次 `viewing_id` 的明确结束只生成一个稳定 `ticket_id`。结束重试或跨设备刷新复用同一张票根，不生成多张副本。
 
 #### 看完后写观后感
@@ -1863,4 +1872,4 @@ Lean In/
 }
 ```
 
-观看 session 的剧情缓存、字幕正文、截图和音频仍按原 TTL 清理，不因为生成看过记录或票根而进入长期归档。票根只长期保存结构化元数据和已允许使用的封面引用；本地导出的 PNG 由使用者自行保存在设备上。
+保存进度时，观看 session 的剧情、风险、字幕与播放状态保留到继续观看或明确完成，原始截图和音频仍立即清理。选择已看完后，剧情分析按默认 24 小时 TTL 清理；票根长期保存结构化元数据、封面引用和可选的一张明确选定剧情帧。本地导出的 PNG 由使用者自行保存在设备上。

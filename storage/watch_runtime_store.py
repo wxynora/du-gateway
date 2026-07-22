@@ -330,7 +330,10 @@ def _ensure_content_bound_sections(
 
 def _cleanup_expired(conn, now_iso: str) -> int:
     rows = conn.execute(
-        "SELECT id FROM watch_sessions WHERE expires_at <= ?",
+        """
+        SELECT id FROM watch_sessions
+         WHERE expires_at <= ? AND retained_for_resume = 0
+        """,
         (now_iso,),
     ).fetchall()
     session_ids = [str(row["id"]) for row in rows]
@@ -506,6 +509,7 @@ def _row_to_session(row: Any) -> dict:
                 and str(row["status"] or "") != "ended"
             ),
         },
+        "retained_for_resume": bool(row["retained_for_resume"]),
         "created_at": str(row["created_at"] or ""),
         "updated_at": str(row["updated_at"] or ""),
         "ended_at": str(row["ended_at"] or ""),
@@ -515,7 +519,10 @@ def _row_to_session(row: Any) -> dict:
 
 def _get_session_row(conn, session_id: str) -> Any:
     return conn.execute(
-        "SELECT * FROM watch_sessions WHERE id = ? AND expires_at > ?",
+        """
+        SELECT * FROM watch_sessions
+         WHERE id = ? AND (expires_at > ? OR retained_for_resume = 1)
+        """,
         (_text(session_id, 120), _iso(_now())),
     ).fetchone()
 
@@ -830,6 +837,101 @@ def create_session(
                     now_iso=now_iso,
                     reason="superseded_expired_creation",
                 )
+            saved_state = (
+                watch_viewing_store.saved_resume_state(conn, requested_viewing_id)
+                if requested_viewing_id
+                else None
+            )
+            if saved_state is not None:
+                saved_viewing = saved_state["viewing"]
+                saved_progress = saved_state["progress"]
+                saved_media = (
+                    saved_progress.get("media")
+                    if isinstance(saved_progress.get("media"), dict)
+                    else {}
+                )
+                same_part = (
+                    _text(saved_media.get("id"), 240) == media_id
+                    and _text(saved_media.get("part_key"), 240) == part["part_key"]
+                )
+                retained_session_id = str(saved_viewing["last_session_id"] or "")
+                retained = (
+                    conn.execute(
+                        """
+                        SELECT * FROM watch_sessions
+                         WHERE id = ? AND viewing_id = ? AND retained_for_resume = 1
+                        """,
+                        (retained_session_id, requested_viewing_id),
+                    ).fetchone()
+                    if same_part and retained_session_id
+                    else None
+                )
+                if retained is not None:
+                    saved_local = (
+                        saved_media.get("local_media")
+                        if isinstance(saved_media.get("local_media"), dict)
+                        else {}
+                    )
+                    if source == "local_file" and _text(
+                        saved_local.get("media_revision"), 240
+                    ) != _text(local_media.get("media_revision"), 240):
+                        raise ValueError("本地文件版本已变化，不能复用旧剧情分析")
+                    conn.execute(
+                        """
+                        UPDATE watch_sessions
+                           SET creation_key = ?, device_id = ?, window_id = ?,
+                               companion_id = ?, companion_name = ?, source_url = ?,
+                               title = ?, part_title = ?, duration_ms = ?,
+                               content_start_ms = ?, content_end_ms = ?,
+                               local_media_json = ?, knowledge_mode = ?,
+                               analysis_model = ?, analysis_prompt_version = ?,
+                               force_unknown_analysis = ?, fear_mode = ?, fear_action = ?,
+                               reduce_volume = ?, danmaku_enabled = ?, reply_lead_ms = ?,
+                               visual_context_mode = ?, status = 'paused', is_playing = 0,
+                               snapshot_seq = 0, playback_observed_at = '', ended_at = '',
+                               retained_for_resume = 1, client_seen_at = ?,
+                               client_lease_expires_at = ?, updated_at = ?, expires_at = ?
+                         WHERE id = ?
+                        """,
+                        (
+                            creation_key,
+                            _text(device_id, 160),
+                            _text(window_id, 160),
+                            companion_id,
+                            companion_name,
+                            _text(media.get("url"), 4000),
+                            _text(media.get("title"), 300),
+                            _text(media.get("part_title"), 300),
+                            duration_ms,
+                            content_start_ms,
+                            content_end_ms,
+                            runtime_sqlite.json_dumps(local_media),
+                            knowledge_mode,
+                            analysis_model,
+                            analysis_prompt_version,
+                            int(force_unknown),
+                            int(_bool(mode.get("fear_mode"))),
+                            fear_action,
+                            int(_bool(mode.get("reduce_volume"))),
+                            int(_bool(mode.get("danmaku_enabled"), True)),
+                            reply_lead_ms,
+                            visual_context_mode,
+                            now_iso,
+                            _iso(
+                                now
+                                + timedelta(seconds=int(WATCH_CLIENT_LEASE_SECONDS))
+                            ),
+                            now_iso,
+                            _iso(now + ACTIVE_TTL),
+                            retained_session_id,
+                        ),
+                    )
+                    resumed = _get_session_row(conn, retained_session_id)
+                    conn.execute("COMMIT")
+                    session = _row_to_session(resumed)
+                    session["create_reused"] = True
+                    session["resumed_from_progress"] = True
+                    return session
             actual_viewing_id = watch_viewing_store.ensure_viewing(
                 conn,
                 requested_viewing_id=requested_viewing_id,

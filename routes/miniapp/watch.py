@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
 from typing import Any, Callable
 
-from flask import jsonify, request
+from flask import jsonify, request, send_file
 
 from config import (
     WATCH_ANALYSIS_API_KEY,
+    WATCH_COMPLETED_ANALYSIS_TTL_SECONDS,
     WATCH_ANALYSIS_ENABLED,
     WATCH_ANALYSIS_MAX_REQUEST_BYTES,
     WATCH_ANALYSIS_MODEL,
@@ -222,6 +225,138 @@ def register_routes(bp):
         if viewing is None:
             return _json_error("观看记录不存在", "watch_viewing_not_found", 404)
         return jsonify({"ok": True, "viewing_summary": viewing})
+
+    @bp.route("/watch/viewings", methods=["GET"])
+    def miniapp_watch_viewing_list():
+        status = str(request.args.get("status") or "recent").strip().lower()
+
+        def _list():
+            return jsonify(
+                {
+                    "ok": True,
+                    "status": status,
+                    "viewings": watch_viewing_store.list_recent_viewings(status=status),
+                }
+            )
+
+        return _handle_store_error(_list)
+
+    @bp.route(
+        "/watch/sessions/<session_id>/ticket-frame-candidates",
+        methods=["GET"],
+    )
+    def miniapp_watch_ticket_frame_candidates(session_id: str):
+        session, error = _owned_session(session_id)
+        if error is not None:
+            return error
+        playback = session.get("playback") or {}
+        media = session.get("media") or {}
+        frames = watch_visual_store.list_frames(
+            session_id,
+            timeline_epoch=int(playback.get("timeline_epoch") or 0),
+            through_ms=int(media.get("duration_ms") or 0),
+            from_ms=0,
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "viewing_id": session.get("viewing_id"),
+                "frames": [
+                    {
+                        "frame_id": str(frame.get("id") or ""),
+                        "media_id": str(frame.get("media_id") or ""),
+                        "at_ms": int(frame.get("at_ms") or 0),
+                        "width": int(frame.get("width") or 0),
+                        "height": int(frame.get("height") or 0),
+                        "mime_type": str(frame.get("mime_type") or "image/webp"),
+                        "image_url": (
+                            f"/miniapp-api/watch/sessions/{session_id}/"
+                            f"ticket-frames/{frame.get('id')}/image"
+                        ),
+                    }
+                    for frame in frames
+                ],
+            }
+        )
+
+    @bp.route(
+        "/watch/sessions/<session_id>/ticket-frames/<frame_id>/image",
+        methods=["GET"],
+    )
+    def miniapp_watch_ticket_frame_candidate_image(session_id: str, frame_id: str):
+        _session, error = _owned_session(session_id)
+        if error is not None:
+            return error
+        frame = watch_visual_store.get_session_frame(session_id, frame_id)
+        if frame is None:
+            return _json_error("剧情画面不存在或已过期", "watch_ticket_frame_not_found", 404)
+        return send_file(
+            Path(str(frame.get("file_path") or "")),
+            mimetype=str(frame.get("mime_type") or "image/webp"),
+            conditional=True,
+        )
+
+    @bp.route("/watch/viewings/<viewing_id>/ticket-frame", methods=["PUT", "DELETE"])
+    def miniapp_watch_ticket_frame_update(viewing_id: str):
+        if request.method == "DELETE":
+            viewing, previous = watch_viewing_store.clear_ticket_frame(
+                viewing_id,
+                now_iso=now_beijing_iso(),
+            )
+            if viewing is None:
+                return _json_error("观看记录不存在", "watch_viewing_not_found", 404)
+            watch_visual_store.delete_persisted_ticket_frame(previous)
+            return jsonify(
+                {
+                    "ok": True,
+                    "viewing_summary": viewing,
+                    "ticket_back_frame": None,
+                }
+            )
+        body, error = _json_body()
+        if error is not None:
+            return error
+        session_id = str(body.get("session_id") or "").strip()
+        frame_id = str(body.get("frame_id") or "").strip()
+        session, error = _owned_session(session_id)
+        if error is not None:
+            return error
+        if str(session.get("viewing_id") or "") != str(viewing_id or ""):
+            return _json_error("画面不属于这次观看", "watch_ticket_frame_mismatch", 409)
+        source_frame = watch_visual_store.get_session_frame(session_id, frame_id)
+        if source_frame is None:
+            return _json_error("剧情画面不存在或已过期", "watch_ticket_frame_not_found", 404)
+        previous = watch_viewing_store.get_ticket_frame_file(viewing_id)
+        persisted = watch_visual_store.persist_ticket_frame(viewing_id, source_frame)
+        viewing = watch_viewing_store.set_ticket_frame(
+            viewing_id,
+            frame=persisted,
+            now_iso=now_beijing_iso(),
+        )
+        if viewing is None:
+            watch_visual_store.delete_persisted_ticket_frame(persisted)
+            return _json_error("观看记录不存在", "watch_viewing_not_found", 404)
+        if previous and previous.get("file_path") != persisted.get("file_path"):
+            watch_visual_store.delete_persisted_ticket_frame(previous)
+        return jsonify(
+            {
+                "ok": True,
+                "viewing_summary": viewing,
+                "ticket_back_frame": viewing.get("ticket_back_frame"),
+            }
+        )
+
+    @bp.route("/watch/viewings/<viewing_id>/ticket-frame/image", methods=["GET"])
+    def miniapp_watch_ticket_frame_image(viewing_id: str):
+        frame = watch_viewing_store.get_ticket_frame_file(viewing_id)
+        path = Path(str((frame or {}).get("file_path") or ""))
+        if frame is None or not path.is_file():
+            return _json_error("票根画面不存在", "watch_ticket_frame_not_found", 404)
+        return send_file(
+            path,
+            mimetype=str(frame.get("mime_type") or "image/webp"),
+            conditional=True,
+        )
 
     @bp.route("/watch/tickets", methods=["GET"])
     def miniapp_watch_ticket_list():
@@ -812,14 +947,15 @@ def register_routes(bp):
 
     @bp.route("/watch/sessions/<session_id>", methods=["DELETE"])
     def miniapp_watch_session_end(session_id: str):
-        finalize_raw = str(request.args.get("finalize_viewing") or "").strip().lower()
-        if finalize_raw not in {"", "0", "1", "false", "true"}:
+        viewing_action = str(request.args.get("viewing_action") or "").strip().lower()
+        if viewing_action and viewing_action not in {"cleanup", "save_progress", "complete"}:
             return _json_error(
-                "finalize_viewing 必须是布尔值",
-                "watch_finalize_viewing_invalid",
+                "viewing_action 必须是 cleanup、save_progress 或 complete",
+                "watch_viewing_action_invalid",
                 400,
             )
-        finalize_viewing = finalize_raw in {"1", "true"}
+        if not viewing_action:
+            viewing_action = "cleanup"
         _session, error = _owned_session(session_id)
         if error is not None:
             return error
@@ -827,19 +963,30 @@ def register_routes(bp):
         def _end():
             session = watch_runtime_store.end_session(session_id)
             analysis_cost = watch_analysis_store.session_analysis_cost(session_id)
-            viewing_summary = (
-                watch_viewing_store.finalize_viewing_for_session(
+            if viewing_action == "save_progress":
+                viewing_summary = watch_viewing_store.save_progress_for_session(
                     session_id,
                     now_iso=now_beijing_iso(),
                 )
-                if finalize_viewing
-                else watch_viewing_store.get_for_session(session_id)
-            )
+            elif viewing_action == "complete":
+                now_utc = datetime.now(timezone.utc).replace(microsecond=0)
+                analysis_cache_expires_at = (
+                    now_utc
+                    + timedelta(seconds=int(WATCH_COMPLETED_ANALYSIS_TTL_SECONDS))
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                viewing_summary = watch_viewing_store.complete_viewing_for_session(
+                    session_id,
+                    now_iso=now_beijing_iso(),
+                    analysis_cache_expires_at=analysis_cache_expires_at,
+                )
+            else:
+                viewing_summary = watch_viewing_store.get_for_session(session_id)
             samples_purged = watch_analysis_store.purge_session_samples(session_id)
             watch_visual_store.delete_session_frames(session_id)
             return jsonify(
                 {
                     "ok": True,
+                    "viewing_action": viewing_action,
                     "session": session,
                     "analysis_cost": analysis_cost,
                     "viewing_summary": viewing_summary,
