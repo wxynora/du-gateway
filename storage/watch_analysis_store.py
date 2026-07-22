@@ -312,18 +312,58 @@ def _source_retry_idempotency_key(previous_key: str, cancelled_job_id: str) -> s
     return f"watch-analysis-source-retry:{digest}"
 
 
-def _available_source_idempotency_key(base_key: str) -> tuple[str, dict | None]:
+def _source_failed_retry_idempotency_key(previous_key: str, failed_job_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{previous_key}|resume-after-failed|{failed_job_id}".encode("utf-8")
+    ).hexdigest()
+    return f"watch-analysis-source-resume-retry:{digest}"
+
+
+def _failed_source_job_has_no_provider_usage(job: dict) -> bool:
+    if (
+        str(job.get("status") or "") != "failed"
+        or str(job.get("input_origin") or "") != "backend_source"
+    ):
+        return False
+    internal = get_job(str(job.get("job_id") or ""), public=False) or {}
+    usage = _usage_totals(internal.get("usage"))
+    return not any(
+        (
+            usage["provider_calls"],
+            usage["input_tokens"],
+            usage["output_tokens"],
+            usage["total_tokens"],
+            usage["cost_usd"],
+        )
+    )
+
+
+def _available_source_idempotency_key(
+    base_key: str,
+    *,
+    allow_failed_resume_retry: bool = False,
+) -> tuple[str, dict | None]:
     key = base_key
     seen: set[str] = set()
     while key not in seen:
         seen.add(key)
         existing = get_job_by_idempotency(key, public=True)
-        if not existing or str(existing.get("status") or "") != "cancelled":
+        if not existing:
             return key, existing
-        key = _source_retry_idempotency_key(
-            key,
-            str(existing.get("job_id") or ""),
-        )
+        status = str(existing.get("status") or "")
+        if status == "cancelled":
+            key = _source_retry_idempotency_key(
+                key,
+                str(existing.get("job_id") or ""),
+            )
+            continue
+        if allow_failed_resume_retry and _failed_source_job_has_no_provider_usage(existing):
+            key = _source_failed_retry_idempotency_key(
+                key,
+                str(existing.get("job_id") or ""),
+            )
+            continue
+        return key, existing
     return key, get_job_by_idempotency(key, public=True)
 
 
@@ -468,6 +508,7 @@ def enqueue_source_plan(
     session: dict,
     plan: dict,
     priority: int = 0,
+    allow_failed_resume_retry: bool = False,
 ) -> tuple[dict, bool]:
     session_id = str(session.get("session_id") or "").strip()
     media_id = str((session.get("media") or {}).get("id") or "").strip()
@@ -492,7 +533,10 @@ def enqueue_source_plan(
         purpose,
         timestamps_ms,
     )
-    key, existing = _available_source_idempotency_key(base_key)
+    key, existing = _available_source_idempotency_key(
+        base_key,
+        allow_failed_resume_retry=allow_failed_resume_retry,
+    )
     if existing:
         return existing, False
 
@@ -569,6 +613,29 @@ def enqueue_source_plan(
             conn.execute("ROLLBACK")
             raise
     return _row_to_job(row, public=True), True
+
+
+def enqueue_resumed_source_plan(session: dict) -> dict:
+    if not bool(session.get("resumed_from_progress")):
+        return {"created": False, "reason": "not_resumed"}
+    media = session.get("media") if isinstance(session.get("media"), dict) else {}
+    if str(media.get("source") or "") != "bilibili_embed":
+        return {"created": False, "reason": "client_managed_source"}
+    plan = build_sample_plan(session)
+    purpose = str(plan.get("purpose") or "")
+    if purpose != "rolling":
+        return {"created": False, "reason": str(plan.get("reason") or "idle")}
+    job, created = enqueue_source_plan(
+        session=session,
+        plan=plan,
+        priority=10,
+        allow_failed_resume_retry=True,
+    )
+    return {
+        "created": bool(created),
+        "reason": "resume_source_created" if created else "resume_source_reused",
+        "job": job,
+    }
 
 
 def attach_source_samples(job: dict, samples: list[dict]) -> tuple[dict | None, bool]:

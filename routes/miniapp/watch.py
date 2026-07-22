@@ -293,6 +293,14 @@ def register_routes(bp):
                 mode=mode,
                 viewing_id=str(body.get("viewing_id") or "").strip(),
             )
+            if session.get("resumed_from_progress"):
+                resume_source = watch_analysis_store.enqueue_resumed_source_plan(session)
+                if resume_source.get("created"):
+                    refreshed = watch_runtime_store.get_session(session["session_id"])
+                    if refreshed is not None:
+                        refreshed["create_reused"] = True
+                        refreshed["resumed_from_progress"] = True
+                        session = refreshed
             return jsonify(
                 {
                     "ok": True,
