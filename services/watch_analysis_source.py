@@ -5,7 +5,6 @@ import re
 import shutil
 import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -688,7 +687,7 @@ class BilibiliApiAnalysisSource:
             params={
                 "bvid": bvid,
                 "cid": cid,
-                "qn": 64,
+                "qn": 32,
                 "fnval": 16,
                 "fnver": 0,
                 "fourk": 0,
@@ -717,6 +716,17 @@ class BilibiliApiAnalysisSource:
             resolved,
         )
         return resolved
+
+    def _invalidate_resolution(self, media: dict) -> None:
+        _canonical_url, bvid, page = canonical_bilibili_url(media)
+        prefix = f"{bvid}:p{page}:"
+        for cache_key in list(self._cache):
+            if cache_key.startswith(prefix):
+                self._cache.pop(cache_key, None)
+
+    def _refresh_resolution(self, media: dict) -> dict:
+        self._invalidate_resolution(media)
+        return self._resolve(media)
 
     @staticmethod
     def _ffmpeg_header_blob(resolved: dict) -> str:
@@ -775,8 +785,8 @@ class BilibiliApiAnalysisSource:
                     check=False,
                 )
             except subprocess.TimeoutExpired:
-                logger.warning(
-                    "一起看关键帧 ffmpeg 超时 at_ms=%s stream_index=%s stream_count=%s timeout_seconds=%s",
+                logger.info(
+                    "一起看关键帧候选流超时，尝试备用流 at_ms=%s stream_index=%s stream_count=%s timeout_seconds=%s",
                     int(at_ms),
                     stream_index,
                     len(stream_urls),
@@ -784,8 +794,8 @@ class BilibiliApiAnalysisSource:
                 )
                 continue
             except Exception as exc:
-                logger.warning(
-                    "一起看关键帧 ffmpeg 异常 at_ms=%s stream_index=%s stream_count=%s exception_type=%s",
+                logger.info(
+                    "一起看关键帧候选流异常，尝试备用流 at_ms=%s stream_index=%s stream_count=%s exception_type=%s",
                     int(at_ms),
                     stream_index,
                     len(stream_urls),
@@ -795,9 +805,14 @@ class BilibiliApiAnalysisSource:
             output = bytes(getattr(completed, "stdout", b"") or b"")
             returncode = int(getattr(completed, "returncode", 1) or 0)
             if returncode == 0 and output:
+                if stream_index > 1:
+                    resolved["stream_urls"] = [
+                        stream_url,
+                        *(candidate for candidate in stream_urls if candidate != stream_url),
+                    ]
                 return output
-            logger.warning(
-                "一起看关键帧 ffmpeg 失败 at_ms=%s stream_index=%s stream_count=%s returncode=%s output_bytes=%s stderr=%s",
+            logger.info(
+                "一起看关键帧候选流失败，尝试备用流 at_ms=%s stream_index=%s stream_count=%s returncode=%s output_bytes=%s stderr=%s",
                 int(at_ms),
                 stream_index,
                 len(stream_urls),
@@ -894,22 +909,24 @@ class BilibiliApiAnalysisSource:
         )
         if not targets:
             raise WatchAnalysisSourceError("后端分析计划没有目标时间", retryable=False)
-        resolved = self._resolve(media)
+        resolved = self._refresh_resolution(media)
         captured_at = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
-            with ThreadPoolExecutor(max_workers=min(self._max_workers, len(targets))) as executor:
-                frames = list(executor.map(lambda at_ms: self._extract_frame(resolved, at_ms), targets))
+            frames: list[bytes] = []
+            for at_ms in targets:
+                try:
+                    frame = self._extract_frame(resolved, at_ms)
+                except WatchAnalysisSourceError:
+                    resolved = self._refresh_resolution(media)
+                    frame = self._extract_frame(resolved, at_ms)
+                frames.append(frame)
             audio_bytes = (
                 self._extract_audio(resolved, targets[0], targets[-1])
                 if normalized_purpose == "rolling" and len(targets) >= 2
                 else b""
             )
         except WatchAnalysisSourceError:
-            _canonical_url, bvid, page = canonical_bilibili_url(media)
-            prefix = f"{bvid}:p{page}:"
-            for cache_key in list(self._cache):
-                if cache_key.startswith(prefix):
-                    self._cache.pop(cache_key, None)
+            self._invalidate_resolution(media)
             raise
         image_samples = [
             {
