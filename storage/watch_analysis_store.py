@@ -518,10 +518,17 @@ def enqueue_source_plan(
         raise ValueError("观看会话不可分析")
     if purpose not in {"identify", "timeline_prepass", "rolling"}:
         raise ValueError("后端分析计划 purpose 无效")
-    duration_ms = int((session.get("media") or {}).get("duration_ms") or 0)
+    media = session.get("media") if isinstance(session.get("media"), dict) else {}
+    duration_ms = int(media.get("duration_ms") or 0)
+    content_end_ms = (
+        int(media["content_end_ms"])
+        if media.get("content_end_ms") is not None
+        else None
+    )
     timestamps_ms = _source_plan_timestamps(
         plan.get("target_timestamps_ms") or [],
         duration_ms=duration_ms,
+        content_end_ms=content_end_ms,
         purpose=purpose,
     )
     if not timestamps_ms:
@@ -1980,13 +1987,20 @@ def commit_analysis_result(
                 covered_from = incoming_from if covered_until <= 0 else min(covered_from, incoming_from)
                 covered_until = max(covered_until, incoming_until)
             covered_until = _advance_past_skipped(covered_until, current_sections)
-            if int(session_row["duration_ms"] or 0) > 0:
-                covered_until = min(covered_until, int(session_row["duration_ms"] or 0))
-            playhead_ms = int(session_row["playhead_ms"] or 0)
             duration_ms = int(session_row["duration_ms"] or 0)
+            content_end_ms = int(session_row["content_end_ms"] or -1)
+            if purpose == "rolling":
+                covered_until = _advance_terminal_coverage(
+                    covered_until,
+                    job_range_end_ms=int(job.get("range_end_ms") or 0),
+                    duration_ms=duration_ms,
+                    content_end_ms=content_end_ms if content_end_ms >= 0 else None,
+                )
+            if duration_ms > 0:
+                covered_until = min(covered_until, duration_ms)
+            playhead_ms = int(session_row["playhead_ms"] or 0)
             required_buffer = int(WATCH_ANALYSIS_INITIAL_READY_BUFFER_MS)
             ready_until = playhead_ms + required_buffer
-            content_end_ms = int(session_row["content_end_ms"] or -1)
             if content_end_ms >= 0:
                 ready_until = min(content_end_ms, ready_until)
             elif duration_ms > 0:
@@ -2513,21 +2527,43 @@ def _last_frame_timestamp_ms(duration_ms: int) -> int:
     return max(0, int(duration_ms) - 1000)
 
 
+def _terminal_end_ms(duration_ms: int, content_end_ms: int | None = None) -> int:
+    candidates = [value for value in (int(duration_ms), content_end_ms) if value is not None and value > 0]
+    return min(candidates) if candidates else 0
+
+
 def _source_plan_timestamps(
     timestamps_ms: list[int],
     *,
     duration_ms: int,
+    content_end_ms: int | None = None,
     purpose: str,
 ) -> list[int]:
-    max_timestamp = int(duration_ms)
-    if duration_ms > 0 and purpose in {"identify", "timeline_prepass"}:
-        max_timestamp = _last_frame_timestamp_ms(duration_ms)
+    terminal_end = _terminal_end_ms(duration_ms, content_end_ms)
+    max_timestamp = _last_frame_timestamp_ms(terminal_end) if terminal_end > 0 else 0
     return sorted(
         {
-            min(max_timestamp, _int(value, 0)) if duration_ms > 0 else _int(value, 0)
+            min(max_timestamp, _int(value, 0)) if terminal_end > 0 else _int(value, 0)
             for value in timestamps_ms
         }
     )[: int(WATCH_ANALYSIS_MAX_FRAMES_PER_JOB)]
+
+
+def _advance_terminal_coverage(
+    covered_until_ms: int,
+    *,
+    job_range_end_ms: int,
+    duration_ms: int,
+    content_end_ms: int | None = None,
+) -> int:
+    covered_until = max(0, int(covered_until_ms))
+    terminal_end = _terminal_end_ms(duration_ms, content_end_ms)
+    if terminal_end <= 0:
+        return covered_until
+    last_frame = _last_frame_timestamp_ms(terminal_end)
+    if int(job_range_end_ms) >= last_frame and covered_until >= int(job_range_end_ms):
+        return max(covered_until, terminal_end)
+    return covered_until
 
 
 def build_sample_plan(session: dict) -> dict:
