@@ -24,7 +24,10 @@ from utils.log import get_logger
 
 ANTHROPIC_IMAGE_MAX_LONG_EDGE = 1568
 ANTHROPIC_IMAGE_MAX_PIXELS = 1_150_000
+REMOTE_IMAGE_CONNECT_TIMEOUT_SECONDS = 5
+REMOTE_IMAGE_READ_TIMEOUT_SECONDS = 30
 _RESIZABLE_MIME_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
+_SUPPORTED_IMAGE_MIME_TYPES = _RESIZABLE_MIME_TYPES | {"image/gif"}
 _IMAGE_PLACEHOLDER_RE = re.compile(r"\[\[DU_IMAGE_DESC:(img_[0-9a-f]{16})\]\]")
 _DESC_CACHE: dict[str, str] = {}
 _DESC_PENDING: dict[str, threading.Event] = {}
@@ -153,6 +156,40 @@ def _split_data_url(url: str) -> tuple[str, str] | None:
     if ";" in head:
         mime_type = head.split(";", 1)[0].replace("data:", "").strip().lower() or mime_type
     return mime_type, payload
+
+
+def _remote_image_payload(url: str) -> tuple[str, str, int]:
+    raw_url = str(url or "").strip()
+    if not raw_url.lower().startswith(("http://", "https://")):
+        raise ValueError("unsupported_image_url_scheme")
+    response = requests.get(
+        raw_url,
+        timeout=(REMOTE_IMAGE_CONNECT_TIMEOUT_SECONDS, REMOTE_IMAGE_READ_TIMEOUT_SECONDS),
+    )
+    response.raise_for_status()
+    raw = response.content
+    if not raw:
+        raise ValueError("empty_image_response")
+
+    mime_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    detected_mime = ""
+    if Image is not None:
+        with Image.open(io.BytesIO(raw)) as img:
+            image_format = str(img.format or "").strip().upper()
+            img.verify()
+        detected_mime = {
+            "JPEG": "image/jpeg",
+            "PNG": "image/png",
+            "WEBP": "image/webp",
+            "GIF": "image/gif",
+        }.get(image_format, "")
+    if detected_mime:
+        mime_type = detected_mime
+    if mime_type == "image/jpg":
+        mime_type = "image/jpeg"
+    if mime_type not in _SUPPORTED_IMAGE_MIME_TYPES:
+        raise ValueError(f"unsupported_image_mime:{mime_type or 'unknown'}")
+    return base64.b64encode(raw).decode("ascii"), mime_type, len(raw)
 
 
 def image_description_key(image_base64: str, mime_type: str = "image/jpeg") -> str:
@@ -350,8 +387,8 @@ def compress_base64_image_for_anthropic(image_base64: str, mime_type: str) -> tu
 
 def compress_images_for_anthropic(body: dict) -> tuple[dict, list[dict]]:
     """
-    压缩 OpenAI 兼容 messages 里的 base64 图片，降低 Claude vision token。
-    远程 image_url 不动。
+    压缩 OpenAI 兼容 messages 里的图片，降低 Claude vision token。
+    远程 image_url 会先由网关下载并转成 base64；单图失败只回退为文字占位。
     """
     messages = (body or {}).get("messages") or []
     if not isinstance(messages, list):
@@ -368,14 +405,49 @@ def compress_images_for_anthropic(body: dict) -> tuple[dict, list[dict]]:
             image_url = item.get("image_url") if isinstance(item.get("image_url"), dict) else None
             if not image_url:
                 continue
-            parsed = _split_data_url(image_url.get("url") or "")
-            if not parsed:
-                continue
-            mime_type, payload = parsed
+            raw_url = str(image_url.get("url") or "").strip()
+            parsed = _split_data_url(raw_url)
+            remote_source = False
+            downloaded_bytes = None
+            if parsed:
+                mime_type, payload = parsed
+            else:
+                remote_source = True
+                try:
+                    payload, mime_type, downloaded_bytes = _remote_image_payload(raw_url)
+                except Exception as e:
+                    if out_body is None:
+                        out_body = copy.deepcopy(body)
+                    out_body["messages"][mi]["content"][ci] = {"type": "text", "text": "【图片】"}
+                    stats.append(
+                        {
+                            "changed": True,
+                            "reason": "remote_fetch_failed",
+                            "replaced_with_placeholder": True,
+                            "message_index": mi,
+                            "content_index": ci,
+                            "error": str(e)[:160],
+                        }
+                    )
+                    logger.warning(
+                        "远程图片处理失败，已回退占位 message_index=%s content_index=%s error=%s",
+                        mi,
+                        ci,
+                        e,
+                    )
+                    continue
             new_b64, new_mime, meta = compress_base64_image_for_anthropic(payload, mime_type)
             meta.update({"message_index": mi, "content_index": ci})
+            if remote_source:
+                meta.update(
+                    {
+                        "source": "remote_url",
+                        "url_converted": True,
+                        "downloaded_bytes": downloaded_bytes,
+                    }
+                )
             stats.append(meta)
-            if not meta.get("changed"):
+            if not remote_source and not meta.get("changed"):
                 continue
             if out_body is None:
                 out_body = copy.deepcopy(body)
