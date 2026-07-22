@@ -295,13 +295,32 @@ def process_claimed_job(
         try:
             session = _require_job_live(job, stage="before_subtitle_provider")
             source_client = source or get_watch_analysis_source()
-            original_title, year = watch_subtitle_store.identity_for_session(session)
+            search_identity = watch_subtitle_store.search_identity_for_session(session)
+            title_candidates = search_identity.get("title_candidates") or []
+            original_title = str(search_identity.get("original_title") or "")
+            if not original_title and title_candidates:
+                original_title = str(title_candidates[0])
+            year = int(search_identity.get("year") or 0)
+            media = session.get("media") if isinstance(session.get("media"), dict) else {}
+            subtitle_media = {
+                **media,
+                "subtitle_titles": title_candidates,
+                "subtitle_year": year,
+            }
+            media_type = str(search_identity.get("media_type") or "")
+            if media_type:
+                subtitle_media["subtitle_media_type"] = media_type
+            session = {**session, "media": subtitle_media}
+            preparation = session.get("preparation") if isinstance(session.get("preparation"), dict) else {}
+            lookup = preparation.get("subtitle_lookup") if isinstance(preparation.get("subtitle_lookup"), dict) else {}
             logger.info(
-                "开始一起看字幕准备 job_id=%s session_id=%s title=%r year=%s",
+                "开始一起看字幕准备 job_id=%s session_id=%s title=%r year=%s candidates=%s strategy=%s",
                 job_id,
                 session_id,
                 original_title,
                 year,
+                len(title_candidates),
+                str(lookup.get("search_strategy") or "subdl_titles"),
             )
             result = source_client.prepare_subtitles(
                 session,

@@ -258,6 +258,11 @@ WATCH_SUBDL_API_URL = os.environ.get(
     "WATCH_SUBDL_API_URL",
     "https://api.subdl.com/api/v1/subtitles",
 ).strip()
+WATCH_TMDB_READ_ACCESS_TOKEN = os.environ.get("WATCH_TMDB_READ_ACCESS_TOKEN", "").strip()
+WATCH_TMDB_API_URL = os.environ.get(
+    "WATCH_TMDB_API_URL",
+    "https://api.themoviedb.org/3",
+).strip().rstrip("/")
 WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS = _env_int(
     "WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS", 15, 3, 90
 )

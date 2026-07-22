@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 import unicodedata
 from typing import Any
 from uuid import uuid4
 
+from config import WATCH_VISUAL_CACHE_DIR
 from storage import runtime_sqlite
 
 
@@ -176,6 +178,24 @@ def _public_ticket_frame(value: Any, *, viewing_id: str) -> dict | None:
         "height": max(0, int(frame.get("height") or 0)),
         "selected_at": _clean_text(frame.get("selected_at")),
         "image_url": f"/miniapp-api/watch/viewings/{viewing_id}/ticket-frame/image",
+    }
+
+
+def _public_ticket_frame_capture(value: Any) -> dict:
+    capture = dict(value)
+    viewing_id = _clean_text(capture.get("viewing_id"))
+    capture_id = _clean_text(capture.get("id") or capture.get("frame_id"))
+    return {
+        "frame_id": capture_id,
+        "media_id": _clean_text(capture.get("media_id")),
+        "at_ms": max(0, int(capture.get("at_ms") or 0)),
+        "width": max(0, int(capture.get("width") or 0)),
+        "height": max(0, int(capture.get("height") or 0)),
+        "mime_type": _clean_text(capture.get("mime_type")) or "image/jpeg",
+        "image_url": (
+            f"/miniapp-api/watch/viewings/{viewing_id}/"
+            f"ticket-frame-captures/{capture_id}/image"
+        ),
     }
 
 
@@ -648,6 +668,145 @@ def list_recent_viewings(*, status: str = "recent") -> list[dict]:
     return [_row_to_viewing(row) for row in rows]
 
 
+def get_viewing_owner(viewing_id: str) -> dict | None:
+    with runtime_sqlite.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, created_by_device_id, source_window_id
+              FROM watch_viewings
+             WHERE id = ?
+            """,
+            (_clean_text(viewing_id),),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def create_ticket_frame_capture(
+    viewing_id: str,
+    *,
+    session_id: str,
+    media_id: str,
+    timeline_epoch: int,
+    at_ms: int,
+    width: int,
+    height: int,
+    mime_type: str,
+    image_bytes: bytes,
+    now_iso: str,
+) -> dict:
+    clean_viewing_id = _clean_text(viewing_id)
+    clean_session_id = _clean_text(session_id)
+    clean_media_id = _clean_text(media_id)
+    capture_id = f"capture_{uuid4().hex}"
+    viewing_directory = hashlib.sha256(clean_viewing_id.encode("utf-8")).hexdigest()
+    output_dir = (
+        Path(WATCH_VISUAL_CACHE_DIR)
+        / "tickets"
+        / "captures"
+        / viewing_directory
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target_path = output_dir / f"{capture_id}.jpg"
+    temporary_path = output_dir / f".{capture_id}.tmp"
+    temporary_path.write_bytes(image_bytes)
+    temporary_path.replace(target_path)
+    digest = hashlib.sha256(image_bytes).hexdigest()
+    try:
+        with runtime_sqlite.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                viewing = conn.execute(
+                    "SELECT id FROM watch_viewings WHERE id = ?",
+                    (clean_viewing_id,),
+                ).fetchone()
+                if viewing is None:
+                    raise KeyError("watch_viewing_not_found")
+                session = conn.execute(
+                    """
+                    SELECT id, viewing_id, media_id, timeline_epoch
+                      FROM watch_sessions
+                     WHERE id = ?
+                    """,
+                    (clean_session_id,),
+                ).fetchone()
+                if session is None:
+                    raise KeyError("watch_session_not_found")
+                if _clean_text(session["viewing_id"]) != clean_viewing_id:
+                    raise ValueError("截图不属于这次观看")
+                if _clean_text(session["media_id"]) != clean_media_id:
+                    raise ValueError("截图 media_id 与观看会话不一致")
+                if int(session["timeline_epoch"] or 0) != int(timeline_epoch):
+                    raise ValueError("截图时间轴已经失效")
+                conn.execute(
+                    """
+                    INSERT INTO watch_ticket_frame_captures (
+                        id, viewing_id, session_id, media_id, timeline_epoch,
+                        at_ms, width, height, mime_type, file_path, sha256, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        capture_id,
+                        clean_viewing_id,
+                        clean_session_id,
+                        clean_media_id,
+                        max(0, int(timeline_epoch)),
+                        max(0, int(at_ms)),
+                        max(0, int(width)),
+                        max(0, int(height)),
+                        _clean_text(mime_type) or "image/jpeg",
+                        str(target_path),
+                        digest,
+                        _clean_text(now_iso),
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT * FROM watch_ticket_frame_captures WHERE id = ?",
+                    (capture_id,),
+                ).fetchone()
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+    except Exception:
+        target_path.unlink(missing_ok=True)
+        temporary_path.unlink(missing_ok=True)
+        raise
+    return _public_ticket_frame_capture(row)
+
+
+def list_ticket_frame_captures(viewing_id: str) -> list[dict]:
+    with runtime_sqlite.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM watch_ticket_frame_captures
+             WHERE viewing_id = ?
+             ORDER BY created_at ASC, rowid ASC
+            """,
+            (_clean_text(viewing_id),),
+        ).fetchall()
+    return [_public_ticket_frame_capture(row) for row in rows]
+
+
+def get_ticket_frame_capture(viewing_id: str, capture_id: str) -> dict | None:
+    with runtime_sqlite.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM watch_ticket_frame_captures
+             WHERE viewing_id = ? AND id = ?
+            """,
+            (_clean_text(viewing_id), _clean_text(capture_id)),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def ticket_frame_is_capture(frame: dict | None) -> bool:
+    if not isinstance(frame, dict):
+        return False
+    return bool(_clean_text(frame.get("capture_id"))) or (
+        _clean_text(frame.get("source")) == "user_capture"
+    )
+
+
 def set_ticket_frame(
     viewing_id: str,
     *,
@@ -667,6 +826,10 @@ def set_ticket_frame(
         "file_path": _clean_text(frame.get("file_path")),
         "selected_at": _clean_text(now_iso),
     }
+    capture_id = _clean_text(frame.get("capture_id"))
+    if capture_id:
+        stored["capture_id"] = capture_id
+        stored["source"] = "user_capture"
     if not stored["frame_id"] or not stored["file_path"]:
         raise ValueError("票根画面无效")
     with runtime_sqlite.connect() as conn:

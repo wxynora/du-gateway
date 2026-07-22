@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 import json
 from pathlib import Path
 from typing import Any, Callable
 
 from flask import jsonify, request, send_file
+from PIL import Image, UnidentifiedImageError
 
 from config import (
     WATCH_ANALYSIS_API_KEY,
@@ -71,6 +73,18 @@ def _owned_session(session_id: str) -> tuple[dict | None, Any | None]:
     return session, None
 
 
+def _owned_viewing(viewing_id: str) -> tuple[dict | None, Any | None]:
+    viewing = watch_viewing_store.get_viewing(viewing_id)
+    if viewing is None:
+        return None, _json_error("观看记录不存在", "watch_viewing_not_found", 404)
+    owner = watch_viewing_store.get_viewing_owner(viewing_id) or {}
+    current_device_id = _panel_device_id()
+    owner_device_id = str(owner.get("created_by_device_id") or "").strip()
+    if current_device_id and owner_device_id and current_device_id != owner_device_id:
+        return None, _json_error("不能访问其他设备的观看记录", "watch_viewing_forbidden", 403)
+    return viewing, None
+
+
 def _handle_store_error(call: Callable[[], Any]):
     try:
         return call()
@@ -120,6 +134,108 @@ def _analysis_upload_body() -> tuple[dict | None, Any | None]:
                 sample.get("mime_type") or uploaded.mimetype or "image/jpeg"
             )
     return body, None
+
+
+def _ticket_frame_capture_upload() -> tuple[dict | None, bytes | None, Any | None]:
+    raw_metadata = str(request.form.get("metadata") or "").strip()
+    if not raw_metadata:
+        return None, None, _json_error(
+            "multipart 请求缺少 metadata",
+            "watch_ticket_capture_metadata_required",
+            400,
+        )
+    try:
+        metadata = json.loads(raw_metadata)
+    except Exception:
+        return None, None, _json_error(
+            "metadata JSON 无效",
+            "watch_ticket_capture_metadata_invalid",
+            400,
+        )
+    if not isinstance(metadata, dict):
+        return None, None, _json_error(
+            "metadata 必须是对象",
+            "watch_ticket_capture_metadata_invalid",
+            400,
+        )
+    uploaded = request.files.get("image")
+    if uploaded is None:
+        return None, None, _json_error(
+            "multipart 请求缺少 image",
+            "watch_ticket_capture_image_required",
+            400,
+        )
+    payload = uploaded.stream.read()
+    if not payload:
+        return None, None, _json_error(
+            "截图文件为空",
+            "watch_ticket_capture_image_invalid",
+            400,
+        )
+    try:
+        with Image.open(BytesIO(payload)) as opened:
+            actual_format = str(opened.format or "").upper()
+            actual_width, actual_height = opened.size
+            opened.verify()
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None, None, _json_error(
+            "上传文件不是有效图片",
+            "watch_ticket_capture_image_invalid",
+            400,
+        )
+    if actual_format != "JPEG":
+        return None, None, _json_error(
+            "截图必须是 JPEG",
+            "watch_ticket_capture_image_type_invalid",
+            400,
+        )
+    mime_type = str(metadata.get("mime_type") or "").strip().lower()
+    if mime_type != "image/jpeg":
+        return None, None, _json_error(
+            "metadata.mime_type 必须是 image/jpeg",
+            "watch_ticket_capture_image_type_invalid",
+            400,
+        )
+    try:
+        width = int(metadata.get("width"))
+        height = int(metadata.get("height"))
+        timeline_epoch = int(metadata.get("timeline_epoch"))
+        at_ms = int(metadata.get("at_ms"))
+    except (TypeError, ValueError):
+        return None, None, _json_error(
+            "截图尺寸或时间字段无效",
+            "watch_ticket_capture_metadata_invalid",
+            400,
+        )
+    if width <= 0 or height <= 0 or timeline_epoch < 0 or at_ms < 0:
+        return None, None, _json_error(
+            "截图尺寸或时间字段无效",
+            "watch_ticket_capture_metadata_invalid",
+            400,
+        )
+    if width != int(actual_width) or height != int(actual_height):
+        return None, None, _json_error(
+            "metadata 尺寸与截图不一致",
+            "watch_ticket_capture_dimensions_mismatch",
+            400,
+        )
+    metadata = {
+        **metadata,
+        "session_id": str(metadata.get("session_id") or "").strip(),
+        "media_id": str(metadata.get("media_id") or "").strip(),
+        "timeline_epoch": timeline_epoch,
+        "at_ms": at_ms,
+        "width": width,
+        "height": height,
+        "mime_type": mime_type,
+    }
+    if not metadata["session_id"] or not metadata["media_id"]:
+        return None, None, _json_error(
+            "metadata 缺少 session_id 或 media_id",
+            "watch_ticket_capture_metadata_invalid",
+            400,
+        )
+    return metadata, payload, None
 
 
 def register_routes(bp):
@@ -242,6 +358,107 @@ def register_routes(bp):
         return _handle_store_error(_list)
 
     @bp.route(
+        "/watch/viewings/<viewing_id>/ticket-frame-captures",
+        methods=["GET", "POST"],
+    )
+    def miniapp_watch_ticket_frame_captures(viewing_id: str):
+        _viewing, error = _owned_viewing(viewing_id)
+        if error is not None:
+            return error
+        if request.method == "GET":
+            return jsonify(
+                {
+                    "ok": True,
+                    "captures": watch_viewing_store.list_ticket_frame_captures(
+                        viewing_id
+                    ),
+                }
+            )
+
+        metadata, image_bytes, error = _ticket_frame_capture_upload()
+        if error is not None:
+            return error
+        session_id = str(metadata.get("session_id") or "")
+        session, error = _owned_session(session_id)
+        if error is not None:
+            return error
+        if str(session.get("viewing_id") or "") != str(viewing_id or ""):
+            return _json_error(
+                "截图不属于这次观看",
+                "watch_ticket_capture_viewing_mismatch",
+                409,
+            )
+        media = session.get("media") if isinstance(session.get("media"), dict) else {}
+        playback = (
+            session.get("playback")
+            if isinstance(session.get("playback"), dict)
+            else {}
+        )
+        if str(media.get("id") or "") != str(metadata.get("media_id") or ""):
+            return _json_error(
+                "截图 media_id 与观看会话不一致",
+                "watch_ticket_capture_media_mismatch",
+                409,
+            )
+        if int(playback.get("timeline_epoch") or 0) != int(
+            metadata.get("timeline_epoch") or 0
+        ):
+            return _json_error(
+                "截图时间轴已经失效",
+                "watch_ticket_capture_epoch_mismatch",
+                409,
+            )
+        try:
+            capture = watch_viewing_store.create_ticket_frame_capture(
+                viewing_id,
+                session_id=session_id,
+                media_id=str(metadata.get("media_id") or ""),
+                timeline_epoch=int(metadata.get("timeline_epoch") or 0),
+                at_ms=int(metadata.get("at_ms") or 0),
+                width=int(metadata.get("width") or 0),
+                height=int(metadata.get("height") or 0),
+                mime_type=str(metadata.get("mime_type") or "image/jpeg"),
+                image_bytes=image_bytes or b"",
+                now_iso=now_beijing_iso(),
+            )
+        except KeyError:
+            return _json_error(
+                "观看会话或观看记录不存在",
+                "watch_ticket_capture_parent_not_found",
+                404,
+            )
+        except ValueError as exc:
+            return _json_error(
+                str(exc),
+                "watch_ticket_capture_mismatch",
+                409,
+            )
+        return jsonify({"ok": True, "capture": capture}), 201
+
+    @bp.route(
+        "/watch/viewings/<viewing_id>/ticket-frame-captures/<capture_id>/image",
+        methods=["GET"],
+    )
+    def miniapp_watch_ticket_frame_capture_image(viewing_id: str, capture_id: str):
+        _viewing, error = _owned_viewing(viewing_id)
+        if error is not None:
+            return error
+        capture = watch_viewing_store.get_ticket_frame_capture(viewing_id, capture_id)
+        path = Path(str((capture or {}).get("file_path") or ""))
+        if capture is None or not path.is_file():
+            return _json_error(
+                "保存的截图不存在",
+                "watch_ticket_capture_not_found",
+                404,
+            )
+        return send_file(
+            path,
+            mimetype=str(capture.get("mime_type") or "image/jpeg"),
+            conditional=True,
+            max_age=31_536_000,
+        )
+
+    @bp.route(
         "/watch/sessions/<session_id>/ticket-frame-candidates",
         methods=["GET"],
     )
@@ -298,6 +515,9 @@ def register_routes(bp):
 
     @bp.route("/watch/viewings/<viewing_id>/ticket-frame", methods=["PUT", "DELETE"])
     def miniapp_watch_ticket_frame_update(viewing_id: str):
+        _viewing, error = _owned_viewing(viewing_id)
+        if error is not None:
+            return error
         if request.method == "DELETE":
             viewing, previous = watch_viewing_store.clear_ticket_frame(
                 viewing_id,
@@ -305,7 +525,8 @@ def register_routes(bp):
             )
             if viewing is None:
                 return _json_error("观看记录不存在", "watch_viewing_not_found", 404)
-            watch_visual_store.delete_persisted_ticket_frame(previous)
+            if not watch_viewing_store.ticket_frame_is_capture(previous):
+                watch_visual_store.delete_persisted_ticket_frame(previous)
             return jsonify(
                 {
                     "ok": True,
@@ -316,6 +537,47 @@ def register_routes(bp):
         body, error = _json_body()
         if error is not None:
             return error
+        capture_id = str(body.get("capture_id") or "").strip()
+        if capture_id:
+            capture = watch_viewing_store.get_ticket_frame_capture(
+                viewing_id, capture_id
+            )
+            if capture is None:
+                return _json_error(
+                    "保存的截图不存在或不属于这次观看",
+                    "watch_ticket_capture_not_found",
+                    404,
+                )
+            previous = watch_viewing_store.get_ticket_frame_file(viewing_id)
+            viewing = watch_viewing_store.set_ticket_frame(
+                viewing_id,
+                frame={
+                    "frame_id": str(capture.get("id") or ""),
+                    "capture_id": str(capture.get("id") or ""),
+                    "media_id": str(capture.get("media_id") or ""),
+                    "at_ms": int(capture.get("at_ms") or 0),
+                    "mime_type": str(capture.get("mime_type") or "image/jpeg"),
+                    "width": int(capture.get("width") or 0),
+                    "height": int(capture.get("height") or 0),
+                    "file_path": str(capture.get("file_path") or ""),
+                },
+                now_iso=now_beijing_iso(),
+            )
+            if viewing is None:
+                return _json_error("观看记录不存在", "watch_viewing_not_found", 404)
+            if (
+                previous
+                and previous.get("file_path") != capture.get("file_path")
+                and not watch_viewing_store.ticket_frame_is_capture(previous)
+            ):
+                watch_visual_store.delete_persisted_ticket_frame(previous)
+            return jsonify(
+                {
+                    "ok": True,
+                    "viewing_summary": viewing,
+                    "ticket_back_frame": viewing.get("ticket_back_frame"),
+                }
+            )
         session_id = str(body.get("session_id") or "").strip()
         frame_id = str(body.get("frame_id") or "").strip()
         session, error = _owned_session(session_id)
@@ -336,7 +598,11 @@ def register_routes(bp):
         if viewing is None:
             watch_visual_store.delete_persisted_ticket_frame(persisted)
             return _json_error("观看记录不存在", "watch_viewing_not_found", 404)
-        if previous and previous.get("file_path") != persisted.get("file_path"):
+        if (
+            previous
+            and previous.get("file_path") != persisted.get("file_path")
+            and not watch_viewing_store.ticket_frame_is_capture(previous)
+        ):
             watch_visual_store.delete_persisted_ticket_frame(previous)
         return jsonify(
             {
@@ -348,6 +614,9 @@ def register_routes(bp):
 
     @bp.route("/watch/viewings/<viewing_id>/ticket-frame/image", methods=["GET"])
     def miniapp_watch_ticket_frame_image(viewing_id: str):
+        _viewing, error = _owned_viewing(viewing_id)
+        if error is not None:
+            return error
         frame = watch_viewing_store.get_ticket_frame_file(viewing_id)
         path = Path(str((frame or {}).get("file_path") or ""))
         if frame is None or not path.is_file():

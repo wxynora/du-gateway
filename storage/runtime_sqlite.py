@@ -50,6 +50,7 @@ _RUNTIME_TABLES = (
     "watch_knowledge_cards",
     "watch_subtitle_assets",
     "watch_visual_frames",
+    "watch_ticket_frame_captures",
 )
 
 
@@ -564,6 +565,26 @@ def ensure_schema() -> None:
                     ON watch_visual_frames(session_id, timeline_epoch, at_ms);
                 CREATE INDEX IF NOT EXISTS idx_watch_visual_frame_expires
                     ON watch_visual_frames(expires_at);
+
+                CREATE TABLE IF NOT EXISTS watch_ticket_frame_captures (
+                    id TEXT PRIMARY KEY,
+                    viewing_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL DEFAULT '',
+                    media_id TEXT NOT NULL DEFAULT '',
+                    timeline_epoch INTEGER NOT NULL DEFAULT 0,
+                    at_ms INTEGER NOT NULL DEFAULT 0,
+                    width INTEGER NOT NULL DEFAULT 0,
+                    height INTEGER NOT NULL DEFAULT 0,
+                    mime_type TEXT NOT NULL DEFAULT 'image/jpeg',
+                    file_path TEXT NOT NULL DEFAULT '',
+                    sha256 TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(viewing_id) REFERENCES watch_viewings(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_ticket_frame_captures_viewing
+                    ON watch_ticket_frame_captures(viewing_id, created_at, id);
+                CREATE INDEX IF NOT EXISTS idx_watch_ticket_frame_captures_session
+                    ON watch_ticket_frame_captures(session_id, created_at, id);
 
                 CREATE TABLE IF NOT EXISTS sense_latest (
                     sense_type TEXT PRIMARY KEY,

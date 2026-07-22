@@ -14,11 +14,17 @@ from config import (
     WATCH_SUBDL_API_URL,
     WATCH_SUBTITLE_LOOKUP_TIMEOUT_SECONDS,
     WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS,
+    WATCH_TMDB_API_URL,
 )
 
 
 SUBDL_DOWNLOAD_BASE_URL = "https://dl.subdl.com"
 SUPPORTED_TEXT_EXTENSIONS = (".srt", ".vtt")
+SUBDL_CANDIDATE_MISS_MESSAGES = (
+    "can't find movie or tv",
+    "cannot find movie or tv",
+    "film name contains potentially unsafe characters",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -216,6 +222,168 @@ def _title_candidates(media: dict) -> list[str]:
     return candidates
 
 
+def _provider_error_message(data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("error") or data.get("status_message") or data.get("message") or "").strip()
+
+
+def _is_subdl_candidate_miss(message: str) -> bool:
+    normalized = str(message or "").strip().casefold()
+    return any(fragment in normalized for fragment in SUBDL_CANDIDATE_MISS_MESSAGES)
+
+
+def _title_token(value: Any) -> str:
+    return "".join(character for character in str(value or "").casefold() if character.isalnum())
+
+
+def _tmdb_media_types(media: dict) -> tuple[str, ...]:
+    configured = str(media.get("subtitle_media_type") or media.get("media_type") or "").strip().casefold()
+    if configured in {"movie", "film"}:
+        return ("movie",)
+    if configured in {"tv", "series", "episode", "show"}:
+        return ("tv",)
+    if media.get("season") or media.get("episode"):
+        return ("tv",)
+    return ("movie", "tv")
+
+
+def resolve_tmdb_identity(
+    media: dict,
+    *,
+    read_access_token: str,
+    http_get: Callable[..., Any] = requests.get,
+) -> dict:
+    token = str(read_access_token or "").strip()
+    titles = _title_candidates(media)
+    if not token or not titles:
+        return {}
+    year = _year_from_media(media)
+    started_at = time.monotonic()
+    deadline = started_at + float(WATCH_SUBTITLE_LOOKUP_TIMEOUT_SECONDS)
+    exact_matches: dict[int, dict] = {}
+    unique_matches: dict[int, dict] = {}
+
+    def request_timeout() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SubtitleLookupError("TMDB 作品识别超时")
+        return min(float(WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS), remaining)
+
+    for title in titles:
+        query_token = _title_token(title)
+        for media_type in _tmdb_media_types(media):
+            params: dict[str, Any] = {
+                "query": title,
+                "include_adult": "false",
+                "language": "zh-CN",
+            }
+            if year:
+                params["primary_release_year" if media_type == "movie" else "first_air_date_year"] = year
+            try:
+                response = http_get(
+                    f"{WATCH_TMDB_API_URL}/search/{media_type}",
+                    params=params,
+                    headers={
+                        "Accept": "application/json",
+                        "Authorization": f"Bearer {token}",
+                    },
+                    timeout=request_timeout(),
+                )
+            except SubtitleLookupError:
+                raise
+            except Exception as exc:
+                raise SubtitleLookupError("TMDB 作品识别请求失败") from exc
+            status_code = int(getattr(response, "status_code", 0) or 0)
+            if status_code in {401, 403}:
+                raise SubtitleLookupError("TMDB 鉴权失败")
+            if status_code == 429:
+                raise SubtitleLookupError("TMDB 请求额度受限")
+            if status_code >= 500:
+                raise SubtitleLookupError("TMDB 服务暂时不可用")
+            if status_code >= 400:
+                raise SubtitleLookupError(f"TMDB 作品识别失败: HTTP {status_code}")
+            try:
+                data = response.json()
+            except Exception as exc:
+                raise SubtitleLookupError("TMDB 作品识别返回格式错误") from exc
+            if not isinstance(data, dict):
+                raise SubtitleLookupError("TMDB 作品识别返回格式错误")
+            if data.get("success") is False:
+                message = _provider_error_message(data)
+                raise SubtitleLookupError(f"TMDB 作品识别失败: {message}" if message else "TMDB 作品识别失败")
+            results = data.get("results") if isinstance(data.get("results"), list) else []
+            valid_results: list[dict] = []
+            exact_results: list[dict] = []
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    tmdb_id = int(item.get("id") or 0)
+                except (TypeError, ValueError):
+                    tmdb_id = 0
+                if tmdb_id <= 0:
+                    continue
+                date_value = str(
+                    item.get("release_date") if media_type == "movie" else item.get("first_air_date")
+                    or ""
+                ).strip()
+                if year and (not date_value or not date_value.startswith(f"{year:04d}-")):
+                    continue
+                normalized = {
+                    _title_token(item.get("title")),
+                    _title_token(item.get("name")),
+                    _title_token(item.get("original_title")),
+                    _title_token(item.get("original_name")),
+                }
+                normalized.discard("")
+                match = {
+                    "tmdb_id": tmdb_id,
+                    "media_type": media_type,
+                    "query_title": title,
+                    "canonical_title": str(item.get("title") or item.get("name") or "").strip(),
+                }
+                valid_results.append(match)
+                if query_token and query_token in normalized:
+                    exact_results.append(match)
+            for match in exact_results:
+                exact_matches[int(match["tmdb_id"])] = match
+            exact_for_query = {int(match["tmdb_id"]): match for match in exact_results}
+            if len(exact_for_query) == 1:
+                result = next(iter(exact_for_query.values()))
+                logger.info(
+                    "TMDB 作品识别完成 tmdb_id=%s media_type=%s year=%s elapsed_ms=%s",
+                    result["tmdb_id"],
+                    result["media_type"],
+                    year or 0,
+                    round((time.monotonic() - started_at) * 1000),
+                )
+                return result
+            if len(valid_results) == 1:
+                match = valid_results[0]
+                unique_matches[int(match["tmdb_id"])] = match
+
+    selected = exact_matches if exact_matches else unique_matches
+    if len(selected) != 1:
+        logger.info(
+            "TMDB 作品未唯一命中 titles=%s year=%s matches=%s elapsed_ms=%s",
+            len(titles),
+            year or 0,
+            len(selected),
+            round((time.monotonic() - started_at) * 1000),
+        )
+        return {}
+    result = next(iter(selected.values()))
+    logger.info(
+        "TMDB 作品识别完成 tmdb_id=%s media_type=%s year=%s elapsed_ms=%s",
+        result["tmdb_id"],
+        result["media_type"],
+        year or 0,
+        round((time.monotonic() - started_at) * 1000),
+    )
+    return result
+
+
 def fetch_subdl_subtitle(
     media: dict,
     *,
@@ -224,7 +392,11 @@ def fetch_subdl_subtitle(
 ) -> dict:
     key = str(api_key or "").strip()
     titles = _title_candidates(media)
-    if not key or not titles:
+    try:
+        tmdb_id = int(media.get("subtitle_tmdb_id") or 0)
+    except (TypeError, ValueError):
+        tmdb_id = 0
+    if not key or (tmdb_id <= 0 and not titles):
         return {}
     year = _year_from_media(media)
     saw_valid_response = False
@@ -238,14 +410,31 @@ def fetch_subdl_subtitle(
             raise SubtitleLookupError("SubDL 字幕准备超时")
         return min(float(WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS), remaining)
 
-    for title in titles:
+    if tmdb_id > 0:
+        query_specs = [
+            {
+                "params": {"tmdb_id": tmdb_id},
+                "query_title": str(media.get("subtitle_query_title") or (titles[0] if titles else "")).strip(),
+            }
+        ]
+    else:
+        query_specs = [
+            {"params": {"film_name": title}, "query_title": title}
+            for title in titles
+        ]
+
+    for query in query_specs:
+        title = str(query.get("query_title") or "").strip()
         params: dict[str, Any] = {
             "api_key": key,
-            "film_name": title,
             "unpack": 1,
             "client": "custom_integration",
+            **(query.get("params") if isinstance(query.get("params"), dict) else {}),
         }
-        if year:
+        media_type = str(media.get("subtitle_media_type") or "").strip().casefold()
+        if tmdb_id > 0 and media_type in {"movie", "tv"}:
+            params["type"] = media_type
+        if year and "film_name" in params:
             params["year"] = year
         try:
             response = http_get(
@@ -258,21 +447,50 @@ def fetch_subdl_subtitle(
             raise
         except Exception as exc:
             raise SubtitleLookupError("SubDL 查询请求失败") from exc
-        if int(getattr(response, "status_code", 0) or 0) >= 400:
-            raise SubtitleLookupError(
-                f"SubDL 查询失败: HTTP {int(getattr(response, 'status_code', 0) or 0)}"
-            )
+        status_code = int(getattr(response, "status_code", 0) or 0)
         try:
             data = response.json()
         except Exception as exc:
+            if status_code >= 400:
+                raise SubtitleLookupError(f"SubDL 查询失败: HTTP {status_code}") from exc
             raise SubtitleLookupError("SubDL 查询返回格式错误") from exc
-        if not isinstance(data, dict) or data.get("status") is not True:
-            raise SubtitleLookupError("SubDL 查询返回失败状态")
+        error_message = _provider_error_message(data)
+        if _is_subdl_candidate_miss(error_message):
+            logger.info(
+                "SubDL 字幕候选未命中 title=%r tmdb_id=%s status=%s elapsed_ms=%s",
+                title,
+                tmdb_id,
+                status_code,
+                round((time.monotonic() - started_at) * 1000),
+            )
+            continue
+        if status_code in {401, 403}:
+            raise SubtitleLookupError("SubDL 鉴权失败")
+        if status_code == 429:
+            raise SubtitleLookupError("SubDL 请求额度受限")
+        if status_code >= 500:
+            raise SubtitleLookupError("SubDL 服务暂时不可用")
+        if status_code >= 400:
+            raise SubtitleLookupError(f"SubDL 查询失败: HTTP {status_code}")
+        if not isinstance(data, dict):
+            raise SubtitleLookupError("SubDL 查询返回格式错误")
+        if data.get("status") is not True:
+            lowered_error = error_message.casefold()
+            if any(fragment in lowered_error for fragment in ("api key", "unauthorized", "authentication")):
+                raise SubtitleLookupError("SubDL 鉴权失败")
+            if any(fragment in lowered_error for fragment in ("quota", "rate limit", "too many requests")):
+                raise SubtitleLookupError("SubDL 请求额度受限")
+            raise SubtitleLookupError(
+                f"SubDL 查询返回失败状态: {error_message}"
+                if error_message
+                else "SubDL 查询返回失败状态"
+            )
         saw_valid_response = True
         candidates = _candidate_downloads(data)
         logger.info(
-            "SubDL 字幕搜索完成 title=%r year=%s candidates=%s elapsed_ms=%s",
+            "SubDL 字幕搜索完成 title=%r tmdb_id=%s year=%s candidates=%s elapsed_ms=%s",
             title,
+            tmdb_id,
             year or 0,
             len(candidates),
             round((time.monotonic() - started_at) * 1000),
@@ -326,8 +544,9 @@ def fetch_subdl_subtitle(
     if saw_valid_response and download_failed:
         raise SubtitleLookupError("SubDL 找到字幕但下载或解析失败")
     logger.info(
-        "SubDL 字幕未命中 titles=%s year=%s elapsed_ms=%s",
+        "SubDL 字幕未命中 titles=%s tmdb_id=%s year=%s elapsed_ms=%s",
         len(titles),
+        tmdb_id,
         year or 0,
         round((time.monotonic() - started_at) * 1000),
     )

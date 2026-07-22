@@ -31,19 +31,83 @@ def _text(value: Any, limit: int = 500) -> str:
     return str(value or "").replace("\x00", "").strip()[:limit]
 
 
-def _identity(session: dict) -> tuple[str, int]:
+def _has_cjk(value: str) -> bool:
+    return any("\u3400" <= character <= "\u9fff" for character in value)
+
+
+def _has_ascii_letters(value: str) -> bool:
+    return any(character.isascii() and character.isalpha() for character in value)
+
+
+def _subtitle_search_identity(session: dict) -> dict:
     card = watch_knowledge_store.get_card_for_session(session)
     canonical = card.get("canonical_identity") if isinstance(card.get("canonical_identity"), dict) else {}
     analysis = session.get("analysis") if isinstance(session.get("analysis"), dict) else {}
-    original_title = _text(
-        canonical.get("original_title") or analysis.get("original_title"),
-        300,
-    )
+    media = session.get("media") if isinstance(session.get("media"), dict) else {}
+    aliases = canonical.get("aliases") if isinstance(canonical.get("aliases"), list) else []
+    configured = media.get("subtitle_titles") if isinstance(media.get("subtitle_titles"), list) else []
+    originals = [canonical.get("original_title"), analysis.get("original_title")]
+    localized = [canonical.get("title"), analysis.get("canonical_title"), media.get("title")]
+    alternatives = [*aliases, *configured]
+    titles: list[str] = []
+    seen: set[str] = set()
+
+    def append(value: Any) -> None:
+        title = _text(value, 300)
+        key = title.casefold()
+        if title and key not in seen:
+            seen.add(key)
+            titles.append(title)
+
+    for value in originals:
+        append(value)
+    for value in [*localized, *alternatives]:
+        title = _text(value, 300)
+        if _has_cjk(title):
+            append(title)
+    for value in [*localized, *alternatives]:
+        title = _text(value, 300)
+        if _has_ascii_letters(title) and not _has_cjk(title):
+            append(title)
+    for value in [*localized, *alternatives]:
+        append(value)
+
+    original_title = next((_text(value, 300) for value in originals if _text(value, 300)), "")
     try:
-        year = max(0, int(canonical.get("year") or analysis.get("year") or 0))
+        year = max(
+            0,
+            int(
+                canonical.get("year")
+                or analysis.get("year")
+                or analysis.get("identity_year")
+                or 0
+            ),
+        )
     except (TypeError, ValueError):
         year = 0
-    return original_title, year
+    work_type = _text(
+        canonical.get("work_type")
+        or media.get("work_type")
+        or media.get("media_type"),
+        40,
+    ).casefold()
+    if work_type in {"movie", "film"}:
+        media_type = "movie"
+    elif work_type in {"tv", "series", "episode", "show"} or canonical.get("season") or canonical.get("episode"):
+        media_type = "tv"
+    else:
+        media_type = ""
+    return {
+        "original_title": original_title,
+        "year": year,
+        "title_candidates": titles,
+        "media_type": media_type,
+    }
+
+
+def _identity(session: dict) -> tuple[str, int]:
+    identity = _subtitle_search_identity(session)
+    return str(identity.get("original_title") or ""), int(identity.get("year") or 0)
 
 
 def _lookup(session: dict) -> dict:
@@ -96,7 +160,12 @@ def ensure_lookup_job(session: dict, *, force: bool = False) -> tuple[dict, bool
     if current_status in TERMINAL_STATUSES and not force:
         return {}, False
 
-    original_title, year = _identity(session)
+    search_identity = _subtitle_search_identity(session)
+    original_title = str(search_identity.get("original_title") or "")
+    title_candidates = search_identity.get("title_candidates") or []
+    query_title = original_title or (str(title_candidates[0]) if title_candidates else "")
+    year = int(search_identity.get("year") or 0)
+    search_strategy = "tmdb_then_subdl" if force else "subdl_titles"
     lookup_id = f"watch_subtitle_lookup_{uuid4().hex}"
     job_id = f"watch_job_{uuid4().hex}"
     retry_suffix = uuid4().hex if force else "initial"
@@ -109,7 +178,8 @@ def ensure_lookup_job(session: dict, *, force: bool = False) -> tuple[dict, bool
         "lookup_id": lookup_id,
         "status": "searching",
         "provider": "",
-        "query_title": original_title,
+        "query_title": query_title,
+        "search_strategy": search_strategy,
         "language_codes": [],
         "release_name": "",
         "format": "",
@@ -264,6 +334,7 @@ def commit_lookup_result(job: dict, result: dict) -> dict:
                 "status": status,
                 "provider": _text(result.get("provider"), 40),
                 "query_title": _text(result.get("query_title"), 300),
+                "search_strategy": _text(current.get("search_strategy"), 40) or "subdl_titles",
                 "language_codes": result.get("language_codes") or [],
                 "release_name": _text(result.get("release_name"), 500),
                 "format": _text(result.get("format"), 40),
@@ -622,6 +693,10 @@ def get_asset_for_session(session: dict) -> dict:
 
 def identity_for_session(session: dict) -> tuple[str, int]:
     return _identity(session)
+
+
+def search_identity_for_session(session: dict) -> dict:
+    return _subtitle_search_identity(session)
 
 
 def cleanup_expired_assets() -> int:

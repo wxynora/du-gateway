@@ -26,8 +26,13 @@ from config import (
     WATCH_ANALYSIS_SOURCE_USER_AGENT,
     WATCH_SUBDL_API_KEY,
     WATCH_SUBTITLE_REQUEST_TIMEOUT_SECONDS,
+    WATCH_TMDB_READ_ACCESS_TOKEN,
 )
-from services.watch_subtitles import SubtitleLookupError, fetch_subdl_subtitle
+from services.watch_subtitles import (
+    SubtitleLookupError,
+    fetch_subdl_subtitle,
+    resolve_tmdb_identity,
+)
 
 
 BVID_RE = re.compile(r"(?i)BV[0-9A-Za-z]{10}")
@@ -179,6 +184,8 @@ class BilibiliApiAnalysisSource:
         cookie: str | None = None,
         subdl_api_key: str | None = None,
         subdl_get: Callable[..., Any] | None = None,
+        tmdb_read_access_token: str | None = None,
+        tmdb_get: Callable[..., Any] | None = None,
     ) -> None:
         self._command_runner = command_runner
         self._http_session = requests.Session() if http_get is None else None
@@ -194,6 +201,13 @@ class BilibiliApiAnalysisSource:
             4096,
         )
         self._subdl_get = subdl_get or self._http_get
+        self._tmdb_read_access_token = _clean_header(
+            WATCH_TMDB_READ_ACCESS_TOKEN
+            if tmdb_read_access_token is None
+            else tmdb_read_access_token,
+            4096,
+        )
+        self._tmdb_get = tmdb_get or self._http_get
         self._cache: dict[str, tuple[float, dict]] = {}
 
     def _api_data(
@@ -547,17 +561,58 @@ class BilibiliApiAnalysisSource:
                 "year": max(0, int(year or 0)),
                 "message": "未配置字幕搜索服务",
             }
-        title = str(original_title or "").strip()
-        if not title:
+        configured_titles = media.get("subtitle_titles")
+        titles: list[str] = []
+        seen_titles: set[str] = set()
+        for value in [original_title, *(configured_titles if isinstance(configured_titles, list) else [])]:
+            candidate = str(value or "").strip()
+            key = candidate.casefold()
+            if candidate and key not in seen_titles:
+                seen_titles.add(key)
+                titles.append(candidate)
+        title = titles[0] if titles else ""
+        if not titles:
             return {
                 "status": "original_title_unavailable",
                 "provider": "subdl",
                 "query_title": "",
                 "year": max(0, int(year or 0)),
-                "message": "未取得作品原名，尚未搜索外部字幕",
+                "message": "未取得可用作品名，尚未搜索外部字幕",
             }
+        preparation = session.get("preparation") if isinstance(session.get("preparation"), dict) else {}
+        lookup = preparation.get("subtitle_lookup") if isinstance(preparation.get("subtitle_lookup"), dict) else {}
+        search_strategy = str(lookup.get("search_strategy") or "subdl_titles").strip()
+        subdl_media = {
+            **media,
+            "subtitle_titles": titles,
+            "subtitle_year": max(0, int(year or 0)),
+        }
+        if search_strategy == "tmdb_then_subdl" and self._tmdb_read_access_token:
+            resolved = resolve_tmdb_identity(
+                subdl_media,
+                read_access_token=self._tmdb_read_access_token,
+                http_get=self._tmdb_get,
+            )
+            if not resolved:
+                return {
+                    "status": "not_found",
+                    "provider": "tmdb",
+                    "query_title": title,
+                    "year": max(0, int(year or 0)),
+                    "message": "TMDB 未能唯一确认作品，未找到可用字幕",
+                    "provider_called": True,
+                }
+            subdl_media.update(
+                {
+                    "subtitle_tmdb_id": int(resolved["tmdb_id"]),
+                    "subtitle_media_type": str(resolved.get("media_type") or ""),
+                    "subtitle_query_title": str(
+                        resolved.get("canonical_title") or resolved.get("query_title") or title
+                    ).strip(),
+                }
+            )
         found = fetch_subdl_subtitle(
-            {**media, "subtitle_titles": [title], "subtitle_year": max(0, int(year or 0))},
+            subdl_media,
             api_key=self._subdl_api_key,
             http_get=self._subdl_get,
         )
@@ -580,7 +635,7 @@ class BilibiliApiAnalysisSource:
         return self._subtitle_result(
             {
                 "provider": "subdl",
-                "query_title": title,
+                "query_title": str(found.get("query_title") or title),
                 "language_codes": [language] if language else [],
                 "release_name": found.get("release_name") or "",
                 "format": found.get("format") or "",
@@ -864,6 +919,11 @@ def watch_analysis_source_health() -> dict:
             "provider": "subdl",
             "configured": bool(WATCH_SUBDL_API_KEY),
             "required": False,
+            "manual_retry_identity_resolver": {
+                "provider": "tmdb",
+                "configured": bool(WATCH_TMDB_READ_ACCESS_TOKEN),
+                "required": False,
+            },
         },
         "ffmpeg_available": bool(ffmpeg),
         "rolling_audio": {
