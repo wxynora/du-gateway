@@ -776,6 +776,48 @@ def flush_sumitalk_chat_live_events(timeout: float = 5.0) -> bool:
     return persist_barrier.wait(max(0.0, deadline - time.monotonic()))
 
 
+def _record_watch_reply_visible(job_id: str, *, visible_ts: float) -> None:
+    current = read_sumitalk_chat_job_state(job_id) or {}
+    if current.get("watch_reply_visible_recorded_at"):
+        return
+    session_id = str(current.get("watch_session_id") or "").strip()
+    snapshot = current.get("watch_snapshot") if isinstance(current.get("watch_snapshot"), dict) else {}
+    if not session_id or not snapshot:
+        return
+    try:
+        from storage import watch_runtime_store
+
+        recorded = watch_runtime_store.record_gateway_reply_visible(
+            session_id,
+            job_id=job_id,
+            snapshot=snapshot,
+            request_created_ts=float(current.get("created_ts") or 0.0),
+            visible_ts=float(visible_ts),
+        )
+        patch_sumitalk_chat_job_state(
+            job_id,
+            {
+                "watch_reply_visible_recorded": bool(recorded),
+                "watch_reply_visible_recorded_at": now_beijing_iso(),
+            },
+            protect_terminal=True,
+        )
+        if recorded:
+            sumitalk_logger.info(
+                "watch_reply_latency_recorded job_id=%s session_id=%s latency_ms=%s source=gateway_first_visible",
+                job_id,
+                session_id,
+                max(0, int(round((float(visible_ts) - float(current.get("created_ts") or 0.0)) * 1000))),
+            )
+    except Exception:
+        sumitalk_logger.warning(
+            "watch_reply_latency_record_failed job_id=%s session_id=%s",
+            job_id,
+            session_id,
+            exc_info=True,
+        )
+
+
 def _emit_raw_live_sumitalk_chat_job_event(job_id: str, kind: str, payload: dict | None = None) -> dict | None:
     job_id = str(job_id or "").strip()
     event_kind = re.sub(r"[^a-zA-Z0-9_.:-]", "_", str(kind or "").strip())[:80]
@@ -818,6 +860,11 @@ def _emit_raw_live_sumitalk_chat_job_event(job_id: str, kind: str, payload: dict
                 str(current.get("reply_target") or "").strip(),
                 str(event.get("window_id") or current.get("window_id") or "").strip(),
             )
+        )
+    if event_kind == "assistant_delta" and str(event.get("text") or ""):
+        _record_watch_reply_visible(
+            job_id,
+            visible_ts=float(event.get("created_ts") or time.time()),
         )
     return event
 
@@ -1864,6 +1911,11 @@ def build_sumitalk_chat_job_payload(
         "request_key": request_key,
         "execution_mode": execution_mode,
     }
+    watch_session_id = str((body_for_queue or {}).get("watch_session_id") or "").strip()
+    watch_snapshot = (body_for_queue or {}).get("watch_snapshot")
+    if watch_session_id and isinstance(watch_snapshot, dict):
+        state["watch_session_id"] = watch_session_id
+        state["watch_snapshot"] = dict(watch_snapshot)
     if game_id:
         state["game_id"] = game_id
     payload = {
@@ -2054,6 +2106,8 @@ def run_sumitalk_chat_job(
         _stage("reply_ready", status_code=status_code)
         message, finish_reason = _chat_completion_message(data)
         final_text = _chat_message_text(message)
+        if final_text:
+            _record_watch_reply_visible(job_id, visible_ts=time.time())
         terminal_part = _latest_sumitalk_chat_assistant_part(job_id) if final_text else None
         terminal_part_id, terminal_round = terminal_part or ("assistant-final", 0)
         if not finalize_sumitalk_chat_job(

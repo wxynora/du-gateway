@@ -95,6 +95,7 @@ def _normalize_snapshot(raw: Any) -> dict:
 
 def _chunk_view(chunk: dict) -> dict:
     return {
+        "id": _compact_text(chunk.get("id"), 160),
         "start_ms": _int(chunk.get("start_ms"), 0),
         "end_ms": _int(chunk.get("end_ms"), 0),
         "summary": _compact_text(chunk.get("summary")),
@@ -351,11 +352,10 @@ def _recall_related_chunks(
     *,
     session_id: str,
     excluded_ids: set[str],
+    anchor_ids: set[str] | None = None,
 ) -> list[dict]:
+    anchor_ids = set(anchor_ids or ())
     query_terms = _weighted_query_terms(query)
-    if not query_terms:
-        return []
-
     documents: list[tuple[dict, Counter[str], Counter[str], Counter[str]]] = []
     document_frequency: Counter[str] = Counter()
     character_terms: set[str] = set()
@@ -364,7 +364,7 @@ def _recall_related_chunks(
             continue
         body_terms, tag_terms, chunk_character_terms = _chunk_field_terms(chunk)
         all_terms = set(body_terms) | set(tag_terms) | set(chunk_character_terms)
-        if not all_terms:
+        if not all_terms and not _chunk_semantic_text(chunk):
             continue
         document_frequency.update(all_terms)
         character_terms.update(chunk_character_terms)
@@ -397,56 +397,74 @@ def _recall_related_chunks(
             score += query_weight * inverse_frequency * field_score
             if term not in character_terms and (body_tf or tag_tf):
                 has_content_anchor = True
-        if score <= 0:
-            continue
-        if not has_content_anchor:
+        if score > 0 and not has_content_anchor:
             score *= 0.2
         scored.append(
             (score, _int(chunk.get("end_ms"), 0), has_content_anchor, chunk)
         )
-    if not scored:
-        return []
-
-    anchored = [item for item in scored if item[2]]
-    candidates = anchored if anchored else scored
-    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    if anchored:
-        minimum_score = candidates[0][0] * 0.35
-        candidates = [item for item in candidates if item[0] >= minimum_score]
-        limit = RELATED_CHUNK_LIMIT
-    else:
-        limit = 1
     semantic_scores = _semantic_scores_for_chunks(
         query,
-        [item[3] for item in candidates],
+        [item[3] for item in scored],
         session_id=session_id,
     )
     if semantic_scores:
-        maximum_bm25 = max(item[0] for item in candidates)
-        earliest_end = min(item[1] for item in candidates)
-        latest_end = max(item[1] for item in candidates)
+        maximum_bm25 = max((item[0] for item in scored), default=0.0)
+        earliest_end = min(item[1] for item in scored)
+        latest_end = max(item[1] for item in scored)
         time_span = max(1, latest_end - earliest_end)
 
         def _combined_score(item: tuple[float, int, bool, dict]) -> float:
             bm25_score, end_ms, _, chunk = item
+            chunk_id = str(chunk.get("id") or "")
             semantic_score = max(
                 0.0,
-                semantic_scores.get(str(chunk.get("id") or ""), 0.0),
+                semantic_scores.get(chunk_id, 0.0),
             )
-            bm25_normalized = bm25_score / max(maximum_bm25, 1e-9)
+            bm25_normalized = (
+                bm25_score / maximum_bm25
+                if maximum_bm25 > 0
+                else 0.0
+            )
             recency = (end_ms - earliest_end) / time_span
-            return semantic_score * 0.72 + bm25_normalized * 0.23 + recency * 0.05
+            anchor = 1.0 if chunk_id in anchor_ids else 0.0
+            return (
+                semantic_score * 0.65
+                + bm25_normalized * 0.20
+                + recency * 0.05
+                + anchor * 0.10
+            )
 
-        candidates.sort(
+        scored.sort(
             key=lambda item: (_combined_score(item), item[0], item[1]),
             reverse=True,
         )
-    selected = [
-        item[3]
-        for item in candidates[:limit]
-    ]
+        selected = [item[3] for item in scored[:RELATED_CHUNK_LIMIT]]
+    else:
+        positive = [item for item in scored if item[0] > 0]
+        if not positive:
+            return []
+        anchored = [item for item in positive if item[2]]
+        candidates = anchored if anchored else positive
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        if anchored:
+            minimum_score = candidates[0][0] * 0.35
+            candidates = [item for item in candidates if item[0] >= minimum_score]
+            limit = RELATED_CHUNK_LIMIT
+        else:
+            limit = 1
+        selected = [item[3] for item in candidates[:limit]]
+
+    ranked = {
+        str(item.get("id") or ""): rank
+        for rank, item in enumerate(selected)
+    }
     selected.sort(key=lambda item: (_int(item.get("start_ms"), 0), _int(item.get("end_ms"), 0)))
-    return [_chunk_view(item) for item in selected]
+    views: list[dict] = []
+    for item in selected:
+        view = _chunk_view(item)
+        view["recall_rank"] = ranked.get(str(item.get("id") or ""), len(ranked))
+        views.append(view)
+    return views
 
 
 def _eligible_story_summary(
@@ -513,11 +531,23 @@ def build_watch_context(
         timeline_epoch=timeline_epoch,
         through_ms=playhead_ms,
     )
+    recall_anchor_ids = set(
+        watch_runtime_store.get_recall_anchor(
+            session_id,
+            timeline_epoch=timeline_epoch,
+        )
+    )
     related = _recall_related_chunks(
         recall_query,
         completed_chunks,
         session_id=session_id,
         excluded_ids={str(item.get("id") or "") for item in current_source},
+        anchor_ids=recall_anchor_ids,
+    )
+    watch_runtime_store.save_recall_anchor(
+        session_id,
+        timeline_epoch=timeline_epoch,
+        chunk_ids=[str(item.get("id") or "") for item in related],
     )
     future = [
         _chunk_view(item)
@@ -525,10 +555,20 @@ def build_watch_context(
         if playhead_ms < _int(item.get("start_ms")) <= playhead_ms + FUTURE_WINDOW_MS
     ][:8]
     reply_lead_ms = 0
+    latency_profile = watch_runtime_store.get_reply_latency_profile(session_id)
     if bool(snapshot.get("is_playing")):
         session_reply_lead_ms = _int(
             (session.get("mode") or {}).get("reply_lead_ms"),
             WATCH_CONTEXT_REPLY_LEAD_MS,
+        )
+        observed_reply_lead_ms = _int(
+            latency_profile.get("average_latency_ms"),
+            0,
+        )
+        effective_reply_lead_ms = (
+            observed_reply_lead_ms
+            if int(latency_profile.get("sample_count") or 0) > 0
+            else session_reply_lead_ms
         )
         reply_lead_ms = min(
             FUTURE_WINDOW_MS,
@@ -536,7 +576,7 @@ def build_watch_context(
                 0,
                 int(
                     round(
-                        session_reply_lead_ms
+                        effective_reply_lead_ms
                         * float(snapshot.get("playback_rate") or 1.0)
                     )
                 ),
@@ -564,11 +604,14 @@ def build_watch_context(
         "snapshot": snapshot,
         "reply_until_ms": reply_until_ms,
         "future_until_ms": playhead_ms + FUTURE_WINDOW_MS,
+        "reply_latency": latency_profile,
         "visual": {
             "timeline_epoch": timeline_epoch,
             "playhead_ms": playhead_ms,
             "reply_until_ms": reply_until_ms,
+            "current_chunks": current,
             "related_chunks": related,
+            "reply_arrival_chunks": reply_arrival,
         },
     }
 
@@ -675,7 +718,13 @@ def inject_watch_context(
             timeline_epoch=_int(visual.get("timeline_epoch"), 0),
             playhead_ms=_int(visual.get("playhead_ms"), 0),
             reply_until_ms=_int(visual.get("reply_until_ms"), 0),
+            current_chunks=visual.get("current_chunks") if isinstance(visual.get("current_chunks"), list) else [],
             related_chunks=visual.get("related_chunks") if isinstance(visual.get("related_chunks"), list) else [],
+            reply_arrival_chunks=(
+                visual.get("reply_arrival_chunks")
+                if isinstance(visual.get("reply_arrival_chunks"), list)
+                else []
+            ),
         )
         if sheet and watch_visual_store.claim_visual_delivery(
             session_id,

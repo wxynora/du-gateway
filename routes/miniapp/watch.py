@@ -764,6 +764,7 @@ def register_routes(bp):
         status["viewing_summary"] = watch_viewing_store.get_for_session(session_id)
         status["sample_plan"] = watch_analysis_store.build_sample_plan(_session)
         status["knowledge_card"] = watch_knowledge_store.get_card_for_session(_session)
+        status["reply_latency"] = watch_runtime_store.get_reply_latency_profile(session_id)
         current_epoch = int((_session.get("playback") or {}).get("timeline_epoch") or 0)
         status["visual_frames"] = watch_visual_store.frame_cache_status(
             session_id,
@@ -819,6 +820,49 @@ def register_routes(bp):
             )
 
         return _handle_store_error(_heartbeat)
+
+    @bp.route("/watch/sessions/<session_id>/reply-displayed", methods=["POST"])
+    def miniapp_watch_session_reply_displayed(session_id: str):
+        _session, error = _owned_session(session_id)
+        if error is not None:
+            return error
+        body, error = _json_body()
+        if error is not None:
+            return error
+        job_id = str(body.get("job_id") or "").strip()
+        if not job_id or "visible_latency_ms" not in body:
+            return _json_error(
+                "缺少 job_id 或 visible_latency_ms",
+                "watch_reply_display_incomplete",
+                400,
+            )
+        try:
+            visible_latency_ms = int(float(body.get("visible_latency_ms")))
+        except (TypeError, ValueError):
+            return _json_error(
+                "visible_latency_ms 必须是非负毫秒整数",
+                "watch_reply_display_invalid",
+                400,
+            )
+        if visible_latency_ms < 0:
+            return _json_error(
+                "visible_latency_ms 必须是非负毫秒整数",
+                "watch_reply_display_invalid",
+                400,
+            )
+        try:
+            profile = watch_runtime_store.record_client_reply_displayed(
+                session_id,
+                job_id=job_id,
+                visible_latency_ms=visible_latency_ms,
+            )
+        except KeyError:
+            return _json_error(
+                "没有找到这条一起看回复的延迟样本",
+                "watch_reply_latency_sample_not_found",
+                404,
+            )
+        return jsonify({"ok": True, "reply_latency": profile})
 
     @bp.route("/watch/sessions/<session_id>/start", methods=["POST"])
     def miniapp_watch_session_start(session_id: str):

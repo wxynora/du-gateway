@@ -38,6 +38,7 @@ _RUNTIME_TABLES = (
     "du_body_eval_audit",
     "watch_viewings",
     "watch_sessions",
+    "watch_reply_latency_samples",
     "watch_timeline_sections",
     "watch_plot_chunks",
     "watch_risk_events",
@@ -243,6 +244,7 @@ def ensure_schema() -> None:
                     visual_last_sent_at TEXT NOT NULL DEFAULT '',
                     visual_last_timeline_epoch INTEGER NOT NULL DEFAULT -1,
                     visual_last_sheet_hash TEXT NOT NULL DEFAULT '',
+                    recall_anchor_json TEXT NOT NULL DEFAULT '{}',
                     status TEXT NOT NULL DEFAULT 'paused',
                     playhead_ms INTEGER NOT NULL DEFAULT 0,
                     is_playing INTEGER NOT NULL DEFAULT 0,
@@ -274,6 +276,20 @@ def ensure_schema() -> None:
                     ON watch_sessions(window_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_watch_sessions_expires
                     ON watch_sessions(expires_at);
+                CREATE TABLE IF NOT EXISTS watch_reply_latency_samples (
+                    job_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    timeline_epoch INTEGER NOT NULL DEFAULT 0,
+                    request_playhead_ms INTEGER NOT NULL DEFAULT 0,
+                    request_created_ts REAL NOT NULL,
+                    visible_ts REAL NOT NULL,
+                    latency_ms INTEGER NOT NULL DEFAULT 0,
+                    source TEXT NOT NULL DEFAULT 'gateway_first_visible',
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES watch_sessions(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_reply_latency_session
+                    ON watch_reply_latency_samples(session_id, updated_at);
                 CREATE TABLE IF NOT EXISTS watch_viewings (
                     id TEXT PRIMARY KEY,
                     work_key TEXT NOT NULL DEFAULT '',
@@ -854,6 +870,7 @@ def ensure_schema() -> None:
                 "visual_last_sent_at": "TEXT NOT NULL DEFAULT ''",
                 "visual_last_timeline_epoch": "INTEGER NOT NULL DEFAULT -1",
                 "visual_last_sheet_hash": "TEXT NOT NULL DEFAULT ''",
+                "recall_anchor_json": "TEXT NOT NULL DEFAULT '{}'",
                 "playback_observed_at": "TEXT NOT NULL DEFAULT ''",
                 "played_duration_ms": "INTEGER NOT NULL DEFAULT 0",
                 "completed_at": "TEXT NOT NULL DEFAULT ''",

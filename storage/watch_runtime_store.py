@@ -509,6 +509,9 @@ def _row_to_session(row: Any) -> dict:
                 and str(row["status"] or "") != "ended"
             ),
         },
+        "coexperience": {
+            "recall_anchor": runtime_sqlite.json_loads(row["recall_anchor_json"], {}),
+        },
         "retained_for_resume": bool(row["retained_for_resume"]),
         "created_at": str(row["created_at"] or ""),
         "updated_at": str(row["updated_at"] or ""),
@@ -1952,6 +1955,196 @@ def save_plot_chunk_recall_embeddings(
             conn.execute("ROLLBACK")
             raise
     return updated
+
+
+def get_recall_anchor(session_id: str, *, timeline_epoch: int) -> list[str]:
+    session = get_session(session_id)
+    if session is None:
+        return []
+    coexperience = session.get("coexperience") if isinstance(session.get("coexperience"), dict) else {}
+    anchor = coexperience.get("recall_anchor") if isinstance(coexperience.get("recall_anchor"), dict) else {}
+    if int(anchor.get("timeline_epoch") or 0) != _int(timeline_epoch, 0):
+        return []
+    chunk_ids = anchor.get("chunk_ids") if isinstance(anchor.get("chunk_ids"), list) else []
+    return [_text(item, 160) for item in chunk_ids if _text(item, 160)]
+
+
+def save_recall_anchor(
+    session_id: str,
+    *,
+    timeline_epoch: int,
+    chunk_ids: Iterable[str],
+) -> bool:
+    normalized_ids = list(dict.fromkeys(_text(item, 160) for item in chunk_ids if _text(item, 160)))
+    now_iso = _iso(_now())
+    with runtime_sqlite.connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE watch_sessions
+               SET recall_anchor_json = ?, updated_at = ?
+             WHERE id = ? AND timeline_epoch = ? AND status != 'ended'
+            """,
+            (
+                runtime_sqlite.json_dumps(
+                    {
+                        "timeline_epoch": _int(timeline_epoch, 0),
+                        "chunk_ids": normalized_ids,
+                        "updated_at": now_iso,
+                    }
+                ),
+                now_iso,
+                _text(session_id, 160),
+                _int(timeline_epoch, 0),
+            ),
+        )
+    return bool(cursor.rowcount)
+
+
+def record_gateway_reply_visible(
+    session_id: str,
+    *,
+    job_id: str,
+    snapshot: dict,
+    request_created_ts: float,
+    visible_ts: float,
+) -> bool:
+    clean_session_id = _text(session_id, 160)
+    clean_job_id = _text(job_id, 160)
+    media_id = _text((snapshot or {}).get("media_id"), 240)
+    timeline_epoch = _int((snapshot or {}).get("timeline_epoch"), 0)
+    playhead_ms = _int((snapshot or {}).get("playhead_ms"), 0)
+    if not clean_session_id or not clean_job_id or not media_id:
+        return False
+    try:
+        request_ts = float(request_created_ts)
+        first_visible_ts = float(visible_ts)
+    except (TypeError, ValueError):
+        return False
+    latency_ms = max(0, int(round((first_visible_ts - request_ts) * 1000)))
+    now_iso = _iso(_now())
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            session = conn.execute(
+                """
+                SELECT media_id, timeline_epoch, status
+                  FROM watch_sessions
+                 WHERE id = ?
+                """,
+                (clean_session_id,),
+            ).fetchone()
+            if (
+                session is None
+                or str(session["status"] or "") == "ended"
+                or str(session["media_id"] or "") != media_id
+                or int(session["timeline_epoch"] or 0) != timeline_epoch
+            ):
+                conn.execute("COMMIT")
+                return False
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO watch_reply_latency_samples (
+                    job_id, session_id, timeline_epoch, request_playhead_ms,
+                    request_created_ts, visible_ts, latency_ms, source, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'gateway_first_visible', ?)
+                """,
+                (
+                    clean_job_id,
+                    clean_session_id,
+                    timeline_epoch,
+                    playhead_ms,
+                    request_ts,
+                    first_visible_ts,
+                    latency_ms,
+                    now_iso,
+                ),
+            )
+            conn.execute("COMMIT")
+            return bool(cursor.rowcount)
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+def record_client_reply_displayed(
+    session_id: str,
+    *,
+    job_id: str,
+    visible_latency_ms: int,
+) -> dict:
+    clean_session_id = _text(session_id, 160)
+    clean_job_id = _text(job_id, 160)
+    latency_ms = _int(visible_latency_ms, 0)
+    now_iso = _iso(_now())
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                """
+                SELECT request_created_ts
+                  FROM watch_reply_latency_samples
+                 WHERE job_id = ? AND session_id = ?
+                """,
+                (clean_job_id, clean_session_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("watch_reply_latency_sample_not_found")
+            request_ts = float(row["request_created_ts"] or 0.0)
+            conn.execute(
+                """
+                UPDATE watch_reply_latency_samples
+                   SET visible_ts = ?, latency_ms = ?, source = 'client_displayed',
+                       updated_at = ?
+                 WHERE job_id = ? AND session_id = ?
+                """,
+                (
+                    request_ts + latency_ms / 1000.0,
+                    latency_ms,
+                    now_iso,
+                    clean_job_id,
+                    clean_session_id,
+                ),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return get_reply_latency_profile(clean_session_id)
+
+
+def get_reply_latency_profile(session_id: str) -> dict:
+    clean_session_id = _text(session_id, 160)
+    with runtime_sqlite.connect() as conn:
+        aggregate = conn.execute(
+            """
+            SELECT COUNT(*) AS sample_count, AVG(latency_ms) AS average_latency_ms
+              FROM watch_reply_latency_samples
+             WHERE session_id = ?
+            """,
+            (clean_session_id,),
+        ).fetchone()
+        latest = conn.execute(
+            """
+            SELECT latency_ms, source, updated_at
+              FROM watch_reply_latency_samples
+             WHERE session_id = ?
+             ORDER BY updated_at DESC, rowid DESC
+             LIMIT 1
+            """,
+            (clean_session_id,),
+        ).fetchone()
+    return {
+        "sample_count": int((aggregate or {})["sample_count"] or 0) if aggregate else 0,
+        "average_latency_ms": max(
+            0,
+            int(round(float((aggregate or {})["average_latency_ms"] or 0.0)))
+            if aggregate
+            else 0,
+        ),
+        "latest_latency_ms": int(latest["latency_ms"] or 0) if latest else 0,
+        "latest_source": str(latest["source"] or "") if latest else "",
+        "updated_at": str(latest["updated_at"] or "") if latest else "",
+    }
 
 
 def upsert_risk_events(session_id: str, events: Iterable[dict]) -> list[dict]:

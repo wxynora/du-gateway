@@ -31,7 +31,9 @@ class WatchVisualContextAdapter(Protocol):
         timeline_epoch: int,
         playhead_ms: int,
         reply_until_ms: int,
+        current_chunks: list[dict],
         related_chunks: list[dict],
+        reply_arrival_chunks: list[dict],
     ) -> dict: ...
 
 
@@ -46,14 +48,18 @@ class LocalWatchVisualContextAdapter:
         timeline_epoch: int,
         playhead_ms: int,
         reply_until_ms: int,
+        current_chunks: list[dict],
         related_chunks: list[dict],
+        reply_arrival_chunks: list[dict],
     ) -> dict:
         return build_contact_sheet(
             session_id=session_id,
             timeline_epoch=timeline_epoch,
             playhead_ms=playhead_ms,
             reply_until_ms=reply_until_ms,
+            current_chunks=current_chunks,
             related_chunks=related_chunks,
+            reply_arrival_chunks=reply_arrival_chunks,
         )
 
 
@@ -138,13 +144,34 @@ def _nearest_frame(
     return selected
 
 
+def _current_target(current_chunks: list[dict], playhead_ms: int) -> int:
+    if current_chunks:
+        item = current_chunks[-1]
+        start_ms = int(item.get("start_ms") or 0)
+        end_ms = int(item.get("end_ms") or start_ms)
+        return max(0, min(int(playhead_ms), (start_ms + end_ms) // 2))
+    return max(0, playhead_ms)
+
+
 def _related_target(related_chunks: list[dict], playhead_ms: int) -> int:
     if related_chunks:
-        item = related_chunks[-1]
+        item = min(
+            related_chunks,
+            key=lambda chunk: int(chunk.get("recall_rank") or 0),
+        )
         start_ms = int(item.get("start_ms") or 0)
         end_ms = int(item.get("end_ms") or start_ms)
         return max(0, (start_ms + end_ms) // 2)
     return max(0, playhead_ms - 15_000)
+
+
+def _reply_arrival_target(reply_arrival_chunks: list[dict], reply_until_ms: int) -> int:
+    if reply_arrival_chunks:
+        item = reply_arrival_chunks[-1]
+        start_ms = int(item.get("start_ms") or 0)
+        end_ms = int(item.get("end_ms") or start_ms)
+        return max(0, min(int(reply_until_ms), (start_ms + end_ms) // 2))
+    return max(0, reply_until_ms)
 
 
 def _select_frames(
@@ -152,13 +179,22 @@ def _select_frames(
     *,
     playhead_ms: int,
     reply_until_ms: int,
-    related_chunks: list[dict],
+    current_chunks: list[dict] | None = None,
+    related_chunks: list[dict] | None = None,
+    reply_arrival_chunks: list[dict] | None = None,
 ) -> list[dict]:
-    midpoint = playhead_ms + max(0, reply_until_ms - playhead_ms) // 2
+    current_chunks = current_chunks or []
+    related_chunks = related_chunks or []
+    reply_arrival_chunks = reply_arrival_chunks or []
     targets = [
-        ("A", "相关已观看片段", _related_target(related_chunks, playhead_ms), None),
-        ("B", "发送位置", playhead_ms, 35_000),
-        ("C", "回复途中", midpoint, 35_000),
+        ("A", "当前剧情", _current_target(current_chunks, playhead_ms), 35_000),
+        ("B", "相关已观看片段", _related_target(related_chunks, playhead_ms), None),
+        (
+            "C",
+            "预计抵达剧情",
+            _reply_arrival_target(reply_arrival_chunks, reply_until_ms),
+            35_000,
+        ),
         ("D", "预计回复抵达", reply_until_ms, 35_000),
     ]
     selected: list[dict] = []
@@ -194,7 +230,9 @@ def build_contact_sheet(
     timeline_epoch: int,
     playhead_ms: int,
     reply_until_ms: int,
-    related_chunks: list[dict],
+    current_chunks: list[dict] | None = None,
+    related_chunks: list[dict] | None = None,
+    reply_arrival_chunks: list[dict] | None = None,
 ) -> dict:
     if not WATCH_VISUAL_CONTEXT_ENABLED:
         return {}
@@ -208,7 +246,9 @@ def build_contact_sheet(
         frames,
         playhead_ms=playhead_ms,
         reply_until_ms=reply_until_ms,
+        current_chunks=current_chunks,
         related_chunks=related_chunks,
+        reply_arrival_chunks=reply_arrival_chunks,
     )
     if len(selected) < 2:
         return {}
