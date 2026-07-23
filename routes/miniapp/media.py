@@ -1001,7 +1001,7 @@ def register_routes(bp) -> None:
         )
         stt_started = time.time()
         try:
-            from services.stt import sanitize_transcript_for_duration, transcribe_speech
+            from services.stt import transcribe_speech
         except Exception as e:
             logger.warning("[SumiTalk] chat_media_transcribe_error stage=load_stt_dependency err=%s", e)
             return jsonify({"ok": False, "error": "语音服务初始化失败"}), 500
@@ -1018,7 +1018,7 @@ def register_routes(bp) -> None:
             )
             return jsonify({"ok": False, "error": "语音转写失败"}), 500
         duration_ms = _safe_duration_ms(request.form.get("duration_ms") or request.form.get("durationMs"))
-        text = sanitize_transcript_for_duration(result.get("text") or "", duration_ms=duration_ms)
+        text = result.get("text") or ""
         row = r2_store.upload_sumitalk_chat_media_file("audio", filename, audio_bytes, mime_type)
         if not row:
             logger.warning(
