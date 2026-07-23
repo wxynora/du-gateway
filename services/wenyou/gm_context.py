@@ -149,6 +149,18 @@ def _gm_mapping_text(items: Any, *, limit: int = 8, item_limit: int = 180) -> li
     return _gm_list_text(items, limit=limit, item_limit=item_limit)
 
 
+def _gm_inventory_owner_lines(items: Any, player1_name: str, player2_name: str) -> list[str]:
+    if not isinstance(items, dict):
+        return []
+    if not any(isinstance(items.get(key), list) and items.get(key) for key in ("player1", "player2", "task_items")):
+        return []
+    lines: list[str] = []
+    for key, label in (("player1", player1_name), ("player2", player2_name), ("task_items", "队伍任务物")):
+        names = _gm_list_text(items.get(key), limit=14, item_limit=80)
+        lines.append(f"{label}：{'、'.join(names) if names else '无'}")
+    return lines
+
+
 def _gm_join(items: Any, *, empty: str = "无", limit: int = 8, item_limit: int = 180) -> str:
     lines = _gm_list_text(items, limit=limit, item_limit=item_limit)
     return "；".join(lines) if lines else empty
@@ -276,9 +288,12 @@ def compose_gm_context(
     team_channel = sess.get("team_channel") if isinstance(sess.get("team_channel"), dict) else {}
     signal = team_channel.get("signal") if isinstance(team_channel.get("signal"), dict) else {}
     signal_label = _compact_text(signal.get("label") or signal.get("status"), 40) if signal else ""
-    inventory_lines = _gm_mapping_text(rules.get("inventory"), limit=14, item_limit=80)
+    inventory_lines = _gm_inventory_owner_lines(stats.get("inventories"), p1_name, p2_name)
     if not inventory_lines:
-        inventory_lines = _gm_list_text(stats.get("inventory"), limit=14, item_limit=80)
+        inventory_lines = _gm_inventory_owner_lines(rules.get("inventories"), p1_name, p2_name)
+    if not inventory_lines:
+        legacy_items = _gm_list_text(rules.get("inventory") or stats.get("inventory"), limit=14, item_limit=80)
+        inventory_lines = [f"{p1_name}：{'、'.join(legacy_items) if legacy_items else '无'}"]
     round_lines = []
     if isinstance(current_round, dict):
         p1 = _compact_text(current_round.get("player1"), 260)

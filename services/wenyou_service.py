@@ -5,11 +5,19 @@ import math
 import os
 import random
 import re
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from functools import wraps
 from typing import Any, Optional
 from uuid import uuid4
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows/open-source fallback
+    fcntl = None
 
 from storage import r2_store
 from utils.log import get_logger
@@ -154,6 +162,7 @@ from services.wenyou.players import (
     _replace_session_player_aliases,
     _resolve_player_key,
     _session_player_display_name,
+    _validated_player_key,
     _wallet_confirmed_player_display_name,
     _wallet_player_display_name,
 )
@@ -213,12 +222,66 @@ _FORCED_FRAMEWORK_CACHE_TARGET = 3
 _FORCED_FRAMEWORK_CACHE_MAX = 5
 _FORCED_FRAMEWORK_PREFETCHING: set[int] = set()
 _FORCED_FRAMEWORK_PREFETCH_LOCK = threading.Lock()
+_USER_OPERATION_LOCKS: dict[tuple[str, int], threading.RLock] = {}
+_USER_OPERATION_LOCKS_GUARD = threading.Lock()
+_USER_OPERATION_LOCK_DEPTH = threading.local()
+_USER_OPERATION_LOCK_DIR = os.path.join(tempfile.gettempdir(), "du-gateway-wenyou-locks")
 _WENYOU_MEMORY_WINDOW_ID = "wenyou"
 _WENYOU_SUMMARY_EVERY_N_ROUNDS = 4
 try:
     _WENYOU_TEST_MIN_POINTS = max(0, int(os.environ.get("WENYOU_TEST_MIN_POINTS", "0") or "0"))
 except Exception:
     _WENYOU_TEST_MIN_POINTS = 0
+
+
+def _local_user_operation_lock(user_id: Any, namespace: str = "state") -> threading.RLock:
+    key = (str(namespace or "state"), int(user_id or 0))
+    with _USER_OPERATION_LOCKS_GUARD:
+        lock = _USER_OPERATION_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _USER_OPERATION_LOCKS[key] = lock
+        return lock
+
+
+@contextmanager
+def _user_operation_lock(user_id: Any, namespace: str = "state"):
+    uid = int(user_id or 0)
+    scope = re.sub(r"[^a-z0-9_-]+", "_", str(namespace or "state").lower())[:24] or "state"
+    key = (scope, uid)
+    local_lock = _local_user_operation_lock(uid, scope)
+    with local_lock:
+        depths = getattr(_USER_OPERATION_LOCK_DEPTH, "depths", None)
+        if not isinstance(depths, dict):
+            depths = {}
+            _USER_OPERATION_LOCK_DEPTH.depths = depths
+        previous_depth = int(depths.get(key) or 0)
+        depths[key] = previous_depth + 1
+        lock_fd: Optional[int] = None
+        try:
+            if previous_depth == 0 and fcntl is not None:
+                os.makedirs(_USER_OPERATION_LOCK_DIR, mode=0o700, exist_ok=True)
+                lock_path = os.path.join(_USER_OPERATION_LOCK_DIR, f"{scope}-{uid}.lock")
+                lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            if lock_fd is not None and fcntl is not None:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+            if previous_depth:
+                depths[key] = previous_depth
+            else:
+                depths.pop(key, None)
+
+
+def _serialized_user_operation(func):
+    @wraps(func)
+    def wrapped(user_id, *args, **kwargs):
+        with _user_operation_lock(user_id):
+            return func(user_id, *args, **kwargs)
+
+    return wrapped
 
 
 def _merge_one_player(cur: dict, new: dict, include_vitals: bool = True) -> dict:
@@ -402,18 +465,33 @@ def _stats_runtime_from_framework(fw: dict) -> dict:
     """由 framework.initial_stats 生成运行时 stats（含 phase、inventory）。"""
     fw = _framework_for_runtime(dict(fw or {}))
     init = _normalize_initial_stats({"initial_stats": fw.get("initial_stats")})
+    inventories = _normalize_inventories_map({}, init.get("items"))
     stats = {
         "phase": "instance_running",
         "points": init["points"],
         "player1": dict(init["player1"]),
         "player2": dict(init["player2"]),
-        "inventory": _normalize_inventory(init.get("items"), source="initial"),
+        "inventory": inventories["player1"],
+        "inventories": inventories,
     }
     stats["player1"]["display_name"] = _normalize_player_display_name(fw.get("player1_name"), "玩家一")
     stats["player1"]["controller"] = "human"
     stats["player2"]["display_name"] = _normalize_player_display_name(fw.get("player2_name"), "玩家二")
     stats["player2"]["controller"] = "ai"
     return stats
+
+
+def _session_inventory_map(stats: dict) -> dict[str, list[dict]]:
+    legacy_player1 = _normalize_inventory(stats.get("inventory"), source="session")
+    inventories = _normalize_inventories_map(
+        stats.get("inventories") if isinstance(stats.get("inventories"), dict) else {},
+        stats.get("inventory"),
+    )
+    if legacy_player1 and not inventories["player1"]:
+        inventories["player1"] = legacy_player1
+    stats["inventories"] = inventories
+    stats["inventory"] = inventories["player1"]
+    return inventories
 
 
 def _session_ensure_stats(session: dict) -> None:
@@ -423,7 +501,7 @@ def _session_ensure_stats(session: dict) -> None:
         session.setdefault("event_log", [])
     if session.get("stats") and isinstance(session["stats"], dict):
         session["stats"]["phase"] = _normalize_phase(session["stats"].get("phase"))
-        session["stats"]["inventory"] = _normalize_inventory(session["stats"].get("inventory"), source="session")
+        _session_inventory_map(session["stats"])
         session["stats"].setdefault("points", 100)
         base = _default_player_stats()
         for k in ("player1", "player2"):
@@ -451,8 +529,11 @@ def _format_stats_for_gm_prompt(session: dict) -> str:
     loc = "主神空间" if phase in {"hub", "settlement"} else "副本"
     p1 = st.get("player1") or {}
     p2 = st.get("player2") or {}
-    inv = _normalize_inventory(st.get("inventory"), source="session")
-    inv_s = "、".join(_inventory_label_list(inv)) if inv else "无"
+    inventories = _session_inventory_map(st)
+
+    def _inventory_line(player_id: str, label: str) -> str:
+        labels = _inventory_label_list(inventories.get(player_id))
+        return f"- {label}背包：{'、'.join(labels) if labels else '无'}"
 
     def _line_player(label: str, p: dict) -> str:
         core = _normalize_core_ability(p.get("core_ability"))
@@ -464,12 +545,16 @@ def _format_stats_for_gm_prompt(session: dict) -> str:
             f"- {label}核心能力（系统字段，GM 不自行新增）：{core_text}"
         )
 
+    p1_label = _normalize_player_display_name(p1.get("display_name"), "玩家一")
+    p2_label = _normalize_player_display_name(p2.get("display_name"), "玩家二")
     return (
         f"- 场地（系统记录）：{loc}\n"
         f"- 主神积分：{int(st.get('points') or 0)}\n"
-        f"{_line_player('玩家一', p1)}\n"
-        f"{_line_player('玩家二', p2)}\n"
-        f"- 道具：{inv_s}"
+        f"{_line_player(p1_label, p1)}\n"
+        f"{_line_player(p2_label, p2)}\n"
+        f"{_inventory_line('player1', p1_label)}\n"
+        f"{_inventory_line('player2', p2_label)}\n"
+        f"{_inventory_line('task_items', '队伍任务物')}"
     )
 
 
@@ -522,7 +607,10 @@ def _merge_panel_into_session_stats(session: dict, parsed: dict, include_vitals:
         cur = st.get(pk) or _default_player_stats()
         st[pk] = _merge_one_player(cur, parsed[pk], include_vitals=include_vitals)
     if "inventory" in parsed:
-        st["inventory"] = list(parsed["inventory"])
+        inventories = _session_inventory_map(st)
+        inventories["player1"] = _normalize_inventory(parsed["inventory"], source="session")[:80]
+        st["inventories"] = inventories
+        st["inventory"] = inventories["player1"]
 
 
 def _mainline_completion_signal(text: Any) -> bool:
@@ -914,12 +1002,15 @@ def _normalize_wallet(raw: Any, seed_points: int = 100) -> dict:
     promotion_history = data.get("promotion_history") if isinstance(data.get("promotion_history"), list) else []
     forced_queue = data.get("forced_instance_queue") if isinstance(data.get("forced_instance_queue"), list) else []
     settlement_history = data.get("settlement_history") if isinstance(data.get("settlement_history"), list) else []
+    tutorial_completion_result = str(data.get("tutorial_completion_result") or "").strip()
+    tutorial_pack_granted = bool(data.get("newbie_starter_pack_granted") or data.get("tutorial_clear_reward_granted"))
+    tutorial_completed = bool(data.get("tutorial_completed") or tutorial_pack_granted or tutorial_completion_result == "standard_clear")
     tutorial_completed_at = str(data.get("tutorial_completed_at") or data.get("tutorial_completed_time") or "").strip()
-    if not tutorial_completed_at and data.get("newbie_starter_pack_granted"):
+    if tutorial_completion_result and tutorial_completion_result != "standard_clear":
+        tutorial_completed = False
+        tutorial_completed_at = ""
+    if not tutorial_completed_at and tutorial_pack_granted and tutorial_completion_result in {"", "standard_clear"}:
         tutorial_completed_at = str(data.get("newbie_starter_pack_granted_at") or data.get("tutorial_completed_at") or "").strip()
-    if not tutorial_completed_at and data.get("tutorial_started_at") and settlement_history:
-        last_settlement = settlement_history[-1] if isinstance(settlement_history[-1], dict) else {}
-        tutorial_completed_at = str(last_settlement.get("at") or data.get("updated_at") or "").strip()
     shop_state = data.get("shop_state") if isinstance(data.get("shop_state"), dict) else {}
     regular_shop = shop_state.get("regular") if isinstance(shop_state.get("regular"), dict) else {}
     raw_players = data.get("players") if isinstance(data.get("players"), dict) else {}
@@ -960,10 +1051,10 @@ def _normalize_wallet(raw: Any, seed_points: int = 100) -> dict:
         "inventories": inventories,
         "wallets": wallets,
         "players": players,
-        "tutorial_completed": bool(data.get("tutorial_completed") or tutorial_completed_at),
+        "tutorial_completed": tutorial_completed,
         "tutorial_completed_at": tutorial_completed_at,
-        "tutorial_completion_result": str(data.get("tutorial_completion_result") or ""),
-        "newbie_starter_pack_granted": bool(data.get("newbie_starter_pack_granted") or data.get("tutorial_clear_reward_granted")),
+        "tutorial_completion_result": tutorial_completion_result,
+        "newbie_starter_pack_granted": tutorial_pack_granted,
         "newbie_starter_pack_granted_at": str(data.get("newbie_starter_pack_granted_at") or data.get("tutorial_completed_at") or ""),
         "tutorial_started_at": str(data.get("tutorial_started_at") or ""),
         "clear_records": [x for x in clear_records[-30:] if isinstance(x, dict)],
@@ -1077,6 +1168,15 @@ def _set_actor_points(wallet: dict, actor_id: Any, points: int) -> None:
         wallet["points"] = account["points"]
 
 
+def _set_actor_debts(wallet: dict, actor_id: Any, debts: int) -> None:
+    pid = _resolve_player_key(actor_id)
+    account = _player_account(wallet, pid)
+    account["debts"] = max(0, int(debts or 0))
+    wallet["wallets"][pid] = account
+    if pid == "player1":
+        wallet["debts"] = account["debts"]
+
+
 def _set_actor_gacha(wallet: dict, actor_id: Any, gacha: Any) -> None:
     pid = _resolve_player_key(actor_id)
     account = _player_account(wallet, pid)
@@ -1092,7 +1192,10 @@ def _load_wenyou_wallet(user_id: int, session: Optional[dict] = None) -> dict:
         st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
         if st.get("points") is not None:
             seed_points = max(0, int(st.get("points") or 0))
-    return _normalize_wallet(r2_store.get_wenyou_wallet(int(user_id)), seed_points=seed_points)
+    wallet = _normalize_wallet(r2_store.get_wenyou_wallet(int(user_id)), seed_points=seed_points)
+    if isinstance(session, dict) and session.get("gameId"):
+        _sync_session_inventories_with_wallet(session, wallet)
+    return wallet
 
 
 def _save_wenyou_wallet(user_id: int, wallet: dict) -> None:
@@ -1106,13 +1209,59 @@ def _save_wenyou_wallet(user_id: int, wallet: dict) -> None:
 
 def _sync_session_points_with_wallet(session: dict, wallet: dict) -> None:
     _session_ensure_stats(session)
+    _ensure_wallet_player_maps(wallet)
     session["stats"]["points"] = max(0, int(wallet.get("points") or 0))
     session["wallet"] = {
         "points": max(0, int(wallet.get("points") or 0)),
         "debts": max(0, int(wallet.get("debts") or 0)),
+        "wallets": {
+            pid: {
+                "points": max(0, int(_player_account(wallet, pid).get("points") or 0)),
+                "debts": max(0, int(_player_account(wallet, pid).get("debts") or 0)),
+            }
+            for pid in _WENYOU_PLAYER_IDS
+        },
         "total_exp": max(0, int(wallet.get("total_exp") or 0)),
         "forced_instance_queue": [x for x in (wallet.get("forced_instance_queue") or []) if isinstance(x, dict)][:8],
     }
+
+
+def _sync_wallet_players_from_session(wallet: dict, session: dict, player_ids: Any = None) -> None:
+    if not isinstance(session, dict):
+        return
+    _session_ensure_stats(session)
+    st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
+    wallet_players = wallet.get("players") if isinstance(wallet.get("players"), dict) else {}
+    requested = player_ids if isinstance(player_ids, (list, tuple, set)) else _WENYOU_PLAYER_IDS
+    for raw_pid in requested:
+        pid = _validated_player_key(raw_pid)
+        player = st.get(pid) if pid and isinstance(st.get(pid), dict) else None
+        if not pid or not player:
+            continue
+        saved = copy.deepcopy(player)
+        saved.setdefault("controller", _WENYOU_PLAYER_CONTROLLERS.get(pid, "human"))
+        _normalize_player_growth_fields(saved)
+        _recalc_player_caps(saved)
+        wallet_players[pid] = saved
+    wallet["players"] = wallet_players
+
+
+def _sync_session_players_with_wallet(session: dict, wallet: dict) -> None:
+    _session_ensure_stats(session)
+    st = session["stats"]
+    wallet_players = wallet.get("players") if isinstance(wallet.get("players"), dict) else {}
+    for pid in _WENYOU_PLAYER_IDS:
+        persistent = wallet_players.get(pid) if isinstance(wallet_players.get(pid), dict) else None
+        if not persistent:
+            continue
+        player = dict(st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats())
+        player.update(copy.deepcopy(persistent))
+        player.setdefault("display_name", _WENYOU_PLAYER_LABELS.get(pid, pid))
+        player.setdefault("controller", _WENYOU_PLAYER_CONTROLLERS.get(pid, "human"))
+        _normalize_player_growth_fields(player)
+        _recalc_player_caps(player)
+        st[pid] = player
+    session["stats"] = st
 
 
 def _session_max_pollution(session: Optional[dict]) -> int:
@@ -1159,7 +1308,8 @@ def _refresh_forced_instance_queue(wallet: dict, session: Optional[dict] = None)
     existing = [x for x in (wallet.get("forced_instance_queue") or []) if isinstance(x, dict) and not x.get("resolved")]
     by_id = {str(x.get("id") or ""): dict(x) for x in existing if str(x.get("id") or "")}
     rank = _player_recommended_rank(session)
-    debts = max(0, int(wallet.get("debts") or 0))
+    _ensure_wallet_player_maps(wallet)
+    debts = max(max(0, int(_player_account(wallet, pid).get("debts") or 0)) for pid in _WENYOU_PLAYER_IDS)
     pollution = _session_max_pollution(session)
     history = [x for x in (wallet.get("settlement_history") or []) if isinstance(x, dict)]
     recent_deaths = 0
@@ -1329,40 +1479,42 @@ def _prewarm_forced_framework_cache(user_id: int, target: int = _FORCED_FRAMEWOR
     uid = int(user_id)
     try:
         for _ in range(max(1, int(target or _FORCED_FRAMEWORK_CACHE_TARGET))):
-            session = r2_store.get_wenyou_session(uid)
-            wallet = _load_wenyou_wallet(uid, session if isinstance(session, dict) else None)
-            queue_changed = _refresh_forced_instance_queue(wallet, session if isinstance(session, dict) else None)
-            candidates = _forced_candidates_from_wallet_queue(wallet, session if isinstance(session, dict) else None)
-            cache = _normalize_forced_framework_cache(
-                wallet.get("forced_instance_framework_cache"),
-                wallet,
-                session if isinstance(session, dict) else None,
-            )
-            wallet["forced_instance_framework_cache"] = cache
-            if queue_changed:
-                _save_wenyou_wallet(uid, wallet)
-            if not candidates or len(cache) >= _FORCED_FRAMEWORK_CACHE_TARGET:
-                return
-            counts = _forced_framework_cache_counts(cache)
-            candidate = min(candidates, key=lambda x: (counts.get(_forced_candidate_cache_key(x), 0), _forced_candidate_cache_key(x)))
+            with _user_operation_lock(uid):
+                session = r2_store.get_wenyou_session(uid)
+                wallet = _load_wenyou_wallet(uid, session if isinstance(session, dict) else None)
+                queue_changed = _refresh_forced_instance_queue(wallet, session if isinstance(session, dict) else None)
+                candidates = _forced_candidates_from_wallet_queue(wallet, session if isinstance(session, dict) else None)
+                cache = _normalize_forced_framework_cache(
+                    wallet.get("forced_instance_framework_cache"),
+                    wallet,
+                    session if isinstance(session, dict) else None,
+                )
+                wallet["forced_instance_framework_cache"] = cache
+                if queue_changed:
+                    _save_wenyou_wallet(uid, wallet)
+                if not candidates or len(cache) >= _FORCED_FRAMEWORK_CACHE_TARGET:
+                    return
+                counts = _forced_framework_cache_counts(cache)
+                candidate = min(candidates, key=lambda x: (counts.get(_forced_candidate_cache_key(x), 0), _forced_candidate_cache_key(x)))
             fw, err = generate_framework_from_candidate(candidate)
             if err or not fw:
                 logger.warning("文游惩罚副本框架预热失败 user_id=%s candidate=%s error=%s", uid, candidate.get("id"), err)
                 return
-            latest_session = r2_store.get_wenyou_session(uid)
-            latest_wallet = _load_wenyou_wallet(uid, latest_session if isinstance(latest_session, dict) else None)
-            _refresh_forced_instance_queue(latest_wallet, latest_session if isinstance(latest_session, dict) else None)
-            current_keys = {
-                _forced_candidate_cache_key(x)
-                for x in _forced_candidates_from_wallet_queue(
-                    latest_wallet,
-                    latest_session if isinstance(latest_session, dict) else None,
-                )
-            }
-            if _forced_candidate_cache_key(candidate) not in current_keys:
-                return
-            _append_forced_framework_cache(latest_wallet, candidate, fw)
-            _save_wenyou_wallet(uid, latest_wallet)
+            with _user_operation_lock(uid):
+                latest_session = r2_store.get_wenyou_session(uid)
+                latest_wallet = _load_wenyou_wallet(uid, latest_session if isinstance(latest_session, dict) else None)
+                _refresh_forced_instance_queue(latest_wallet, latest_session if isinstance(latest_session, dict) else None)
+                current_keys = {
+                    _forced_candidate_cache_key(x)
+                    for x in _forced_candidates_from_wallet_queue(
+                        latest_wallet,
+                        latest_session if isinstance(latest_session, dict) else None,
+                    )
+                }
+                if _forced_candidate_cache_key(candidate) not in current_keys:
+                    return
+                _append_forced_framework_cache(latest_wallet, candidate, fw)
+                _save_wenyou_wallet(uid, latest_wallet)
     except Exception as e:
         logger.warning("文游惩罚副本框架预热线程异常 user_id=%s error=%s", uid, e, exc_info=True)
     finally:
@@ -1384,13 +1536,15 @@ def _tutorial_pack_granted(wallet: Optional[dict]) -> bool:
 
 
 def _tutorial_flow_completed(wallet: Optional[dict]) -> bool:
+    if not isinstance(wallet, dict):
+        return False
+    result = str(wallet.get("tutorial_completion_result") or "").strip()
+    if result and result != "standard_clear":
+        return False
     return bool(
-        isinstance(wallet, dict)
-        and (
-            wallet.get("tutorial_completed")
-            or wallet.get("tutorial_completed_at")
-            or wallet.get("newbie_starter_pack_granted")
-        )
+        wallet.get("tutorial_completed")
+        or wallet.get("tutorial_completed_at")
+        or wallet.get("newbie_starter_pack_granted")
     )
 
 
@@ -1473,6 +1627,7 @@ def _attach_forced_instance_contract(session: dict, candidate: Any) -> None:
     session["runtime_state"] = runtime
 
 
+@_serialized_user_operation
 def apply_forced_instance_candidates(user_id: int, payload: Optional[dict] = None) -> dict:
     uid = int(user_id)
     session = r2_store.get_wenyou_session(uid)
@@ -1945,10 +2100,14 @@ def _apply_forced_instance_settlement(wallet: dict, session: dict, settlement: d
     }
     if success:
         if penalty_type == "debt":
-            repay = min(max(0, int(wallet.get("debts") or 0)), 350 * rank_scale)
-            wallet["debts"] = max(0, int(wallet.get("debts") or 0) - repay)
-            outcome["debt_repaid_extra"] = repay
-            outcome["notes"].append(f"惩罚副本额外偿还债务 {repay}")
+            repaid_by_player: dict[str, int] = {}
+            for pid in _WENYOU_PLAYER_IDS:
+                before = max(0, int(_player_account(wallet, pid).get("debts") or 0))
+                repay = min(before, 350 * rank_scale)
+                _set_actor_debts(wallet, pid, before - repay)
+                repaid_by_player[pid] = repay
+            outcome["debt_repaid_extra"] = repaid_by_player
+            outcome["notes"].append(f"惩罚副本额外偿还债务 {sum(repaid_by_player.values())}")
         elif penalty_type == "pollution":
             st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
             reduction = 10 * rank_scale
@@ -1970,9 +2129,13 @@ def _apply_forced_instance_settlement(wallet: dict, session: dict, settlement: d
     else:
         if penalty_type in {"debt", "contract", "revive"}:
             debt_delta = 120 * rank_scale + exposure * 50
-            wallet["debts"] = max(0, int(wallet.get("debts") or 0) + debt_delta)
-            outcome["debt_added"] = debt_delta
-            outcome["notes"].append(f"惩罚失败追加债务 {debt_delta}")
+            debt_added: dict[str, int] = {}
+            for pid in _WENYOU_PLAYER_IDS:
+                before = max(0, int(_player_account(wallet, pid).get("debts") or 0))
+                _set_actor_debts(wallet, pid, before + debt_delta)
+                debt_added[pid] = debt_delta
+            outcome["debt_added"] = debt_added
+            outcome["notes"].append(f"惩罚失败为每名玩家追加债务 {debt_delta}")
         if penalty_type in {"pollution", "revive"}:
             st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
             pollution_delta = 4 * rank_scale + exposure * 2
@@ -2020,9 +2183,12 @@ def _mark_tutorial_started(user_id: int, session: dict, wallet: dict) -> None:
     _save_wenyou_wallet(int(user_id), wallet)
 
 
+@_serialized_user_operation
 def set_wenyou_player_display_name(user_id: int, player_name: Any, player_id: str = "player1") -> str:
     uid = int(user_id or 0)
-    pid = _resolve_player_key(player_id)
+    pid = _validated_player_key(player_id)
+    if not pid:
+        return ""
     fallback = _WENYOU_PLAYER_LABELS.get(pid, pid)
     name = _normalize_player_display_name(player_name, "")
     if not name:
@@ -2101,26 +2267,15 @@ _WENYOU_CORE_ABILITY_KEYWORDS = {
 def _core_ability_text_source(session: dict, player_id: str) -> str:
     pieces: list[str] = []
     history = session.get("history") if isinstance(session.get("history"), list) else []
-    labels = {
-        "player1": ("player1", "玩家一", "我"),
-        "player2": ("player2", "玩家二"),
-    }.get(player_id, (player_id,))
     for entry in history[-80:]:
-        if isinstance(entry, dict):
-            role = str(entry.get("role") or entry.get("speaker") or entry.get("player_id") or "")
-            text = str(entry.get("content") or entry.get("text") or entry.get("message") or "")
-            if player_id == "player2" and role and not any(label in role for label in labels):
-                continue
-            if player_id == "player1" and role and "player2" in role.lower():
-                continue
-        else:
-            text = str(entry or "")
+        if not isinstance(entry, dict):
+            continue
+        role = _validated_player_key(entry.get("role") or entry.get("speaker") or entry.get("player_id"))
+        if role != player_id:
+            continue
+        text = str(entry.get("content") or entry.get("text") or entry.get("message") or "")
         if text:
             pieces.append(text)
-    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
-    rules = runtime.get("rules_state") if isinstance(runtime.get("rules_state"), dict) else {}
-    reward_context = rules.get("reward_context") if isinstance(rules.get("reward_context"), dict) else {}
-    pieces.extend(str(x) for x in reward_context.get("reward_tags") or [] if str(x).strip())
     return "\n".join(pieces)[-4000:]
 
 
@@ -2169,8 +2324,8 @@ def _grant_newbie_starter_pack(session: dict, wallet: dict, result: str) -> dict
         return {"granted": False}
 
     st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
-    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
-    gift_items: list[dict] = []
+    inventories = _session_inventory_map(st)
+    gift_items_by_player: dict[str, list[dict]] = {}
     gift_fallbacks = {
         "wy_d_001": ("初级治愈药剂", {"hp_restore": 30, "label": "恢复 30 HP"}),
         "wy_d_002": ("初级精神药剂", {"san_restore": 30, "label": "恢复 30 SAN"}),
@@ -2179,10 +2334,16 @@ def _grant_newbie_starter_pack(session: dict, wallet: dict, result: str) -> dict
         _catalog_item_definition(item_id, gift_fallbacks[item_id][0], gift_fallbacks[item_id][1])
         for item_id in _WENYOU_TUTORIAL_GIFT_ITEM_IDS
     ]
-    for definition in gift_defs:
-        item = _new_inventory_item(definition, "newbie_starter_pack", "newbie-gift")
-        inventory = _add_inventory_item(inventory, item)
-        gift_items.append(item)
+    for pid in _WENYOU_PLAYER_IDS:
+        inventory = _merge_inventory_preferring_runtime(_get_player_inventory(wallet, pid), inventories.get(pid))
+        gift_items: list[dict] = []
+        for definition in gift_defs:
+            item = _new_inventory_item(definition, "newbie_starter_pack", "newbie-gift", {"holder_id": pid})
+            inventory = _add_inventory_item(inventory, item)
+            gift_items.append(item)
+        gift_items_by_player[pid] = gift_items
+        _set_player_inventory(wallet, pid, inventory[:80])
+        inventories[pid] = inventory[:80]
 
     players_changed: dict[str, dict[str, Any]] = {}
     for pid in ("player1", "player2"):
@@ -2202,29 +2363,32 @@ def _grant_newbie_starter_pack(session: dict, wallet: dict, result: str) -> dict
             "core_ability_profile": player.get("core_ability_profile"),
         }
 
-    st["inventory"] = inventory[:80]
+    st["inventories"] = inventories
+    st["inventory"] = inventories["player1"]
     session["stats"] = st
-    wallet["inventory"] = inventory[:80]
     wallet["newbie_starter_pack_granted"] = True
     wallet["newbie_starter_pack_granted_at"] = now_beijing_iso()
-    wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [
-        {
+    for pid in _WENYOU_PLAYER_IDS:
+        append_player_ledger(
+            wallet,
+            pid,
+            {
             "at": wallet["newbie_starter_pack_granted_at"],
             "type": "newbie_starter_pack",
             "gameId": str(session.get("gameId") or ""),
-            "items": [str(item.get("id") or "") for item in gift_items],
+            "items": [str(item.get("id") or "") for item in gift_items_by_player.get(pid, [])],
             "attribute_points_delta": _WENYOU_TUTORIAL_ATTRIBUTE_POINTS,
-            "core_abilities": {pid: data.get("core_ability") for pid, data in players_changed.items()},
-            "core_ability_profiles": {pid: data.get("core_ability_profile") for pid, data in players_changed.items()},
-        }
-    ]
+            "core_ability": players_changed.get(pid, {}).get("core_ability"),
+            "core_ability_profile": players_changed.get(pid, {}).get("core_ability_profile"),
+            },
+        )
 
     event_log = session.get("event_log") if isinstance(session.get("event_log"), list) else []
     patch = {
         "round_id": f"newbie_pack_{len(event_log) + 1:03d}",
         "source": "rules_engine.newbie_starter_pack",
         "changes": {
-            "inventory_add": gift_items,
+            "inventory_add": gift_items_by_player,
             "players": players_changed,
             "wallet": {"newbie_starter_pack_granted": True},
         },
@@ -2235,10 +2399,62 @@ def _grant_newbie_starter_pack(session: dict, wallet: dict, result: str) -> dict
     session["last_state_patch"] = patch
     return {
         "granted": True,
-        "items": gift_items,
+        "items": gift_items_by_player.get("player1", []),
+        "items_by_player": gift_items_by_player,
         "attribute_points": _WENYOU_TUTORIAL_ATTRIBUTE_POINTS,
         "players": players_changed,
         "granted_at": wallet["newbie_starter_pack_granted_at"],
+    }
+
+
+def _settlement_reward_grants_for_player(base_grants: list[dict], session: dict, player_id: str) -> list[dict]:
+    grants: list[dict] = []
+    for raw in base_grants:
+        if not isinstance(raw, dict) or not isinstance(raw.get("item"), dict):
+            continue
+        prepared = _seal_item_if_needed(dict(raw["item"]), session, player_id)
+        item = _new_inventory_item(prepared, "settlement", "reward", {"holder_id": player_id})
+        grant = dict(raw)
+        grant["item"] = item
+        grants.append(grant)
+    return grants
+
+
+def _credit_settlement_account(wallet: dict, player_id: str, settlement: dict, ledger_base: dict, reward_grants: list[dict]) -> dict:
+    account = _player_account(wallet, player_id)
+    debt_before = max(0, int(account.get("debts") or 0))
+    gross_points = int(settlement.get("gross_points") or 0)
+    penalty = int(settlement.get("penalty_points") or 0)
+    available_for_debt = max(0, gross_points - penalty)
+    debt_repay_cap = math.floor(available_for_debt * 0.8) if debt_before > 0 else 0
+    debt_repaid = min(debt_before, debt_repay_cap)
+    points_delta = max(0, available_for_debt - debt_repaid)
+    new_debt = max(0, penalty - gross_points)
+    points_after = max(0, int(account.get("points") or 0)) + points_delta
+    debt_after = max(0, debt_before - debt_repaid + new_debt)
+    _set_actor_points(wallet, player_id, points_after)
+    _set_actor_debts(wallet, player_id, debt_after)
+    ledger_entry = append_player_ledger(
+        wallet,
+        player_id,
+        {
+            **ledger_base,
+            "type": "settlement",
+            "points_delta": points_delta,
+            "exp_delta": int(settlement.get("gross_exp") or 0),
+            "debt_repaid": debt_repaid,
+            "debts": debt_after,
+            "reward_items": [str((grant.get("item") or {}).get("id") or "") for grant in reward_grants],
+        },
+    )
+    return {
+        "points_delta": points_delta,
+        "wallet_points": points_after,
+        "debt_before": debt_before,
+        "debt_repaid": debt_repaid,
+        "debt_after": debt_after,
+        "reward_items": reward_grants,
+        "ledger_entry": ledger_entry,
     }
 
 
@@ -2252,80 +2468,54 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
     settlement = dict(preview.get("reward") or _calculate_settlement_reward(session, result, rating))
     wallet = _load_wenyou_wallet(user_id, session)
     forced_result = _apply_forced_instance_settlement(wallet, session, settlement, result)
-    debt_before = max(0, int(wallet.get("debts") or 0))
-    gross_points = int(settlement.get("gross_points") or 0)
-    penalty = int(settlement.get("penalty_points") or 0)
-    available_for_debt = max(0, gross_points - penalty)
-    debt_repay_cap = math.floor(available_for_debt * 0.8) if debt_before > 0 else 0
-    debt_repaid = min(debt_before, debt_repay_cap)
-    final_points = max(0, available_for_debt - debt_repaid)
-    new_debt = max(0, penalty - gross_points)
-    wallet["points"] = max(0, int(wallet.get("points") or 0)) + final_points
-    wallet["debts"] = max(0, debt_before - debt_repaid + new_debt)
-    wallet["total_exp"] = max(0, int(wallet.get("total_exp") or 0)) + int(settlement.get("gross_exp") or 0)
-    wallet["settlement_count"] = max(0, int(wallet.get("settlement_count") or 0)) + 1
-    reward_grants = _roll_settlement_rewards(user_id, session, settlement)
+    base_reward_grants = _roll_settlement_rewards(user_id, session, settlement)
     st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
-    if reward_grants:
-        inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
-        for grant in reward_grants:
-            item = grant.get("item") if isinstance(grant, dict) else None
-            if isinstance(item, dict):
-                inventory = _add_inventory_item(inventory, item)
-        wallet["inventory"] = inventory[:80]
-        st["inventory"] = inventory[:80]
-        session["stats"] = st
-    ledger_entry = {
-        "at": now_beijing_iso(),
+    inventories = _session_inventory_map(st)
+    granted_at = now_beijing_iso()
+    ledger_base = {
+        "at": granted_at,
         "gameId": str(session.get("gameId") or ""),
         "difficulty": str(settlement.get("difficulty") or ""),
         "result": result,
         "rating": rating,
-        "points_delta": final_points,
-        "exp_delta": int(settlement.get("gross_exp") or 0),
-        "debt_repaid": debt_repaid,
-        "debts": wallet["debts"],
-        "reward_items": [str((grant.get("item") or {}).get("id") or "") for grant in reward_grants if isinstance(grant, dict)],
     }
-    wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [ledger_entry]
-    wallet["settlement_history"] = (wallet.get("settlement_history") or [])[-11:] + [
-        {
-            "at": ledger_entry["at"],
-            "gameId": ledger_entry["gameId"],
-            "difficulty": str(settlement.get("difficulty") or ""),
-            "result": result,
-            "rating": rating,
-        }
-    ]
+    player_rewards: dict[str, dict[str, Any]] = {}
+    for pid in _WENYOU_PLAYER_IDS:
+        grants = _settlement_reward_grants_for_player(base_reward_grants, session, pid)
+        inventory = _merge_inventory_preferring_runtime(_get_player_inventory(wallet, pid), inventories.get(pid))
+        for grant in grants:
+            inventory = _add_inventory_item(inventory, grant["item"])
+        _set_player_inventory(wallet, pid, inventory[:80])
+        inventories[pid] = inventory[:80]
+        player_rewards[pid] = _credit_settlement_account(wallet, pid, settlement, ledger_base, grants)
+    st["inventories"] = inventories
+    st["inventory"] = inventories["player1"]
+    session["stats"] = st
+    wallet["total_exp"] = max(0, int(wallet.get("total_exp") or 0)) + int(settlement.get("gross_exp") or 0)
+    wallet["settlement_count"] = max(0, int(wallet.get("settlement_count") or 0)) + 1
+    wallet["settlement_history"] = (wallet.get("settlement_history") or [])[-11:] + [dict(ledger_base)]
     if result == "standard_clear":
-        clear_record = {
-            "at": ledger_entry["at"],
-            "gameId": ledger_entry["gameId"],
-            "difficulty": str(settlement.get("difficulty") or ""),
-            "rating": rating,
-            "result": result,
-        }
-        wallet["clear_records"] = (wallet.get("clear_records") or [])[-29:] + [clear_record]
-    _refresh_forced_instance_queue(wallet, session)
-    _save_wenyou_wallet(user_id, wallet)
-    _sync_session_points_with_wallet(session, wallet)
+        wallet["clear_records"] = (wallet.get("clear_records") or [])[-29:] + [{**ledger_base, "result": result}]
 
-    st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
     level_changes: dict[str, Any] = {}
-    for pk in ("player1", "player2"):
-        player = st.get(pk) if isinstance(st.get(pk), dict) else _default_player_stats()
-        level_changes[pk] = _grant_player_exp(player, int(settlement.get("gross_exp") or 0))
-        st[pk] = player
+    for pid in _WENYOU_PLAYER_IDS:
+        player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
+        level_changes[pid] = _grant_player_exp(player, int(settlement.get("gross_exp") or 0))
+        st[pid] = player
     session["stats"] = st
     newbie_pack = _grant_newbie_starter_pack(session, wallet, result)
     if _is_tutorial_session(session):
-        wallet["tutorial_completed"] = True
-        wallet["tutorial_completed_at"] = str(wallet.get("tutorial_completed_at") or now_beijing_iso())
         wallet["tutorial_completion_result"] = result
-    st = session.get("stats") if isinstance(session.get("stats"), dict) else st
+        if result == "standard_clear":
+            wallet["tutorial_completed"] = True
+            wallet["tutorial_completed_at"] = str(wallet.get("tutorial_completed_at") or granted_at)
+        else:
+            wallet["tutorial_completed"] = False
+            wallet["tutorial_completed_at"] = ""
+
     existing_players = wallet.get("players") if isinstance(wallet.get("players"), dict) else {}
     merged_players: dict[str, dict[str, Any]] = {}
-    for pid in ("player1", "player2"):
+    for pid in _WENYOU_PLAYER_IDS:
         player = copy.deepcopy(st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats())
         existing_player = existing_players.get(pid) if isinstance(existing_players.get(pid), dict) else {}
         if existing_player.get("display_name"):
@@ -2337,9 +2527,11 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
         player.setdefault("controller", _WENYOU_PLAYER_CONTROLLERS.get(pid, "human"))
         merged_players[pid] = player
     wallet["players"] = merged_players
+    _refresh_forced_instance_queue(wallet, session)
     _save_wenyou_wallet(user_id, wallet)
     _sync_session_points_with_wallet(session, wallet)
 
+    primary = player_rewards["player1"]
     settlement.update(
         {
             "result_label": preview.get("result_label") or settlement.get("result_label"),
@@ -2350,17 +2542,18 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
             "reason": preview.get("reason") or "",
             "score_breakdown": preview.get("score_breakdown") or [],
             "reward_granted": True,
-            "points_delta": final_points,
+            "points_delta": primary["points_delta"],
             "exp_delta": int(settlement.get("gross_exp") or 0),
-            "reward_items": reward_grants,
+            "reward_items": primary["reward_items"],
+            "player_rewards": player_rewards,
             "newbie_starter_pack": newbie_pack if newbie_pack.get("granted") else None,
             "forced_instance_result": forced_result or None,
-            "debt_before": debt_before,
-            "debt_repaid": debt_repaid,
-            "debt_after": int(wallet.get("debts") or 0),
-            "wallet_points": int(wallet.get("points") or 0),
+            "debt_before": primary["debt_before"],
+            "debt_repaid": primary["debt_repaid"],
+            "debt_after": primary["debt_after"],
+            "wallet_points": primary["wallet_points"],
             "level_changes": level_changes,
-            "granted_at": now_beijing_iso(),
+            "granted_at": granted_at,
         }
     )
     session["settlement"] = settlement
@@ -2369,17 +2562,29 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
         "round_id": f"settlement_{len(event_log) + 1:03d}",
         "source": "rules_engine.settlement",
         "changes": {
-            "wallet": {"points_delta": final_points, "debt_repaid": debt_repaid, "debts": settlement["debt_after"]},
-            "inventory_add": [grant.get("item") for grant in reward_grants if isinstance(grant, dict) and isinstance(grant.get("item"), dict)],
+            "wallet": {"points_delta": primary["points_delta"], "debt_repaid": primary["debt_repaid"], "debts": primary["debt_after"]},
+            "wallets": {
+                pid: {
+                    "points_delta": data["points_delta"],
+                    "points": data["wallet_points"],
+                    "debt_repaid": data["debt_repaid"],
+                    "debts": data["debt_after"],
+                }
+                for pid, data in player_rewards.items()
+            },
+            "inventory_add": {
+                pid: [grant["item"] for grant in data["reward_items"]]
+                for pid, data in player_rewards.items()
+            },
             "forced_instance_result": forced_result or None,
             "players": {
-                "player1": {"exp_delta": settlement["exp_delta"], **level_changes.get("player1", {})},
-                "player2": {"exp_delta": settlement["exp_delta"], **level_changes.get("player2", {})},
+                pid: {"exp_delta": settlement["exp_delta"], **level_changes.get(pid, {})}
+                for pid in _WENYOU_PLAYER_IDS
             },
-            "rewards": reward_grants,
+            "rewards": {pid: data["reward_items"] for pid, data in player_rewards.items()},
             "newbie_starter_pack": newbie_pack if newbie_pack.get("granted") else None,
         },
-        "created_at": now_beijing_iso(),
+        "created_at": granted_at,
     }
     event_log.append(patch)
     session["event_log"] = event_log[-200:]
@@ -2518,10 +2723,19 @@ def _apply_item_use_cost(session: dict, player: dict, item: dict) -> tuple[list[
 
 def _apply_item_effect_to_session(session: dict, item: dict, detail: str = "", player_id: Any = "player1", target_id: Any = None) -> tuple[bool, str, Optional[dict]]:
     _session_ensure_stats(session)
-    pid = _resolve_player_key(player_id)
-    target_pid = _resolve_player_key(target_id or pid)
+    pid = _validated_player_key(player_id)
+    target_pid = _validated_player_key(target_id or pid)
+    if not pid or not target_pid:
+        return False, "文游：无效的玩家角色。", None
     if item.get("sealed"):
-        return False, f"文游：【{_inventory_item_name(item)}】还处于封印状态，不能使用。", None
+        dynamic_gate = bool(item.get("seal_rank") or isinstance(item.get("requirements"), dict))
+        blockers = _item_requirement_blockers(item, session, pid) if dynamic_gate else []
+        if blockers or not dynamic_gate:
+            reason = "；".join(blockers[:4]) if blockers else str(item.get("sealed_reason") or "尚未满足解封条件")
+            return False, f"文游：【{_inventory_item_name(item)}】还处于封印状态：{reason}。", None
+        item["sealed"] = False
+        item["sealed_reason"] = ""
+        item["_inventory_update"] = {"sealed": False, "sealed_reason": ""}
     if not _item_allowed_in_phase(item, session):
         return False, f"文游：【{_inventory_item_name(item)}】当前阶段不能使用。", None
 
@@ -2628,7 +2842,7 @@ def _apply_item_effect_to_session(session: dict, item: dict, detail: str = "", p
     result_text = "；".join(parts)
     inventory_update = _item_inventory_update_after_use(item)
     if inventory_update:
-        item["_inventory_update"] = inventory_update
+        item["_inventory_update"] = {**(item.get("_inventory_update") or {}), **inventory_update}
     will_consume = item.get("consume") is not False and not item.get("_use_keep")
     changes = {
         "players": {
@@ -2710,22 +2924,36 @@ def _merge_inventory_preferring_runtime(wallet_inventory: Any, runtime_inventory
     return out[:80]
 
 
+def _sync_session_inventories_with_wallet(session: dict, wallet: dict) -> dict[str, list[dict]]:
+    _session_ensure_stats(session)
+    st = session["stats"]
+    inventories = _session_inventory_map(st)
+    for pid in _WENYOU_PLAYER_IDS:
+        inventories[pid] = _merge_inventory_preferring_runtime(_get_player_inventory(wallet, pid), inventories.get(pid))
+    wallet_task_items = _normalize_inventory((wallet.get("inventories") or {}).get("task_items"), source="wallet")
+    inventories["task_items"] = _merge_inventory_preferring_runtime(wallet_task_items, inventories.get("task_items"))
+    st["inventories"] = inventories
+    st["inventory"] = inventories["player1"]
+    session["stats"] = st
+    return inventories
+
+
 def _inventory_for_player_action(wallet: dict, st: dict, player_id: Any, active: bool) -> list[dict]:
     pid = _resolve_player_key(player_id)
     wallet_inventory = _get_player_inventory(wallet, pid)
     if not active:
         return wallet_inventory[:80]
-    runtime_inventory = _normalize_inventory(st.get("inventory"), source="session")
-    if pid != "player1":
-        runtime_inventory = [x for x in runtime_inventory if str(x.get("holder_id") or "") == pid]
+    runtime_inventory = _session_inventory_map(st).get(pid)
     return _merge_inventory_preferring_runtime(wallet_inventory, runtime_inventory)
 
 
 def _persist_player_inventory_for_action(wallet: dict, st: dict, player_id: Any, inventory: list[dict]) -> None:
     pid = _resolve_player_key(player_id)
     normalized = _set_player_inventory(wallet, pid, inventory)
-    if pid == "player1":
-        st["inventory"] = normalized[:80]
+    inventories = _session_inventory_map(st)
+    inventories[pid] = normalized[:80]
+    st["inventories"] = inventories
+    st["inventory"] = inventories["player1"]
 
 
 def _inventory_action_view(uid: int, active: bool) -> dict:
@@ -2733,7 +2961,10 @@ def _inventory_action_view(uid: int, active: bool) -> dict:
 
 
 def _persist_wallet_inventory_result(user_id: int, wallet: dict, st: dict, source: str, changes: dict) -> dict:
-    wallet["inventory"] = _normalize_inventory(st.get("inventory"), source="wallet")[:80]
+    inventories = _session_inventory_map(st)
+    for pid in _WENYOU_PLAYER_IDS:
+        _set_player_inventory(wallet, pid, inventories.get(pid))
+    wallet["inventories"]["task_items"] = _normalize_inventory(inventories.get("task_items"), source="wallet")[:80]
     wallet["players"] = {
         "player1": copy.deepcopy(st.get("player1") if isinstance(st.get("player1"), dict) else _default_player_stats()),
         "player2": copy.deepcopy(st.get("player2") if isinstance(st.get("player2"), dict) else _default_player_stats()),
@@ -2751,6 +2982,7 @@ def _persist_wallet_inventory_result(user_id: int, wallet: dict, st: dict, sourc
 
 def _persist_inventory_rule_result(user_id: int, session: dict, wallet: dict, source: str, changes: dict) -> dict:
     _sync_session_points_with_wallet(session, wallet)
+    _sync_wallet_players_from_session(wallet, session)
     patch = _append_rules_patch(session, source, changes)
     _save_wenyou_wallet(int(user_id), wallet)
     r2_store.save_wenyou_session(int(user_id), session)
@@ -2759,9 +2991,12 @@ def _persist_inventory_rule_result(user_id: int, session: dict, wallet: dict, so
     return view
 
 
+@_serialized_user_operation
 def sell_inventory_item(user_id: int, item_ref: str, player_id: Any = "player1") -> tuple[bool, str, dict]:
     uid = int(user_id)
-    pid = _resolve_player_key(player_id)
+    pid = _validated_player_key(player_id)
+    if not pid:
+        return False, "无效的玩家角色。", {"error_code": "INVALID_ACTOR", "actor_id": str(player_id or "")}
     active, session, wallet, st, _ = _load_inventory_action_context(uid)
     inventory = _inventory_for_player_action(wallet, st, pid, active)
     item = _inventory_find_by_name(inventory, item_ref)
@@ -2810,13 +3045,16 @@ def _find_player_ability(player: dict, ability_ref: str) -> Optional[dict]:
     return None
 
 
+@_serialized_user_operation
 def use_player_ability(user_id: int, ability_ref: str, player_id: Any = "player1", detail: str = "") -> tuple[bool, str, dict]:
     uid = int(user_id)
+    pid = _validated_player_key(player_id)
+    if not pid:
+        return False, "无效的玩家角色。", {"error_code": "INVALID_ACTOR", "actor_id": str(player_id or "")}
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
         return False, "当前没有可使用能力的文游存档。", get_session_view(uid)
     _session_ensure_stats(session)
-    pid = _resolve_player_key(player_id)
     wallet = _load_wenyou_wallet(uid, session)
     st = session["stats"]
     player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
@@ -2893,7 +3131,7 @@ def _instance_item_grant_cap(session: dict) -> str:
     return _shift_rarity(difficulty, 1)
 
 
-def _resolve_catalog_item_for_proposal(proposal: dict, session: dict) -> Optional[dict[str, Any]]:
+def _resolve_catalog_item_for_proposal(proposal: dict, session: dict, player_id: str = "player1") -> Optional[dict[str, Any]]:
     if not isinstance(proposal, dict):
         return None
     raw_key = str(proposal.get("id") or proposal.get("name") or "").strip()
@@ -2906,52 +3144,33 @@ def _resolve_catalog_item_for_proposal(proposal: dict, session: dict) -> Optiona
     if _rarity_rank(item.get("rarity")) > _rarity_rank(cap):
         return None
     prepared = dict(item)
-    max_rank = _max_player_rank(session)
-    if str(prepared.get("rarity") or "D") in {"A", "S"} and _rarity_rank(prepared.get("rarity")) > _rarity_rank(max_rank):
-        prepared["sealed"] = True
-        prepared["sealed_reason"] = f"当前最高阶位 {max_rank}，需达到 {prepared.get('rarity')} 阶后解封。"
-    return prepared
+    rarity = _normalize_difficulty(prepared.get("rarity") or "D")
+    if rarity in {"A", "S"} and not prepared.get("seal_rank"):
+        prepared["seal_rank"] = rarity
+    return _seal_item_if_needed(prepared, session, player_id)
 
 
-def _max_player_level(session: dict) -> int:
-    _session_ensure_stats(session)
-    levels: list[int] = []
-    for pk in ("player1", "player2"):
-        player = session.get("stats", {}).get(pk)
-        if isinstance(player, dict):
-            levels.append(max(1, int(player.get("level") or 1)))
-    return max(levels or [1])
-
-
-def _max_player_attr(session: dict, attr: str) -> int:
-    _session_ensure_stats(session)
-    values: list[int] = []
-    aliases = {"int": "int", "wis": "int", "vit": "con", "spi_current": "spi_current"}
-    key = aliases.get(attr, attr)
-    for pk in ("player1", "player2"):
-        player = session.get("stats", {}).get(pk)
-        if not isinstance(player, dict):
-            continue
-        if key == "spi_current":
-            values.append(max(0, int(player.get("spi_current") or 0)))
-        else:
-            values.append(max(0, int(player.get(key) or player.get(attr) or 0)))
-    return max(values or [0])
-
-
-def _item_requirement_blockers(item: dict, session: dict) -> list[str]:
+def _item_requirement_blockers(item: dict, session: dict, player_id: str = "player1") -> list[str]:
     blockers: list[str] = []
+    _session_ensure_stats(session)
+    pid = _validated_player_key(player_id) or "player1"
+    player = session.get("stats", {}).get(pid)
+    if not isinstance(player, dict):
+        player = _default_player_stats()
     seal_rank = str(item.get("seal_rank") or "").strip().upper()
-    if seal_rank and _rarity_rank(_max_player_rank(session)) < _rarity_rank(seal_rank):
+    player_rank = _normalize_difficulty(player.get("rank") or "D")
+    if seal_rank and _rarity_rank(player_rank) < _rarity_rank(seal_rank):
         blockers.append(f"需达到 {seal_rank} 阶")
     req = item.get("requirements") if isinstance(item.get("requirements"), dict) else {}
     level_min = _to_non_negative_int(req.get("level_min"), 0)
-    if level_min and _max_player_level(session) < level_min:
+    if level_min and max(1, int(player.get("level") or 1)) < level_min:
         blockers.append(f"需等级 {level_min}")
     for attr in ("str", "con", "agi", "int", "spi", "luk", "spi_current"):
         key = f"{attr}_min"
         needed = _to_non_negative_int(req.get(key), 0)
-        if needed and _max_player_attr(session, attr) < needed:
+        key_name = {"vit": "con", "wis": "int"}.get(attr, attr)
+        actual = max(0, int(player.get(key_name) or player.get(attr) or 0))
+        if needed and actual < needed:
             label = {
                 "str": "力量",
                 "con": "体质",
@@ -2965,16 +3184,16 @@ def _item_requirement_blockers(item: dict, session: dict) -> list[str]:
     return blockers
 
 
-def _seal_item_if_needed(item: dict, session: dict) -> dict:
+def _seal_item_if_needed(item: dict, session: dict, player_id: str = "player1") -> dict:
     prepared = dict(item)
-    blockers = _item_requirement_blockers(prepared, session)
+    blockers = _item_requirement_blockers(prepared, session, player_id)
     if blockers:
         prepared["sealed"] = True
         prepared["sealed_reason"] = "；".join(blockers[:4])
     return prepared
 
 
-def _unique_item_for_proposal(proposal: dict, session: dict) -> Optional[dict[str, Any]]:
+def _unique_item_for_proposal(proposal: dict, session: dict, player_id: str = "player1") -> Optional[dict[str, Any]]:
     if not isinstance(proposal, dict):
         return None
     name = str(proposal.get("name") or proposal.get("id") or "").strip()
@@ -3006,7 +3225,7 @@ def _unique_item_for_proposal(proposal: dict, session: dict) -> Optional[dict[st
         "seal_rank": seal_rank or None,
         "instance_grant_reason": str(proposal.get("reason") or "")[:180],
     }
-    return _seal_item_if_needed(item, session)
+    return _seal_item_if_needed(item, session, player_id)
 
 
 def _unique_duplicate_fragment_item(item: dict) -> dict[str, Any]:
@@ -3059,7 +3278,7 @@ def _apply_state_proposal_item_grants(session: dict, proposals: Any) -> list[dic
         return []
     _session_ensure_stats(session)
     st = session["stats"]
-    inventory = _normalize_inventory(st.get("inventory"), source="session")
+    inventories = _session_inventory_map(st)
     grants: list[dict[str, Any]] = []
     for proposal in proposals[:12]:
         if not isinstance(proposal, dict):
@@ -3069,12 +3288,18 @@ def _apply_state_proposal_item_grants(session: dict, proposals: Any) -> list[dic
             continue
         if str(proposal.get("visibility") or "hidden") != "public":
             continue
+        raw_holder_id = proposal.get("holder_id") or proposal.get("player_id")
+        holder_id = _validated_player_key(raw_holder_id)
+        if raw_holder_id and not holder_id:
+            continue
+        inventory_key = "task_items" if ptype == "acquire_task_item" else holder_id or "player1"
+        inventory = _normalize_inventory(inventories.get(inventory_key), source="session")
         if ptype == "acquire_task_item":
             item = _task_item_for_proposal(proposal)
         elif ptype == "acquire_unique_item":
-            item = _unique_item_for_proposal(proposal, session)
+            item = _unique_item_for_proposal(proposal, session, inventory_key)
         else:
-            item = _resolve_catalog_item_for_proposal(proposal, session)
+            item = _resolve_catalog_item_for_proposal(proposal, session, inventory_key)
         if not item:
             continue
         quantity = max(1, min(3, int(proposal.get("quantity") or 1)))
@@ -3098,42 +3323,38 @@ def _apply_state_proposal_item_grants(session: dict, proposals: Any) -> list[dic
             grant_prefix,
             {
                 "quantity": quantity,
+                "holder_id": inventory_key,
                 "instance_grant_reason": str(proposal.get("reason") or "")[:180],
             },
         )
         inventory = _add_inventory_item(inventory, item_obj)
+        inventories[inventory_key] = inventory[:80]
         grants.append(item_obj)
         if len(grants) >= 3:
             break
     if grants:
-        st["inventory"] = inventory[:80]
+        st["inventories"] = inventories
+        st["inventory"] = inventories["player1"]
         session["stats"] = st
     return grants
 
 
-def _max_player_rank(session: dict) -> str:
-    _session_ensure_stats(session)
-    ranks = []
-    for pk in ("player1", "player2"):
-        p = session.get("stats", {}).get(pk)
-        if isinstance(p, dict):
-            ranks.append(_normalize_difficulty(p.get("rank") or "D"))
-    return max(ranks or ["D"], key=_rarity_rank)
-
-
-def _prepare_gacha_item_for_inventory(defn: dict, session: dict, pool_id: str) -> dict:
+def _prepare_gacha_item_for_inventory(defn: dict, session: dict, pool_id: str, player_id: str) -> dict:
     item = dict(defn)
-    max_rank = _max_player_rank(session)
-    if str(item.get("rarity") or "D") in {"A", "S"} and _rarity_rank(item.get("rarity")) > _rarity_rank(max_rank):
-        item["sealed"] = True
-        item["sealed_reason"] = f"当前最高阶位 {max_rank}，需达到 {item.get('rarity')} 阶后解封。"
+    rarity = _normalize_difficulty(item.get("rarity") or "D")
+    if rarity in {"A", "S"} and not item.get("seal_rank"):
+        item["seal_rank"] = rarity
+    item = _seal_item_if_needed(item, session, player_id)
     item["pool_id"] = pool_id
     return item
 
 
+@_serialized_user_operation
 def roll_gacha(user_id: int, pool_id: str = "mixed", count: int = 1, actor_id: Any = "player1", reason: str = "") -> tuple[bool, str, dict]:
     uid = int(user_id)
-    actor = _resolve_player_key(actor_id)
+    actor = _validated_player_key(actor_id)
+    if not actor:
+        return False, "无效的玩家角色。", {"error_code": "INVALID_ACTOR", "actor_id": str(actor_id or "")}
     pool = _normalize_gacha_pool_id(pool_id)
     try:
         pull_count = int(count or 1)
@@ -3177,7 +3398,7 @@ def roll_gacha(user_id: int, pool_id: str = "mixed", count: int = 1, actor_id: A
         rarity, pity_hit = _apply_gacha_pity(pool_state, rarity)
         pool_state = _update_gacha_pity(pool_state, rarity)
         picked = _pick_gacha_definition(pool, rarity, rng)
-        prepared = _prepare_gacha_item_for_inventory(picked, rank_context, pool)
+        prepared = _prepare_gacha_item_for_inventory(picked, rank_context, pool, actor)
         prepared_category = str(prepared.get("category") or "")
         duplicate_to_fragment = prepared_category in {"tool", "special"} and _inventory_has_item(inventory, item_id=str(prepared.get("id") or ""))
         if duplicate_to_fragment:
@@ -3280,19 +3501,20 @@ def _regular_shop_state(wallet: dict) -> dict:
     return regular
 
 
-def _shop_rank_context(wallet: Optional[dict], session: Optional[dict] = None) -> str:
+def _shop_rank_context(wallet: Optional[dict], session: Optional[dict] = None, player_id: str = "player1") -> str:
+    pid = _validated_player_key(player_id) or "player1"
     if isinstance(session, dict) and session.get("gameId"):
         try:
-            return _max_player_rank(session)
+            _session_ensure_stats(session)
+            player = session.get("stats", {}).get(pid)
+            if isinstance(player, dict):
+                return _normalize_difficulty(player.get("rank") or "D")
         except Exception:
             pass
     if isinstance(wallet, dict):
         stats = _wallet_stats_from_wallet(wallet)
-        ranks = []
-        for pid in ("player1", "player2"):
-            player = stats.get(pid) if isinstance(stats.get(pid), dict) else {}
-            ranks.append(_normalize_difficulty(player.get("rank") or "D"))
-        return max(ranks or ["D"], key=_rarity_rank)
+        player = stats.get(pid) if isinstance(stats.get(pid), dict) else {}
+        return _normalize_difficulty(player.get("rank") or "D")
     return "D"
 
 
@@ -3305,11 +3527,12 @@ _WENYOU_SHOP_RARITY_RATES: dict[str, list[tuple[str, float]]] = {
 }
 
 
-def _shop_offer_items(user_id: int, wallet: Optional[dict] = None, session: Optional[dict] = None) -> list[dict[str, Any]]:
+def _shop_offer_items(user_id: int, wallet: Optional[dict] = None, session: Optional[dict] = None, player_id: str = "player1") -> list[dict[str, Any]]:
     """每天按用户固定随机 7-8 个商品；高阶物品只随玩家阶位极低概率进入普通商店。"""
     regular = _regular_shop_state(wallet) if isinstance(wallet, dict) else {"refresh_count": 0, "rotation_nonce": ""}
-    rank = _shop_rank_context(wallet, session)
-    rng = random.Random(f"wenyou-shop:{int(user_id or 0)}:{_shop_today_key()}:{regular.get('refresh_count', 0)}:{regular.get('rotation_nonce') or ''}:{rank}")
+    pid = _validated_player_key(player_id) or "player1"
+    rank = _shop_rank_context(wallet, session, pid)
+    rng = random.Random(f"wenyou-shop:{int(user_id or 0)}:{pid}:{_shop_today_key()}:{regular.get('refresh_count', 0)}:{regular.get('rotation_nonce') or ''}:{rank}")
     source = _SHOP_CATALOG or _GACHA_CATALOG
     by_rarity: dict[str, list[dict[str, Any]]] = {}
     for item in source:
@@ -3347,7 +3570,7 @@ def _shop_offer_items(user_id: int, wallet: Optional[dict] = None, session: Opti
             cur["price"] = max(260, int(cur.get("price") or 0))
         if _rarity_rank(rarity) > _rarity_rank(rank):
             cur["sealed"] = True
-            cur["sealed_reason"] = f"当前最高阶位 {rank}，购买后需达到 {rarity} 阶完整解封。"
+            cur["sealed_reason"] = f"当前阶位 {rank}，购买后需达到 {rarity} 阶完整解封。"
         out.append(cur)
     if len(out) < 7:
         fallback = [dict(item) for item in source if str(item.get("rarity") or "D") in {"D", "C"}]
@@ -3371,10 +3594,13 @@ def _shop_items_with_offer_refs(items: list[dict[str, Any]], prefix: str) -> lis
     return out
 
 
+@_serialized_user_operation
 def get_shop_view(user_id: int, actor_id: Any = "player1") -> dict:
     """文游系统商店/个人空间：优先读当前 session，归档后读 wallet 背包。"""
     uid = int(user_id)
-    actor = _resolve_player_key(actor_id)
+    actor = _validated_player_key(actor_id)
+    if not actor:
+        return {"active": False, "actor_id": str(actor_id or ""), "error": "无效的玩家角色。", "error_code": "INVALID_ACTOR"}
     session = r2_store.get_wenyou_session(uid)
     has_session = bool(session and isinstance(session, dict) and session.get("gameId"))
     raw_phase = _session_phase(session) if has_session else "hub"
@@ -3399,7 +3625,7 @@ def get_shop_view(user_id: int, actor_id: Any = "player1") -> dict:
             "player2": copy.deepcopy(st.get("player2") if isinstance(st.get("player2"), dict) else players["player2"]),
         }
     can_buy = bool(_shop_open_for_phase(phase))
-    regular_items = _shop_items_with_offer_refs(_shop_offer_items(uid, wallet, session if active else None), "R")
+    regular_items = _shop_items_with_offer_refs(_shop_offer_items(uid, wallet, session if active else None, actor), "R")
     account = _player_account(wallet, actor)
     inventories = {
         "player1": _get_player_inventory(wallet, "player1"),
@@ -3443,6 +3669,7 @@ def get_shop_view(user_id: int, actor_id: Any = "player1") -> dict:
     }
 
 
+@_serialized_user_operation
 def refresh_shop_items(user_id: int) -> tuple[bool, str, dict]:
     uid = int(user_id)
     session = r2_store.get_wenyou_session(uid)
@@ -3488,10 +3715,13 @@ def _resolve_shop_offer(offers: list[dict], item_id: str = "", offer_ref: str = 
     return None
 
 
+@_serialized_user_operation
 def buy_shop_item(user_id: int, item_id: str = "", actor_id: Any = "player1", offer_ref: str = "", reason: str = "") -> tuple[bool, str, dict]:
     """购买商店道具：主神空间/结算期写入钱包背包，副本中禁止购买。"""
     uid = int(user_id)
-    actor = _resolve_player_key(actor_id)
+    actor = _validated_player_key(actor_id)
+    if not actor:
+        return False, "无效的玩家角色。", {"error_code": "INVALID_ACTOR", "actor_id": str(actor_id or "")}
     iid = str(item_id or "").strip()
     ref = str(offer_ref or "").strip()
     if not iid and not ref:
@@ -3506,7 +3736,7 @@ def buy_shop_item(user_id: int, item_id: str = "", actor_id: Any = "player1", of
     if has_economy_session:
         _session_ensure_stats(session)
     wallet = _load_wenyou_wallet(uid, session if has_economy_session else None)
-    offers = _shop_items_with_offer_refs(_shop_offer_items(uid, wallet, session if has_economy_session else None), "R")
+    offers = _shop_items_with_offer_refs(_shop_offer_items(uid, wallet, session if has_economy_session else None, actor), "R")
     item = _resolve_shop_offer(offers, iid, ref)
     if not item:
         return False, "该商品已下架，请刷新系统商店。", get_shop_view(uid, actor)
@@ -3520,8 +3750,9 @@ def buy_shop_item(user_id: int, item_id: str = "", actor_id: Any = "player1", of
     name = str(item.get("name") or "").strip()
     if not name:
         return False, "商品数据异常。", get_shop_view(uid, actor)
-    if _inventory_has_item(inv, item_id=iid, name=name) and not item.get("stackable") and not item.get("unique"):
+    if _inventory_has_item(inv, item_id=iid, name=name) and not item.get("stackable"):
         return False, f"背包里已有【{name}】。", get_shop_view(uid, actor)
+    item = _seal_item_if_needed(item, {"phase": phase, "stats": st}, actor)
     item_obj = _new_inventory_item(item, "shop", "shop", {"holder_id": actor})
     inv = _add_inventory_item(inv, item_obj)
     _set_actor_points(wallet, actor, points - price)
@@ -3612,8 +3843,9 @@ def _has_required_clear_record(wallet: dict, target_rank: str) -> bool:
     return False
 
 
-def _promotion_preview(player: dict, wallet: dict) -> dict:
+def _promotion_preview(player: dict, wallet: dict, player_id: str = "player1") -> dict:
     _normalize_player_growth_fields(player)
+    account = _player_account(wallet, player_id)
     target = _next_rank(str(player.get("rank") or "D"))
     if not target:
         return {"available": False, "current_rank": str(player.get("rank") or "D"), "target_rank": "", "reasons": ["已达最高阶位"]}
@@ -3621,9 +3853,9 @@ def _promotion_preview(player: dict, wallet: dict) -> dict:
     reasons: list[str] = []
     if int(player.get("level") or 1) < int(rule.get("level") or 1):
         reasons.append(f"等级不足：需要 Lv{rule.get('level')}")
-    if int(wallet.get("points") or 0) < int(rule.get("cost") or 0):
+    if int(account.get("points") or 0) < int(rule.get("cost") or 0):
         reasons.append(f"积分不足：需要 {rule.get('cost')}")
-    if int(wallet.get("debts") or 0) >= 3000:
+    if int(account.get("debts") or 0) >= 3000:
         reasons.append("债务达到 3000，需先清算")
     if int(player.get("pollution") or 0) >= 90:
         reasons.append("污染达到 90，需先清算")
@@ -3658,7 +3890,7 @@ def _growth_view(session: dict, wallet: dict) -> dict:
             "next_level_exp": int(_WENYOU_LEVEL_EXP_TABLE.get(int(player.get("level") or 1), 0)),
             "spi_current": int(player.get("spi_current") or 0),
             "spi_max": int(player.get("spi_max") or 0),
-            "promotion": _promotion_preview(player, wallet),
+            "promotion": _promotion_preview(player, wallet, pid),
         }
     return {
         "attribute_keys": list(_WENYOU_ATTRIBUTE_KEYS),
@@ -3667,8 +3899,12 @@ def _growth_view(session: dict, wallet: dict) -> dict:
     }
 
 
+@_serialized_user_operation
 def allocate_attribute_points(user_id: int, player_id: Any = "player1", deltas: Optional[dict] = None) -> tuple[bool, str, dict]:
     uid = int(user_id)
+    pid = _validated_player_key(player_id)
+    if not pid:
+        return False, "无效的玩家角色。", {"error_code": "INVALID_ACTOR", "actor_id": str(player_id or "")}
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
         return False, "当前没有可分配属性点的文游存档。", get_session_view(uid)
@@ -3677,7 +3913,6 @@ def allocate_attribute_points(user_id: int, player_id: Any = "player1", deltas: 
     safe_rest = bool((session.get("flags") or {}).get("safe_rest_node")) if isinstance(session.get("flags"), dict) else False
     if phase not in {"hub", "settlement"} and not safe_rest:
         return False, "副本高压阶段不能分配属性点；请回到主神空间、结算阶段或安全休整节点。", get_session_view(uid)
-    pid = _resolve_player_key(player_id)
     st = session["stats"]
     player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
     _recalc_player_caps(player)
@@ -3719,6 +3954,9 @@ def allocate_attribute_points(user_id: int, player_id: Any = "player1", deltas: 
         player["spi_current"] = min(int(player.get("spi_max") or 0), spi_current_before + int(clean["spi"]))
     st[pid] = player
     session["stats"] = st
+    wallet = _load_wenyou_wallet(uid, session)
+    _sync_wallet_players_from_session(wallet, session, [pid])
+    _save_wenyou_wallet(uid, wallet)
     patch = _append_rules_patch(
         session,
         "rules_engine.allocate_attribute_points",
@@ -3743,8 +3981,12 @@ def allocate_attribute_points(user_id: int, player_id: Any = "player1", deltas: 
     return True, "属性点已分配。", view
 
 
+@_serialized_user_operation
 def promote_player_rank(user_id: int, player_id: Any = "player1", target_rank: str = "") -> tuple[bool, str, dict]:
     uid = int(user_id)
+    pid = _validated_player_key(player_id)
+    if not pid:
+        return False, "无效的玩家角色。", {"error_code": "INVALID_ACTOR", "actor_id": str(player_id or "")}
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
         return False, "当前没有可晋升的文游存档。", get_session_view(uid)
@@ -3752,7 +3994,6 @@ def promote_player_rank(user_id: int, player_id: Any = "player1", target_rank: s
     phase = _session_phase(session)
     if phase not in {"hub", "settlement"}:
         return False, "只能在主神空间或结算阶段晋升。", get_session_view(uid)
-    pid = _resolve_player_key(player_id)
     wallet = _load_wenyou_wallet(uid, session)
     st = session["stats"]
     player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
@@ -3764,36 +4005,36 @@ def promote_player_rank(user_id: int, player_id: Any = "player1", target_rank: s
         return False, "已经是最高阶位。", get_session_view(uid)
     if target != expected:
         return False, f"只能从 {current} 晋升到 {expected}。", get_session_view(uid)
-    preview = _promotion_preview(player, wallet)
+    preview = _promotion_preview(player, wallet, pid)
     if not preview.get("available"):
         return False, "暂不能晋升：" + "；".join(preview.get("reasons") or []), get_session_view(uid)
 
     cost = int(preview.get("cost") or 0)
-    wallet["points"] = max(0, int(wallet.get("points") or 0) - cost)
+    account = _player_account(wallet, pid)
+    _set_actor_points(wallet, pid, max(0, int(account.get("points") or 0) - cost))
     before_rank = current
     caps_before = {"hp_max": int(player.get("hp_max") or 0), "san_max": int(player.get("san_max") or 0), "spi_max": int(player.get("spi_max") or 0)}
     player["rank"] = target
     _recalc_player_caps(player)
     st[pid] = player
 
-    merged_inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    merged_inventory = _inventory_for_player_action(wallet, st, pid, active=True)
     unlocked_inventory, unlocked = _unseal_inventory_by_rank(merged_inventory, target)
-    wallet["inventory"] = unlocked_inventory
-    st["inventory"] = unlocked_inventory
+    _persist_player_inventory_for_action(wallet, st, pid, unlocked_inventory)
     session["stats"] = st
+    _sync_wallet_players_from_session(wallet, session, [pid])
     wallet["promotion_history"] = (wallet.get("promotion_history") or [])[-19:] + [
         {"at": now_beijing_iso(), "player": pid, "from": before_rank, "to": target, "cost": cost}
     ]
-    wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [
-        {"at": now_beijing_iso(), "type": "rank_promote", "player": pid, "from": before_rank, "to": target, "points_delta": -cost}
-    ]
+    append_player_ledger(wallet, pid, {"type": "rank_promote", "player": pid, "from": before_rank, "to": target, "points_delta": -cost})
     _save_wenyou_wallet(uid, wallet)
     _sync_session_points_with_wallet(session, wallet)
     patch = _append_rules_patch(
         session,
         "rules_engine.promote_rank",
         {
-            "wallet": {"points_delta": -cost, "points": wallet["points"]},
+            "wallet": {"points_delta": -cost, "points": int(_player_account(wallet, pid).get("points") or 0)} if pid == "player1" else {},
+            "wallets": {pid: {"points_delta": -cost, "points": int(_player_account(wallet, pid).get("points") or 0)}},
             "players": {
                 pid: {
                     "rank_before": before_rank,
@@ -3810,16 +4051,19 @@ def promote_player_rank(user_id: int, player_id: Any = "player1", target_rank: s
     r2_store.save_wenyou_session(uid, session)
     view = get_session_view(uid)
     view["state_patch"] = patch
-    return True, f"{pid} 已晋升至 {target} 阶，扣除 {cost} 主神积分。", view
+    return True, f"{_session_player_display_name(session, pid, _player_display_name(pid))} 已晋升至 {target} 阶，扣除 {cost} 主神积分。", view
 
 
+@_serialized_user_operation
 def revive_player(user_id: int, player_id: Any = "player1") -> tuple[bool, str, dict]:
     uid = int(user_id)
+    pid = _validated_player_key(player_id)
+    if not pid:
+        return False, "无效的玩家角色。", {"error_code": "INVALID_ACTOR", "actor_id": str(player_id or "")}
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
         return False, "当前没有可复活的文游存档。", get_session_view(uid)
     _session_ensure_stats(session)
-    pid = _resolve_player_key(player_id)
     st = session["stats"]
     player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
     _recalc_player_caps(player)
@@ -3829,11 +4073,12 @@ def revive_player(user_id: int, player_id: Any = "player1") -> tuple[bool, str, 
     rank = _normalize_difficulty(player.get("rank") or "D")
     death_count_before = int(player.get("death_count") or 0)
     revive_cost = int(_WENYOU_REVIVE_BASE_COST.get(rank, 200)) + int(player.get("level") or 1) * 50 + death_count_before * 200
-    points_before = int(wallet.get("points") or 0)
+    account = _player_account(wallet, pid)
+    points_before = int(account.get("points") or 0)
     paid = min(points_before, revive_cost)
     debt_added = max(0, revive_cost - paid)
-    wallet["points"] = max(0, points_before - paid)
-    wallet["debts"] = max(0, int(wallet.get("debts") or 0) + debt_added)
+    _set_actor_points(wallet, pid, points_before - paid)
+    _set_actor_debts(wallet, pid, int(account.get("debts") or 0) + debt_added)
     player["death_count"] = death_count_before + 1
     player["hp"] = max(1, math.floor(int(player.get("hp_max") or 1) * 0.5))
     player["san"] = max(1, math.floor(int(player.get("san_max") or 1) * 0.5))
@@ -3843,7 +4088,10 @@ def revive_player(user_id: int, player_id: Any = "player1") -> tuple[bool, str, 
     _add_condition_unique(player, "复活疲惫")
     st[pid] = player
     session["stats"] = st
-    wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [
+    _sync_wallet_players_from_session(wallet, session, [pid])
+    append_player_ledger(
+        wallet,
+        pid,
         {
             "at": now_beijing_iso(),
             "type": "revive",
@@ -3852,9 +4100,9 @@ def revive_player(user_id: int, player_id: Any = "player1") -> tuple[bool, str, 
             "cost": revive_cost,
             "points_delta": -paid,
             "debt_delta": debt_added,
-            "debts": wallet["debts"],
-        }
-    ]
+            "debts": int(_player_account(wallet, pid).get("debts") or 0),
+        },
+    )
     _refresh_forced_instance_queue(wallet, session)
     _save_wenyou_wallet(uid, wallet)
     _sync_session_points_with_wallet(session, wallet)
@@ -3862,7 +4110,8 @@ def revive_player(user_id: int, player_id: Any = "player1") -> tuple[bool, str, 
         session,
         "rules_engine.revive_player",
         {
-            "wallet": {"points_delta": -paid, "debt_delta": debt_added, "debts": wallet["debts"]},
+            "wallet": {"points_delta": -paid, "debt_delta": debt_added, "debts": int(_player_account(wallet, pid).get("debts") or 0)} if pid == "player1" else {},
+            "wallets": {pid: {"points_delta": -paid, "debt_delta": debt_added, "debts": int(_player_account(wallet, pid).get("debts") or 0)}},
             "players": {
                 pid: {
                     "hp": player["hp"],
@@ -3877,11 +4126,13 @@ def revive_player(user_id: int, player_id: Any = "player1") -> tuple[bool, str, 
     r2_store.save_wenyou_session(uid, session)
     view = get_session_view(uid)
     view["state_patch"] = patch
+    player_name = _session_player_display_name(session, pid, _player_display_name(pid))
     if debt_added:
-        return True, f"{pid} 已复活，支付 {paid} 积分，新增债务 {debt_added}。", view
-    return True, f"{pid} 已复活，支付 {paid} 积分。", view
+        return True, f"{player_name} 已复活，支付 {paid} 积分，新增债务 {debt_added}。", view
+    return True, f"{player_name} 已复活，支付 {paid} 积分。", view
 
 
+@_serialized_user_operation
 def generate_instance_candidates(user_id: int, count: int = 6, keywords: str = "") -> tuple[Optional[dict], Optional[str]]:
     """一次生成多个大厅候选设定；不创建副本 session。"""
     uid = int(user_id or 0)
@@ -4748,6 +4999,7 @@ def _apply_public_state_updates(session: dict, event_intent: dict) -> dict:
     }
 
 
+@_serialized_user_operation
 def cmd_story(user_id: int, keywords: Optional[str]) -> str:
     """处理开局请求；含二次确认逻辑。"""
     uid = int(user_id)
@@ -4778,9 +5030,10 @@ def cmd_story(user_id: int, keywords: Optional[str]) -> str:
     fw = _apply_wallet_player_names_to_framework(fw, wallet)
     session = _new_session(fw)
     wallet = _load_wenyou_wallet(uid, session)
+    _sync_session_players_with_wallet(session, wallet)
     _mark_tutorial_started(uid, session, wallet)
     _sync_session_points_with_wallet(session, wallet)
-    session.setdefault("stats", {})["inventory"] = _merge_inventory(wallet.get("inventory"), session.get("stats", {}).get("inventory"))
+    _sync_session_inventories_with_wallet(session, wallet)
     _attach_forced_instance_contract(session, {})
     r2_store.save_wenyou_session(uid, session)
     with _PENDING_LOCK:
@@ -4790,6 +5043,7 @@ def cmd_story(user_id: int, keywords: Optional[str]) -> str:
     return head + fw.get("opening", "")
 
 
+@_serialized_user_operation
 def cmd_story_from_candidate(user_id: int, candidate: Any) -> str:
     """处理大厅候选扩展开局；完整副本框架由并行 DS 子任务生成。"""
     uid = int(user_id)
@@ -4826,9 +5080,10 @@ def cmd_story_from_candidate(user_id: int, candidate: Any) -> str:
     fw = _apply_wallet_player_names_to_framework(fw, wallet)
     session = _new_session(fw)
     wallet = _load_wenyou_wallet(uid, session)
+    _sync_session_players_with_wallet(session, wallet)
     _mark_tutorial_started(uid, session, wallet)
     _sync_session_points_with_wallet(session, wallet)
-    session.setdefault("stats", {})["inventory"] = _merge_inventory(wallet.get("inventory"), session.get("stats", {}).get("inventory"))
+    _sync_session_inventories_with_wallet(session, wallet)
     _attach_forced_instance_contract(session, item)
     r2_store.save_wenyou_session(uid, session)
     with _PENDING_LOCK:
@@ -4869,6 +5124,7 @@ def _cleanup_story_jobs_locked() -> None:
         _STORY_EXPANSION_JOBS.pop(jid, None)
 
 
+@_serialized_user_operation
 def start_story_candidate_expansion_job(user_id: int, candidate: Any) -> tuple[Optional[dict], Optional[str]]:
     """启动候选扩展后台任务；HTTP 立即返回，前端轮询结果。"""
     uid = int(user_id)
@@ -5010,7 +5266,11 @@ def _current_instance_for_card(session: dict) -> dict:
     _session_ensure_stats(session)
     fw = _framework_for_runtime(session.get("framework") or {})
     st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
-    inventory = [_compact_text(x, 40) for x in _inventory_label_list(st.get("inventory"))][:20]
+    inventory_map = _session_inventory_map(st)
+    inventories = {
+        key: [_compact_text(x, 40) for x in _inventory_label_list(inventory_map.get(key))][:20]
+        for key in ("player1", "player2", "task_items")
+    }
     return {
         "game_id": _compact_text(session.get("gameId"), 80),
         "instance": _compact_text(_framework_instance_line(fw), 120),
@@ -5021,7 +5281,8 @@ def _current_instance_for_card(session: dict) -> dict:
         "points": int(st.get("points") or 0),
         "player1": _player_summary_for_card(st.get("player1")),
         "player2": _player_summary_for_card(st.get("player2")),
-        "inventory": inventory,
+        "inventory": inventories["player1"],
+        "inventories": inventories,
         "clues": [_compact_text(x, 160) for x in _clues_from_session(session)[:8]],
     }
 
@@ -5079,6 +5340,11 @@ def _wenyou_card_has_context(card: Any) -> bool:
 
 
 def _update_wenyou_card_for_round(user_id: int, session: dict, p1_text: str, p2_text: str, gm_out: str) -> None:
+    with _user_operation_lock(user_id, namespace="card"):
+        _update_wenyou_card_for_round_locked(user_id, session, p1_text, p2_text, gm_out)
+
+
+def _update_wenyou_card_for_round_locked(user_id: int, session: dict, p1_text: str, p2_text: str, gm_out: str) -> None:
     """复用共读卡片模型配置维护文游连续性；失败时退回本地规则兜底。"""
     try:
         uid = int(user_id)
@@ -5204,6 +5470,7 @@ def _normalize_external_ai_player_action(action: Any) -> str:
     return re.sub(r"^[\"'“”]+|[\"'“”]+$", "", text).strip()[:220]
 
 
+@_serialized_user_operation
 def get_session_view(user_id: int) -> dict:
     """MiniApp 结构化读取当前文游 session：任务、背包、状态、线索、最近历史。"""
     uid = int(user_id)
@@ -5227,7 +5494,7 @@ def get_session_view(user_id: int) -> dict:
     inventories = {
         "player1": _inventory_for_player_action(wallet, st, "player1", active=True),
         "player2": _inventory_for_player_action(wallet, st, "player2", active=True),
-        "task_items": _normalize_inventory((wallet.get("inventories") or {}).get("task_items"), source="wallet"),
+        "task_items": _normalize_inventory(_session_inventory_map(st).get("task_items"), source="session"),
     }
     if _session_phase(session) == "instance_running":
         _ensure_monster_instances(session)
@@ -5334,6 +5601,7 @@ def classify_wenyou_action_text(text: str) -> dict[str, Any]:
     return {"action_type": "act", "confidence": "low", "text": raw, "target": "", "reason": "普通剧情行动"}
 
 
+@_serialized_user_operation
 def cmd_record_action(user_id: int, text: str, player: str = "player1") -> tuple[bool, str]:
     """记录玩家行动到 pending_round，不立即调用 GM。"""
     uid = int(user_id)
@@ -5342,7 +5610,9 @@ def cmd_record_action(user_id: int, text: str, player: str = "player1") -> tuple
         return False, "行动内容不能为空。"
     if len(action) > 1200:
         action = action[:1200]
-    role = "player2" if str(player or "").lower() in ("player2", "p2", "玩家二") else "player1"
+    role = _validated_player_key(player)
+    if not role:
+        return False, "文游：无效的玩家角色。"
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
         return False, "文游：当前没有进行中的局，请先开局。"
@@ -5371,6 +5641,7 @@ def cmd_record_action(user_id: int, text: str, player: str = "player1") -> tuple
     return True, action
 
 
+@_serialized_user_operation
 def cmd_action(user_id: int, text: str, player: str = "player1") -> str:
     """记录玩家行动并立即推进一轮。"""
     ok, msg = cmd_record_action(user_id, text, player)
@@ -5379,6 +5650,7 @@ def cmd_action(user_id: int, text: str, player: str = "player1") -> str:
     return cmd_go(user_id)
 
 
+@_serialized_user_operation
 def cmd_action_with_ai_player(user_id: int, text: str, ai_player_action: str = "") -> tuple[str, str]:
     """记录玩家一行动；若外部玩家二已给出行动，则一并记录后推进 GM。"""
     ok, msg = cmd_record_action(user_id, text, "player1")
@@ -5401,8 +5673,10 @@ def _use_item_system_result(
     target_id: Any = None,
 ) -> tuple[bool, str, str, dict, Optional[dict], Optional[dict]]:
     uid = int(user_id)
-    pid = _resolve_player_key(player_id)
-    target_pid = _resolve_player_key(target_id or pid)
+    pid = _validated_player_key(player_id)
+    target_pid = _validated_player_key(target_id or pid)
+    if not pid or not target_pid:
+        return False, "文游：无效的玩家角色。", "", {}, None, None
     item = str(item_name or "").strip()
     if not item:
         return False, "文游：请选择要使用的道具。", "", {}, None, None
@@ -5429,9 +5703,7 @@ def _use_item_system_result(
     wallet_changes = changes.get("wallet") if isinstance(changes, dict) and isinstance(changes.get("wallet"), dict) else {}
     if int(wallet_changes.get("debt_delta") or 0):
         account = _player_account(wallet, pid)
-        account["debts"] = max(0, int(account.get("debts") or 0) + int(wallet_changes.get("debt_delta") or 0))
-        if pid == "player1":
-            wallet["debts"] = account["debts"]
+        _set_actor_debts(wallet, pid, int(account.get("debts") or 0) + int(wallet_changes.get("debt_delta") or 0))
     _refresh_forced_instance_queue(wallet, session)
     _persist_player_inventory_for_action(wallet, st, pid, inventory_after[:80])
     session["stats"] = st
@@ -5468,10 +5740,12 @@ def _use_item_system_result(
 
 
 def _save_item_system_result(user_id: int, session: dict, wallet: dict) -> None:
+    _sync_wallet_players_from_session(wallet, session)
     _save_wenyou_wallet(int(user_id), wallet)
     r2_store.save_wenyou_session(int(user_id), session)
 
 
+@_serialized_user_operation
 def cmd_use_item(user_id: int, item_name: str, action: str = "") -> str:
     """使用道具：系统先结算效果/消耗，再把结算结果交给 GM 生成剧情。"""
     uid = int(user_id)
@@ -5494,6 +5768,7 @@ def cmd_use_item(user_id: int, item_name: str, action: str = "") -> str:
     return _inject_item_result_into_output(out, consumed or {}, result_text)
 
 
+@_serialized_user_operation
 def cmd_use_item_with_ai_player(user_id: int, item_name: str, action: str = "", ai_player_action: str = "") -> tuple[str, str]:
     """使用道具：系统结算后，记录外部 AI 玩家行动，再交给 GM 叙事。"""
     uid = int(user_id)
@@ -5637,6 +5912,9 @@ def _append_team_channel_log(session: dict, sender: str, text: str, *, consume_t
 def summarize_story_for_ai_player(state: Any, actor_id: Any = "player2") -> dict:
     session = state if isinstance(state, dict) else {}
     _session_ensure_stats(session)
+    actor = _validated_player_key(actor_id)
+    if not actor:
+        return {"error_code": "INVALID_ACTOR", "actor_id": str(actor_id or "")}
     fw = _framework_for_runtime(session.get("framework") or {})
     public = _public_state_from_session(session)
     phase = _session_phase(session)
@@ -5651,12 +5929,12 @@ def summarize_story_for_ai_player(state: Any, actor_id: Any = "player2") -> dict
         if content:
             if role == "gm":
                 prefix = "GM："
-            elif _resolve_player_key(role) == "player2":
+            elif _validated_player_key(role) == "player2":
                 prefix = f"{player2_name}："
-            elif _resolve_player_key(role) == "player1":
+            elif _validated_player_key(role) == "player1":
                 prefix = f"{player1_name}："
             else:
-                prefix = f"{_player_display_name(role)}："
+                prefix = f"{_compact_text(role, 24) or '事件'}："
             history_events.append(prefix + content)
     event_notes: list[str] = []
     for patch in (session.get("event_log") or [])[-4:]:
@@ -5704,7 +5982,9 @@ def compose_ai_player_context(
 ) -> dict:
     session = state if isinstance(state, dict) else {}
     _session_ensure_stats(session)
-    actor = _resolve_player_key(actor_id)
+    actor = _validated_player_key(actor_id)
+    if not actor:
+        return {"error_code": "INVALID_ACTOR", "actor_id": str(actor_id or "")}
     mode = str(context_mode or "tool").strip().lower()
     if mode not in {"tool", "turn", "channel"}:
         mode = "tool"
@@ -5820,6 +6100,8 @@ def get_player_tool_context(user_id: int, actor_id: Any = "player2") -> Optional
     session = r2_store.get_wenyou_session(uid)
     if not session or not isinstance(session, dict) or not session.get("gameId"):
         return None
+    if not _validated_player_key(actor_id):
+        return {"error_code": "INVALID_ACTOR", "actor_id": str(actor_id or "")}
     wallet = _load_wenyou_wallet(uid, session)
     return compose_ai_player_context(session, actor_id=actor_id, wallet=wallet, user_id=uid)
 
@@ -5875,12 +6157,14 @@ def build_ai_player_chat_messages(
     session = r2_store.get_wenyou_session(uid)
     if not session or not isinstance(session, dict) or not session.get("gameId"):
         return None
+    actor = _validated_player_key(actor_id)
+    if not actor:
+        return None
     wallet = _load_wenyou_wallet(uid, session)
-    context = compose_ai_player_context(session, actor_id=actor_id, wallet=wallet, user_id=uid, context_mode="turn")
+    context = compose_ai_player_context(session, actor_id=actor, wallet=wallet, user_id=uid, context_mode="turn")
     if not context:
         return None
     ai_context = context.get("ai_player_context") if isinstance(context.get("ai_player_context"), dict) else {}
-    actor = _resolve_player_key(actor_id)
     team_states = ai_context.get("team_public_states") if isinstance(ai_context.get("team_public_states"), dict) else {}
     p1_state = team_states.get("player1") if isinstance(team_states.get("player1"), dict) else {}
     actor_state = team_states.get(actor) if isinstance(team_states.get(actor), dict) else {}
@@ -5920,11 +6204,13 @@ def build_ai_player_channel_messages(
     session = r2_store.get_wenyou_session(uid)
     if not session or not isinstance(session, dict) or not session.get("gameId"):
         return None
+    actor = _validated_player_key(actor_id)
+    if not actor:
+        return None
     wallet = _load_wenyou_wallet(uid, session)
-    actor = _resolve_player_key(actor_id)
     player1_name = _wallet_player_display_name(wallet, "player1", "") or _session_player_display_name(session, "player1", "玩家一")
     actor_name = _wallet_player_display_name(wallet, actor, "") or _session_player_display_name(session, actor, _player_display_name(actor))
-    context = compose_ai_player_context(session, actor_id=actor_id, wallet=wallet, user_id=uid, context_mode="channel")
+    context = compose_ai_player_context(session, actor_id=actor, wallet=wallet, user_id=uid, context_mode="channel")
     user_prompt = "\n".join(
         [
             "[WENYOU WALKIE TALKIE]",
@@ -5945,6 +6231,7 @@ def build_ai_player_channel_messages(
     ]
 
 
+@_serialized_user_operation
 def cmd_team_channel_message(
     user_id: int,
     player_message: str,
@@ -6090,6 +6377,7 @@ def _compact_player_tool_view(view: dict) -> dict:
     }
 
 
+@_serialized_user_operation
 def execute_player_tool(user_id: int, name: str, arguments: Optional[dict]) -> str:
     uid = int(user_id)
     args = arguments if isinstance(arguments, dict) else {}
@@ -6147,9 +6435,9 @@ def execute_player_tool(user_id: int, name: str, arguments: Optional[dict]) -> s
 
 
 def _validate_player_tool_actor(wallet: dict, actor_id: Any) -> tuple[bool, str, str]:
-    actor = _resolve_player_key(actor_id)
-    if actor not in _WENYOU_PLAYER_IDS:
-        return False, actor, "INVALID_ACTOR"
+    actor = _validated_player_key(actor_id)
+    if not actor:
+        return False, str(actor_id or ""), "INVALID_ACTOR"
     players = wallet.get("players") if isinstance(wallet.get("players"), dict) else {}
     player = players.get(actor) if isinstance(players.get(actor), dict) else {}
     controller = str(player.get("controller") or _WENYOU_PLAYER_CONTROLLERS.get(actor) or "").lower()
@@ -6160,10 +6448,11 @@ def _validate_player_tool_actor(wallet: dict, actor_id: Any) -> tuple[bool, str,
 
 def _player_tool_error(actor_id: Any, error_code: str, message: str, view: Optional[dict] = None) -> tuple[bool, str, dict]:
     payload = dict(view or {})
-    payload.update({"actor_id": _resolve_player_key(actor_id), "error_code": error_code, "state_patch": None})
+    payload.update({"actor_id": _validated_player_key(actor_id) or str(actor_id or ""), "error_code": error_code, "state_patch": None})
     return False, message, payload
 
 
+@_serialized_user_operation
 def player_tool_buy_item(user_id: int, actor_id: Any = "player2", offer_ref: str = "", item_id: str = "", quantity: int = 1, reason: str = "") -> tuple[bool, str, dict]:
     uid = int(user_id)
     wallet = _load_wenyou_wallet(uid, r2_store.get_wenyou_session(uid))
@@ -6179,6 +6468,7 @@ def player_tool_buy_item(user_id: int, actor_id: Any = "player2", offer_ref: str
     return ok, message, view
 
 
+@_serialized_user_operation
 def player_tool_roll_gacha(user_id: int, actor_id: Any = "player2", pool_id: str = "mixed", count: int = 1, reason: str = "") -> tuple[bool, str, dict]:
     uid = int(user_id)
     wallet = _load_wenyou_wallet(uid, r2_store.get_wenyou_session(uid))
@@ -6192,6 +6482,7 @@ def player_tool_roll_gacha(user_id: int, actor_id: Any = "player2", pool_id: str
     return ok, message, view
 
 
+@_serialized_user_operation
 def player_tool_inventory_action(
     user_id: int,
     actor_id: Any = "player2",
@@ -6222,10 +6513,12 @@ def player_tool_inventory_action(
     return True, result_text, view
 
 
+@_serialized_user_operation
 def player_tool_use_item(user_id: int, actor_id: Any = "player2", item_ref: str = "", target_id: Any = None, context: str = "") -> tuple[bool, str, dict]:
     return player_tool_inventory_action(user_id, actor_id=actor_id, action="use", item_ref=item_ref, target_id=target_id or actor_id, context=context)
 
 
+@_serialized_user_operation
 def player_tool_transfer(
     user_id: int,
     actor_id: Any = "player2",
@@ -6243,7 +6536,9 @@ def player_tool_transfer(
     ok_actor, actor, error = _validate_player_tool_actor(wallet, actor_id)
     if not ok_actor:
         return _player_tool_error(actor, error, "指定角色不存在或不是 AI 控制。", get_shop_view(uid, actor))
-    target = _resolve_player_key(target_id)
+    target = _validated_player_key(target_id)
+    if not target:
+        return _player_tool_error(actor, "INVALID_TARGET", "指定接收角色不存在。", get_shop_view(uid, actor))
     if target == actor:
         return _player_tool_error(actor, "TARGET_FORBIDDEN", "不能转交给自己。", get_shop_view(uid, actor))
     if active:
@@ -6735,6 +7030,7 @@ def _resolve_encounter_action(session: dict, action_type: str, target: str = "",
     return True, result_text, patch
 
 
+@_serialized_user_operation
 def cmd_encounter_action_with_ai_player(
     user_id: int,
     action_type: str,
@@ -6871,6 +7167,7 @@ def build_gm_context_preview(user_id: int) -> Optional[dict]:
     }
 
 
+@_serialized_user_operation
 def cmd_go(user_id: int) -> str:
     """结算本轮，调用 GM。"""
     uid = int(user_id)
@@ -6958,6 +7255,7 @@ def _archive_settled_session(uid: int, session: dict) -> None:
         _PENDING_STORY_CONFIRM.pop(uid, None)
 
 
+@_serialized_user_operation
 def cmd_end(user_id: int, result: str = "", rating: str = "") -> str:
     """最终结算并立即归档本局。"""
     uid = int(user_id)
@@ -6984,6 +7282,7 @@ def cmd_end(user_id: int, result: str = "", rating: str = "") -> str:
     return "文游：本局已完成结算并归档。\n\n" + summary + "\n\n下一局可在主神空间重新开局。"
 
 
+@_serialized_user_operation
 def cmd_settle(user_id: int) -> str:
     """结算完成并归档本局。"""
     uid = int(user_id)

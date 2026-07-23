@@ -168,10 +168,13 @@ def _item_allowed_in_phase(item: dict, session: dict) -> bool:
 
 
 def _check_item_requirements(session: dict, item: dict, player: dict) -> Optional[str]:
+    rank = _normalize_difficulty(player.get("rank") or "D")
+    seal_rank = str(item.get("seal_rank") or "").strip().upper()
+    if seal_rank and _rarity_rank(rank) < _rarity_rank(seal_rank):
+        return f"阶位不足，需要 {seal_rank} 阶。"
     req = item.get("requirements") if isinstance(item.get("requirements"), dict) else {}
     if not req:
         return None
-    rank = _normalize_difficulty(player.get("rank") or "D")
     if req.get("rank_min") and _rarity_rank(rank) < _rarity_rank(req.get("rank_min")):
         return f"阶位不足，需要 {str(req.get('rank_min')).upper()} 阶。"
     if req.get("level_min") and int(player.get("level") or 1) < int(req.get("level_min") or 0):

@@ -8,11 +8,17 @@ _WENYOU_PLAYER_LABELS = {"player1": "玩家一", "player2": "玩家二"}
 _WENYOU_PLAYER_CONTROLLERS = {"player1": "human", "player2": "ai"}
 
 
-def _resolve_player_key(player_id: Any = "player1") -> str:
-    raw = str(player_id or "player1").strip().lower()
+def _validated_player_key(player_id: Any) -> Optional[str]:
+    raw = str(player_id or "").strip().lower()
+    if raw in {"player1", "p1", "玩家一"}:
+        return "player1"
     if raw in {"player2", "p2", "玩家二"}:
         return "player2"
-    return "player1"
+    return None
+
+
+def _resolve_player_key(player_id: Any = "player1") -> str:
+    return _validated_player_key(player_id) or "player1"
 
 
 def _player_display_name(player_id: Any) -> str:

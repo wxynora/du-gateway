@@ -153,7 +153,7 @@ def format_inject_block(items: Optional[list[dict]] = None) -> str:
         return "【你的待续念头（仅你与网关可见）】\n（当前没有待续念头）"
     lines = [
         "【你的待续念头（仅你与网关可见）】",
-        "这些是你自己留下、还没处理完的小念头。你可以选择执行、继续留着，或用隐藏标记标为 done / dismiss。",
+        "这些是你自己留下、还没处理完的小念头。你可以选择执行、继续留着（不需要输出标记），或用隐藏标记标为 done / dismiss。",
     ]
     for idx, item in enumerate(pending[:MAX_PENDING_INJECT], 1):
         text = _clean_text(str(item.get("text") or ""))

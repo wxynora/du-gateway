@@ -55,7 +55,7 @@
 | 能力 | 代码入口 | 当前边界 |
 | --- | --- | --- |
 | 请求接收、流式响应、工具循环、隐藏标记 | `routes/chat.py` | 所有支持入口走统一主链路 |
-| Reasoning 与业务隐藏块 | `services/reasoning_utils.py`、`services/hidden_blocks.py`、`services/pc_command_handler.py` | `reasoning_started / reasoning_delta / reasoning_finished / assistant_reasoning` 与 PCmd `DU_THOUGHT` 流继续独立运行；`DU_THOUGHT`、`DU_FOLLOWUP`、`DU_VITALS`、`PIXEL_HOME` 等业务隐藏标记仍由统一解析链剥离并执行。停用的 pseudo COT / `DU_INNER_OS` 代码与 R2 状态接口已移除，历史 R2 对象不在代码清理任务中批量删除 |
+| Reasoning 与业务隐藏块 | `services/reasoning_utils.py`、`services/hidden_blocks.py`、`services/pc_command_handler.py` | `reasoning_started / reasoning_delta / reasoning_finished / assistant_reasoning` 与 PCmd `DU_THOUGHT` 流继续独立运行；`DU_THOUGHT`、`DU_FOLLOWUP`、`DU_VITALS`、`PIXEL_HOME` 等业务隐藏标记仍由统一解析链剥离并执行。待续念头只支持 `add / done / dismiss`；继续保留时不输出标记。停用的 pseudo COT / `DU_INNER_OS` 代码与 R2 状态接口已移除，历史 R2 对象不在代码清理任务中批量删除 |
 | 主模型输出参数 | `routes/chat.py`、`config.py` | 通用流式与非流式转发不再自动补写或抬高 `max_tokens`；客户端明确传入的输出参数原样保留，网关只记录上游 `finish_reason=length` 供诊断 |
 | Pipeline 组装与归档 | `pipeline/pipeline.py` | 负责上下文、记忆、工具与回合后处理 |
 | 请求清洗 | `pipeline/cleaner.py` | 统一清洗入口消息与上游消息结构 |
@@ -248,6 +248,10 @@ HTML 使用当前页笺工具直接持久化；旧临时预览工具不再作为
 - 文游：`services/wenyou/*`、`storage/wenyou_sqlite_store.py`
 
 文游玩家工具默认不进入聊天工具集。App 负责管理“无限流游戏模式”这个全局开关；开启后，统一聊天入口都会注入 `buy_item`、`roll_gacha`、`inventory_action`、`use_item`、`transfer`，关闭后所有入口都不注入。
+
+文游经济与角色状态以 `wallet.wallets.player1/player2`、`wallet.inventories.player1/player2/task_items` 和运行中 `stats.inventories` 为当前数据源；顶层 `points/debts/inventory` 只保留玩家一旧接口兼容。结算奖励、新手礼包、商店/抽卡、加点、晋升、复活、使用/回收/转交均按实际角色结算，物品阶位与属性门槛也只检查持有者本人。新手流程只有 `standard_clear` 才完成，失败归档后仍会重新进入 `T-000`；长期等级、属性、阶位和核心能力会在角色卡与下一局之间双向同步。GM 上下文按持有者列出两名玩家背包和队伍任务物，核心能力画像只采集对应玩家自己的历史行动。公开读改写入口按 `user_id` 使用可重入锁串行；同主机多 worker 额外使用临时目录 `flock`，无 `fcntl` 平台退回进程内锁。非法角色 ID 明确拒绝，不再静默落到玩家一。
+
+文游定向验证：`.venv/bin/python scripts/test_wenyou_logic_regressions.py` 覆盖教程重试、双账户奖励与背包、GM 持有者视图、个人门槛、能力样本、跨局成长、同进程/跨进程串行写入、重复唯一商品和非法角色；`.venv/bin/python scripts/wenyou_rules_smoke.py` 覆盖既有规则基础链。
 
 游戏内部允许列表、道具适配表和安全访问 allowlist 属于各自领域约束，不等同于已经移除的聊天窗口白名单/黑名单。
 
