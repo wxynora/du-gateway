@@ -64,6 +64,7 @@
 | 提示词管理 | `services/prompt_manager.py`、`storage/r2_store.py` | App 可编辑的静态 Prompt 分区统一从这里管理；详情最多返回当前分区最新 3 个备份，配置写成功后按 `created_at` 清理到最新 3 个，写失败不删旧备份，回滚复用同一保存与保留链路 |
 | 入口风格 | `services/entry_style_prompt.py` | 按真实聊天入口注入对应风格 |
 | 语音台词规范 | `services/voice_line_prompt.py` | 语音输出场景统一使用该规范 |
+| 幽默梗库 | `services/humor_meme_bank.py` | 默认梗以 SQLite 种子维护，按语境关键词与随机结果合计最多注入 3 条；2026-07 已补入“OMG，你吓到我了”，并保留来源语境、完整句式和使用例子 |
 | 工具定义与执行 | `services/chat_tools.py` | 当前网关原生工具集中入口 |
 | 网关工具辅助 | `services/chat_tool_helpers.py`、`services/gateway_tools.py` | 领域工具复用同一执行边界 |
 | 工具使用摘要缓存 | `services/tool_result_cache.py`、`storage/runtime_sqlite.py`、`routes/miniapp/reasoning.py` | 工具循环结束后一次性写本地 SQLite；结果按工具清洗，不保存原始大 JSON；24 小时 TTL，按实际注入字符计数，超过 3000 字符时删除最早完整记录直至不高于 2000；思维链接口根据每轮已归档的 `static_breakdown` 返回当轮 `tool_cache.current_chars/max_chars`，不读取页面刷新时的全局现值 |
