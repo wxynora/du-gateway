@@ -64,6 +64,7 @@
 | 提示词管理 | `services/prompt_manager.py`、`storage/r2_store.py` | App 可编辑的静态 Prompt 分区统一从这里管理；详情最多返回当前分区最新 3 个备份，配置写成功后按 `created_at` 清理到最新 3 个，写失败不删旧备份，回滚复用同一保存与保留链路 |
 | 入口风格 | `services/entry_style_prompt.py` | 按真实聊天入口注入对应风格 |
 | 语音台词规范 | `services/voice_line_prompt.py` | 语音输出场景统一使用该规范 |
+| 语音转写后处理 | `services/stt.py` | Gemini/OpenRouter 与 Deepgram 在统一返回边界压缩同一个非词汇填充音的超长连续重复：至少 5 次时保留 3 次并以中文省略号分隔；短重复、混合发声和有意义的词语重复保持原文 |
 | MiniApp 语音转写 | `routes/miniapp/media.py`、`POST /miniapp-api/chat-media/transcribe` | `text` 逐字使用 STT/Gemini 返回正文，不按 `duration_ms` 清洗停顿、笑声、哼唱等标记；`duration_ms` 只用于保存语音 attachment 时长 |
 | 幽默梗库 | `services/humor_meme_bank.py` | 默认梗以 SQLite 种子维护，按语境关键词与随机结果合计最多注入 3 条；2026-07 已补入“OMG，你吓到我了”，并保留来源语境、完整句式和使用例子 |
 | 工具定义与执行 | `services/chat_tools.py` | 当前网关原生工具集中入口 |
@@ -239,7 +240,7 @@ HTML 使用当前页笺工具直接持久化；旧临时预览工具不再作为
 - App 设备上报：`routes/miniapp/device_state.py`
 - App 设备动作：`routes/miniapp/device_actions.py`
 
-设备感知快照写入 `sense_latest`，24 小时短尾历史写入 `sense_history`；历史按感知类型分别限量，前台应用与会话高频上报不会挤掉屏幕、健康、位置和电量记录。最近睡眠摘要按滚动 24 小时展示，并合并仍在时间窗内的主睡眠与午睡段；同日摘要同时显示今天/昨天与具体月日，跨日摘要分别显示起止日期，避免只看时刻误判睡眠归属日。睡眠结算中，上午开始且持续至少 4 小时的熄屏优先归入主睡眠；系统电话界面 `com.android.incallui` 不作为明确前台活动截断睡眠，且未出现可信醒来证据时，重复熄屏事件沿用最早的 `screenOffSince`，不会把连续睡眠切短。
+设备感知快照写入 `sense_latest`，24 小时短尾历史写入 `sense_history`；历史按感知类型分别限量，前台应用与会话高频上报不会挤掉屏幕、健康、位置和电量记录。最近睡眠摘要按滚动 24 小时展示，并合并仍在时间窗内的主睡眠与午睡段；凡存储层已经接受的有效摘要，system 展示层不再按分钟数二次过滤。同日摘要同时显示今天/昨天与具体月日，跨日摘要分别显示起止日期，避免只看时刻误判睡眠归属日。早晨亮屏唤醒优先依据本次 `lastSleepBlock` 已被认定并纳入 `main_sleep` 摘要，旧记录缺少分类信息时才回退到原 60 分钟门槛；普通 rejected 短锁屏不触发。睡眠结算中，上午开始且持续至少 4 小时的熄屏优先归入主睡眠；系统电话界面 `com.android.incallui` 不作为明确前台活动截断睡眠，且未出现可信醒来证据时，重复熄屏事件沿用最早的 `screenOffSince`，不会把连续睡眠切短。
 
 ### 8.4 游戏
 

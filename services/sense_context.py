@@ -15,7 +15,6 @@ _MAX_SNAPSHOT_CHARS = 800
 _MAX_USAGE_APPS = 5
 _MAX_APP_SESSION_ITEMS = 5
 _SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES = 60
-_DAY_SLEEP_SUMMARY_DISPLAY_MIN_MINUTES = 45
 
 
 def _as_dict(v: Any) -> dict:
@@ -162,11 +161,11 @@ def _sleep_summary_minutes(summary: dict) -> int:
     return max(0, total_ms // 60000)
 
 
-def _recent_sleep_summary(summary: dict, min_minutes: int) -> tuple[int, Any, Any] | None:
+def _recent_sleep_summary(summary: dict) -> tuple[int, Any, Any] | None:
     if not isinstance(summary, dict):
         return None
     total_minutes = _sleep_summary_minutes(summary)
-    if total_minutes < min_minutes:
+    if total_minutes <= 0:
         return None
     start_dt = parse_iso_to_beijing(str(summary.get("startAt") or "").strip())
     end_dt = parse_iso_to_beijing(str(summary.get("endAt") or "").strip())
@@ -215,8 +214,8 @@ def _format_sleep_summary_piece(label: str, summary: dict, total_minutes: int, s
 
 
 def _format_last_sleep_summary_line(screen: dict) -> str | None:
-    main = _recent_sleep_summary(_as_dict(screen.get("sleepSummary")), _SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES)
-    day = _recent_sleep_summary(_as_dict(screen.get("daySleepSummary")), _DAY_SLEEP_SUMMARY_DISPLAY_MIN_MINUTES)
+    main = _recent_sleep_summary(_as_dict(screen.get("sleepSummary")))
+    day = _recent_sleep_summary(_as_dict(screen.get("daySleepSummary")))
     if not main and not day:
         return None
     pieces: list[str] = []

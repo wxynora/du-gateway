@@ -235,6 +235,20 @@ def _sleep_summary_minutes(on_data: dict | None, on_at: datetime) -> int:
         return 0
 
 
+def _is_recognized_main_sleep_wake(on_data: dict | None, on_at: datetime) -> bool:
+    block = (on_data or {}).get("lastSleepBlock")
+    if not isinstance(block, dict):
+        return False
+    if str(block.get("classification") or "").strip() != "main_sleep":
+        return False
+    if block.get("summaryIncluded") is not True:
+        return False
+    end_at = _dt(block.get("endAt"))
+    if not end_at:
+        return False
+    return abs((on_at - end_at).total_seconds()) <= 10 * 60
+
+
 def _screen_off_minutes(prev_off: dict | None, on_at: datetime, on_data: dict | None = None) -> int:
     summary_minutes = _sleep_summary_minutes(on_data, on_at)
     block_minutes = 0
@@ -624,12 +638,13 @@ def _build_events(doc: dict, history: list[dict], window_id: str, now_dt) -> lis
         prev_off = _previous_screen_off(screen_events, on_at)
         latest_on_data = latest_on.get("data") if isinstance(latest_on.get("data"), dict) else {}
         off_minutes = _screen_off_minutes(prev_off, on_at, latest_on_data)
+        recognized_main_sleep = _is_recognized_main_sleep_wake(latest_on_data, on_at)
         user_chatted_after_screen_on = _has_normal_user_chat_after(window_id, on_at)
         event_at = on_at.strftime("%Y-%m-%dT%H:%M:%S+08:00")
         if (
             on_at.strftime("%Y-%m-%d") == now_dt.strftime("%Y-%m-%d")
             and _MORNING_START_HOUR <= on_at.hour < _MORNING_END_HOUR
-            and off_minutes >= _MIN_MORNING_OFF_MINUTES
+            and (recognized_main_sleep or off_minutes >= _MIN_MORNING_OFF_MINUTES)
             and not user_chatted_after_screen_on
         ):
             events.append(

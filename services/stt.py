@@ -72,6 +72,7 @@ _JSON_TEXT_FIELD_RE = re.compile(r'"text"\s*:\s*"((?:\\.|[^"\\])*)"', flags=re.S
 _LEAKED_TEXT_PREFIX_RE = re.compile(r'^\s*\{?\s*"?text"?\s*[:：]\s*"?', flags=re.I)
 _PAUSE_NOTE_RE = re.compile(r"（\s*停顿了约\s*\d+(?:\.\d+)?\s*秒\s*）")
 _FILLER_ONLY_RE = re.compile(r"^[嗯啊哦呃呃唔诶哎哼]+$")
+_LONG_FILLER_RUN_RE = re.compile(r"(?P<filler>[嗯啊哦呃唔诶哎哼])(?:[ \t…]*(?P=filler)){4,}")
 
 
 def _clean_text(value: Any, limit: int = 4000) -> str:
@@ -107,6 +108,16 @@ def _extract_leaked_text_field(text: str) -> str:
     return raw
 
 
+def _compact_long_filler_repetition(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    return _LONG_FILLER_RUN_RE.sub(
+        lambda match: "……".join([match.group("filler")] * 3),
+        raw,
+    )
+
+
 def _compact_pause_repetition(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
@@ -115,7 +126,8 @@ def _compact_pause_repetition(text: str) -> str:
     without_pauses = _PAUSE_NOTE_RE.sub("", raw)
     compact = re.sub(r"[\s，,、。.!！？?…\"'“”‘’（）()：:；;]+", "", without_pauses)
     if pause_count >= 2 and compact and _FILLER_ONLY_RE.fullmatch(compact):
-        return compact[0]
+        long_filler = _compact_long_filler_repetition(compact)
+        return long_filler if long_filler != compact else compact[0]
     return raw
 
 
@@ -447,6 +459,8 @@ def transcribe_speech(audio_bytes: bytes, mime_type: str = "audio/webm", filenam
             logger.warning("未知 STT provider=%s", item)
             result = None
         if result and result.get("text"):
+            result = dict(result)
+            result["text"] = _compact_long_filler_repetition(result.get("text") or "")
             return result
     return None
 
