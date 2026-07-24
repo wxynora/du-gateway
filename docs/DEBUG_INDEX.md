@@ -72,10 +72,11 @@
 | 工具使用摘要缓存 | `services/tool_result_cache.py`、`storage/runtime_sqlite.py`、`routes/miniapp/reasoning.py` | 工具循环结束后一次性写本地 SQLite；结果按工具清洗，不保存原始大 JSON；24 小时 TTL，按实际注入字符计数，超过 3000 字符时删除最早完整记录直至不高于 2000；思维链接口根据每轮已归档的 `static_breakdown` 返回当轮 `tool_cache.current_chars/max_chars`，不读取页面刷新时的全局现值 |
 | 身体状态四轮评估 | `services/du_body_evaluator.py`、`storage/du_body_eval_store.py`、`services/pixel_home.py` | 真实归档轮次独立进入 SQLite pending，每 4 轮或最旧等待 30 分钟时由 DS 逐轮输出 delta；保留模型默认 thinking、不设置人为输出上限并启用 JSON Output，解析失败日志只记录结束原因和 token/字符统计；apply 使用稳定幂等键并记录 before/delta/after 审计，最终失败仍保留原轮次供人工恢复，进程重启按 lease 接手；不改变动态记忆、近期总结或压缩移位计数，动态记忆 DS 不再请求、解析或返回 BODY delta |
 | Claude thinking 连续性 | `services/claude_thinking_carryover.py` | 普通对话回传 opaque signature，不回灌转写 thinking 文本 |
-| Claude OAuth Proxy 输出额度 | `scripts/claude_oauth_proxy.js` | Anthropic 协议必填的默认 `max_tokens` 使用当前 Claude 主模型 128k 输出上限；旧式 extended thinking 继续强制保证总额度不少于 `thinking budget + 1`，该保护是辛玥明确设计，不得删除或弱化 |
-| Prompt Cache 诊断 | `services/prompt_cache_debug.py` | 记录静态/动态构成与上游 usage 元数据；合并后的静态尾段仍按内容拆分 QQ、TG、微信、SumiTalk、小爱音箱入口风格，不会被近期记忆块标记吞掉 |
+| Claude OAuth Proxy 思考与输出额度 | `scripts/claude_oauth_proxy.js` | `claude-opus-4-6/4-7/4-8/5` 与 `claude-fable-5` 走 adaptive thinking，强制请求 `display=summarized`；强度优先读取请求的 `output_config.effort` / `reasoning_effort`，否则使用 `CLAUDE_ADAPTIVE_THINKING_EFFORT`（默认 `high`）。Anthropic 协议必填的默认 `max_tokens` 使用当前 Claude 主模型 128k 输出上限；旧式 extended thinking 继续强制保证总额度不少于 `thinking budget + 1`，该保护不得删除或弱化 |
+| Claude 思考强度网关注入 | `routes/miniapp/upstreams.py`、`storage/upstream_store.py`、`services/upstream_policy.py` | App 通过独立设置接口按当前上游保存 `claude_thinking_effort`；网关对 `claude-opus-4-6/4-7/4-8/5` 与 `claude-fable-5` 转发时读取该值，注入 `thinking.type=adaptive`、`thinking.display=summarized` 与 `output_config.effort`。这不是 App 每轮聊天直接携带的字段 |
+| Prompt Cache 诊断 | `services/prompt_cache_debug.py` | 记录静态/动态构成与上游 usage 元数据；Thinking 规范保持独立 breakdown，QQ、TG、微信、SumiTalk、小爱音箱入口风格也不会被近期记忆块标记吞掉 |
 
-当前 Claude 缓存前缀顺序固定为：tools → 第 1 个断点 → 固定静态子块 → 第 2 个断点 → 工具摘要 → 第 3 个断点 → 入口风格 → SumiTalk Real/App 互斥提示 → 较稳定近期记忆 → 最近记忆 → 第 4 个断点 → 常驻动态 → 临时动态 → last4 → 对话消息。固定静态、工具摘要、入口风格、Real/App、较稳定近期和最近记忆属于静态提示前缀的子块；它们按唯一顺序表独立收集，再合并为对应缓存段，不为每个小注入额外生成 system。常驻动态、临时动态和 last4 分别保持独立，不会拼进静态区。工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑，只从静态尾段调整到临时动态位置。
+当前 Claude 缓存前缀顺序固定为：tools → 第 1 个断点 → 固定静态子块 → 第 2 个断点 → 工具摘要 → 第 3 个断点 → Thinking 规范 → 入口风格 → SumiTalk Real/App 互斥提示 → 较稳定近期记忆 → 最近记忆 → 第 4 个断点 → 常驻动态 → 临时动态 → last4 → 对话消息。固定静态、工具摘要、Thinking 规范、入口风格、Real/App、较稳定近期和最近记忆属于静态提示前缀的独立逻辑子块，按唯一顺序表收集。Thinking 规范单独输出为第 3 个断点后的 system 段，不与带 `__summary_recent__` 的入口/记忆尾段合并；专用内部标记只供 gateway 排序与诊断，上游转发前删除，因此不新增缓存断点，也不要求 Claude OAuth proxy 识别新字段。常驻动态、临时动态和 last4 分别保持独立，不会拼进静态区。工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑，只从静态尾段调整到临时动态位置。
 
 system 分区采用显式标记合同：凡辛玥明确指定为动态区、临时动态或一次性事件的 system，生产点必须直接携带 `__dynamic__=True`；未标记的 system 继续按 static 归类，不以正文内容猜测。这些临时动态 system 固定放在常驻动态之后、last4 之前，不得进入静态前缀；一起看当前剧情、一起听或当前音乐、小家/游戏事件、交换日记回执等都只调整到该注入位置，各功能原有的产生、持续与结束行为保持不变。若只是在调查或实现时判断某个 system 可能应改为动态，必须先说明来源、内容、现有行为、拟放位置及缓存或行为影响并向辛玥确认，不能静默重分类或扩展生命周期设计。
 
@@ -269,6 +270,8 @@ git diff --check
 ```
 
 ### 9.2 关键运行检查
+
+当前主网关的 SSH 入口优先使用 `ssh du-gateway`，该别名走 Tailscale；只有 Tailscale 不可用或需要专门排查公网入口时，才使用 `ssh du-gateway-public`。部署、日志与服务操作不要先拿公网 IP 或默认 SSH key 试连。
 
 ```bash
 curl -fsS http://127.0.0.1:5000/health

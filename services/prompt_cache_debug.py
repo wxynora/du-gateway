@@ -20,6 +20,8 @@ def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
         return "play小纸条"
     if msg.get("__summary_cache__") or msg.get("__summary_recent__") or "【近期记忆】" in content:
         return "近期记忆"
+    if msg.get("__thinking_rules__") or stripped.startswith("### Thinking 规范"):
+        return "thinking规则"
     if stripped.startswith("【入口风格：QQ】"):
         return "QQ入口风格"
     if stripped.startswith("【入口风格：微信】"):

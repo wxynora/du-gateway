@@ -16,7 +16,7 @@ from config import (
 from services.cloudflare_anthropic import normalize_model_for_cloudflare
 
 _CLAUDE_ADAPTIVE_THINKING_RE = re.compile(
-    r"(?:claude-opus-4-(?:6|7|8)|claude-fable-5)(?:\b|-|$)",
+    r"(?:claude-opus-4-(?:6|7|8)|claude-opus-5|claude-fable-5)(?:\b|-|$)",
     re.IGNORECASE,
 )
 _CLAUDE_OPUS_46_RE = re.compile(r"claude-opus-4-6(?:\b|-|$)", re.IGNORECASE)
@@ -26,6 +26,7 @@ _LAST4_SYSTEM_MARKER = "__last4__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
+_THINKING_RULES_SYSTEM_MARKER = "__thinking_rules__"
 _ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
 _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
@@ -253,6 +254,7 @@ def strip_internal_prompt_region_markers(messages: list[dict]) -> None:
     for msg in messages:
         if not isinstance(msg, dict):
             continue
+        msg.pop(_THINKING_RULES_SYSTEM_MARKER, None)
         msg.pop(_TEMPORARY_DYNAMIC_SYSTEM_MARKER, None)
         msg.pop(_LAST4_SYSTEM_MARKER, None)
 

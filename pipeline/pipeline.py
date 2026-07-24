@@ -76,7 +76,8 @@ _SYSTEM_PROMPT_REGION_ORDER = (
 _SYSTEM_PROMPT_CACHE_GROUPS = (
     ("static",),
     ("tool_result_cache",),
-    ("thinking_rules", "entry_style", "sumitalk_mode", "summary_cache", "summary_recent"),
+    ("thinking_rules",),
+    ("entry_style", "sumitalk_mode", "summary_cache", "summary_recent"),
     ("dynamic",),
     ("temporary_dynamic",),
     ("last4",),
@@ -581,6 +582,7 @@ def step_inject_tool_result_cache(body: dict) -> dict:
     cache_group_markers = (
         None,
         _TOOL_RESULT_CACHE_SYSTEM_MARKER,
+        _THINKING_RULES_SYSTEM_MARKER,
         static_tail_marker,
         _DYNAMIC_SYSTEM_MARKER,
         _DYNAMIC_SYSTEM_MARKER,
