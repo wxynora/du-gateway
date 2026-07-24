@@ -2728,7 +2728,6 @@ def chat_completions():
     body = step_clean_images_and_save_desc(body, window_id)
     body = step_clean_for_forward(body)
     body = step_replace_rikka_system(body)
-    body = step_inject_thinking_block_rules(body)
     body = step_inject_core_behavior_rules(body)
     body = step_inject_du_non_retreat_rules(body)
     body = step_inject_common_knowledge(body)
@@ -2819,6 +2818,7 @@ def chat_completions():
         _is_local_claude_oauth_proxy_url(active_upstream_url) or is_cloudflare_anthropic_url(active_upstream_url)
     ) and not _skip_claude_thinking_carryover_request():
         body = _inject_previous_claude_thinking_blocks(body, window_id)
+    body = step_inject_thinking_block_rules(body)
     body = step_inject_tool_result_cache(body)
     body = step_trim_messages_if_over_limit(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))

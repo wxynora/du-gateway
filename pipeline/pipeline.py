@@ -53,6 +53,7 @@ _LAST4_SYSTEM_MARKER = "__last4__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
+_THINKING_RULES_SYSTEM_MARKER = "__thinking_rules__"
 _ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
 _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
@@ -63,6 +64,7 @@ _PLAY_NOTE_PENDING_BODY_KEY = "__play_note_pending__"
 _SYSTEM_PROMPT_REGION_ORDER = (
     "static",
     "tool_result_cache",
+    "thinking_rules",
     "entry_style",
     "sumitalk_mode",
     "summary_cache",
@@ -74,7 +76,7 @@ _SYSTEM_PROMPT_REGION_ORDER = (
 _SYSTEM_PROMPT_CACHE_GROUPS = (
     ("static",),
     ("tool_result_cache",),
-    ("entry_style", "sumitalk_mode", "summary_cache", "summary_recent"),
+    ("thinking_rules", "entry_style", "sumitalk_mode", "summary_cache", "summary_recent"),
     ("dynamic",),
     ("temporary_dynamic",),
     ("last4",),
@@ -403,6 +405,8 @@ def _system_prompt_region(msg: dict) -> str:
     """Return the logical static/dynamic sub-block for one system message."""
     if msg.get(_TOOL_RESULT_CACHE_SYSTEM_MARKER):
         return "tool_result_cache"
+    if msg.get(_THINKING_RULES_SYSTEM_MARKER):
+        return "thinking_rules"
     if msg.get(_ENTRY_STYLE_SYSTEM_MARKER):
         return "entry_style"
     if msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER):
@@ -932,7 +936,7 @@ def step_inject_du_non_retreat_rules(body: dict) -> dict:
 
 def step_inject_thinking_block_rules(body: dict) -> dict:
     """
-    全局注入：放在渡核心 prompt 之后、核心行为规则之前。
+    全局注入：放在工具缓存断点之后、入口风格之前。
     """
     rules = _load_managed_static_prompt("thinking_rules", _THINKING_BLOCK_RULES)
     if not rules:
@@ -944,23 +948,26 @@ def step_inject_thinking_block_rules(body: dict) -> dict:
 
     body = copy.deepcopy(body)
     messages = body.get("messages") or []
-    if not messages:
-        body["messages"] = [{"role": "system", "content": rules}]
-        return body
-
-    insert_idx = 0
-    du_prompt = _load_du_core_prompt().strip()
-    first = messages[0]
-    if (first.get("role") or "").lower() == "system" and du_prompt and str(first.get("content") or "").strip() == du_prompt:
-        insert_idx = 1
-    messages.insert(insert_idx, {"role": "system", "content": rules})
+    insert_idx = len(messages)
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict) or (msg.get("role") or "").lower() != "system":
+            insert_idx = i
+            break
+    messages.insert(
+        insert_idx,
+        {
+            "role": "system",
+            "content": rules,
+            _THINKING_RULES_SYSTEM_MARKER: True,
+        },
+    )
     body["messages"] = messages
     return body
 
 
 def step_inject_core_behavior_rules(body: dict) -> dict:
     """
-    全局注入：放在 thinking block 约束之后、各入口风格 system 之前。
+    全局注入：放在渡核心 prompt 后的固定行为规则区。
     """
     rules = _load_managed_static_prompt("core_behavior_rules", _CORE_BEHAVIOR_RULES)
     if not rules:
