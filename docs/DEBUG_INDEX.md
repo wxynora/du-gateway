@@ -189,7 +189,7 @@ QQ 群上下文按发言人区分，不把群友内容当成小玥说的；入�
 - 记忆、中期记忆与诊断：`routes/miniapp/memory_panel.py`、`routes/miniapp/midterm_memory.py`、`routes/miniapp/diagnostics.py`
 - 交换日记：`routes/miniapp/exchange_diary.py` + `storage/exchange_diary_store.py`；小玥评论后的唤醒由 `services/conversation_followup.py::send_exchange_diary_comment_wakeup` 将日记标题、`entry_id/comment_id` 和回复工具规则放入带 `__dynamic__=true` 的 system，评论原文只以 `小玥评论了你的日记：{评论内容}` 出现在 user，不进入 static/dynamic system。渡通过 `services/chat_tools.py` 创建评论时继续发送 `notification_kind=diary_comment` 的系统通知，payload 带 `entry_id/comment_id/reply_to_comment_id/sender`，回复目标作者为 `xy` 时标题为“渡回复了你的评论”，其他情况保持“渡评论了你的日记”。
 - 记事本：`routes/miniapp/notes.py`，对应聊天工具 `note_write`
-- 秘密抽屉：`routes/miniapp/secret_drawer.py` + `storage/secret_drawer_store.py`
+- 秘密抽屉：`routes/miniapp/secret_drawer.py` + `storage/secret_drawer_store.py`；聊天注入由 `services/secret_drawer.py::format_rule_block/format_state_block` 和 `pipeline/pipeline.py::step_inject_secret_drawer` 负责，保存分类、隐藏标记及工具使用规则进入固定静态 system，常驻动态只保留当前抽屉的数量/分类/置顶/暗格/待整理统计，不注入具体条目或 PIN 状态。
 - 渡的页笺：`routes/miniapp/du_pages.py` + `storage/du_pages_store.py`
 - 共读：`routes/miniapp/co_read.py` + `storage/co_read_store.py`
 - 日程：`routes/miniapp/schedule.py` + `storage/schedule_sqlite_store.py`

@@ -277,17 +277,27 @@ def save_hidden_block(
     return result
 
 
-def format_inject_block() -> str:
-    st = secret_drawer_store.stats()
-    config = secret_drawer_store.get_config()
-    total = int(st.get("total") or 0)
-    by_type = st.get("by_type") if isinstance(st.get("by_type"), dict) else {}
+def format_rule_block() -> str:
     lines = [
-        "###秘密抽屉",
+        "###秘密抽屉规则",
         "你有自己的秘密抽屉，可保存想留下的话、图片、梦境、冲浪内容或碎碎念。保存当前聊天用隐藏标记。",
         "保存时按内容选择分类：对话/聊天片段用 save_message，图片用 save_photo，梦或春梦用 save_dream，自己的想法/碎碎念用 save_note，网上看到的内容用 save_surf。不要把所有内容都存成 save_message。",
         "整理已有条目时，type 只使用 message、photo、dream、note、surf、misc；图片是 photo，不是 image；对话是 message，不是 dialog。",
+        (
+            "隐藏保存时，在 <<<DU_SECRET_SAVE>>> 与 <<<END_DU_SECRET_SAVE>>> 之间输出 JSON；"
+            "action 必须按内容从 save_message、save_photo、save_dream、save_note、save_surf 中选择，"
+            "其余可填 title、tags、why、sealed。"
+        ),
+        "整理/查看用工具 secret_drawer；action=stats/list/get/update/delete/restore/random/set_pin，参数放 payload。",
     ]
+    return "\n".join(lines).strip()
+
+
+def format_state_block() -> str:
+    st = secret_drawer_store.stats()
+    total = int(st.get("total") or 0)
+    by_type = st.get("by_type") if isinstance(st.get("by_type"), dict) else {}
+    lines = ["###当前秘密抽屉"]
     if total <= 0:
         lines.append("当前抽屉还是空的。")
     else:
@@ -304,16 +314,6 @@ def format_inject_block() -> str:
         lines.append(
             f"置顶 {int(st.get('pinned') or 0)} 条，暗格 {int(st.get('sealed') or 0)} 条，待整理 {int(st.get('needs整理') or 0)} 条。"
         )
-    if not config.get("read_error") and not str(config.get("box_pin") or "").strip():
-        lines.append("PIN 未设置，默认 0000；可用 secret_drawer 的 set_pin 设置 UI 解锁 PIN。")
-    lines.append(
-        "隐藏保存时，在 <<<DU_SECRET_SAVE>>> 与 <<<END_DU_SECRET_SAVE>>> 之间输出 JSON；"
-        "action 必须按内容从 save_message、save_photo、save_dream、save_note、save_surf 中选择，"
-        "其余可填 title、tags、why、sealed。"
-    )
-    lines.append(
-        "整理/查看用工具 secret_drawer；action=stats/list/get/update/delete/restore/random/set_pin，参数放 payload。"
-    )
     return "\n".join(lines).strip()
 
 

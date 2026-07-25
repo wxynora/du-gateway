@@ -1554,18 +1554,21 @@ def step_inject_pending_thoughts(body: dict, window_id: str) -> dict:
 
 
 def step_inject_secret_drawer(body: dict, window_id: str) -> dict:
-    """动态注入：秘密抽屉能力和短概况，不注入具体条目。"""
+    """固定规则进入静态 system；当前抽屉统计进入常驻动态 system。"""
     _ = window_id
     try:
-        from services.secret_drawer import format_inject_block
+        from services.secret_drawer import format_rule_block, format_state_block
 
-        block = format_inject_block()
+        rule_block = format_rule_block()
+        state_block = format_state_block()
     except Exception as e:
         logger.debug("secret_drawer 注入跳过 error=%s", e)
         return body
-    if not (block or "").strip():
-        return body
-    return _append_to_dynamic_system(body, "\n\n" + block.strip())
+    if (rule_block or "").strip():
+        body = _append_to_static_system(body, "\n\n" + rule_block.strip())
+    if (state_block or "").strip():
+        body = _append_to_dynamic_system(body, "\n\n" + state_block.strip())
+    return body
 
 
 def step_inject_wakeup_frame(body: dict, window_id: str) -> dict:
