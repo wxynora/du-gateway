@@ -66,7 +66,7 @@
 | 语音台词规范 | `services/voice_line_prompt.py` | 语音输出场景统一使用该规范 |
 | 语音转写后处理 | `services/stt.py` | Gemini/OpenRouter 与 Deepgram 在统一返回边界压缩同一个非词汇填充音的超长连续重复：至少 5 次时保留 3 次并以中文省略号分隔；短重复、混合发声和有意义的词语重复保持原文 |
 | MiniApp 语音转写 | `routes/miniapp/media.py`、`POST /miniapp-api/chat-media/transcribe` | `text` 逐字使用 STT/Gemini 返回正文，不按 `duration_ms` 清洗停顿、笑声、哼唱等标记；`duration_ms` 只用于保存语音 attachment 时长 |
-| 幽默梗库 | `services/humor_meme_bank.py` | 默认梗以 SQLite 种子维护，来源语境和使用例子只留在库内；模型侧按语境关键词与随机结果合计注入 3 条纯梗文本，不重复注入来源、用法或使用规则；2026-07 已补入“OMG，你吓到我了” |
+| 幽默梗库 | `services/humor_meme_bank.py` | 默认梗以 SQLite 种子维护；模型侧按语境关键词与随机结果合计注入 3 条“梗文本＋用法”，不注入来源、公共重复规则或尾部标题；2026-07 已补入“OMG，你吓到我了” |
 | 工具定义与执行 | `services/chat_tools.py` | 当前网关原生工具集中入口 |
 | 网关工具辅助 | `services/chat_tool_helpers.py`、`services/gateway_tools.py` | 领域工具复用同一执行边界 |
 | 工具使用摘要缓存 | `services/tool_result_cache.py`、`storage/runtime_sqlite.py`、`routes/miniapp/reasoning.py` | 工具循环结束后一次性写本地 SQLite；结果按工具清洗，不保存原始大 JSON；24 小时 TTL，按实际注入字符计数，超过 3000 字符时删除最早完整记录直至不高于 2000；思维链接口根据每轮已归档的 `static_breakdown` 返回当轮 `tool_cache.current_chars/max_chars`，不读取页面刷新时的全局现值 |

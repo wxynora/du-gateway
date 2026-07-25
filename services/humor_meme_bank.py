@@ -318,5 +318,5 @@ def format_memes_for_system(memes: list[HumorMeme]) -> str:
         return ""
     lines = ["", "【本轮可选梗素材】"]
     for item in items:
-        lines.append(f"- {item.meme}")
+        lines.append(f"- {item.meme}｜用法：{item.usage}")
     return "\n".join(lines)
