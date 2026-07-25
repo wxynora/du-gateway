@@ -316,12 +316,7 @@ def format_memes_for_system(memes: list[HumorMeme]) -> str:
     items = [m for m in memes if m.meme.strip()]
     if not items:
         return ""
-    lines = [
-        "",
-        "【本轮可选梗素材】",
-        "以下是一些网络流行语和热门梗参考。当前氛围轻松、玩梗、吐槽、撒娇或抽象时，先扫一眼本轮素材，优先挑 1 个最贴合当下语义的梗轻轻化用；如果没有贴合的，就不用。可以改写句式、替换关键词、只借一点语气，不要生硬照抄，不要连续堆梗，不要解释来源或笑点。认真求助、排错、身体不舒服、情绪很重时不要用。",
-    ]
+    lines = ["", "【本轮可选梗素材】"]
     for item in items:
-        lines.append(f"- {item.meme}｜来源：{item.origin}｜用法：{item.usage}")
-    lines.append("【以上为本轮可选梗素材】")
+        lines.append(f"- {item.meme}")
     return "\n".join(lines)
