@@ -350,7 +350,11 @@ def register_routes(bp) -> None:
 
         try:
             body = request.get_json(silent=True) or {}
-            candidate = preview_memory_rewrite(body.get("layer"), body.get("memory_id"))
+            candidate = preview_memory_rewrite(
+                body.get("layer"),
+                body.get("memory_id"),
+                body.get("rewrite_instructions"),
+            )
             return jsonify({"ok": True, "candidate": candidate})
         except MemoryRewriteError as e:
             return jsonify({"ok": False, "error": str(e)}), e.status_code

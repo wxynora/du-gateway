@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 import requests
@@ -14,6 +15,11 @@ logger = logging.getLogger(__name__)
 
 _VALID_LAYERS = {"dynamic", "core"}
 _MAX_CONTENT_CHARS = 4000
+_REFUSAL_PATTERNS = (
+    re.compile(r"^(?:抱歉|对不起).*(?:无法|不能|不可以|拒绝).*(?:修改|改写|重写|处理|要求|请求|这条记忆|原文)"),
+    re.compile(r"^(?:我)?(?:无法|不能|不可以|没法)(?:按|根据|依照|为你|帮你|执行).*(?:修改|改写|重写|处理|要求|请求)"),
+    re.compile(r"^(?:拒绝|无法执行|不能执行).*(?:修改|改写|重写|要求|请求)"),
+)
 
 
 class MemoryRewriteError(RuntimeError):
@@ -63,6 +69,10 @@ def _normalize_content(value: Any, *, field: str) -> str:
     return content
 
 
+def _normalize_rewrite_instructions(value: Any) -> str:
+    return str(value or "").strip()
+
+
 def _load_layer_items(layer: str) -> list[dict[str, Any]]:
     raw = (
         r2_store.get_dynamic_memory_list()
@@ -101,11 +111,30 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _rewrite_prompt(layer: str, item: dict[str, Any]) -> str:
+def _rewrite_prompt(
+    layer: str,
+    item: dict[str, Any],
+    rewrite_instructions: str = "",
+    retry_reason: str = "",
+) -> str:
     layer_rule = (
         "这是动态层记忆：写成一条简洁、具体、便于以后召回的当前理解。"
         if layer == "dynamic"
         else "这是核心记忆：保留长期稳定、真正重要的事实与感受，表达可以稍完整，但仍只写一条记忆。"
+    )
+    if rewrite_instructions:
+        correction_rule = (
+            "用户明确修正要求是本次重写的最高优先级。"
+            "如果修正要求与原文冲突，必须采用用户修正并删除冲突的旧判断；"
+            "只保留未被修正触及且不冲突的原文事实。不得拒绝修正，也不得原样返回旧正文。\n\n"
+            f"用户明确修正要求：\n{rewrite_instructions}"
+        )
+    else:
+        correction_rule = "完整保留原文已经确定的事实、感受和结论，不新增经历，不强化猜测，不把审核意见写进记忆。"
+    retry_rule = (
+        f"\n\n上一次结果不可用：{retry_reason}。这次必须返回已经实际改动、且不是拒绝说明的完整记忆正文。"
+        if retry_reason
+        else ""
     )
     source = {
         "id": str(item.get("id") or ""),
@@ -122,65 +151,116 @@ def _rewrite_prompt(layer: str, item: dict[str, Any]) -> str:
 
 要求：
 1. 使用渡的第一人称来写，“我”只指渡；提到辛玥时沿用原文已有称呼，不擅自补关系或事实。
-2. 完整保留原文已经确定的事实、感受和结论，不新增经历，不强化猜测，不把审核意见写进记忆。
+2. {correction_rule}
 3. 如果原文把“渡”当第三人称，或出现“像渡”“渡会怎么做”“用户”“助手”“模型”“角色扮演”等元身份说法，把真正需要记住的内容改成直接、自然的第一人称体验；若这些词本身就是被记录的事实或引用，不要机械删除。
 4. {layer_rule}
-5. 原文已经自然时只做必要润色，不为追求变化而改坏原意。
-6. 只输出一个 JSON 对象，不要 Markdown：{{"content":"重写后的完整正文","reason":"一句话说明改了什么；无需修改时也如实说明"}}
+5. 即使只需轻微调整，也必须产出与原文不同的可用正文；禁止返回拒绝说明或照抄原文。
+6. 只输出一个 JSON 对象，不要 Markdown：{{"content":"重写后的完整正文","reason":"一句话说明实际修改了什么"}}
 
 原记忆：
 {json.dumps(source, ensure_ascii=False)}
+{retry_rule}
 """.strip()
 
 
-def _request_deepseek_rewrite(layer: str, item: dict[str, Any]) -> tuple[str, str]:
+def _invalid_rewrite_reason(original: str, rewritten: str) -> str:
+    if rewritten == original:
+        return "返回内容与原文相同"
+    compact = re.sub(r"\s+", "", rewritten)
+    if any(pattern.search(compact) for pattern in _REFUSAL_PATTERNS):
+        return "返回了拒绝修改的说明"
+    return ""
+
+
+def _request_deepseek_rewrite(
+    layer: str,
+    item: dict[str, Any],
+    rewrite_instructions: str = "",
+) -> tuple[str, str]:
     if not (DEEPSEEK_API_KEY and DEEPSEEK_API_URL and DEEPSEEK_CHAT_MODEL):
         raise MemoryRewriteUpstreamError("DeepSeek 未配置完整")
-    payload = {
-        "model": DEEPSEEK_CHAT_MODEL,
-        "messages": [{"role": "user", "content": _rewrite_prompt(layer, item)}],
-        "temperature": 0.25,
-        "max_tokens": 700,
-    }
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
         "Content-Type": "application/json",
     }
-    try:
-        response = requests.post(
-            DEEPSEEK_API_URL,
-            headers=headers,
-            json=payload,
-            timeout=30,
-        )
-        response.raise_for_status()
-        data = response.json()
-        raw = str((((data.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or "")
-    except Exception as error:
-        logger.warning("memory rewrite DeepSeek request failed: %s", error)
-        raise MemoryRewriteUpstreamError("DeepSeek 重写失败，请稍后重试") from error
+    original = _normalize_content(item.get("content"), field="original_content")
+    invalid_reason = ""
+    for attempt in range(2):
+        payload = {
+            "model": DEEPSEEK_CHAT_MODEL,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": _rewrite_prompt(
+                        layer,
+                        item,
+                        rewrite_instructions,
+                        retry_reason=invalid_reason if attempt else "",
+                    ),
+                }
+            ],
+            "temperature": 0.25,
+            "max_tokens": 700,
+        }
+        try:
+            response = requests.post(
+                DEEPSEEK_API_URL,
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
+            response.raise_for_status()
+            data = response.json()
+            raw = str((((data.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or "")
+        except Exception as error:
+            logger.warning("memory rewrite DeepSeek request failed: %s", error)
+            raise MemoryRewriteUpstreamError("DeepSeek 重写失败，请稍后重试") from error
 
-    parsed = _extract_json_object(raw)
-    if not parsed:
-        raise MemoryRewriteUpstreamError("DeepSeek 没有返回可用的重写结果")
-    try:
-        content = _normalize_content(parsed.get("content"), field="rewritten_content")
-    except MemoryRewriteInputError as error:
-        raise MemoryRewriteUpstreamError("DeepSeek 没有返回可用的重写正文") from error
-    reason = str(parsed.get("reason") or "").strip()[:500]
-    return content, reason
+        parsed = _extract_json_object(raw)
+        if not parsed:
+            raise MemoryRewriteUpstreamError("DeepSeek 没有返回可用的重写结果")
+        try:
+            content = _normalize_content(parsed.get("content"), field="rewritten_content")
+        except MemoryRewriteInputError as error:
+            raise MemoryRewriteUpstreamError("DeepSeek 没有返回可用的重写正文") from error
+        invalid_reason = _invalid_rewrite_reason(original, content)
+        if invalid_reason:
+            logger.info(
+                "memory rewrite semantic retry layer=%s memory_id=%s attempt=%s reason=%s",
+                layer,
+                str(item.get("id") or ""),
+                attempt + 1,
+                invalid_reason,
+            )
+            continue
+        reason = str(parsed.get("reason") or "").strip()[:500]
+        return content, reason
+    raise MemoryRewriteUpstreamError("DeepSeek 连续两次返回拒绝或未修改原文，未生成可用候选")
 
 
-def preview_memory_rewrite(layer: Any, memory_id: Any) -> dict[str, Any]:
+def preview_memory_rewrite(
+    layer: Any,
+    memory_id: Any,
+    rewrite_instructions: Any = None,
+) -> dict[str, Any]:
     normalized_layer = _normalize_layer(layer)
     normalized_id = _normalize_memory_id(memory_id)
+    normalized_instructions = _normalize_rewrite_instructions(rewrite_instructions)
     _, item = _find_item(_load_layer_items(normalized_layer), normalized_id)
     original = _normalize_content(item.get("content"), field="original_content")
-    pending_merge = item.get("pending_merge") if normalized_layer == "core" else None
+    pending_merge = (
+        item.get("pending_merge")
+        if normalized_layer == "core" and not normalized_instructions
+        else None
+    )
     if isinstance(pending_merge, dict):
         pending_original = str(pending_merge.get("original_content") or "").strip()
         pending_rewritten = str(pending_merge.get("rewritten_content") or "").strip()
-        if pending_original == original and pending_rewritten:
+        if (
+            pending_original == original
+            and pending_rewritten
+            and not _invalid_rewrite_reason(original, pending_rewritten)
+        ):
             return {
                 "layer": normalized_layer,
                 "memory_id": normalized_id,
@@ -189,7 +269,11 @@ def preview_memory_rewrite(layer: Any, memory_id: Any) -> dict[str, Any]:
                 "reason": str(pending_merge.get("reason") or "").strip(),
                 "changed": pending_rewritten != original,
             }
-    rewritten, reason = _request_deepseek_rewrite(normalized_layer, item)
+    rewritten, reason = _request_deepseek_rewrite(
+        normalized_layer,
+        item,
+        normalized_instructions,
+    )
     return {
         "layer": normalized_layer,
         "memory_id": normalized_id,

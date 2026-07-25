@@ -160,7 +160,7 @@ QQ 群上下文按发言人区分，不把群友内容当成小玥说的；入�
 | 画像记忆 | `services/portrait_memory.py` | 画像候选与更新边界 |
 | 每轮总结 | `services/deepseek_summary.py` | 统一摘要更新，不再包含 Notion 小本本分支；近期记忆四轮总结显式关闭 thinking，动态层不受影响 |
 | 记忆引用 | `services/dynamic_memory_citation.py` | 解析并回写实际引用标记 |
-| 记忆管理 | `routes/miniapp/memory_panel.py`、`routes/memory_api.py`、`storage/r2_store.py`、`pipeline/pipeline.py`、`services/memory_maintenance.py` | 查询、重写、删除、维护和诊断；`POST /miniapp-api/dynamic-memory/<id>/retain` 原子增加一次 `mention_count` 并刷新 `last_mentioned`，未命中返回 404、写入失败返回 500；动态层边缘淘汰前 15 天不衰减，第 16 天起每天衰减 0.1、最多衰减 2，仅在至少 15 天未提及且综合权重不高于 2 时删除，图书馆 tag 与 core_cache 来源记忆永久豁免 |
+| 记忆管理 | `routes/miniapp/memory_panel.py`、`routes/memory_api.py`、`storage/r2_store.py`、`pipeline/pipeline.py`、`services/memory_maintenance.py`、`services/memory_rewrite.py` | 查询、重写、删除、维护和诊断；重写 preview 路由转发 `rewrite_instructions`，显式修正优先于原文且核心层不复用旧 `pending_merge`，模型拒绝或原样返回时自动重试一次、仍无可用改动才返回 502；`POST /miniapp-api/dynamic-memory/<id>/retain` 原子增加一次 `mention_count` 并刷新 `last_mentioned`，未命中返回 404、写入失败返回 500；动态层边缘淘汰前 15 天不衰减，第 16 天起每天衰减 0.1、最多衰减 2，仅在至少 15 天未提及且综合权重不高于 2 时删除，图书馆 tag 与 core_cache 来源记忆永久豁免 |
 
 亲密/卧室记忆仍使用动态记忆分类与独立生命周期；不额外侧写 Notion，也不进入不适合的核心缓存/画像路径。
 
