@@ -402,6 +402,15 @@ def _append_to_static_system(body: dict, text: str) -> dict:
     return body
 
 
+def step_inject_custom_static_systems(body: dict) -> dict:
+    """按固定编号把非空自定义槽位逐块追加到固定静态区末尾。"""
+    from services.prompt_manager import get_custom_static_system_texts
+
+    for text in get_custom_static_system_texts():
+        body = _append_to_static_system(body, text)
+    return body
+
+
 def _system_prompt_region(msg: dict) -> str:
     """Return the logical static/dynamic sub-block for one system message."""
     if msg.get(_TOOL_RESULT_CACHE_SYSTEM_MARKER):

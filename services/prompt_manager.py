@@ -21,6 +21,12 @@ class PromptSectionDef:
     allow_empty: bool = False
 
 
+CUSTOM_STATIC_SYSTEM_SECTION_IDS = tuple(
+    f"custom_static_system_{index}"
+    for index in range(1, 6)
+)
+
+
 PROMPT_SECTIONS: tuple[PromptSectionDef, ...] = (
     PromptSectionDef("core_prompt", "核心 Prompt", "渡的基础人格、关系定位和长期稳定规则。", 180_000),
     PromptSectionDef("common_knowledge", "常识块", "长期稳定常识，独立注入在核心 Prompt 后面。", 80_000),
@@ -59,6 +65,15 @@ PROMPT_SECTIONS: tuple[PromptSectionDef, ...] = (
         "上一轮随机唤醒命中春梦后，下一轮睡眠期随机唤醒使用的自定义文案；留空则走原随机唤醒。",
         80_000,
         True,
+    ),
+    *(
+        PromptSectionDef(
+            section_id,
+            f"自定义静态 System {index}",
+            "自由编辑的固定静态 System；留空时不注入，非空时按编号放在固定静态区最后。",
+            allow_empty=True,
+        )
+        for index, section_id in enumerate(CUSTOM_STATIC_SYSTEM_SECTION_IDS, start=1)
     ),
 )
 PROMPT_SECTION_MAP = {item.id: item for item in PROMPT_SECTIONS}
@@ -176,6 +191,15 @@ def get_managed_prompt_text(section_id: str, fallback: str | Callable[[], str] =
     if text is not None:
         return str(text or "")
     return str(fallback() if callable(fallback) else fallback or "")
+
+
+def get_custom_static_system_texts() -> list[str]:
+    texts: list[str] = []
+    for section_id in CUSTOM_STATIC_SYSTEM_SECTION_IDS:
+        text = get_managed_prompt_text(section_id, "")
+        if text.strip():
+            texts.append(text)
+    return texts
 
 
 def list_prompt_sections() -> list[dict]:

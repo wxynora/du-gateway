@@ -61,7 +61,7 @@
 | 请求清洗 | `pipeline/cleaner.py` | 统一清洗入口消息与上游消息结构 |
 | 上游策略 | `services/upstream_policy.py` | active upstream / model 只由 App 明确保存更新 |
 | 上游持久选择 | `storage/upstream_store.py` | 探活、拉模型和普通请求不能覆盖已保存选择 |
-| 提示词管理 | `services/prompt_manager.py`、`storage/r2_store.py` | App 可编辑的静态 Prompt 分区统一从这里管理；详情最多返回当前分区最新 3 个备份，配置写成功后按 `created_at` 清理到最新 3 个，写失败不删旧备份，回滚复用同一保存与保留链路 |
+| 提示词管理 | `services/prompt_manager.py`、`storage/r2_store.py` | App 可编辑的静态 Prompt 分区统一从这里管理；目录末尾固定提供 `custom_static_system_1..5` 五个允许为空的自定义 System 槽位，空槽不注入，非空槽按编号进入固定静态尾部；详情最多返回当前分区最新 3 个备份，配置写成功后按 `created_at` 清理到最新 3 个，写失败不删旧备份，回滚复用同一保存与保留链路 |
 | 入口风格 | `services/entry_style_prompt.py` | 按真实聊天入口注入对应风格 |
 | 语音台词规范 | `services/voice_line_prompt.py` | 语音输出场景统一使用该规范 |
 | 语音转写后处理 | `services/stt.py` | Gemini/OpenRouter 与 Deepgram 在统一返回边界压缩同一个非词汇填充音的超长连续重复：至少 5 次时保留 3 次并以中文省略号分隔；短重复、混合发声和有意义的词语重复保持原文 |
@@ -76,13 +76,13 @@
 | Claude 思考强度网关注入 | `routes/miniapp/upstreams.py`、`storage/upstream_store.py`、`services/upstream_policy.py` | App 通过独立设置接口按当前上游保存 `claude_thinking_effort`；网关对 `claude-opus-4-6/4-7/4-8/5` 与 `claude-fable-5` 转发时读取该值，注入 `thinking.type=adaptive`、`thinking.display=summarized` 与 `output_config.effort`。这不是 App 每轮聊天直接携带的字段 |
 | Prompt Cache 诊断 | `services/prompt_cache_debug.py` | 记录静态/动态构成与上游 usage 元数据；Thinking 规范保持独立 breakdown，QQ、TG、微信、SumiTalk、小爱音箱入口风格也不会被近期记忆块标记吞掉 |
 
-当前 Claude 缓存前缀顺序固定为：tools → 第 1 个断点 → 固定静态子块 → 第 2 个断点 → 工具摘要 → 第 3 个断点 → Thinking 规范 → 入口风格 → SumiTalk Real/App 互斥提示 → 较稳定近期记忆 → 最近记忆 → 第 4 个断点 → 常驻动态 → 临时动态 → last4 → 对话消息。固定静态、工具摘要、Thinking 规范、入口风格、Real/App、较稳定近期和最近记忆属于静态提示前缀的独立逻辑子块，按唯一顺序表收集。Thinking 规范单独输出为第 3 个断点后的 system 段，不与带 `__summary_recent__` 的入口/记忆尾段合并；专用内部标记只供 gateway 排序与诊断，上游转发前删除，因此不新增缓存断点，也不要求 Claude OAuth proxy 识别新字段。常驻动态、临时动态和 last4 分别保持独立，不会拼进静态区。工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑，只从静态尾段调整到临时动态位置。
+当前 Claude 缓存前缀顺序固定为：tools → 第 1 个断点 → 固定静态子块（尾部为五个自定义静态 System 槽位中的非空项，按 1→5）→ 第 2 个断点 → 工具摘要 → 第 3 个断点 → Thinking 规范 → 入口风格 → SumiTalk Real/App 互斥提示 → 较稳定近期记忆 → 最近记忆 → 第 4 个断点 → 常驻动态 → 临时动态 → last4 → 对话消息。固定静态、工具摘要、Thinking 规范、入口风格、Real/App、较稳定近期和最近记忆属于静态提示前缀的独立逻辑子块，按唯一顺序表收集。Thinking 规范单独输出为第 3 个断点后的 system 段，不与带 `__summary_recent__` 的入口/记忆尾段合并；专用内部标记只供 gateway 排序与诊断，上游转发前删除，因此不新增缓存断点，也不要求 Claude OAuth proxy 识别新字段。常驻动态、临时动态和 last4 分别保持独立，不会拼进静态区。工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑，只从静态尾段调整到临时动态位置。
 
 system 分区采用显式标记合同：凡辛玥明确指定为动态区、临时动态或一次性事件的 system，生产点必须直接携带 `__dynamic__=True`；未标记的 system 继续按 static 归类，不以正文内容猜测。这些临时动态 system 固定放在常驻动态之后、last4 之前，不得进入静态前缀；一起看当前剧情、一起听或当前音乐、小家/游戏事件、交换日记回执等都只调整到该注入位置，各功能原有的产生、持续与结束行为保持不变。若只是在调查或实现时判断某个 system 可能应改为动态，必须先说明来源、内容、现有行为、拟放位置及缓存或行为影响并向辛玥确认，不能静默重分类或扩展生命周期设计。
 
 小家事件及 App 内涩涩走格棋、囚禁模拟器的 `sync-du` 请求通过 `X-DU-SUMITALK-PROMPT-ASSEMBLY` 复用 SumiTalk 的提示词组装表面，但不改实际回复、投递和归档渠道；小家/游戏状态作为临时动态 system，各入口保留自己的 user 内容。实现入口为 `services/conversation_followup.py::_send_wakeup_event` 与 `routes/chat.py::chat_completions`，`return_only`、游戏工具和续跑规则不受影响。以后新注册的 App 游戏，只要存在发给渡的模型消息，也必须复用该 SumiTalk 组装表面：不得自行拼静态 system，不得把游戏状态塞进静态缓存前缀，只允许替换本游戏的临时动态 system 与 user 内容；纯查看或本地状态变更接口不触发模型请求。
 
-`step_inject_tool_result_cache()` 使用 `pipeline/pipeline.py` 的唯一 `_SYSTEM_PROMPT_REGION_ORDER` 和 `_SYSTEM_PROMPT_CACHE_GROUPS`：固定静态段、工具摘要段、工具摘要后的静态尾段、常驻动态段、临时动态段、last4 段。每个逻辑子块在组装期间保持独立，最终每段最多输出一条 system；四个缓存断点仍由 tools、固定静态段、工具摘要段和静态尾段的末尾承载。入口风格、Real/App 和近期记忆只改变静态尾段内容，play 进入临时动态段；内部 `__temporary_dynamic__`、`__last4__` 仅用于网关排序，在转发上游前统一移除，`__dynamic__` 继续供已有缓存适配层识别动态内容。修改固定静态内容会让下一次请求重建一次缓存，后续请求按新前缀继续命中。
+`step_inject_tool_result_cache()` 使用 `pipeline/pipeline.py` 的唯一 `_SYSTEM_PROMPT_REGION_ORDER` 和 `_SYSTEM_PROMPT_CACHE_GROUPS`：固定静态段、工具摘要段、工具摘要后的静态尾段、常驻动态段、临时动态段、last4 段。每个逻辑子块在组装期间保持独立，最终每段最多输出一条 system；五个自定义静态槽位在组装期间保持编号顺序并追加到固定静态段末尾，空槽跳过，最终随固定静态段合并。四个缓存断点仍由 tools、固定静态段、工具摘要段和静态尾段的末尾承载。入口风格、Real/App 和近期记忆只改变静态尾段内容，play 进入临时动态段；内部 `__temporary_dynamic__`、`__last4__` 仅用于网关排序，在转发上游前统一移除，`__dynamic__` 继续供已有缓存适配层识别动态内容。修改固定静态内容（包括任一自定义槽位）会让下一次请求重建一次缓存，后续请求按新前缀继续命中。
 
 ## 4. 对话入口与异步 worker
 

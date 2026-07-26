@@ -39,6 +39,7 @@ from pipeline.pipeline import (
     step_clean_images_and_save_desc,
     step_clean_for_forward,
     step_replace_rikka_system,
+    step_inject_custom_static_systems,
     step_inject_thinking_block_rules,
     step_inject_core_behavior_rules,
     step_inject_common_knowledge,
@@ -2819,6 +2820,7 @@ def chat_completions():
     ) and not _skip_claude_thinking_carryover_request():
         body = _inject_previous_claude_thinking_blocks(body, window_id)
     body = step_inject_thinking_block_rules(body)
+    body = step_inject_custom_static_systems(body)
     body = step_inject_tool_result_cache(body)
     body = step_trim_messages_if_over_limit(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
