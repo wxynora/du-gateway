@@ -21,6 +21,7 @@ from routes.miniapp.game_tools import register_routes as register_game_tools_rou
 from routes.miniapp.studyroom import register_routes as register_studyroom_routes
 from routes.miniapp.logs import register_routes as register_logs_routes
 from routes.miniapp.media import register_routes as register_media_routes
+from routes.miniapp.memory_organizer import register_routes as register_memory_organizer_routes
 from routes.miniapp.memory_panel import register_routes as register_memory_panel_routes
 from routes.miniapp.midterm_memory import register_routes as register_midterm_memory_routes
 from routes.miniapp.music_bgm import register_routes as register_music_bgm_routes
@@ -56,6 +57,7 @@ register_game_tools_routes(bp)
 register_studyroom_routes(bp)
 register_logs_routes(bp)
 register_media_routes(bp)
+register_memory_organizer_routes(bp)
 register_memory_panel_routes(bp)
 register_midterm_memory_routes(bp)
 register_music_bgm_routes(bp)
