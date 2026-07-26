@@ -1091,6 +1091,17 @@ def _disable_followup_request() -> bool:
     return (request.headers.get("X-DU-DISABLE-FOLLOWUP") or "").strip().lower() in ("1", "true", "yes")
 
 
+def _inject_static_followup_instruction_for_request(body: dict, *, prompt_reply_channel: str) -> dict:
+    """Keep the static followup contract independent from whether this reply may enqueue one."""
+    if prompt_reply_channel == "xiaoai":
+        return body
+    return _inject_followup_instruction(
+        body,
+        is_followup_generation=_is_followup_generation_request(),
+        should_archive=_should_archive_followup_generation_request(),
+    )
+
+
 def _allow_tool_only_reply_request() -> bool:
     return (request.headers.get("X-Allow-Tool-Only-Reply") or "").strip().lower() in ("1", "true", "yes")
 
@@ -2742,12 +2753,10 @@ def chat_completions():
     body = _inject_million_plan_player_prompt_if_enabled(body)
     body = _inject_codex_oauth_prompt_system(body, upstream_url=_get_active_upstream_url())
     body = _inject_channel_nsfw_system(body, reply_channel=prompt_reply_channel)
-    if prompt_reply_channel != "xiaoai" and not _disable_followup_request():
-        body = _inject_followup_instruction(
-            body,
-            is_followup_generation=_is_followup_generation_request(),
-            should_archive=_should_archive_followup_generation_request(),
-        )
+    body = _inject_static_followup_instruction_for_request(
+        body,
+        prompt_reply_channel=prompt_reply_channel,
+    )
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     tg_user_input = _is_real_user_input_request(
         window_id,
