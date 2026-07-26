@@ -75,9 +75,6 @@ _PIXEL_HOME_LOOSE_KEY_RE = re.compile(
 
 PIXEL_HOME_DAY_START_HOUR = 7
 PIXEL_HOME_NIGHT_START_HOUR = 18
-PIXEL_HOME_SLEEP_SCREEN_OFF_MINUTES = 45
-PIXEL_HOME_SCREEN_LOOKBACK_MINUTES = 12 * 60
-PIXEL_HOME_AWAKE_SCREEN_LOOKBACK_MINUTES = 30
 
 SPOT_LABELS: dict[str, str] = {
     "bed": "卧室",
@@ -747,90 +744,14 @@ def _minutes_since(value: Any, now_dt: datetime) -> float | None:
     return delta
 
 
-def _user_after(value: Any) -> bool:
-    marker_dt = parse_iso_to_beijing(str(value or "").strip())
-    last_user_dt = parse_iso_to_beijing(r2_store.get_last_user_activity_at() or "")
-    if not marker_dt or not last_user_dt:
-        return False
-    return last_user_dt > marker_dt + timedelta(seconds=30)
-
-
-def _relevant_sleep_dates(now_dt: datetime) -> set[str]:
-    today = now_dt.strftime("%Y-%m-%d")
-    if now_dt.hour < PIXEL_HOME_DAY_START_HOUR:
-        return {today, (now_dt.date() - timedelta(days=1)).isoformat()}
-    return {today}
-
-
-def _date_hit(value: Any, candidates: set[str]) -> bool:
-    raw = str(value or "").strip()
-    return bool(raw and raw in candidates)
-
-
-def _recent_awake_signal(screen: dict, now_dt: datetime) -> bool:
-    event = str((screen or {}).get("event") or "").strip().lower()
-    interactive = (screen or {}).get("interactive") is True or str((screen or {}).get("interactive") or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    explicit_foreground = str((screen or {}).get("screenWakeSource") or "").strip() == "foreground_app"
-    if not (event == "app_active" and interactive and explicit_foreground):
-        return False
-    minutes = _minutes_since(
-        (screen or {}).get("observedAt") or (screen or {}).get("occurredAt") or (screen or {}).get("lastSeen") or (screen or {}).get("updatedAt"),
-        now_dt,
-    )
-    return minutes is not None and minutes <= PIXEL_HOME_AWAKE_SCREEN_LOOKBACK_MINUTES
-
-
-def _screen_off_minutes(screen: dict, now_dt: datetime) -> float | None:
-    event = str((screen or {}).get("event") or "").strip().lower()
-    since = (screen or {}).get("screenOffSince")
-    if not since and event == "screen_off":
-        since = (screen or {}).get("lastScreenOffAt") or (screen or {}).get("occurredAt")
-    if not since:
-        return None
-    minutes = _minutes_since(since, now_dt)
-    if minutes is not None:
-        return minutes if minutes <= PIXEL_HOME_SCREEN_LOOKBACK_MINUTES else None
-    try:
-        duration_minutes = int((screen or {}).get("screenOffDurationMs") or 0) / 60000
-    except Exception:
-        duration_minutes = 0
-    seen_minutes = _minutes_since((screen or {}).get("observedAt") or (screen or {}).get("lastSeen") or (screen or {}).get("updatedAt"), now_dt)
-    if duration_minutes > 0 and seen_minutes is not None and seen_minutes <= PIXEL_HOME_SCREEN_LOOKBACK_MINUTES:
-        return duration_minutes
-    return None
-
-
 def _sleeping_state(now_dt: datetime, is_night: bool) -> tuple[bool, str]:
-    if not is_night:
-        return False, "daytime"
+    _ = now_dt
     sense = r2_store.get_sense_latest() or {}
     screen = sense.get("screen") if isinstance(sense.get("screen"), dict) else {}
-    if _recent_awake_signal(screen, now_dt):
-        return False, "awake_screen"
-
-    candidates = _relevant_sleep_dates(now_dt)
-    daily = r2_store.get_du_daily_state() or {}
-    trigger_at = str(daily.get("last_trigger_at") or "").strip()
-    for key in ("sleep_closed_for_date", "today_finalized_for_date"):
-        if _date_hit(daily.get(key), candidates):
-            if trigger_at and _user_after(trigger_at):
-                return False, "awake_after_sleep"
-            return True, key
-
-    candidate_at = str(daily.get("sleep_candidate_at") or "").strip()
-    if _date_hit(daily.get("sleep_candidate_day"), candidates) and candidate_at:
-        if not _user_after(candidate_at):
-            return True, "sleep_candidate"
-
-    screen_off_minutes = _screen_off_minutes(screen, now_dt)
-    if screen_off_minutes is not None and screen_off_minutes >= PIXEL_HOME_SLEEP_SCREEN_OFF_MINUTES:
-        return True, "screen_off"
-    return False, "night_awake"
+    session = screen.get("sleepSession") if isinstance(screen.get("sleepSession"), dict) else {}
+    if str(session.get("state") or "").strip() == "candidate" and str(session.get("startAt") or "").strip():
+        return True, "sleep_candidate"
+    return False, "night_awake" if is_night else "daytime"
 
 
 def build_pixel_home_mode_state() -> dict:
@@ -864,42 +785,14 @@ def build_sleep_wakeup_state(now_dt: datetime | None = None) -> dict:
     night_date = _sleep_session_night_date(now_ref)
     anchor = ""
     if sleeping:
-        daily = r2_store.get_du_daily_state() or {}
         sense = r2_store.get_sense_latest() or {}
         screen = sense.get("screen") if isinstance(sense.get("screen"), dict) else {}
-        screen_event = str(screen.get("event") or "").strip().lower()
-        screen_interactive = screen.get("interactive") is True or str(screen.get("interactive") or "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        explicit_foreground = str(screen.get("screenWakeSource") or "").strip() == "foreground_app"
-        if screen_event == "app_active" and screen_interactive and explicit_foreground:
-            sleeping = False
-            source = "awake_screen_latest"
-            screen = {}
-        screen_off_anchor = ""
-        if str(screen.get("event") or "").strip().lower() == "screen_off":
-            screen_off_anchor = str(
-                screen.get("screenOffSince")
-                or screen.get("lastScreenOffAt")
-                or screen.get("occurredAt")
-                or screen.get("observedAt")
-                or ""
-            ).strip()
-        if source == "screen_off":
-            anchor = screen_off_anchor
-        elif source == "sleep_candidate":
-            anchor = screen_off_anchor or str(daily.get("sleep_candidate_at") or daily.get("sleep_candidate_day") or "").strip()
-        elif source in {"sleep_closed_for_date", "today_finalized_for_date"}:
-            anchor = screen_off_anchor or str(
-                daily.get("sleep_candidate_at")
-                or daily.get("sleep_candidate_day")
-                or daily.get(source)
-                or daily.get("last_trigger_at")
-                or ""
-            ).strip()
+        session = screen.get("sleepSession") if isinstance(screen.get("sleepSession"), dict) else {}
+        anchor = str(session.get("startAt") or "").strip()
+        anchor_dt = parse_iso_to_beijing(anchor)
+        if anchor_dt:
+            sleep_date_dt = now_ref if anchor_dt.date() != now_ref.date() else anchor_dt
+            night_date = sleep_date_dt.strftime("%Y-%m-%d")
         if not anchor:
             anchor = night_date
     session_key = f"{night_date}|{anchor[:32]}" if sleeping else ""

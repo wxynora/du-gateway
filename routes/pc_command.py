@@ -5,8 +5,10 @@ from flask import Blueprint, jsonify, request
 
 from config import PC_COMMAND_TOKEN
 from storage import r2_store
+from storage.sense_store import mark_screen_awake_from_pc_activity
 from services import codex_group_chat
 from services.pc_command_handler import process_pcmd_in_assistant_text
+from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 
 bp = Blueprint("pc_command", __name__)
 
@@ -31,6 +33,51 @@ def _require_pc_token():
     if token != PC_COMMAND_TOKEN:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     return None
+
+
+@bp.route("/api/pc_activity", methods=["POST", "OPTIONS"])
+def report_pc_activity():
+    if request.method == "OPTIONS":
+        return "", 204
+    token_err = _require_pc_token()
+    if token_err:
+        return token_err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "JSON 无效"}), 400
+    last_input_at = str(body.get("last_input_at") or body.get("lastInputAt") or "").strip()
+    if not parse_iso_to_beijing(last_input_at):
+        return jsonify({"ok": False, "error": "last_input_at 无效"}), 400
+    device_id = str(body.get("device_id") or body.get("deviceId") or "pc").strip()[:80] or "pc"
+    observed_at = now_beijing_iso()
+    patch = {
+        "deviceId": device_id,
+        "platform": str(body.get("platform") or "").strip()[:40],
+        "lastInputAt": last_input_at,
+        "observedAt": observed_at,
+    }
+    try:
+        idle_seconds = max(0.0, float(body.get("idle_seconds") or body.get("idleSeconds") or 0))
+    except Exception:
+        idle_seconds = 0.0
+    patch["idleSeconds"] = round(idle_seconds, 3)
+
+    awake_ok = mark_screen_awake_from_pc_activity(patch)
+    latest = r2_store.get_sense_latest() or {}
+    current = latest.get("computer") if isinstance(latest.get("computer"), dict) else {}
+    unchanged = (
+        str(current.get("deviceId") or "").strip() == device_id
+        and str(current.get("lastInputAt") or "").strip() == last_input_at
+    )
+    stored_ok = True if unchanged else r2_store.merge_and_save_sense_bucket("computer", patch)
+    return jsonify(
+        {
+            "ok": bool(awake_ok and stored_ok),
+            "device_id": device_id,
+            "last_input_at": last_input_at,
+            "skipped": bool(unchanged),
+        }
+    )
 
 
 @bp.route("/api/pc_command", methods=["POST", "OPTIONS"])

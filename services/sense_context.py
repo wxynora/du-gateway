@@ -14,7 +14,6 @@ logger = get_logger(__name__)
 _MAX_SNAPSHOT_CHARS = 800
 _MAX_USAGE_APPS = 5
 _MAX_APP_SESSION_ITEMS = 5
-_SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES = 60
 
 
 def _as_dict(v: Any) -> dict:
@@ -116,35 +115,17 @@ def _format_duration_minutes(minutes: int) -> str:
     return f"{hours}小时"
 
 
-def _screen_off_duration_minutes(screen: dict) -> tuple[int | None, Any]:
-    event = str(screen.get("event") or "").strip().lower()
-    since_raw = str(screen.get("screenOffSince") or "").strip()
-    if not since_raw and event == "screen_off":
-        since_raw = str(screen.get("occurredAt") or "").strip()
-    if not since_raw:
-        return None, None
-    since_dt = parse_iso_to_beijing(since_raw)
-    now_dt = parse_iso_to_beijing(now_beijing_iso())
-    if since_dt and now_dt:
-        minutes = int((now_dt - since_dt).total_seconds() // 60)
-        return max(0, minutes), since_dt
-    try:
-        duration_ms = int(screen.get("screenOffDurationMs") or 0)
-    except Exception:
-        duration_ms = 0
-    if duration_ms > 0:
-        return max(1, int(duration_ms // 60000)), None
-    return None, None
-
-
 def _format_sleep_guess_line(screen: dict) -> str | None:
-    minutes, since_dt = _screen_off_duration_minutes(screen)
-    if minutes is None or minutes < _SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES:
+    session = _as_dict(screen.get("sleepSession"))
+    if str(session.get("state") or "").strip() != "candidate":
         return None
-    duration = _format_duration_minutes(minutes)
-    if since_dt:
-        return f"她可能睡着了：手机从 {since_dt.strftime('%H:%M')} 起连续熄屏 {duration}，期间没有明显手机操作。"
-    return f"她可能睡着了：手机已连续熄屏 {duration}，期间没有明显手机操作。"
+    started_at = parse_iso_to_beijing(str(session.get("startAt") or screen.get("screenOffSince") or "").strip())
+    if started_at:
+        return (
+            f"睡眠候选：手机从 {started_at.month}月{started_at.day}日 {started_at.strftime('%H:%M')} 起熄屏；"
+            "这只表示待确认的息屏区间，不能据此断定你已经睡着。"
+        )
+    return "睡眠候选：手机当前熄屏；这只表示待确认的息屏区间，不能据此断定你已经睡着。"
 
 
 def _sleep_summary_minutes(summary: dict) -> int:
@@ -170,7 +151,7 @@ def _recent_sleep_summary(summary: dict) -> tuple[int, Any, Any] | None:
     start_dt = parse_iso_to_beijing(str(summary.get("startAt") or "").strip())
     end_dt = parse_iso_to_beijing(str(summary.get("endAt") or "").strip())
     now_dt = parse_iso_to_beijing(now_beijing_iso())
-    if end_dt and now_dt and (now_dt - end_dt).total_seconds() > 24 * 3600:
+    if end_dt and now_dt and (now_dt.date() - end_dt.date()).days > 1:
         return None
     return total_minutes, start_dt, end_dt
 
@@ -194,6 +175,34 @@ def _format_sleep_time_range(start_dt: Any, end_dt: Any) -> str:
     return f"{day_label} {start_dt.strftime('%H:%M')}–{end_dt.strftime('%H:%M')}"
 
 
+def _format_sleep_health_evidence(summary: dict) -> str:
+    evidence = summary.get("healthEvidence") if isinstance(summary.get("healthEvidence"), dict) else {}
+    items: list[str] = []
+    steps = evidence.get("steps") if isinstance(evidence.get("steps"), dict) else {}
+    try:
+        step_count = int(steps.get("sampleCount") or 0)
+    except Exception:
+        step_count = 0
+    if step_count > 0:
+        if steps.get("delta") is not None:
+            items.append(f"步数变化 {int(steps.get('delta') or 0)} 步（{step_count} 个样本）")
+        else:
+            last_steps = steps.get("last")
+            suffix = f"，记录值 {last_steps}" if last_steps is not None else ""
+            items.append(f"步数有 {step_count} 个样本{suffix}，不足以计算变化")
+    heart = evidence.get("heartRate") if isinstance(evidence.get("heartRate"), dict) else {}
+    try:
+        heart_count = int(heart.get("sampleCount") or 0)
+    except Exception:
+        heart_count = 0
+    if heart_count > 0:
+        minimum = heart.get("min")
+        maximum = heart.get("max")
+        average = heart.get("average")
+        items.append(f"心率 {minimum}–{maximum}，平均 {average}（{heart_count} 个样本）")
+    return "；".join(items) if items else "暂无心率/步数样本"
+
+
 def _format_sleep_summary_piece(label: str, summary: dict, total_minutes: int, start_dt: Any, end_dt: Any) -> str:
     duration = _format_duration_minutes(total_minutes)
     try:
@@ -204,32 +213,39 @@ def _format_sleep_summary_piece(label: str, summary: dict, total_minutes: int, s
         awake_gap_minutes = int(summary.get("awakeGapMinutes") or 0)
     except Exception:
         awake_gap_minutes = 0
-    time_range = _format_sleep_time_range(start_dt, end_dt)
-    parts = [f"{time_range} {label}，累计 {duration}" if time_range else f"{label}，累计 {duration}"]
+    sleep_date = str(summary.get("sleepDate") or summary.get("nightDate") or "").strip()
+    sleep_date_dt = parse_iso_to_beijing(f"{sleep_date}T00:00:00+08:00") if sleep_date else None
+    now_dt = parse_iso_to_beijing(now_beijing_iso())
+    date_label = f"{sleep_date_dt.month}月{sleep_date_dt.day}日" if sleep_date_dt else ""
+    if sleep_date_dt and now_dt:
+        day_delta = (now_dt.date() - sleep_date_dt.date()).days
+        if day_delta == 0:
+            date_label = f"今天（{date_label}）"
+        elif day_delta == 1:
+            date_label = f"昨天（{date_label}）"
+    if start_dt and end_dt and start_dt.date() == end_dt.date():
+        time_range = f"{start_dt.strftime('%H:%M')}–{end_dt.strftime('%H:%M')}"
+    else:
+        time_range = _format_sleep_time_range(start_dt, end_dt)
+    heading = f"{date_label}{label}" if date_label else label
+    parts = [f"{heading}：{time_range}，累计 {duration}" if time_range else f"{heading}，累计 {duration}"]
     if segment_count > 1:
         parts.append(f"分 {segment_count} 段")
     if awake_gap_minutes > 0:
         parts.append(f"中间醒着约 {_format_duration_minutes(awake_gap_minutes)}")
+    health_evidence = _format_sleep_health_evidence(summary)
+    if health_evidence:
+        parts.append(f"区间佐证：{health_evidence}")
     return "，".join(parts)
 
 
 def _format_last_sleep_summary_line(screen: dict) -> str | None:
-    main = _recent_sleep_summary(_as_dict(screen.get("sleepSummary")))
-    day = _recent_sleep_summary(_as_dict(screen.get("daySleepSummary")))
-    if not main and not day:
+    recent = _recent_sleep_summary(_as_dict(screen.get("sleepSummary")))
+    if not recent:
         return None
-    pieces: list[str] = []
-    total_24h = 0
-    if main:
-        minutes, start_dt, end_dt = main
-        total_24h += minutes
-        pieces.append(_format_sleep_summary_piece("主睡眠", _as_dict(screen.get("sleepSummary")), minutes, start_dt, end_dt))
-    if day:
-        minutes, start_dt, end_dt = day
-        total_24h += minutes
-        pieces.append(_format_sleep_summary_piece("午睡", _as_dict(screen.get("daySleepSummary")), minutes, start_dt, end_dt))
-    pieces.append(f"24h合计 {_format_duration_minutes(total_24h)}")
-    return "最近睡眠推断：" + "；".join(pieces) + "。"
+    minutes, start_dt, end_dt = recent
+    piece = _format_sleep_summary_piece("睡眠", _as_dict(screen.get("sleepSummary")), minutes, start_dt, end_dt)
+    return f"最近确认睡眠：{piece}。"
 
 
 def _format_screen_line(screen: dict) -> str | None:
@@ -240,7 +256,8 @@ def _format_screen_line(screen: dict) -> str | None:
         "screen_on": "亮屏",
         "screen_off": "熄屏",
         "user_present": "解锁",
-        "app_active": "打开 SumiTalk",
+        "app_active": "连续使用手机，已确认清醒",
+        "pc_active": "电脑出现本人输入，已确认清醒",
     }
     action = mapping.get(event)
     if not action:

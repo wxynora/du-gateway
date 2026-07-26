@@ -18,8 +18,6 @@ _STATE_MAX_FIRED = 200
 _MORNING_START_HOUR = 5
 _MORNING_END_HOUR = 12
 _NIGHT_REAWAKE_END_HOUR = 5
-_MIN_MORNING_OFF_MINUTES = 60
-_MIN_NIGHT_OFF_MINUTES = 45
 _SLEEP_STILL_AWAKE_AFTER_MINUTES = 30
 _SLEEP_STILL_AWAKE_MAX_MINUTES = 180
 _XHS_LONG_USE_MINUTES = 120
@@ -100,6 +98,7 @@ _AWAY_INTENT_HINTS = (
 _EVENT_PRIORITY = {
     "sleep_intent_still_screen_on": 10,
     "night_reawake_screen_on": 20,
+    "sleep_wakeup": 25,
     "morning_first_screen_on": 30,
     "xiaohongshu_over_2h": 40,
     "no_reply_30m_app_activity": 90,
@@ -151,7 +150,20 @@ def _event_time(data: dict) -> str:
 
 def _is_screen_on(data: dict) -> bool:
     event = str((data or {}).get("event") or "").strip().lower()
-    return event == "app_active" and str((data or {}).get("screenWakeSource") or "").strip() == "foreground_app"
+    return event in {"app_active", "pc_active"} and bool(_confirmed_sleep_block(data))
+
+
+def _confirmed_sleep_block(data: dict) -> dict | None:
+    block = (data or {}).get("lastSleepBlock")
+    if not isinstance(block, dict):
+        return None
+    if block.get("confirmed") is not True:
+        return None
+    if str(block.get("classification") or "").strip() != "sleep":
+        return None
+    if not _dt(block.get("startAt")) or not _dt(block.get("endAt")):
+        return None
+    return block
 
 
 def _is_screen_off(data: dict) -> bool:
@@ -196,88 +208,12 @@ def _history_screen_events(history: list[dict]) -> list[dict]:
     return out
 
 
-def _previous_screen_off(events: list[dict], at_dt: datetime) -> dict | None:
-    for item in reversed(events):
-        if item["at"] >= at_dt:
-            continue
-        data = item.get("data") if isinstance(item.get("data"), dict) else {}
-        if _is_screen_on(data):
-            return None
-        if _is_screen_off(data):
-            return item
-    return None
-
-
 def _latest_screen_on(events: list[dict]) -> dict | None:
     for item in reversed(events):
         data = item.get("data") if isinstance(item.get("data"), dict) else {}
         if _is_screen_on(data):
             return item
     return None
-
-
-def _sleep_summary_minutes(on_data: dict | None, on_at: datetime) -> int:
-    summary = (on_data or {}).get("sleepSummary")
-    if not isinstance(summary, dict):
-        return 0
-    end_at = _dt(summary.get("endAt"))
-    if end_at and abs((on_at - end_at).total_seconds()) > 10 * 60:
-        return 0
-    try:
-        total_ms = int(summary.get("totalDurationMs") or 0)
-    except Exception:
-        total_ms = 0
-    if total_ms > 0:
-        return max(0, int(total_ms // 60000))
-    try:
-        return max(0, int(summary.get("totalMinutes") or 0))
-    except Exception:
-        return 0
-
-
-def _is_recognized_main_sleep_wake(on_data: dict | None, on_at: datetime) -> bool:
-    block = (on_data or {}).get("lastSleepBlock")
-    if not isinstance(block, dict):
-        return False
-    if str(block.get("classification") or "").strip() != "main_sleep":
-        return False
-    if block.get("summaryIncluded") is not True:
-        return False
-    end_at = _dt(block.get("endAt"))
-    if not end_at:
-        return False
-    return abs((on_at - end_at).total_seconds()) <= 10 * 60
-
-
-def _screen_off_minutes(prev_off: dict | None, on_at: datetime, on_data: dict | None = None) -> int:
-    summary_minutes = _sleep_summary_minutes(on_data, on_at)
-    block_minutes = 0
-    if not prev_off:
-        block = (on_data or {}).get("lastSleepBlock")
-        if isinstance(block, dict):
-            try:
-                duration_ms = int(block.get("durationMs") or 0)
-            except Exception:
-                duration_ms = 0
-            if duration_ms > 0:
-                block_minutes = max(0, int(duration_ms // 60000))
-                return max(block_minutes, summary_minutes)
-            start_at = _dt(block.get("startAt"))
-            end_at = _dt(block.get("endAt")) or on_at
-            block_minutes = _minutes_between(start_at, end_at)
-            return max(block_minutes, summary_minutes)
-        return summary_minutes
-    data = prev_off.get("data") if isinstance(prev_off.get("data"), dict) else {}
-    try:
-        duration_ms = int(data.get("screenOffDurationMs") or 0)
-    except Exception:
-        duration_ms = 0
-    if duration_ms > 0:
-        block_minutes = max(0, int(duration_ms // 60000))
-        return max(block_minutes, summary_minutes)
-    off_at = _dt(data.get("screenOffSince") or data.get("occurredAt") or prev_off.get("at"))
-    block_minutes = _minutes_between(off_at, on_at)
-    return max(block_minutes, summary_minutes)
 
 
 def _message_text(content: Any) -> str:
@@ -634,38 +570,36 @@ def _build_events(doc: dict, history: list[dict], window_id: str, now_dt) -> lis
     foreground = _foreground_label(doc)
 
     if latest_on:
-        on_at = latest_on["at"]
-        prev_off = _previous_screen_off(screen_events, on_at)
+        confirmed_at = latest_on["at"]
         latest_on_data = latest_on.get("data") if isinstance(latest_on.get("data"), dict) else {}
-        off_minutes = _screen_off_minutes(prev_off, on_at, latest_on_data)
-        recognized_main_sleep = _is_recognized_main_sleep_wake(latest_on_data, on_at)
-        user_chatted_after_screen_on = _has_normal_user_chat_after(window_id, on_at)
-        event_at = on_at.strftime("%Y-%m-%dT%H:%M:%S+08:00")
-        if (
-            on_at.strftime("%Y-%m-%d") == now_dt.strftime("%Y-%m-%d")
-            and _MORNING_START_HOUR <= on_at.hour < _MORNING_END_HOUR
-            and (recognized_main_sleep or off_minutes >= _MIN_MORNING_OFF_MINUTES)
-            and not user_chatted_after_screen_on
-        ):
+        block = _confirmed_sleep_block(latest_on_data)
+        start_at = _dt((block or {}).get("startAt"))
+        end_at = _dt((block or {}).get("endAt"))
+        if block and start_at and end_at and not _has_normal_user_chat_after(window_id, confirmed_at):
+            event_at = confirmed_at.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+            duration = _duration_text(_minutes_between(start_at, end_at))
+            wake_source = str(block.get("wakeSource") or "").strip()
+            source_text = "电脑出现了本人输入" if wake_source == "pc_activity" else "亮屏后出现了连续 App 切换"
+            if (
+                end_at.strftime("%Y-%m-%d") == now_dt.strftime("%Y-%m-%d")
+                and _MORNING_START_HOUR <= end_at.hour < _MORNING_END_HOUR
+            ):
+                trigger_type = "morning_first_screen_on"
+                dedupe_key = f"morning_first_screen_on:{block.get('startAt')}:{block.get('endAt')}"
+                fact = f"小玥刚刚确认醒来，这次睡了约 {duration}；{source_text}。"
+            elif end_at.hour < _NIGHT_REAWAKE_END_HOUR:
+                trigger_type = "night_reawake_screen_on"
+                dedupe_key = f"night_reawake_screen_on:{block.get('startAt')}:{block.get('endAt')}"
+                fact = f"小玥刚刚确认半夜醒来，这次睡了约 {duration}；{source_text}。"
+            else:
+                trigger_type = "sleep_wakeup"
+                dedupe_key = f"sleep_wakeup:{block.get('startAt')}:{block.get('endAt')}"
+                fact = f"小玥刚刚确认醒来，这次睡了约 {duration}；{source_text}。"
             events.append(
                 TriggerEvent(
-                    "morning_first_screen_on",
-                    f"morning_first_screen_on:{on_at.strftime('%Y-%m-%d')}",
-                    "小玥刚刚屏幕亮了一下，可能是睡醒了。",
-                    device_id=device_id,
-                    event_at=event_at,
-                )
-            )
-        if (
-            on_at.hour < _NIGHT_REAWAKE_END_HOUR
-            and off_minutes >= _MIN_NIGHT_OFF_MINUTES
-            and not user_chatted_after_screen_on
-        ):
-            events.append(
-                TriggerEvent(
-                    "night_reawake_screen_on",
-                    f"night_reawake_screen_on:{event_at}",
-                    "小玥刚刚屏幕亮了一下，可能是半夜醒了。",
+                    trigger_type,
+                    dedupe_key,
+                    fact,
                     device_id=device_id,
                     event_at=event_at,
                 )

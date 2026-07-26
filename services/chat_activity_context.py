@@ -72,17 +72,17 @@ def _add_sleep_summary(out: dict[str, dict], raw: Any) -> None:
     total_minutes = _int_minutes(raw.get("totalMinutes"), raw.get("totalDurationMs"))
     if total_minutes <= 0:
         total_minutes = max(0, int((end - start).total_seconds() // 60))
-    if total_minutes < 45:
+    if total_minutes <= 0:
         return
-    night_date = str(raw.get("nightDate") or end.strftime("%Y-%m-%d")).strip()
-    if not night_date:
+    sleep_date = str(raw.get("sleepDate") or raw.get("nightDate") or start.strftime("%Y-%m-%d")).strip()
+    if not sleep_date:
         return
-    prev = out.get(night_date)
-    # Keep the newest summary for a night; sense snapshots often repeat the same summary.
+    prev = out.get(sleep_date)
+    # Keep the newest confirmed session for a date; sense snapshots often repeat it.
     if prev and _dt(prev.get("end_at")) and (_dt(prev.get("end_at")) or end) >= end:
         return
-    out[night_date] = {
-        "night_date": night_date,
+    out[sleep_date] = {
+        "night_date": sleep_date,
         "start_at": start.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
         "end_at": end.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
         "total_minutes": total_minutes,

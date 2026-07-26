@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
 from typing import Any, Optional
 
 import requests
@@ -19,9 +18,6 @@ MARKER_END = "<<<END_DU_DAILY>>>"
 _HIDDEN_BLOCK = HiddenBlockParser.for_markers("DU_DAILY", MARKER_START, MARKER_END)
 
 _SLEEP_INACTIVITY_MINUTES = 60
-_SLEEP_SIGNAL_LOOKBACK_MINUTES = 120
-_SLEEP_STEP_DELTA_MAX = 20
-_SLEEP_HEART_RATE_MAX = 95
 _MAX_TODAY_EVENTS = 8
 
 _CONFLICT_STRONG_RE = re.compile(
@@ -422,29 +418,6 @@ def _minutes_since(iso_str: str) -> Optional[float]:
     return delta
 
 
-def _save_sleep_candidate(state: dict, text: str) -> None:
-    state["sleep_candidate_at"] = now_beijing_iso()
-    state["sleep_candidate_day"] = today_beijing()
-    state["sleep_candidate_text"] = str(text or "").strip()[:160]
-    state["updated_at"] = now_beijing_iso()
-    try:
-        r2_store.save_du_daily_state(state)
-    except Exception:
-        logger.warning("保存睡眠候选失败", exc_info=True)
-
-
-def _clear_sleep_candidate_if_needed(state: dict) -> None:
-    if not any(state.get(k) for k in ("sleep_candidate_at", "sleep_candidate_day", "sleep_candidate_text")):
-        return
-    state["sleep_candidate_at"] = ""
-    state["sleep_candidate_day"] = ""
-    state["sleep_candidate_text"] = ""
-    try:
-        r2_store.save_du_daily_state(state)
-    except Exception:
-        logger.warning("清理睡眠候选失败", exc_info=True)
-
-
 def _is_sleep_rollover_kind(kind: str) -> bool:
     return str(kind or "").strip() in {"sleep_inferred", "sleep_rollover"}
 
@@ -465,10 +438,6 @@ def build_chat_trigger(window_id: str, body: dict, headers: Optional[dict] = Non
     text = _extract_last_user_text((body or {}).get("messages") or [])
     if not text:
         return None
-    if is_explicit_user_sleep_intent(text):
-        _save_sleep_candidate(state, text)
-    else:
-        _clear_sleep_candidate_if_needed(state)
     if _looks_like_conflict_or_relation_tension(text):
         facts = _extract_recent_dialogue_facts((body or {}).get("messages") or [])
         if not facts:
@@ -637,42 +606,6 @@ def save_hidden_block(raw_block: str, trigger: Optional[dict] = None) -> bool:
     return bool(r2_store.save_du_daily_state(state))
 
 
-def _sense_bucket_dt(bucket: dict) -> Optional[object]:
-    if not isinstance(bucket, dict):
-        return None
-    for key in ("occurredAt", "observedAt", "capturedAt", "updatedAt"):
-        dt = parse_iso_to_beijing(str(bucket.get(key) or "").strip())
-        if dt:
-            return dt
-    return None
-
-
-def _extract_recent_health_stats(now_dt) -> tuple[Optional[int], Optional[int]]:
-    history = r2_store.get_sense_history_for_date(today_beijing(), limit=300) or []
-    floor_dt = now_dt - timedelta(minutes=_SLEEP_SIGNAL_LOOKBACK_MINUTES)
-    steps: list[int] = []
-    for item in history:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("type") or "").strip().lower() != "health":
-            continue
-        event_dt = parse_iso_to_beijing(str(item.get("at") or "").strip())
-        if not event_dt or event_dt < floor_dt:
-            continue
-        data = item.get("data") if isinstance(item.get("data"), dict) else {}
-        try:
-            step_val = int(data.get("steps"))
-        except Exception:
-            step_val = None
-        if step_val is not None:
-            steps.append(step_val)
-    if len(steps) >= 2:
-        return max(steps) - min(steps), steps[-1]
-    if len(steps) == 1:
-        return None, steps[0]
-    return None, None
-
-
 def infer_sleep_rollover_trigger() -> Optional[dict]:
     state, _ = get_prepared_state()
     if not state.get("today_summary") and not state.get("today_events"):
@@ -680,74 +613,31 @@ def infer_sleep_rollover_trigger() -> Optional[dict]:
     today = today_beijing()
     if str(state.get("today_finalized_for_date") or state.get("sleep_closed_for_date") or "").strip() == today:
         return None
-    candidate_iso = str(state.get("sleep_candidate_at") or "").strip()
-    candidate_text = str(state.get("sleep_candidate_text") or "").strip()
-    if str(state.get("sleep_candidate_day") or "").strip() != today or not candidate_iso:
-        return None
-    candidate_minutes = _minutes_since(candidate_iso)
-    candidate_dt = parse_iso_to_beijing(candidate_iso)
-    if candidate_minutes is None or candidate_minutes < _SLEEP_INACTIVITY_MINUTES or not candidate_dt:
-        return None
-
-    last_user_iso = r2_store.get_last_user_activity_at()
-    inactive_minutes = _minutes_since(last_user_iso or "")
-    if inactive_minutes is None or inactive_minutes < _SLEEP_INACTIVITY_MINUTES:
-        return None
-    last_user_dt = parse_iso_to_beijing(last_user_iso or "")
-    if last_user_dt and last_user_dt > candidate_dt + timedelta(seconds=30):
-        return None
 
     sense = r2_store.get_sense_latest() or {}
-    now_dt = parse_iso_to_beijing(now_beijing_iso())
-    if not now_dt:
-        return None
     screen = sense.get("screen") if isinstance(sense.get("screen"), dict) else {}
-    health = sense.get("health") if isinstance(sense.get("health"), dict) else {}
-
-    screen_dt = _sense_bucket_dt(screen)
-    screen_ok = (
-        str(screen.get("event") or "").strip().lower() == "screen_off"
-        and screen_dt is not None
-        and (now_dt - screen_dt).total_seconds() / 60.0 <= _SLEEP_SIGNAL_LOOKBACK_MINUTES
-    )
-    if not screen_ok:
+    session = screen.get("sleepSession") if isinstance(screen.get("sleepSession"), dict) else {}
+    if str(session.get("state") or "").strip() != "candidate":
+        return None
+    candidate_iso = str(session.get("startAt") or "").strip()
+    candidate_dt = parse_iso_to_beijing(candidate_iso)
+    candidate_minutes = _minutes_since(candidate_iso)
+    if not candidate_dt or candidate_minutes is None or candidate_minutes < _SLEEP_INACTIVITY_MINUTES:
         return None
 
-    score = 2
+    last_user_dt = parse_iso_to_beijing(r2_store.get_last_user_activity_at() or "")
+    if last_user_dt and last_user_dt > candidate_dt:
+        return None
+
     facts = [
-        f"她明确说过准备睡觉：{candidate_text[:120]}" if candidate_text else "她明确说过准备睡觉。",
-        f"之后已经大约 {int(inactive_minutes)} 分钟没回复。",
-        "手机最近是熄屏状态。",
+        f"统一睡眠会话从 {candidate_dt.strftime('%Y-%m-%d %H:%M')} 起保持候选状态。",
+        f"已经持续约 {int(candidate_minutes)} 分钟，仍未出现已确认的手机或电脑清醒活动。",
     ]
-
-    try:
-        hr = int(health.get("heart_rate"))
-    except Exception:
-        hr = None
-    if hr is not None:
-        if hr <= _SLEEP_HEART_RATE_MAX:
-            score += 1
-            facts.append(f"最近心率不高，大约 {hr}。")
-        else:
-            return None
-
-    step_delta, latest_steps = _extract_recent_health_stats(now_dt)
-    if step_delta is not None:
-        if step_delta <= _SLEEP_STEP_DELTA_MAX:
-            score += 1
-            facts.append(f"最近一段时间步数变化很小（约 {step_delta} 步）。")
-        else:
-            return None
-    elif latest_steps is not None:
-        facts.append(f"当前步数大约 {latest_steps}。")
-
-    if score < 4:
-        return None
 
     return {
         "kind": "sleep_inferred",
         "hard": True,
-        "reason": "多信号推定已睡，做今天总结收口",
+        "reason": "统一睡眠候选持续满一小时，做今天总结收口",
         "facts": facts,
         "topic_key": "sleep",
         "hidden_only": True,
