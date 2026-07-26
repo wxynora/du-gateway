@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 import threading
-from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
+
+from PIL import Image, ImageOps, ImageSequence
 
 from config import R2_BUCKET_NAME
 from storage.r2_client import _read_json, _s3_client, _write_json
@@ -16,6 +18,13 @@ logger = get_logger(__name__)
 
 R2_KEY_STICKERS_MAPPING = "stickers/mapping.json"
 R2_KEY_STICKERS_META = "stickers/meta.json"
+_STICKER_MAX_DIMENSION = 300
+_STICKER_FORMAT_INFO = {
+    "JPEG": (".jpg", "image/jpeg"),
+    "PNG": (".png", "image/png"),
+    "WEBP": (".webp", "image/webp"),
+    "GIF": (".gif", "image/gif"),
+}
 
 _sticker_write_lock = threading.Lock()
 
@@ -200,6 +209,73 @@ def get_stickers_mapping() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _sticker_save_kwargs(image_format: str) -> dict:
+    if image_format == "JPEG":
+        return {"quality": 85, "optimize": True, "progressive": True}
+    if image_format == "PNG":
+        return {"optimize": True}
+    if image_format == "WEBP":
+        return {"quality": 85, "method": 6}
+    if image_format == "GIF":
+        return {"optimize": True}
+    return {}
+
+
+def _resize_sticker_for_r2(content: bytes) -> Optional[tuple[bytes, str, str, tuple[int, int], tuple[int, int]]]:
+    """Decode and downscale one supported sticker while preserving animation."""
+    try:
+        with Image.open(BytesIO(content)) as source:
+            image_format = str(source.format or "").strip().upper()
+            format_info = _STICKER_FORMAT_INFO.get(image_format)
+            if not format_info:
+                return None
+            original_size = tuple(source.size)
+            if source.width <= _STICKER_MAX_DIMENSION and source.height <= _STICKER_MAX_DIMENSION:
+                return content, format_info[0], format_info[1], original_size, original_size
+
+            output = BytesIO()
+            if bool(getattr(source, "is_animated", False)):
+                frames: list[Image.Image] = []
+                durations: list[int] = []
+                disposals: list[int] = []
+                for frame in ImageSequence.Iterator(source):
+                    resized = frame.copy()
+                    resized.thumbnail(
+                        (_STICKER_MAX_DIMENSION, _STICKER_MAX_DIMENSION),
+                        Image.Resampling.LANCZOS,
+                    )
+                    frames.append(resized)
+                    durations.append(int(frame.info.get("duration", source.info.get("duration", 0)) or 0))
+                    disposals.append(int(getattr(frame, "disposal_method", source.info.get("disposal", 0)) or 0))
+                if not frames:
+                    return None
+                save_kwargs = {
+                    **_sticker_save_kwargs(image_format),
+                    "save_all": True,
+                    "append_images": frames[1:],
+                    "duration": durations,
+                    "loop": int(source.info.get("loop", 0) or 0),
+                }
+                if image_format == "GIF":
+                    save_kwargs["disposal"] = disposals
+                frames[0].save(output, format=image_format, **save_kwargs)
+                resized_size = tuple(frames[0].size)
+            else:
+                resized = ImageOps.exif_transpose(source)
+                resized.thumbnail(
+                    (_STICKER_MAX_DIMENSION, _STICKER_MAX_DIMENSION),
+                    Image.Resampling.LANCZOS,
+                )
+                if image_format == "JPEG" and resized.mode not in ("RGB", "L"):
+                    resized = resized.convert("RGB")
+                resized.save(output, format=image_format, **_sticker_save_kwargs(image_format))
+                resized_size = tuple(resized.size)
+            return output.getvalue(), format_info[0], format_info[1], original_size, resized_size
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        logger.warning("sticker image decode/resize failed error=%s", exc)
+        return None
+
+
 def upload_sticker_file(tag: str, filename: str, content: bytes, content_type: str) -> Optional[str]:
     """Upload one sticker and refresh the mapping."""
     from services.sticker_tags import validate_sticker_tag_key
@@ -209,18 +285,27 @@ def upload_sticker_file(tag: str, filename: str, content: bytes, content_type: s
         return None
     if normalized_tag not in get_sticker_tag_keys() or not content:
         return None
-    ext = Path(filename or "").suffix.lower()
-    if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
-        ext = ".jpg"
-    content_type = _sticker_content_type(content_type)
+    prepared = _resize_sticker_for_r2(content)
+    if not prepared:
+        return None
+    upload_content, ext, content_type, original_size, resized_size = prepared
     key = f"stickers/{normalized_tag}/{uuid4().hex}{ext}"
     client = _s3_client()
     if not client:
         return None
     try:
-        client.put_object(Bucket=R2_BUCKET_NAME, Key=key, Body=content, ContentType=content_type)
+        client.put_object(Bucket=R2_BUCKET_NAME, Key=key, Body=upload_content, ContentType=content_type)
         save_stickers_mapping(rebuild_stickers_mapping_from_r2())
-        logger.info("sticker uploaded key=%s", key)
+        logger.info(
+            "sticker uploaded key=%s original_size=%sx%s stored_size=%sx%s original_bytes=%s stored_bytes=%s",
+            key,
+            original_size[0],
+            original_size[1],
+            resized_size[0],
+            resized_size[1],
+            len(content),
+            len(upload_content),
+        )
         return key
     except Exception as exc:
         logger.error("upload_sticker_file failed error=%s", exc, exc_info=True)
@@ -243,16 +328,3 @@ def delete_sticker_object(key: str) -> bool:
     except Exception as exc:
         logger.error("delete_sticker_object failed key=%s error=%s", normalized, exc, exc_info=True)
         return False
-
-
-def _sticker_content_type(content_type: str) -> str:
-    normalized = (content_type or "").strip().lower() or "image/jpeg"
-    if "jpeg" in normalized or "jpg" in normalized:
-        return "image/jpeg"
-    if "png" in normalized:
-        return "image/png"
-    if "webp" in normalized:
-        return "image/webp"
-    if "gif" in normalized:
-        return "image/gif"
-    return "image/jpeg"
