@@ -1508,6 +1508,45 @@ def stage_core_memory_merge(
     return False
 
 
+def stage_dynamic_memory_merge(
+    entry_id: str,
+    *,
+    original_content: str,
+    rewritten_content: str,
+    proposed_at: str,
+    window_id: str,
+    round_index: int,
+    field_updates: dict,
+    merge_reason: str = "",
+) -> bool:
+    """暂存动态记忆 merge 候选；正式正文保持不变，等待人工审核。"""
+    clean_id = str(entry_id or "").strip()
+    original = str(original_content or "").strip()
+    rewritten = str(rewritten_content or "").strip()
+    if not clean_id or not original or not rewritten or original == rewritten:
+        return False
+    memories = get_dynamic_memory_list()
+    for index, item in enumerate(memories):
+        if not isinstance(item, dict) or str(item.get("id") or "").strip() != clean_id:
+            continue
+        if str(item.get("content") or "").strip() != original:
+            return False
+        updated = dict(item)
+        updated["pending_merge"] = {
+            "original_content": original,
+            "rewritten_content": rewritten,
+            "reason": "多次重复内容归纳成常态习惯，等待人工审核",
+            "proposed_at": str(proposed_at or "").strip() or now_beijing_iso(),
+            "window_id": str(window_id or "").strip(),
+            "round_index": int(round_index or 0),
+            "merge_reason": str(merge_reason or "").strip(),
+            "field_updates": dict(field_updates or {}),
+        }
+        memories[index] = updated
+        return save_dynamic_memory_list(memories)
+    return False
+
+
 def delete_memory_by_id(layer: str, entry_id: str) -> bool:
     """把动态/核心记忆移入统一回收站，并立即退出 active 层与召回索引。"""
     normalized_layer = _normalize_memory_layer(layer)

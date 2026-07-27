@@ -356,6 +356,26 @@ def _apply_dynamic_rewrite(
 
     updated = dict(current)
     updated["content"] = rewritten_content
+    pending_merge = current.get("pending_merge")
+    if isinstance(pending_merge, dict):
+        pending_original = str(pending_merge.get("original_content") or "").strip()
+        pending_rewritten = str(pending_merge.get("rewritten_content") or "").strip()
+        if pending_original == expected_content and pending_rewritten == rewritten_content:
+            allowed_updates = {
+                "importance",
+                "mention_count",
+                "tag",
+                "emotion_label",
+                "scene_type",
+                "target_type",
+                "last_mentioned",
+            }
+            field_updates = pending_merge.get("field_updates")
+            if isinstance(field_updates, dict):
+                for key in allowed_updates:
+                    if key in field_updates:
+                        updated[key] = field_updates[key]
+    updated.pop("pending_merge", None)
     updated["retrieval_text"] = _build_dynamic_retrieval_text(rewritten_content)
     updated["updated_at"] = now_beijing_iso()
     items[index] = updated
@@ -458,18 +478,16 @@ def reject_memory_rewrite(
     rewritten_content: Any,
 ) -> dict[str, Any]:
     normalized_layer = _normalize_layer(layer)
-    if normalized_layer != "core":
-        raise MemoryRewriteInputError("只有核心记忆 merge 候选需要审核拒绝")
     normalized_id = _normalize_memory_id(memory_id)
     expected = _normalize_content(original_content, field="original_content")
     rewritten = _normalize_content(rewritten_content, field="rewritten_content")
-    items = _load_layer_items("core")
+    items = _load_layer_items(normalized_layer)
     index, current = _find_item(items, normalized_id)
     if str(current.get("content") or "").strip() != expected:
-        raise MemoryRewriteConflict("这条核心记忆已经变化，请刷新后再操作")
+        raise MemoryRewriteConflict(f"这条{'动态' if normalized_layer == 'dynamic' else '核心'}记忆已经变化，请刷新后再操作")
     pending_merge = current.get("pending_merge")
     if not isinstance(pending_merge, dict):
-        raise MemoryRewriteNotFound("这条核心记忆没有待审核 merge")
+        raise MemoryRewriteNotFound(f"这条{'动态' if normalized_layer == 'dynamic' else '核心'}记忆没有待审核 merge")
     if (
         str(pending_merge.get("original_content") or "").strip() != expected
         or str(pending_merge.get("rewritten_content") or "").strip() != rewritten
@@ -478,8 +496,13 @@ def reject_memory_rewrite(
     updated = dict(current)
     updated.pop("pending_merge", None)
     items[index] = updated
-    if not r2_store.save_core_cache_pending(items):
-        raise MemoryRewriteStorageError("拒绝核心记忆 merge 失败")
+    saved = (
+        r2_store.save_dynamic_memory_list(items)
+        if normalized_layer == "dynamic"
+        else r2_store.save_core_cache_pending(items)
+    )
+    if not saved:
+        raise MemoryRewriteStorageError(f"拒绝{'动态' if normalized_layer == 'dynamic' else '核心'}记忆 merge 失败")
     return {
         "layer": normalized_layer,
         "memory_id": normalized_id,

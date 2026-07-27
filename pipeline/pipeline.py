@@ -3803,6 +3803,55 @@ def _apply_one_decision(
                 logger.warning("核心层 merge 候选未暂存 window_id=%s fused_with_id=%s", window_id, fused_with_id)
             return None
 
+        if merge_reason == "habit_generalization":
+            current_dynamic = next(
+                (
+                    item
+                    for item in current_memories
+                    if isinstance(item, dict) and str(item.get("id") or "").strip() == str(fused_with_id).strip()
+                ),
+                None,
+            )
+            if not isinstance(current_dynamic, dict):
+                logger.warning(
+                    "动态层常态归纳 merge 未找到 fused_with_id=%s，本轮回退为 skip window_id=%s",
+                    fused_with_id,
+                    window_id,
+                )
+                return None
+            content_before = str(current_dynamic.get("content") or "")
+            staged = r2_store.stage_dynamic_memory_merge(
+                str(fused_with_id),
+                original_content=content_before,
+                rewritten_content=content if content else content_before,
+                proposed_at=now_iso,
+                window_id=window_id,
+                round_index=round_index,
+                field_updates={
+                    "importance": importance,
+                    "mention_count": int(current_dynamic.get("mention_count") or 0) + 1,
+                    "tag": tag,
+                    "emotion_label": emotion_label,
+                    "scene_type": scene_type,
+                    "target_type": target_type,
+                    "last_mentioned": now_iso,
+                },
+                merge_reason=merge_reason,
+            )
+            if staged:
+                logger.info(
+                    "动态层常态归纳 merge 已生成待审核候选 window_id=%s fused_with_id=%s",
+                    window_id,
+                    fused_with_id,
+                )
+            else:
+                logger.warning(
+                    "动态层常态归纳 merge 候选未暂存 window_id=%s fused_with_id=%s",
+                    window_id,
+                    fused_with_id,
+                )
+            return None
+
         found = False
         merged_mem = None
         for mem in current_memories:

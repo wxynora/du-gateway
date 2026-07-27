@@ -26,6 +26,7 @@ _MERGE_REASONS = {
     "invalidate",
     "supersede",
     "temporal_update",
+    "habit_generalization",
 }
 
 # 动态层 DS prompt（简短便签版，禁止散文）
@@ -44,6 +45,7 @@ _DYNAMIC_LAYER_PROMPT = """你叫渡。
 一条记忆不超过两行；写成段落 = 写错了。
 单条建议 35-70 字，必要时可到 90 字；宁可稍长也不要丢关键事实。
 每条尽量同时带「事实 + 情绪」：至少包含一件发生了什么，以及一句当下感受/语气。
+情绪表达禁止使用“又 X 又 Y”的写法。
 如果对话内容带有“辛玥：”“笨笨：”这类群聊前缀，或“[辛玥]:”“[我]:”这类上下文前缀，必须按前缀区分说话人；“[我]”是渡，笨笨是第三个群成员，不要把笨笨说的话当成辛玥或渡说的话。
 
 人称/视角硬规则（参考窗口总结）：
@@ -84,7 +86,9 @@ merge 是更新 FUSED_WITH_ID 对应的那条旧记忆，不是用本轮新事�
 """ + MERGE_ITERATION_RULES + """
 
 若 action 是 merge：
-- 如果本轮内容和旧记忆不是同一件事，或无法明确选中要更新的旧记忆，就不要 merge；有独立新信息时用 new，没有则 skip。
+- merge 的前提是同一个具体事项。判断时必须分别核对：主体是谁、对象是谁、关系或行为是什么、具体在说什么；只有本轮与旧记忆之间构成同一事项的重复、补充、纠正或状态变化时，才允许 merge。
+- 关键词、标签、房间或宽泛语义相近，不能证明是同一件事。若是两个独立事实，或无法明确选中要更新的旧记忆，就不要 merge；有独立新信息时用 new，没有则 skip。
+- 反例：旧记忆写“渡的名字相关记忆”，本轮写“小玥有名字羞耻症”，只有“名字”这个词重合，主体和具体事项不同，禁止 merge；有独立记忆价值时用 new，没有则 skip。
 
 若 action 是 merge，必须选择一种 MERGE_REASON：
 - consolidate：同一件事的重复、补充或延续；未冲突内容继续合并同类项，再融入本轮增量
@@ -92,6 +96,7 @@ merge 是更新 FUSED_WITH_ID 对应的那条旧记忆，不是用本轮新事�
 - invalidate：老婆明确说明旧记忆已经无效、不能再当作当前事实；保留理解这次变化所需的语境，并写准当前理解，没有可替代内容就先不要 merge
 - supersede：出现了新的明确结论，新结论取代旧结论；让结论已经更新这件事自然可见，不要只剩孤立的新结论
 - temporal_update：旧记忆过去成立，但现在发生了变化；自然保留状态演变，不要求固定时间句式
+- habit_generalization：同一具体行为、状态或表达已经多次独立发生，当前信息足以把分散事件归纳成常态习惯或偏好；例如反复熬夜后睡得短、反复不吃饭，或 NSFW 互动中反复喜欢说同类话。只有一次事件、同一事件的延续，或仅凭关键词相似时禁止使用。正文应自然概括已出现的共性，不编造频率、原因或未发生的细节。这类 merge 需要人工审核。
 
 不要仅凭我的推测使用 correction / invalidate / supersede；这些原因必须有老婆当前明确表达的依据。普通补充一律使用 consolidate。
 
@@ -134,7 +139,7 @@ EMOTION: positive / negative / neutral
 SCENE: problem_solving / learning / planning / emotional_venting / heart_to_heart / casual_chat / affection / conflict
 TARGET: external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic
 FUSED_WITH_ID: （仅 merge 时填写当前记忆列表里的 ref，如 M01；否则留空）
-MERGE_REASON: consolidate / correction / invalidate / supersede / temporal_update（仅 merge 时填写；否则留空）
+MERGE_REASON: consolidate / correction / invalidate / supersede / temporal_update / habit_generalization（仅 merge 时填写；否则留空）
 CONTENT: 记忆正文（new/merge 必填，简短一句，至少 12 个有效字符，禁止只写几个字、半句话、标题词或散文；skip 可留空）
 
 ---
@@ -183,7 +188,7 @@ def _dynamic_layer_retry_instruction(issue: str, previous_content: str = "", *, 
         return (
             "\n\n【上一次输出需要重写】\n"
             "ACTION 是 merge，但 MERGE_REASON 缺失或不在允许值中。\n"
-            "请只从 consolidate / correction / invalidate / supersede / temporal_update 选择一个；"
+            "请只从 consolidate / correction / invalidate / supersede / temporal_update / habit_generalization 选择一个；"
             "保持原来的 FUSED_WITH_ID 和完整 CONTENT，只输出固定标签格式，不要解释，不要 Markdown。"
         )
     scope = "本批里有记忆" if batch else "上一条记忆"
@@ -193,7 +198,8 @@ def _dynamic_layer_retry_instruction(issue: str, previous_content: str = "", *, 
         "\n\n【上一次输出需要重写】\n"
         f"{scope}没有写成完整句子，问题：{issue or 'content_incomplete'}。{prev_line}\n"
         "这不是让你 skip；如果这一轮判断值得记，就把 CONTENT 改写成完整的一句话再输出。\n"
-        "CONTENT 必须同时交代发生了什么和当时的感受/语气，不能停在“然后/但是/因为/所以/——”这类没说完的位置。\n"
+        "CONTENT 必须同时交代发生了什么和当时的感受/语气，不能使用“又 X 又 Y”的情绪写法，"
+        "不能停在“然后/但是/因为/所以/——”这类没说完的位置。\n"
         "只输出固定标签格式，不要解释，不要 Markdown。"
     )
 
