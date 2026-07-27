@@ -46,7 +46,8 @@ def report_pc_activity():
     if not isinstance(body, dict):
         return jsonify({"ok": False, "error": "JSON 无效"}), 400
     last_input_at = str(body.get("last_input_at") or body.get("lastInputAt") or "").strip()
-    if not parse_iso_to_beijing(last_input_at):
+    input_dt = parse_iso_to_beijing(last_input_at)
+    if not input_dt:
         return jsonify({"ok": False, "error": "last_input_at 无效"}), 400
     device_id = str(body.get("device_id") or body.get("deviceId") or "pc").strip()[:80] or "pc"
     observed_at = now_beijing_iso()
@@ -62,20 +63,23 @@ def report_pc_activity():
         idle_seconds = 0.0
     patch["idleSeconds"] = round(idle_seconds, 3)
 
-    awake_ok = mark_screen_awake_from_pc_activity(patch)
     latest = r2_store.get_sense_latest() or {}
     current = latest.get("computer") if isinstance(latest.get("computer"), dict) else {}
-    unchanged = (
-        str(current.get("deviceId") or "").strip() == device_id
-        and str(current.get("lastInputAt") or "").strip() == last_input_at
+    current_device_id = str(current.get("deviceId") or "").strip()
+    current_input_dt = parse_iso_to_beijing(str(current.get("lastInputAt") or "").strip())
+    stale_or_unchanged = bool(
+        current_device_id == device_id
+        and current_input_dt
+        and input_dt <= current_input_dt
     )
-    stored_ok = True if unchanged else r2_store.merge_and_save_sense_bucket("computer", patch)
+    awake_ok = True if stale_or_unchanged else mark_screen_awake_from_pc_activity(patch)
+    stored_ok = True if stale_or_unchanged else r2_store.merge_and_save_sense_bucket("computer", patch)
     return jsonify(
         {
             "ok": bool(awake_ok and stored_ok),
             "device_id": device_id,
             "last_input_at": last_input_at,
-            "skipped": bool(unchanged),
+            "skipped": stale_or_unchanged,
         }
     )
 
