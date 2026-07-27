@@ -186,7 +186,7 @@ def _collect_recent_daily(end_day: date) -> tuple[list[dict], dict, int, str, st
                     item.get("yesterday_summary") or item.get("content"),
                     max_summary_chars,
                 ),
-                "events": [_sanitize_midterm_source_text(e, 220) for e in events[-4:]],
+                "events": [e for e in events if isinstance(e, str) and e.strip()],
             }
         )
 
@@ -300,7 +300,7 @@ def _build_prompt(
 
 画像候选只作补充质感，不要写成长期人格判断，也不要原样搬成“以后要/不要”的规则。稳定事实、工具授权、操作策略不要写进中期记忆。不要出现“记住：”这种给自己下命令的句子。
 
-长度：content 180-420 个中文字符，最多 2 段。宁可漏掉旧细节，也不要写成长回顾。
+长度：content 不超过 1000 个中文字符。
 
 必须输出这个 JSON，字段值不要改：
 {{"period_start":"{period_start}","period_end":"{period_end}","source_archive_days":{source_archive_days},"source_portrait_items":{source_portrait_items},"content":"..."}}
@@ -343,7 +343,7 @@ def _validate_generated(obj: dict, expected: dict) -> tuple[bool, str]:
     content = str(obj.get("content") or "").strip()
     if len(content) < 80:
         return False, "content_too_short"
-    if len(content) > 700:
+    if len(content) > 1000:
         return False, "content_too_long"
     if any(x in content for x in _DISALLOWED_CURRENTISH):
         return False, "currentish_phrase"
@@ -376,7 +376,6 @@ def _call_ds(prompt: str) -> Optional[dict]:
         "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
-        "max_tokens": 2200,
     }
     resp = requests.post(
         DEEPSEEK_API_URL,

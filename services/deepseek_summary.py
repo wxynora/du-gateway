@@ -24,9 +24,9 @@ _SUMMARY_OLDER_LEVEL = "older"
 _SUMMARY_LEVELS = {_SUMMARY_RECENT_LEVEL, _SUMMARY_SLIGHTLY_LEVEL, _SUMMARY_OLDER_LEVEL}
 _SUMMARY_NEW_CHUNK_PLACEHOLDER_ID = "__new_chunk__"
 _SUMMARY_PENDING_STATUS = "pending"
-_SUMMARY_RECENT_MAX_CHUNKS = 3
-_SUMMARY_SLIGHTLY_MAX_CHUNKS = 8
-_SUMMARY_OLDER_MAX_CHUNKS = 4
+_SUMMARY_RECENT_MAX_CHUNKS = 8
+_SUMMARY_SLIGHTLY_MAX_CHUNKS = 10
+_SUMMARY_OLDER_MAX_CHUNKS = 7
 _SUMMARY_DS_MAX_ATTEMPTS = 3
 _SUMMARY_DS_RETRY_SLEEP_SECONDS = 3
 
@@ -870,12 +870,25 @@ def _summary_compression_plan(chunks: list[dict], should_compress: bool) -> tupl
             "text": "请使用本次生成的 new_chunk 内容，按轻压缩规则再压缩一次。",
         }
     ]
-    # 保持原有节拍：每个压缩点固定处理最旧的两个 recent 小段。
-    recent_to_slightly = recent_pool[:2] if len(recent_pool) >= 2 else []
-    slightly_to_older = _bucket_summary_chunks(chunks, _SUMMARY_SLIGHTLY_LEVEL)[:2]
-    if len(slightly_to_older) < 2:
-        slightly_to_older = []
-    older_to_drop = _bucket_summary_chunks(chunks, _SUMMARY_OLDER_LEVEL)[:2] if slightly_to_older else []
+    # 仍只在原压缩点迁移；填充期少搬，填满后为下个压缩点前的新块预留位置。
+    reserved_recent_slots = max(0, _summary_compress_every_updates() - 1)
+    recent_after_compression_max = max(0, _SUMMARY_RECENT_MAX_CHUNKS - reserved_recent_slots)
+    recent_move_count = max(0, len(recent_pool) - recent_after_compression_max)
+    recent_to_slightly = recent_pool[:recent_move_count]
+
+    slightly_pool = _bucket_summary_chunks(chunks, _SUMMARY_SLIGHTLY_LEVEL)
+    slightly_move_count = max(
+        0,
+        len(slightly_pool) + len(recent_to_slightly) - _SUMMARY_SLIGHTLY_MAX_CHUNKS,
+    )
+    slightly_to_older = slightly_pool[:slightly_move_count]
+
+    older_pool = _bucket_summary_chunks(chunks, _SUMMARY_OLDER_LEVEL)
+    older_drop_count = max(
+        0,
+        len(older_pool) + len(slightly_to_older) - _SUMMARY_OLDER_MAX_CHUNKS,
+    )
+    older_to_drop = older_pool[:older_drop_count]
     older_to_drop_ids = {str(item.get("id") or "") for item in older_to_drop}
     return recent_to_slightly, slightly_to_older, older_to_drop_ids
 
@@ -1007,7 +1020,7 @@ def fetch_new_summary_update(
 ) -> tuple[str | None, dict | None]:
     """
     调用 DeepSeek 完成一次小段更新：
-    1) 每次总结最新 4 轮；2) 每两次总结才批量迁移/压缩两个旧小段。
+    1) 每次总结最新 4 轮；2) 每两次总结按分桶容量迁移/压缩旧小段。
     """
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
         return None, None

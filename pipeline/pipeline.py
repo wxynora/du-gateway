@@ -56,6 +56,7 @@ _TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
 _THINKING_RULES_SYSTEM_MARKER = "__thinking_rules__"
 _ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
+_DU_DAILY_SYSTEM_MARKER = "__du_daily__"
 _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 _PLAY_NOTE_PENDING_BODY_KEY = "__play_note_pending__"
 
@@ -66,6 +67,7 @@ _SYSTEM_PROMPT_REGION_ORDER = (
     "tool_result_cache",
     "entry_style",
     "sumitalk_mode",
+    "du_daily",
     "summary_cache",
     "summary_recent",
     "dynamic",
@@ -76,7 +78,7 @@ _SYSTEM_PROMPT_REGION_ORDER = (
 _SYSTEM_PROMPT_CACHE_GROUPS = (
     ("static",),
     ("tool_result_cache",),
-    ("entry_style", "sumitalk_mode", "summary_cache", "summary_recent"),
+    ("entry_style", "sumitalk_mode", "du_daily", "summary_cache", "summary_recent"),
     ("dynamic",),
     ("temporary_dynamic",),
     ("thinking_rules",),
@@ -421,6 +423,8 @@ def _system_prompt_region(msg: dict) -> str:
         return "entry_style"
     if msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER):
         return "sumitalk_mode"
+    if msg.get(_DU_DAILY_SYSTEM_MARKER):
+        return "du_daily"
     if msg.get(_SUMMARY_CACHE_SYSTEM_MARKER):
         return "summary_cache"
     if msg.get(_SUMMARY_RECENT_SYSTEM_MARKER):
@@ -1622,7 +1626,8 @@ def step_inject_du_daily(
     maintenance_mode: bool = False,
 ) -> dict:
     """
-    全局注入：在 system 末尾追加「渡的日常」隐藏滚动记忆说明 + 当前版本。
+    全局注入：把「渡的日常」作为独立静态 system 槽位注入。
+    位置固定在 SumiTalk Real/App 互斥专属槽位之后、两个近期记忆块之前。
     网关判定命中更新时，渡只写本次新增隐藏块，网关截取后追加进 R2，老婆侧不可见。
     """
     _ = window_id
@@ -1637,7 +1642,33 @@ def step_inject_du_daily(
     if not (block or "").strip():
         return body
     inject = "\n\n" + block.strip()
-    body = _append_to_dynamic_system(body, inject)
+    body = copy.deepcopy(body)
+    messages = [
+        msg
+        for msg in (body.get("messages") or [])
+        if not (isinstance(msg, dict) and msg.get(_DU_DAILY_SYSTEM_MARKER))
+    ]
+    insert_idx = len(messages)
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict) or (msg.get("role") or "").lower() != "system":
+            insert_idx = i
+            break
+        if (
+            msg.get(_SUMMARY_CACHE_SYSTEM_MARKER)
+            or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER)
+            or msg.get(_DYNAMIC_SYSTEM_MARKER)
+        ):
+            insert_idx = i
+            break
+    messages.insert(
+        insert_idx,
+        {
+            "role": "system",
+            "content": inject,
+            _DU_DAILY_SYSTEM_MARKER: True,
+        },
+    )
+    body["messages"] = messages
     return body
 
 
