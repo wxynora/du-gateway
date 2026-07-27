@@ -226,12 +226,13 @@ def _items_after_last_proactive(items: list[dict]) -> list[dict]:
     return sorted(out, key=lambda x: str(x.get("latest_owner_at") or x.get("recorded_at") or ""))
 
 
-def _recent_context_images(rows: list[dict]) -> list[str]:
+def _recent_context_images(rows: list[dict]) -> list[dict]:
     now_dt = parse_iso_to_beijing(now_beijing_iso())
     cutoff = None
     if now_dt:
         cutoff = now_dt - timedelta(hours=_IMAGE_CONTEXT_TTL_HOURS)
-    out: list[str] = []
+    out: list[dict] = []
+    seen_urls: set[str] = set()
     for row in reversed(rows[-_MAX_CONTEXT_ROWS:]):
         if not isinstance(row, dict):
             continue
@@ -239,8 +240,16 @@ def _recent_context_images(rows: list[dict]) -> list[str]:
         if cutoff and (not row_dt or row_dt < cutoff):
             continue
         for url in reversed(_image_urls(row.get("images"))):
-            if url not in out:
-                out.append(url)
+            if url not in seen_urls:
+                seen_urls.add(url)
+                out.append(
+                    {
+                        "url": url,
+                        "at": str(row.get("at") or "").strip(),
+                        "sender_name": str(row.get("sender_name") or "").strip(),
+                        "is_owner": bool(row.get("is_owner")),
+                    }
+                )
             if len(out) >= _MAX_CONTEXT_IMAGES:
                 return out
     return out
@@ -258,7 +267,7 @@ def build_group_activity_context_for_wakeup() -> list[dict] | str:
     latest = items[-1]
     older = items[:-1][-6:]
     latest_rows = [x for x in (latest.get("context") or [])[-_MAX_CONTEXT_ROWS:] if isinstance(x, dict)]
-    image_urls = list(reversed(_recent_context_images(latest_rows)))
+    image_entries = list(reversed(_recent_context_images(latest_rows)))
 
     lines = [
         "【辛玥近期的QQ群活动】",
@@ -276,8 +285,11 @@ def build_group_activity_context_for_wakeup() -> list[dict] | str:
         text = _clip_text(row.get("text"), _MAX_TEXT_CHARS)
         if text:
             lines.append(f"{_clock(str(row.get('at') or ''))} {name}：{text}")
-    if image_urls:
-        lines.append(f"（已随上下文附上最近 1 小时内最新的 {len(image_urls)} 张群聊图片，按时间从旧到新排列。）")
+    if image_entries:
+        lines.append(
+            f"（已随上下文附上最近 1 小时内最新的 {len(image_entries)} 张群聊图片，"
+            "每张图片前已标明发送者和时间，按时间从旧到新排列。）"
+        )
     lines.extend(
         [
             "",
@@ -289,17 +301,24 @@ def build_group_activity_context_for_wakeup() -> list[dict] | str:
         "qq_group_activity_context_built items=%s chars=%s images=%s",
         len(items),
         len(text),
-        len(image_urls),
+        len(image_entries),
     )
-    if not image_urls:
+    if not image_entries:
         return text
     content = [{"type": "text", "text": text}]
-    content.extend(
-        {
-            "type": "image_url",
-            "image_url": {"url": url},
-            "__skip_image_description": True,
-        }
-        for url in image_urls
-    )
+    for entry in image_entries:
+        name = "辛玥" if bool(entry.get("is_owner")) else (str(entry.get("sender_name") or "").strip() or "群友")
+        content.append(
+            {
+                "type": "text",
+                "text": f"{_clock(str(entry.get('at') or ''))} {name}发的群聊图片：",
+            }
+        )
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": str(entry.get("url") or "")},
+                "__skip_image_description": True,
+            }
+        )
     return content
