@@ -60,26 +60,26 @@ _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 _PLAY_NOTE_PENDING_BODY_KEY = "__play_note_pending__"
 
 # Keep logical prompt regions explicit. Dynamic context is ordered by injection slot:
-# normal runtime context, temporary scene/event context, then recent conversation.
+# normal runtime context, temporary scene/event context, Thinking rules, then recent conversation.
 _SYSTEM_PROMPT_REGION_ORDER = (
     "static",
     "tool_result_cache",
-    "thinking_rules",
     "entry_style",
     "sumitalk_mode",
     "summary_cache",
     "summary_recent",
     "dynamic",
     "temporary_dynamic",
+    "thinking_rules",
     "last4",
 )
 _SYSTEM_PROMPT_CACHE_GROUPS = (
     ("static",),
     ("tool_result_cache",),
-    ("thinking_rules",),
     ("entry_style", "sumitalk_mode", "summary_cache", "summary_recent"),
     ("dynamic",),
     ("temporary_dynamic",),
+    ("thinking_rules",),
     ("last4",),
 )
 SUMITALK_REAL_MODE_PROMPT = (
@@ -591,10 +591,10 @@ def step_inject_tool_result_cache(body: dict) -> dict:
     cache_group_markers = (
         None,
         _TOOL_RESULT_CACHE_SYSTEM_MARKER,
-        _THINKING_RULES_SYSTEM_MARKER,
         static_tail_marker,
         _DYNAMIC_SYSTEM_MARKER,
         _DYNAMIC_SYSTEM_MARKER,
+        _THINKING_RULES_SYSTEM_MARKER,
         _DYNAMIC_SYSTEM_MARKER,
     )
     ordered_regions = []
@@ -608,6 +608,8 @@ def step_inject_tool_result_cache(body: dict) -> dict:
         if merged:
             if group == ("temporary_dynamic",):
                 merged[_TEMPORARY_DYNAMIC_SYSTEM_MARKER] = True
+            elif group == ("thinking_rules",):
+                merged[_DYNAMIC_SYSTEM_MARKER] = True
             elif group == ("last4",):
                 merged[_LAST4_SYSTEM_MARKER] = True
             ordered_regions.append(merged)
@@ -947,7 +949,7 @@ def step_inject_du_non_retreat_rules(body: dict) -> dict:
 
 def step_inject_thinking_block_rules(body: dict) -> dict:
     """
-    全局注入：放在工具缓存断点之后、入口风格之前。
+    全局注入：作为独立动态块，放在常驻/临时动态之后、last4 之前。
     """
     rules = _load_managed_static_prompt("thinking_rules", _THINKING_BLOCK_RULES)
     if not rules:
@@ -969,6 +971,7 @@ def step_inject_thinking_block_rules(body: dict) -> dict:
         {
             "role": "system",
             "content": rules,
+            _DYNAMIC_SYSTEM_MARKER: True,
             _THINKING_RULES_SYSTEM_MARKER: True,
         },
     )
