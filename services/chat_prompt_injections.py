@@ -201,7 +201,7 @@ def load_nsfw_prompt() -> str:
 
 
 def inject_codex_oauth_prompt_system(body: dict, *, upstream_url: str) -> dict:
-    """仅 Codex OAuth 上游注入可编辑静态 Prompt。"""
+    """仅 Codex OAuth 上游注入可编辑静态 Prompt，固定放在核心 Prompt 前。"""
     if not is_local_cliproxyapi_url(upstream_url):
         return body
     if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
@@ -216,13 +216,14 @@ def inject_codex_oauth_prompt_system(body: dict, *, upstream_url: str) -> dict:
     if not prompt:
         return body
     messages = list(body.get("messages") or [])
-    if messages and isinstance(messages[0], dict) and str(messages[0].get("role") or "").strip().lower() == "system":
-        current = str(messages[0].get("content") or "")
-        if prompt in current:
-            return body
-        messages[0] = {**messages[0], "content": (current.rstrip() + "\n\n" + prompt).strip()}
-    else:
-        messages.insert(0, {"role": "system", "content": prompt})
+    if (
+        messages
+        and isinstance(messages[0], dict)
+        and str(messages[0].get("role") or "").strip().lower() == "system"
+        and str(messages[0].get("content") or "").strip() == prompt
+    ):
+        return body
+    messages.insert(0, {"role": "system", "content": prompt})
     body = dict(body)
     body["messages"] = messages
     return body

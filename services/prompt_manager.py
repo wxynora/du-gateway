@@ -42,7 +42,7 @@ PROMPT_SECTIONS: tuple[PromptSectionDef, ...] = (
     PromptSectionDef(
         "codex_oauth_prompt",
         "Codex OAuth 专用 Prompt",
-        "仅当前上游为 Codex OAuth 时注入，位置固定在 NSFW 规则前。",
+        "仅当前上游为 Codex OAuth 时注入，位置固定在核心 Prompt 前面。",
         80_000,
         True,
     ),

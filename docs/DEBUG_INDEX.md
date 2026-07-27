@@ -61,7 +61,7 @@
 | 请求清洗 | `pipeline/cleaner.py` | 统一清洗入口消息与上游消息结构 |
 | 上游策略 | `services/upstream_policy.py` | active upstream / model 只由 App 明确保存更新 |
 | 上游持久选择 | `storage/upstream_store.py` | 探活、拉模型和普通请求不能覆盖已保存选择 |
-| 提示词管理 | `services/prompt_manager.py`、`storage/r2_store.py` | App 可编辑的静态 Prompt 分区统一从这里管理；目录末尾固定提供 `custom_static_system_1..5` 五个允许为空的自定义 System 槽位，空槽不注入，非空槽按编号进入固定静态尾部；详情最多返回当前分区最新 3 个备份，配置写成功后按 `created_at` 清理到最新 3 个，写失败不删旧备份，回滚复用同一保存与保留链路 |
+| 提示词管理 | `services/prompt_manager.py`、`storage/r2_store.py` | App 可编辑的静态 Prompt 分区统一从这里管理；Codex OAuth 专用 Prompt 仅在对应上游命中时作为独立 system 置于核心 Prompt 前；目录末尾固定提供 `custom_static_system_1..5` 五个允许为空的自定义 System 槽位，空槽不注入，非空槽按编号进入固定静态尾部；详情最多返回当前分区最新 3 个备份，配置写成功后按 `created_at` 清理到最新 3 个，写失败不删旧备份，回滚复用同一保存与保留链路 |
 | 入口风格 | `services/entry_style_prompt.py` | 按真实聊天入口注入对应风格 |
 | 语音台词规范 | `services/voice_line_prompt.py` | 语音输出场景统一使用该规范 |
 | 语音转写后处理 | `services/stt.py` | Gemini/OpenRouter 与 Deepgram 在统一返回边界压缩同一个非词汇填充音的超长连续重复：至少 5 次时保留 3 次并以中文省略号分隔；短重复、混合发声和有意义的词语重复保持原文 |
@@ -76,7 +76,7 @@
 | Claude 思考强度网关注入 | `routes/miniapp/upstreams.py`、`storage/upstream_store.py`、`services/upstream_policy.py` | App 通过独立设置接口按当前上游保存 `claude_thinking_effort`；网关对 `claude-opus-4-6/4-7/4-8/5` 与 `claude-fable-5` 转发时读取该值，注入 `thinking.type=adaptive`、`thinking.display=summarized` 与 `output_config.effort`。这不是 App 每轮聊天直接携带的字段 |
 | Prompt Cache 诊断 | `services/prompt_cache_debug.py` | 记录静态/动态构成与上游 usage 元数据；Thinking 规范保持独立 breakdown，QQ、TG、微信、SumiTalk、小爱音箱入口风格也不会被近期记忆块标记吞掉 |
 
-当前 Claude 缓存前缀顺序固定为：tools → 第 1 个断点 → 固定静态子块（尾部为五个自定义静态 System 槽位中的非空项，按 1→5）→ 第 2 个断点 → 工具摘要 → 第 3 个断点 → Thinking 规范 → 入口风格 → SumiTalk Real/App 互斥提示 → 较稳定近期记忆 → 最近记忆 → 第 4 个断点 → 常驻动态 → 临时动态 → last4 → 对话消息。固定静态、工具摘要、Thinking 规范、入口风格、Real/App、较稳定近期和最近记忆属于静态提示前缀的独立逻辑子块，按唯一顺序表收集。Thinking 规范单独输出为第 3 个断点后的 system 段，不与带 `__summary_recent__` 的入口/记忆尾段合并；专用内部标记只供 gateway 排序与诊断，上游转发前删除，因此不新增缓存断点，也不要求 Claude OAuth proxy 识别新字段。常驻动态、临时动态和 last4 分别保持独立，不会拼进静态区。工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑，只从静态尾段调整到临时动态位置。
+当前 Claude 缓存前缀顺序固定为：tools → 第 1 个断点 → 固定静态子块（Codex OAuth 上游命中时以专用 Prompt 开头，随后才是核心 Prompt；尾部为五个自定义静态 System 槽位中的非空项，按 1→5）→ 第 2 个断点 → 工具摘要 → 第 3 个断点 → Thinking 规范 → 入口风格 → SumiTalk Real/App 互斥提示 → 较稳定近期记忆 → 最近记忆 → 第 4 个断点 → 常驻动态 → 临时动态 → last4 → 对话消息。固定静态、工具摘要、Thinking 规范、入口风格、Real/App、较稳定近期和最近记忆属于静态提示前缀的独立逻辑子块，按唯一顺序表收集。Thinking 规范单独输出为第 3 个断点后的 system 段，不与带 `__summary_recent__` 的入口/记忆尾段合并；专用内部标记只供 gateway 排序与诊断，上游转发前删除，因此不新增缓存断点，也不要求 Claude OAuth proxy 识别新字段。常驻动态、临时动态和 last4 分别保持独立，不会拼进静态区。工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑，只从静态尾段调整到临时动态位置。
 
 system 分区采用显式标记合同：凡辛玥明确指定为动态区、临时动态或一次性事件的 system，生产点必须直接携带 `__dynamic__=True`；未标记的 system 继续按 static 归类，不以正文内容猜测。这些临时动态 system 固定放在常驻动态之后、last4 之前，不得进入静态前缀；一起看当前剧情、一起听或当前音乐、小家/游戏事件、交换日记回执等都只调整到该注入位置，各功能原有的产生、持续与结束行为保持不变。若只是在调查或实现时判断某个 system 可能应改为动态，必须先说明来源、内容、现有行为、拟放位置及缓存或行为影响并向辛玥确认，不能静默重分类或扩展生命周期设计。
 
@@ -155,12 +155,13 @@ QQ 群上下文按发言人区分，不把群友内容当成小玥说的；入�
 | 动态层判断 | `services/dynamic_layer_ds.py` | 产生 new / merge / out 等动态记忆决策；merge 同时输出 `consolidate/correction/invalidate/supersede/temporal_update` 五类规范原因，缺失或非法原因进入现有重写机制，动态层血缘与核心层待审候选保留该字段；当前不按原因自动删除或淘汰记忆；保留模型默认 thinking，不设置人为 `max_tokens` 上限 |
 | 动态记忆检索 | `services/dynamic_memory_search.py`、`services/dynamic_memory_reranker.py` | 关键词、向量与 rerank 组合召回 |
 | 动态记忆镜像 | `storage/dynamic_memory_mirror_store.py` | 为管理、维护和诊断提供 SQLite 镜像 |
+| 记忆整理轻量读取 | `routes/miniapp/memory_organizer.py`、`storage/memory_organizer_store.py`、`routes/miniapp_api.py` | `/miniapp-api/memory-organizer/summary` 只返回总结与动态/核心计数和 revision；`dynamic`、`core` 默认每页 40 条并用持久 revision/cursor 快照同步变化与删除，核心支持 `filter=pending/all`，动态直接返回 `prune_at`、`at_risk`、`core_protected`；DS 审核明细由独立 `audit` 路由分页。四条路由均记录耗时、响应字节数和条目数，且不读取 recall/search/citation 调试事件；旧 `/memory-debug` 保持兼容 |
 | 中期记忆 | `services/du_midterm_memory.py`、`routes/miniapp/midterm_memory.py` | 生成、读取和管理阶段记忆 |
 | 长期记忆素材审阅包 | `data/longterm_memory_material_review.json` | 本地 mode-600 素材预览，不是正式长期摘要且未写入 R2；当前 597 条候选素材已完成明确重复项合并，19 组合并保留全部来源引用；最终正式长期摘要目标约 4000 字符，不以该长度裁切原始素材 |
 | 画像记忆 | `services/portrait_memory.py` | 画像候选与更新边界 |
 | 每轮总结 | `services/deepseek_summary.py` | 统一摘要更新，不再包含 Notion 小本本分支；近期记忆四轮总结显式关闭 thinking，动态层不受影响 |
 | 记忆引用 | `services/dynamic_memory_citation.py` | 解析并回写实际引用标记 |
-| 记忆管理 | `routes/miniapp/memory_panel.py`、`routes/memory_api.py`、`storage/r2_store.py`、`pipeline/pipeline.py`、`services/memory_maintenance.py`、`services/memory_rewrite.py` | 查询、重写、删除、维护和诊断；重写 preview 路由转发 `rewrite_instructions`，显式修正优先于原文且核心层不复用旧 `pending_merge`，模型拒绝或原样返回时自动重试一次、仍无可用改动才返回 502；`POST /miniapp-api/dynamic-memory/<id>/retain` 原子增加一次 `mention_count` 并刷新 `last_mentioned`，未命中返回 404、写入失败返回 500；动态层边缘淘汰前 15 天不衰减，第 16 天起每天衰减 0.1、最多衰减 2，仅在至少 15 天未提及且综合权重不高于 2 时删除，图书馆 tag 与 core_cache 来源记忆永久豁免 |
+| 记忆管理 | `routes/miniapp/memory_panel.py`、`routes/memory_api.py`、`storage/r2_store.py`、`pipeline/pipeline.py`、`services/memory_maintenance.py`、`services/memory_rewrite.py` | 查询、重写、删除、维护和诊断；重写 preview 路由转发 `rewrite_instructions`，显式修正优先于原文且核心层不复用旧 `pending_merge`，模型拒绝或原样返回时自动重试一次、仍无可用改动才返回 502；`POST /miniapp-api/dynamic-memory/<id>/retain` 原子增加一次 `mention_count` 并刷新 `last_mentioned`，未命中返回 404、写入失败返回 500；卧室 tag 按独立短有效期淘汰，其他动态记忆前 15 天不衰减、第 16 天起每天衰减 0.1 且最多衰减 2，仅在至少 15 天未提及且综合权重不高于 2 时删除，图书馆 tag 与 core_cache 来源记忆永久豁免 |
 
 亲密/卧室记忆仍使用动态记忆分类与独立生命周期；不额外侧写 Notion，也不进入不适合的核心缓存/画像路径。
 
