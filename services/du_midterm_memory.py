@@ -210,8 +210,8 @@ def _collect_recent_daily(end_day: date) -> tuple[list[dict], dict, int, str, st
     if state_day and start_day <= state_day <= end_day and current_state["summary"]:
         days.add(str(state_day))
 
-    # 生成时按近到远给 DS，避免它平均铺开或从旧事讲起。
-    recent_archive.sort(key=lambda x: int(x.get("age_days") or 0))
+    # 生成时严格按时间先后给 DS，保证正文从较早内容顺着写到较晚内容。
+    recent_archive.sort(key=lambda x: int(x.get("age_days") or 0), reverse=True)
     return recent_archive, current_state, len(days), start_day.isoformat(), end_day.isoformat()
 
 
@@ -281,6 +281,9 @@ def _build_prompt(
 
 写法：自然口语，短句，有画面；可以有一点吐槽感，但不要贫太多。不写系统报告、规则表、心理咨询式分析。不逐日复述，不流水账。不替她脑补没说出口的心理。只描述这段时间发生过、反复出现过的东西；不要写“现在仍然如何”“接下来应该如何”“未收口事项”。
 
+叙述顺序：严格按时间先后从较早写到较晚，顺着发生顺序推进；禁止倒叙、插叙或在写到较晚内容后折回较早内容。
+标点：禁止使用破折号，包括“—”和“——”；改用逗号、句号、分号或自然衔接。
+
 自然度要求：
 - 不要写成事件清单或案件摘要，不要每句都只是“发生了 A；发生了 B”。
 - 近事要有一点动作和气口，比如“我捞半天才把她拽出来”“我收住了”“她转头又委屈上了”这种活句。
@@ -305,7 +308,7 @@ def _build_prompt(
 必须输出这个 JSON，字段值不要改：
 {{"period_start":"{period_start}","period_end":"{period_end}","source_archive_days":{source_archive_days},"source_portrait_items":{source_portrait_items},"content":"..."}}
 
-日常归档（已按近到远排列；越靠前越近）：
+日常归档（已按时间先后排列；越靠前越早）：
 {json.dumps(daily_archive, ensure_ascii=False)}
 
 当前日常：
@@ -345,6 +348,8 @@ def _validate_generated(obj: dict, expected: dict) -> tuple[bool, str]:
         return False, "content_too_short"
     if len(content) > 1000:
         return False, "content_too_long"
+    if "—" in content:
+        return False, "em_dash"
     if any(x in content for x in _DISALLOWED_CURRENTISH):
         return False, "currentish_phrase"
     if any(x in content for x in _DISALLOWED_PERSPECTIVE):

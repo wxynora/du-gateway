@@ -156,7 +156,7 @@ QQ 群上下文按发言人区分，不把群友内容当成小玥说的；入�
 | 动态记忆检索 | `services/dynamic_memory_search.py`、`services/dynamic_memory_reranker.py` | 关键词、向量与 rerank 组合召回 |
 | 动态记忆镜像 | `storage/dynamic_memory_mirror_store.py` | 为管理、维护和诊断提供 SQLite 镜像 |
 | 记忆整理轻量读取 | `routes/miniapp/memory_organizer.py`、`storage/memory_organizer_store.py`、`routes/miniapp_api.py` | `/miniapp-api/memory-organizer/summary` 只返回总结与动态/核心计数和 revision；`dynamic`、`core` 默认每页 40 条并用持久 revision/cursor 快照同步变化与删除，核心支持 `filter=pending/all`，动态直接返回 `prune_at`、`at_risk`、`core_protected` 及条目已有的 `pending_merge`；DS 审核明细由独立 `audit` 路由分页。四条路由均记录耗时、响应字节数和条目数，且不读取 recall/search/citation 调试事件；旧 `/memory-debug` 保持兼容 |
-| 中期记忆 | `services/du_midterm_memory.py`、`routes/miniapp/midterm_memory.py` | 14 天滑窗、72 小时刷新；归档中的 `today_events` 按有效字符串原文全量输入，不限制每日条数、不裁切或替换事件正文；DS 请求不设置 `max_tokens`，生成正文只校验不超过 1000 字；聊天注入读取完整 latest，不二次截断 |
+| 中期记忆 | `services/du_midterm_memory.py`、`routes/miniapp/midterm_memory.py` | 14 天滑窗、72 小时刷新；归档中的 `today_events` 按有效字符串原文全量输入，不限制每日条数、不裁切或替换事件正文，并按较早到较晚顺序提供；DS 请求不设置 `max_tokens`，正文严格顺叙、禁止破折号且只校验不超过 1000 字；聊天注入读取完整 latest，不二次截断 |
 | 长期记忆素材审阅包 | `data/longterm_memory_material_review.json` | 本地 mode-600 素材预览，不是正式长期摘要且未写入 R2；当前 597 条候选素材已完成明确重复项合并，19 组合并保留全部来源引用；最终正式长期摘要目标约 4000 字符，不以该长度裁切原始素材 |
 | 画像记忆 | `services/portrait_memory.py` | 画像候选与更新边界 |
 | 近期总结 | `services/deepseek_summary.py` | 每 4 轮生成一个近期记忆块，每 8 轮在同一次 DS 更新中执行分层压缩迁移；最近 / 稍早 / 更早最多分别保留 8 / 10 / 7 个，共 25 个，填充期只迁移为下个压缩点预留位置所需的数量，填满后每个压缩点依次迁移 2 个并淘汰最旧 2 个；近期记忆总结显式关闭 thinking，不包含 Notion 小本本分支，动态层不受影响 |
