@@ -14,6 +14,7 @@ from typing import Any, Optional
 import requests
 
 from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL
+from services.memory_merge_rules import MERGE_ITERATION_RULES
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -76,16 +77,21 @@ _DYNAMIC_LAYER_PROMPT = """你叫渡。
 
 ---
 
-融合：
-同一件事提到多次 → 用现在的理解重新说一遍。
-不是拼接，是重讲。
+融合 / 迭代：
+merge 是更新 FUSED_WITH_ID 对应的那条旧记忆，不是用本轮新事覆盖旧记忆。
+
+若 action 是 merge，执行以下共享规则：
+""" + MERGE_ITERATION_RULES + """
+
+若 action 是 merge：
+- 如果本轮内容和旧记忆不是同一件事，或无法明确选中要更新的旧记忆，就不要 merge；有独立新信息时用 new，没有则 skip。
 
 若 action 是 merge，必须选择一种 MERGE_REASON：
-- consolidate：同一件事的重复、补充或延续，合成一条当前理解
-- correction：老婆明确指出旧记忆里的判断或事实本来就是错的
-- invalidate：老婆明确说明旧记忆已经无效、不能再当作当前事实；仍要在 CONTENT 写出当前正确理解，没有可替代内容就先不要 merge
-- supersede：出现了新的明确结论，新结论取代旧结论
-- temporal_update：旧记忆过去成立，但现在发生了变化；CONTENT 要保留“过去怎样、现在怎样”的时间关系
+- consolidate：同一件事的重复、补充或延续；未冲突内容继续合并同类项，再融入本轮增量
+- correction：老婆明确指出旧记忆里的判断或事实本来就是错的；不要继续把错误写成事实，也不要抹掉这次改正本身
+- invalidate：老婆明确说明旧记忆已经无效、不能再当作当前事实；保留理解这次变化所需的语境，并写准当前理解，没有可替代内容就先不要 merge
+- supersede：出现了新的明确结论，新结论取代旧结论；让结论已经更新这件事自然可见，不要只剩孤立的新结论
+- temporal_update：旧记忆过去成立，但现在发生了变化；自然保留状态演变，不要求固定时间句式
 
 不要仅凭我的推测使用 correction / invalidate / supersede；这些原因必须有老婆当前明确表达的依据。普通补充一律使用 consolidate。
 

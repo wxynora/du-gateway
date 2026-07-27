@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import Any
@@ -8,6 +7,7 @@ from typing import Any
 import requests
 
 from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL
+from services.memory_merge_rules import MERGE_ITERATION_RULES
 from storage import r2_store
 from utils.time_aware import now_beijing_iso
 
@@ -19,6 +19,11 @@ _REFUSAL_PATTERNS = (
     re.compile(r"^(?:抱歉|对不起).*(?:无法|不能|不可以|拒绝).*(?:修改|改写|重写|处理|要求|请求|这条记忆|原文)"),
     re.compile(r"^(?:我)?(?:无法|不能|不可以|没法)(?:按|根据|依照|为你|帮你|执行).*(?:修改|改写|重写|处理|要求|请求)"),
     re.compile(r"^(?:拒绝|无法执行|不能执行).*(?:修改|改写|重写|要求|请求)"),
+)
+_EXPLANATION_PATTERNS = (
+    re.compile(r"^(?:以下是|这是)(?:根据.*)?(?:重写|改写|修改)(?:后|后的)?(?:记忆|正文|结果)"),
+    re.compile(r"^(?:重写|改写|修改)(?:后|后的)?(?:记忆|正文|结果|说明)\s*[:：]"),
+    re.compile(r"^(?:修改说明|重写说明|改写说明|修改理由|重写理由|原因|理由)\s*[:：]"),
 )
 
 
@@ -89,34 +94,20 @@ def _find_item(items: list[dict[str, Any]], memory_id: str) -> tuple[int, dict[s
     raise MemoryRewriteNotFound("没有找到这条记忆")
 
 
-def _extract_json_object(text: str) -> dict[str, Any] | None:
-    raw = str(text or "").strip()
-    if not raw:
-        return None
-    if "```" in raw:
-        for marker in ("```json", "```"):
-            if marker in raw:
-                raw = raw.split(marker, 1)[1].strip()
-                if "```" in raw:
-                    raw = raw.split("```", 1)[0].strip()
-                break
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        value = json.loads(raw[start : end + 1])
-    except Exception:
-        return None
-    return value if isinstance(value, dict) else None
-
-
 def _rewrite_prompt(
     layer: str,
     item: dict[str, Any],
     rewrite_instructions: str = "",
     retry_reason: str = "",
 ) -> str:
+    original_content = str(item.get("content") or "").strip()
+    pending_merge = item.get("pending_merge")
+    if isinstance(pending_merge, dict):
+        pending_candidate = str(pending_merge.get("rewritten_content") or "").strip()
+        merge_reason = str(pending_merge.get("merge_reason") or "").strip()
+    else:
+        pending_candidate = ""
+        merge_reason = ""
     layer_rule = (
         "这是动态层记忆：写成一条简洁、具体、便于以后召回的当前理解。"
         if layer == "dynamic"
@@ -124,28 +115,22 @@ def _rewrite_prompt(
     )
     if rewrite_instructions:
         correction_rule = (
-            "用户明确修正要求是本次重写的最高优先级。"
-            "如果修正要求与原文冲突，必须采用用户修正并删除冲突的旧判断；"
-            "只保留未被修正触及且不冲突的原文事实。不得拒绝修正，也不得原样返回旧正文。\n\n"
-            f"用户明确修正要求：\n{rewrite_instructions}"
+            "用户明确修正要求是本次重写的最高优先级；"
+            "与正式原文或待修正候选冲突时，按用户修正处理。"
+            "待修正候选只能作为需要纠正或参考的上下文，不能直接复用或接受；"
+            "始终以正式原文为底稿重新生成完整正文。"
         )
     else:
-        correction_rule = "完整保留原文已经确定的事实、感受和结论，不新增经历，不强化猜测，不把审核意见写进记忆。"
+        correction_rule = (
+            "没有额外修正要求时，仍以正式原文为底稿；"
+            "不得新增经历、强化猜测或把审核意见写进记忆。"
+        )
     retry_rule = (
-        f"\n\n上一次结果不可用：{retry_reason}。这次必须返回已经实际改动、且不是拒绝说明的完整记忆正文。"
+        f"\n\n上一次结果不可用：{retry_reason}。"
+        "这次必须只返回已经实际改动的完整新版记忆正文，不要解释上一次为什么错。"
         if retry_reason
         else ""
     )
-    source = {
-        "id": str(item.get("id") or ""),
-        "content": str(item.get("content") or "").strip(),
-        "tag": str(item.get("tag") or "").strip(),
-        "importance": item.get("importance"),
-        "mention_count": item.get("mention_count"),
-        "emotion_label": str(item.get("emotion_label") or "").strip(),
-        "scene_type": str(item.get("scene_type") or "").strip(),
-        "target_type": str(item.get("target_type") or "").strip(),
-    }
     return f"""
 你在审核并重写一条已经存在的渡的记忆。只重写 content，不改变其他字段。
 
@@ -154,21 +139,50 @@ def _rewrite_prompt(
 2. {correction_rule}
 3. 如果原文把“渡”当第三人称，或出现“像渡”“渡会怎么做”“用户”“助手”“模型”“角色扮演”等元身份说法，把真正需要记住的内容改成直接、自然的第一人称体验；若这些词本身就是被记录的事实或引用，不要机械删除。
 4. {layer_rule}
-5. 即使只需轻微调整，也必须产出与原文不同的可用正文；禁止返回拒绝说明或照抄原文。
-6. 只输出一个 JSON 对象，不要 Markdown：{{"content":"重写后的完整正文","reason":"一句话说明实际修改了什么"}}
+5. 即使只需轻微调整，也必须产出与正式原文不同的可用正文；禁止返回拒绝说明或照抄正式原文。
+6. 只返回完整的新版记忆正文；不返回 JSON、Markdown、解释、标题、修改理由、字段名或任何包裹标记。
 
-原记忆：
-{json.dumps(source, ensure_ascii=False)}
+共享 merge / 迭代规则：
+{MERGE_ITERATION_RULES}
+
+重写上下文：
+<original_content>
+{original_content}
+</original_content>
+
+<pending_candidate>
+{pending_candidate or "（无）"}
+</pending_candidate>
+
+<merge_reason>
+{merge_reason or "（无）"}
+</merge_reason>
+
+<rewrite_instructions>
+{rewrite_instructions or "（无）"}
+</rewrite_instructions>
 {retry_rule}
 """.strip()
 
 
 def _invalid_rewrite_reason(original: str, rewritten: str) -> str:
-    if rewritten == original:
+    raw = str(rewritten or "").strip()
+    if not raw:
+        return "message.content 为空"
+    if raw == original:
         return "返回内容与原文相同"
-    compact = re.sub(r"\s+", "", rewritten)
+    compact = re.sub(r"\s+", "", raw)
     if any(pattern.search(compact) for pattern in _REFUSAL_PATTERNS):
         return "返回了拒绝修改的说明"
+    if "```" in raw:
+        return "返回了 Markdown 代码块"
+    if (
+        (raw.startswith("{") and raw.endswith("}"))
+        or (raw.startswith("[") and raw.endswith("]"))
+    ):
+        return "返回了 JSON，而不是记忆正文"
+    if any(pattern.search(raw) for pattern in _EXPLANATION_PATTERNS):
+        return "返回了解释或标题，而不是记忆正文"
     return ""
 
 
@@ -216,14 +230,13 @@ def _request_deepseek_rewrite(
             logger.warning("memory rewrite DeepSeek request failed: %s", error)
             raise MemoryRewriteUpstreamError("DeepSeek 重写失败，请稍后重试") from error
 
-        parsed = _extract_json_object(raw)
-        if not parsed:
-            raise MemoryRewriteUpstreamError("DeepSeek 没有返回可用的重写结果")
-        try:
-            content = _normalize_content(parsed.get("content"), field="rewritten_content")
-        except MemoryRewriteInputError as error:
-            raise MemoryRewriteUpstreamError("DeepSeek 没有返回可用的重写正文") from error
+        content = raw.strip()
         invalid_reason = _invalid_rewrite_reason(original, content)
+        if not invalid_reason:
+            try:
+                content = _normalize_content(content, field="rewritten_content")
+            except MemoryRewriteInputError as error:
+                invalid_reason = str(error)
         if invalid_reason:
             logger.info(
                 "memory rewrite semantic retry layer=%s memory_id=%s attempt=%s reason=%s",
@@ -233,9 +246,10 @@ def _request_deepseek_rewrite(
                 invalid_reason,
             )
             continue
-        reason = str(parsed.get("reason") or "").strip()[:500]
-        return content, reason
-    raise MemoryRewriteUpstreamError("DeepSeek 连续两次返回拒绝或未修改原文，未生成可用候选")
+        return content, ""
+    raise MemoryRewriteUpstreamError(
+        f"DeepSeek 连续两次未返回可用的完整记忆正文：{invalid_reason}"
+    )
 
 
 def preview_memory_rewrite(
@@ -266,7 +280,7 @@ def preview_memory_rewrite(
                 "memory_id": normalized_id,
                 "original_content": original,
                 "rewritten_content": pending_rewritten,
-                "reason": str(pending_merge.get("reason") or "").strip(),
+                "reason": "",
                 "changed": pending_rewritten != original,
             }
     rewritten, reason = _request_deepseek_rewrite(
