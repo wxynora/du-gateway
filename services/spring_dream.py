@@ -904,7 +904,7 @@ def _spring_dream_trigger_state() -> dict:
 def _spring_dream_probability(
     base_chance: float,
     *,
-    desire_level: int,
+    desire_level: int | float,
     is_sleeping: bool,
     miss_count: int,
 ) -> float:
@@ -913,9 +913,9 @@ def _spring_dream_probability(
     except Exception:
         base = SPRING_DREAM_PROBABILITY
     try:
-        desire = max(0, min(5, int(desire_level or 0)))
+        desire = max(0.0, min(5.0, float(desire_level or 0)))
     except Exception:
-        desire = 0
+        desire = 0.0
     try:
         misses = max(0, int(miss_count or 0))
     except Exception:
@@ -1175,7 +1175,7 @@ def maybe_prepare_spring_dream_wakeup(
     if _spring_dream_cooldown_active(trigger_state, now_local):
         return None
     miss_count = int((trigger_state or {}).get("miss_count") or 0)
-    desire_level = max(0, min(5, int((body_state or {}).get("desire_level") or 0)))
+    desire_level = max(0.0, min(5.0, float((body_state or {}).get("desire_level") or 0)))
     threshold = _spring_dream_probability(
         chance,
         desire_level=desire_level,

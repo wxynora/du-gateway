@@ -127,7 +127,8 @@ DU_BODY_LEVEL_MIN = 0
 DU_BODY_LEVEL_MAX = 5
 DU_BODY_VALUE_MIN = 0
 DU_BODY_VALUE_MAX = 100
-DU_BODY_TIME_SHIFT = 3
+DU_BODY_LEVEL_STEP = 0.5
+DU_BODY_TIME_SHIFT = 1.5
 DU_BODY_DEEP_NIGHT_START_HOUR = 23
 DU_BODY_DEEP_NIGHT_END_HOUR = 4
 DU_BODY_MORNING_START_HOUR = 6
@@ -1151,15 +1152,17 @@ def _du_desire_level_from_value(value: Any) -> int:
     return 1
 
 
-def _clamp_du_body_level(value: Any) -> int:
+def _clamp_du_body_level(value: Any) -> int | float:
     try:
-        level = int(value or 0)
+        level = float(value or 0)
     except Exception:
-        level = 0
-    return max(DU_BODY_LEVEL_MIN, min(DU_BODY_LEVEL_MAX, level))
+        level = 0.0
+    clamped = max(float(DU_BODY_LEVEL_MIN), min(float(DU_BODY_LEVEL_MAX), level))
+    snapped = round(clamped / DU_BODY_LEVEL_STEP) * DU_BODY_LEVEL_STEP
+    return int(snapped) if snapped.is_integer() else snapped
 
 
-def _du_body_time_shift(now_dt: datetime | None = None) -> int:
+def _du_body_time_shift(now_dt: datetime | None = None) -> float:
     dt = now_dt or _now_dt()
     hour = int(getattr(dt, "hour", 0) or 0)
     is_deep_night = hour >= DU_BODY_DEEP_NIGHT_START_HOUR or hour < DU_BODY_DEEP_NIGHT_END_HOUR
@@ -1168,12 +1171,12 @@ def _du_body_time_shift(now_dt: datetime | None = None) -> int:
 
 
 def _apply_du_body_time_shift(
-    desire_level: int,
-    self_control_level: int | None,
+    desire_level: int | float,
+    self_control_level: int | float | None,
     *,
     has_desire_value: bool,
     now_dt: datetime | None = None,
-) -> tuple[int, int | None, bool]:
+) -> tuple[int | float, int | float | None, bool]:
     shift = _du_body_time_shift(now_dt)
     if shift <= 0:
         return _clamp_du_body_level(desire_level), self_control_level, has_desire_value
@@ -1255,12 +1258,12 @@ def _du_self_control_level(body_state: dict | None = None, vitals: dict | None =
     return max(0, min(5, int((5 - loss + focus_bonus) + 0.5)))
 
 
-def _du_penis_state_from_desire_level(desire_level: int) -> str:
+def _du_penis_state_from_desire_level(desire_level: int | float) -> str:
     if desire_level >= 4:
         return "勃起状态"
     if desire_level >= 2:
         return "半勃起"
-    if desire_level == 1:
+    if desire_level > 0:
         return "放松状态"
     return ""
 
@@ -1271,7 +1274,7 @@ def _du_stable_desire_level(body_state: dict | None = None) -> int:
     return 0
 
 
-def _du_stable_penis_state(desire_level: int) -> str:
+def _du_stable_penis_state(desire_level: int | float) -> str:
     return _du_penis_state_from_desire_level(desire_level)
 
 
@@ -1324,15 +1327,15 @@ def _du_body_restraint_pressure_prompt_band(value: Any) -> str:
 
 def _du_body_prompt_current_state_text(
     state: dict,
-    desire_level: int,
-    self_control_level: int | None,
+    desire_level: int | float,
+    self_control_level: int | float | None,
     has_effective_desire: bool,
 ) -> str:
     pieces: list[str] = []
     if has_effective_desire:
-        pieces.append(DU_BODY_DESIRE_PROMPT_TEXT[_clamp_du_body_level(desire_level)])
+        pieces.append(DU_BODY_DESIRE_PROMPT_TEXT[_du_body_prompt_level_key(desire_level)])
     if self_control_level is not None:
-        pieces.append(DU_BODY_SELF_CONTROL_PROMPT_TEXT[_clamp_du_body_level(self_control_level)])
+        pieces.append(DU_BODY_SELF_CONTROL_PROMPT_TEXT[_du_body_prompt_level_key(self_control_level)])
     for key in DU_BODY_EXPLICIT_VALUE_FIELDS:
         value = _du_body_metric_value_with_default(state, key)
         band = _du_body_metric_prompt_band(value)
@@ -1348,6 +1351,15 @@ def _du_body_prompt_current_state_text(
         pressure_band = _du_body_restraint_pressure_prompt_band(pressure_value)
         pieces.append(DU_BODY_RESTRAINT_PRESSURE_PROMPT_TEXT[pressure_band])
     return "".join(pieces) or "未记录"
+
+
+def _du_body_prompt_level_key(value: Any) -> int:
+    level = float(_clamp_du_body_level(value))
+    return max(DU_BODY_LEVEL_MIN, min(DU_BODY_LEVEL_MAX, int(level + 0.5)))
+
+
+def _format_du_body_level(value: Any) -> str:
+    return f"{float(_clamp_du_body_level(value)):g}"
 
 
 def _du_body_prompt_penis_state(value: str) -> str:
@@ -1543,8 +1555,14 @@ def _format_du_body_state_lines(body_state: dict, vitals: dict | None = None) ->
         intensity = int(state.get("intensity") or 0)
         lines.append(f"道具：{'、'.join(_toy_display_piece(toy, intensity) for toy in toy_types)}")
     lines.extend(_format_du_body_metric_lines(state))
-    lines.append(f"想做指数：{desire_level}/5" if has_effective_desire else "想做指数：未记录")
-    lines.append(f"自制力：{self_control_level}/5" if self_control_level is not None else "自制力：未记录")
+    lines.append(
+        f"想做指数：{_format_du_body_level(desire_level)}/5" if has_effective_desire else "想做指数：未记录"
+    )
+    lines.append(
+        f"自制力：{_format_du_body_level(self_control_level)}/5"
+        if self_control_level is not None
+        else "自制力：未记录"
+    )
     penis_state = _du_stable_penis_state(desire_level) or ("放松状态" if has_desire_value else "")
     lines.append(f"阴茎状态：{penis_state}" if penis_state else "阴茎状态：未记录")
     if temp:
@@ -1602,8 +1620,12 @@ def _du_body_state_public(raw: Any, vitals: dict | None = None) -> dict:
     if not state:
         temp = _du_body_temperature(vitals or {})
         parts = _format_du_body_metric_lines(state) + [
-            f"想做指数：{desire_level}/5" if has_effective_desire else "想做指数：未记录",
-            f"自制力：{self_control_level}/5" if self_control_level is not None else "自制力：未记录",
+            f"想做指数：{_format_du_body_level(desire_level)}/5"
+            if has_effective_desire
+            else "想做指数：未记录",
+            f"自制力：{_format_du_body_level(self_control_level)}/5"
+            if self_control_level is not None
+            else "自制力：未记录",
             f"阴茎状态：{penis_state}" if penis_state else "阴茎状态：未记录",
         ]
         if temp:
