@@ -78,7 +78,11 @@ _SYSTEM_PROMPT_REGION_ORDER = (
 _SYSTEM_PROMPT_CACHE_GROUPS = (
     ("static",),
     ("tool_result_cache",),
-    ("entry_style", "sumitalk_mode", "du_daily", "summary_cache", "summary_recent"),
+    ("entry_style",),
+    ("sumitalk_mode",),
+    ("du_daily",),
+    ("summary_cache",),
+    ("summary_recent",),
     ("dynamic",),
     ("temporary_dynamic",),
     ("thinking_rules",),
@@ -579,36 +583,27 @@ def step_inject_tool_result_cache(body: dict) -> dict:
         if region == "tool_result_cache" and msg in leading_systems:
             continue
         region_blocks[region].append(msg)
-    static_tail_marker = next(
-        (
-            marker
-            for region, marker in (
-                ("summary_recent", _SUMMARY_RECENT_SYSTEM_MARKER),
-                ("sumitalk_mode", _SUMITALK_REAL_MODE_SYSTEM_MARKER),
-                ("entry_style", _ENTRY_STYLE_SYSTEM_MARKER),
-                ("summary_cache", _SUMMARY_CACHE_SYSTEM_MARKER),
-            )
-            if region_blocks[region]
-        ),
-        None,
-    )
-    cache_group_markers = (
-        None,
-        _TOOL_RESULT_CACHE_SYSTEM_MARKER,
-        static_tail_marker,
-        _DYNAMIC_SYSTEM_MARKER,
-        _DYNAMIC_SYSTEM_MARKER,
-        _THINKING_RULES_SYSTEM_MARKER,
-        _DYNAMIC_SYSTEM_MARKER,
-    )
+    cache_group_markers = {
+        "static": None,
+        "tool_result_cache": _TOOL_RESULT_CACHE_SYSTEM_MARKER,
+        "entry_style": _ENTRY_STYLE_SYSTEM_MARKER,
+        "sumitalk_mode": _SUMITALK_REAL_MODE_SYSTEM_MARKER,
+        "du_daily": None,
+        "summary_cache": _SUMMARY_CACHE_SYSTEM_MARKER,
+        "summary_recent": _SUMMARY_RECENT_SYSTEM_MARKER,
+        "dynamic": _DYNAMIC_SYSTEM_MARKER,
+        "temporary_dynamic": _DYNAMIC_SYSTEM_MARKER,
+        "thinking_rules": _THINKING_RULES_SYSTEM_MARKER,
+        "last4": _DYNAMIC_SYSTEM_MARKER,
+    }
     ordered_regions = []
-    for group_idx, group in enumerate(_SYSTEM_PROMPT_CACHE_GROUPS):
+    for group in _SYSTEM_PROMPT_CACHE_GROUPS:
         group_messages = [
             msg
             for region in group
             for msg in region_blocks[region]
         ]
-        merged = _merge_system_region(group_messages, cache_group_markers[group_idx])
+        merged = _merge_system_region(group_messages, cache_group_markers[group[0]])
         if merged:
             if group == ("temporary_dynamic",):
                 merged[_TEMPORARY_DYNAMIC_SYSTEM_MARKER] = True
