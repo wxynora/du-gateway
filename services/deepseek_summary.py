@@ -9,12 +9,10 @@ from config import (
     DEEPSEEK_API_URL,
     DEEPSEEK_API_KEY,
     DEEPSEEK_CHAT_MODEL,
-    SUMMARY_COMPRESSION_PROFILE,
     SUMMARY_EVERY_N_ROUNDS,
     SUMMARY_COMPRESSION_EVERY_N_ROUNDS,
 )
 from utils.log import get_logger
-from utils.tokens import estimate_tokens, memory_summary_budget
 
 logger = get_logger(__name__)
 
@@ -962,10 +960,7 @@ def build_pending_summary_update(
 
     for item in chunks:
         if str(item.get("id") or "") == current_id:
-            if _summary_chunk_is_pending(item):
-                summary = _trim_summary_to_budget(render_summary_from_chunks(state), memory_summary_budget())
-                return summary, state
-            return _trim_summary_to_budget(render_summary_from_chunks(state), memory_summary_budget()), state
+            return render_summary_from_chunks(state), state
 
     next_update_count = update_count + 1
     should_compress = next_update_count % _summary_compress_every_updates() == 0
@@ -1009,7 +1004,6 @@ def build_pending_summary_update(
     chunks = _trim_summary_chunks_by_level(chunks)
     next_state = {"version": 2, "update_count": next_update_count, "chunks": chunks}
     summary = render_summary_from_chunks(next_state)
-    summary = _trim_summary_to_budget(summary, memory_summary_budget())
     return summary, next_state
 
 
@@ -1106,7 +1100,6 @@ def fetch_new_summary_update(
                 continue
             return None, None
         summary = render_summary_from_chunks(updated_state)
-        summary = _trim_summary_to_budget(summary, memory_summary_budget())
         return summary, updated_state
     return None, None
 
@@ -1169,188 +1162,3 @@ def fetch_daily_whisper_from_summary(current_summary: str, recent_4_rounds: list
     except Exception as e:
         logger.warning("DeepSeek 每日气泡生成失败 error=%s", e)
         return None
-
-
-def _trim_summary_to_budget(text: str, budget_tokens: int) -> str:
-    """
-    按「【最近】/【稍早】/【更早】」结构，从最早的内容开始一点点削，
-    始终优先保留【最近】末尾、其次【稍早】末尾，最后才动【更早】。
-    """
-    if not text or estimate_tokens(text) <= budget_tokens:
-        return text
-
-    lines = text.splitlines()
-    n = len(lines)
-
-    def _find_block_idx(title: str) -> int:
-        for i, line in enumerate(lines):
-            if line.strip().startswith(title):
-                return i
-        return -1
-
-    idx_recent = _find_block_idx("【最近】")
-    idx_earlier = _find_block_idx("【稍早】")
-    idx_oldest = _find_block_idx("【更早】")
-    # 若结构不完整，退回简单保留末尾一段
-    if idx_recent == -1:
-        s = text
-        CHUNK = 200
-        while s and estimate_tokens(s) > budget_tokens:
-            if len(s) <= CHUNK:
-                break
-            s = s[CHUNK:]
-        return s
-
-    def _block_slice(start: int, end: int | None) -> list[str]:
-        if start == -1:
-            return []
-        if end is None or end < 0:
-            end = n
-        return lines[start:end]
-
-    recent_end = min([i for i in (idx_earlier, idx_oldest) if i != -1] or [n])
-    earlier_end = min([i for i in (idx_oldest,) if i != -1] or [n])
-    oldest_end = n
-
-    recent_block = _block_slice(idx_recent, recent_end)
-    earlier_block = _block_slice(idx_earlier, earlier_end) if idx_earlier != -1 else []
-    oldest_block = _block_slice(idx_oldest, oldest_end) if idx_oldest != -1 else []
-    def _split_title(block: list[str]) -> tuple[list[str], list[str]]:
-        if not block:
-            return [], []
-        title = [block[0]]
-        body = block[1:]
-        return title, body
-
-    recent_title, recent_body = _split_title(recent_block)
-    earlier_title, earlier_body = _split_title(earlier_block)
-    oldest_title, oldest_body = _split_title(oldest_block)
-
-    def _compose() -> str:
-        parts: list[str] = []
-        if recent_title:
-            parts.extend(recent_title + recent_body)
-        if earlier_title and earlier_body:
-            parts.extend(earlier_title + earlier_body)
-        if oldest_title and oldest_body:
-            parts.extend(oldest_title + oldest_body)
-        return "\n".join(parts).rstrip()
-
-    summary = _compose()
-    if estimate_tokens(summary) <= budget_tokens:
-        return summary
-
-    def _compress_body(body: list[str], max_chars: int, max_fragments: int = 1) -> list[str]:
-        """
-        语义压缩（不是直接删行）：
-        - 每行只保留前 N 个语义片段（按常见句号/分号切分）
-        - 再做单行长度压缩
-        用于“越早越狠”的分层压缩。
-        """
-        if not body:
-            return body
-        import re
-
-        out: list[str] = []
-        for raw in body:
-            line = (raw or "").strip()
-            if not line:
-                continue
-            # 保留时间标记/括号标记，不做重写
-            if line.startswith("（") and line.endswith("）"):
-                out.append(line)
-                continue
-            # 先按句号/分号压缩语义片段
-            frags = [x.strip() for x in re.split(r"[。！？!?；;]+", line) if x.strip()]
-            if frags:
-                line = "；".join(frags[: max(1, max_fragments)])
-            # 再按长度收紧，保留句首核心信息
-            if len(line) > max_chars:
-                line = line[:max_chars].rstrip("，,；;、 ") + "…"
-            out.append(line)
-        return out
-
-    def _profile_limits(profile: str) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]]:
-        """
-        返回 (更早, 稍早, 最近) 的 (max_chars, max_fragments)。
-        standard：默认平衡档。
-        """
-        if profile == "mild":
-            return (52, 2), (64, 2), (88, 3)
-        if profile == "aggressive":
-            return (36, 1), (48, 2), (72, 2)
-        return (44, 2), (58, 2), (82, 3)
-
-    oldest_cfg, earlier_cfg, recent_cfg = _profile_limits(SUMMARY_COMPRESSION_PROFILE)
-
-    # 第一阶段：分层“压缩”而非删除（更早最狠，稍早其次，最近最轻）
-    oldest_body = _compress_body(oldest_body, max_chars=oldest_cfg[0], max_fragments=oldest_cfg[1])
-    summary = _compose()
-    if estimate_tokens(summary) <= budget_tokens:
-        return summary
-
-    earlier_body = _compress_body(earlier_body, max_chars=earlier_cfg[0], max_fragments=earlier_cfg[1])
-    summary = _compose()
-    if estimate_tokens(summary) <= budget_tokens:
-        return summary
-
-    recent_body = _compress_body(recent_body, max_chars=recent_cfg[0], max_fragments=recent_cfg[1])
-    summary = _compose()
-    if estimate_tokens(summary) <= budget_tokens:
-        return summary
-
-    # 第二阶段：压缩仍不够时，才从最早段开始删行兜底
-    def _is_key_line(line: str) -> bool:
-        """尽量保护“事实锚点”行，避免预算裁剪把关键信息先删掉。"""
-        s = (line or "").strip()
-        if not s:
-            return False
-        if s.startswith("（") and s.endswith("）"):
-            return True
-        import re
-
-        if re.search(r"\d{4}-\d{2}-\d{2}", s):
-            return True
-        if re.search(r"\d+\s*(次|个|天|小时|分钟|%|km|mAh|bpm|步)", s):
-            return True
-        key_words = (
-            "决定", "结论", "已完成", "完成了", "待办", "下一步", "约好", "计划", "提醒", "截止",
-            "地址", "定位", "报错", "修复", "上线",
-            # 健康信息只在异常/生病场景视为关键锚点
-            "生病", "不舒服", "发烧", "感冒", "咳嗽", "头疼", "肚子疼", "就医", "看医生", "吃药",
-        )
-        return any(k in s for k in key_words)
-
-    def _pop_from_front(body: list[str]) -> bool:
-        # 先删最前面的“非关键行”，尽量保关键事实；若全是关键行，再退化为删第一行。
-        for i, line in enumerate(body):
-            if not _is_key_line(line):
-                body.pop(i)
-                return True
-        while body:
-            line = body[0]
-            body.pop(0)
-            if line.strip():
-                return True
-        return False
-
-    for _ in range(1000):
-        if estimate_tokens(summary) <= budget_tokens:
-            break
-        if oldest_body:
-            if not _pop_from_front(oldest_body):
-                oldest_body.clear()
-                continue
-        elif earlier_body:
-            if not _pop_from_front(earlier_body):
-                earlier_body.clear()
-                continue
-        elif recent_body:
-            if not _pop_from_front(recent_body):
-                recent_body.clear()
-                continue
-        else:
-            break
-        summary = _compose()
-
-    return summary

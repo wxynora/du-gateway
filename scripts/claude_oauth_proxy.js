@@ -23,6 +23,17 @@ const CLAUDE_ADAPTIVE_THINKING_EFFORT = String(
 ).trim().toLowerCase();
 const CLAUDE_ADAPTIVE_THINKING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const CLAUDE_OAUTH_FILE = process.env.CLAUDE_OAUTH_FILE || "";
+const CLAUDE_RATE_LIMIT_SNAPSHOT_FILE =
+  process.env.CLAUDE_RATE_LIMIT_SNAPSHOT_FILE ||
+  (CLAUDE_OAUTH_FILE
+    ? path.join(path.dirname(CLAUDE_OAUTH_FILE), "claude-rate-limit-snapshot.json")
+    : "");
+const CLAUDE_REQUEST_SNAPSHOT_DIR =
+  process.env.CLAUDE_REQUEST_SNAPSHOT_DIR ||
+  (CLAUDE_OAUTH_FILE
+    ? path.join(path.dirname(CLAUDE_OAUTH_FILE), "claude-request-snapshots")
+    : path.join(process.cwd(), "claude-request-snapshots"));
+const CLAUDE_REQUEST_SNAPSHOT_LIMIT = 10;
 const CLAUDE_OAUTH_JSON = process.env.CLAUDE_OAUTH_JSON || "";
 const CLAUDE_OAUTH_KEYCHAIN_SERVICE =
   process.env.CLAUDE_OAUTH_KEYCHAIN_SERVICE || "Claude Code-credentials";
@@ -98,7 +109,9 @@ let cachedOAuthSource = "";
 let lastUnauthorizedAt = 0;
 let lastUnauthorizedRoute = "";
 let lastRateLimitSnapshot = null;
+let rateLimitSnapshotLoaded = false;
 let refreshInFlight = null;
+let requestSnapshotSequence = 0;
 
 function log(msg) {
   console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
@@ -251,6 +264,96 @@ function writeSyncedOAuthCredentials(raw) {
   cachedOAuth = normalized;
   cachedOAuthSource = "file";
   return normalized;
+}
+
+function sanitizeRateLimitWindow(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const out = {};
+  const status = String(value.status || "").trim();
+  if (status) out.status = status;
+  for (const key of ["resetAt", "utilization"]) {
+    const field = value[key];
+    if (
+      field !== undefined &&
+      field !== null &&
+      (typeof field === "number" || typeof field === "string")
+    ) {
+      out[key] = field;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function sanitizeRateLimitSnapshot(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const updatedAt = Number(value.updatedAt);
+  if (!Number.isFinite(updatedAt) || updatedAt <= 0) return null;
+  const out = { updatedAt };
+  for (const key of [
+    "status",
+    "resetAt",
+    "representativeClaim",
+    "fallbackPercentage",
+    "overageStatus",
+    "overageDisabledReason",
+    "retryAfter",
+    "statusCode",
+  ]) {
+    const field = value[key];
+    if (
+      field !== undefined &&
+      field !== null &&
+      (typeof field === "number" || typeof field === "string")
+    ) {
+      out[key] = field;
+    }
+  }
+  const fiveHour = sanitizeRateLimitWindow(value.fiveHour);
+  const sevenDay = sanitizeRateLimitWindow(value.sevenDay);
+  if (fiveHour) out.fiveHour = fiveHour;
+  if (sevenDay) out.sevenDay = sevenDay;
+  return out;
+}
+
+function loadRateLimitSnapshot() {
+  if (rateLimitSnapshotLoaded) return lastRateLimitSnapshot;
+  rateLimitSnapshotLoaded = true;
+  if (!CLAUDE_RATE_LIMIT_SNAPSHOT_FILE) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(CLAUDE_RATE_LIMIT_SNAPSHOT_FILE, "utf8"));
+    lastRateLimitSnapshot = sanitizeRateLimitSnapshot(raw);
+    if (lastRateLimitSnapshot) {
+      log(
+        `Rate-limit snapshot restored from ${CLAUDE_RATE_LIMIT_SNAPSHOT_FILE} ` +
+          `(updated ${new Date(lastRateLimitSnapshot.updatedAt).toLocaleString()})`
+      );
+    }
+  } catch (e) {
+    if (e?.code !== "ENOENT") {
+      log(`Rate-limit snapshot restore skipped: ${e.message}`);
+    }
+  }
+  return lastRateLimitSnapshot;
+}
+
+function persistRateLimitSnapshot(value) {
+  if (!CLAUDE_RATE_LIMIT_SNAPSHOT_FILE) return false;
+  const snapshot = sanitizeRateLimitSnapshot(value);
+  if (!snapshot) return false;
+  const directory = path.dirname(CLAUDE_RATE_LIMIT_SNAPSHOT_FILE);
+  const tmp = `${CLAUDE_RATE_LIMIT_SNAPSHOT_FILE}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tmp, JSON.stringify(snapshot, null, 2) + "\n", { mode: 0o600 });
+    fs.renameSync(tmp, CLAUDE_RATE_LIMIT_SNAPSHOT_FILE);
+    return true;
+  } catch (e) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {}
+    log(`Rate-limit snapshot persist failed: ${e.message}`);
+    return false;
+  }
 }
 
 function refreshOAuthWithPython(refreshToken) {
@@ -1244,6 +1347,7 @@ function sendJson(res, status, payload) {
 }
 
 function oauthStatusPayload() {
+  loadRateLimitSnapshot();
   if (!cachedOAuth) {
     cachedOAuth = readOAuthCredentials();
     log(
@@ -1340,12 +1444,43 @@ function updateRateLimitSnapshot(proxyRes, routeLabel) {
   if (retryAfter !== undefined) snapshot.retryAfter = retryAfter;
   if (fiveHour) snapshot.fiveHour = fiveHour;
   if (sevenDay) snapshot.sevenDay = sevenDay;
-  lastRateLimitSnapshot = snapshot;
+  lastRateLimitSnapshot = sanitizeRateLimitSnapshot(snapshot);
+  persistRateLimitSnapshot(lastRateLimitSnapshot);
+}
+
+function persistRequestSnapshot(data) {
+  const timestamp = Date.now();
+  requestSnapshotSequence += 1;
+  const filename =
+    `request-${String(timestamp).padStart(13, "0")}-` +
+    `${process.pid}-${String(requestSnapshotSequence).padStart(8, "0")}.json`;
+  const target = path.join(CLAUDE_REQUEST_SNAPSHOT_DIR, filename);
+  const tmp = `${target}.tmp`;
+  try {
+    fs.mkdirSync(CLAUDE_REQUEST_SNAPSHOT_DIR, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tmp, data, { mode: 0o600 });
+    fs.renameSync(tmp, target);
+
+    const snapshots = fs.readdirSync(CLAUDE_REQUEST_SNAPSHOT_DIR)
+      .filter((name) => /^request-\d{13}-\d+-\d{8}\.json$/.test(name))
+      .sort();
+    for (const stale of snapshots.slice(0, -CLAUDE_REQUEST_SNAPSHOT_LIMIT)) {
+      fs.unlinkSync(path.join(CLAUDE_REQUEST_SNAPSHOT_DIR, stale));
+    }
+    return target;
+  } catch (e) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {}
+    log(`Request snapshot persist failed: ${e.message}`);
+    return "";
+  }
 }
 
 function proxyToAnthropic(token, path, payload) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(payload);
+    persistRequestSnapshot(data);
     const req = https.request(
       {
         hostname: TARGET_HOST,
@@ -1680,8 +1815,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
+  loadRateLimitSnapshot();
   log(`Claude OAuth Proxy running on http://${HOST}:${PORT}`);
   log("Auth: PROXY_KEY required");
+  log(`Request snapshots: ${CLAUDE_REQUEST_SNAPSHOT_DIR} (latest ${CLAUDE_REQUEST_SNAPSHOT_LIMIT})`);
   log("");
   log("Endpoints:");
   log(`  POST http://localhost:${PORT}/v1/chat/completions  (OpenAI format)`);

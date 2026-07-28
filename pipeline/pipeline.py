@@ -11,7 +11,6 @@ from typing import Any, Callable, Optional
 from config import (
     SUMMARY_EVERY_N_ROUNDS,
     DYNAMIC_MEMORY_BEDROOM_DAYS_VALID,
-    DYNAMIC_MEMORY_DAYS_VALID,
     DYNAMIC_MEMORY_TOP_N,
     DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED,
     DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT,
@@ -29,7 +28,7 @@ from config import (
 from pathlib import Path
 from storage import r2_store
 from utils.log import get_logger
-from utils.tokens import estimate_tokens, memory_summary_budget, memory_dynamic_budget, truncate_to_tokens
+from utils.tokens import estimate_tokens, memory_dynamic_budget
 from services.user_activity_context import (
     capture_previous_interaction_and_mark_chat,
     elapsed_seconds as user_activity_elapsed_seconds,
@@ -1490,14 +1489,6 @@ def step_inject_summary(body: dict, window_id: str, is_user_input: bool = False)
 
     summary = r2_store.get_summary(window_id)
     if summary and summary.strip():
-        budget = memory_summary_budget()
-        if estimate_tokens(summary) > budget:
-            # 结构化裁剪：优先压缩更早内容，避免把【更早】标题整体截没
-            try:
-                summary = deepseek_summary._trim_summary_to_budget(summary, budget)
-            except Exception:
-                summary = truncate_to_tokens(summary, budget)
-            logger.debug("summary trimmed to %s tokens", budget)
         stable_summary, recent_summary = _split_summary_for_prompt_cache(summary)
         body = _upsert_summary_cache_system(body, stable_summary, recent_summary)
         inject = head
@@ -2640,12 +2631,6 @@ def _dynamic_memory_tag(mem: dict) -> str:
     return str((mem or {}).get("tag") or "").strip()
 
 
-def _dynamic_memory_valid_days(mem: dict) -> int:
-    if _dynamic_memory_tag(mem) == "卧室":
-        return max(0, int(DYNAMIC_MEMORY_BEDROOM_DAYS_VALID))
-    return max(0, int(DYNAMIC_MEMORY_DAYS_VALID))
-
-
 def _dynamic_memory_days_since_last_mentioned(mem: dict, now) -> Optional[int]:
     from utils.time_aware import parse_iso_to_beijing
 
@@ -2669,7 +2654,7 @@ def _is_tag_expired_dynamic_memory_for_prune(mem: dict, now) -> bool:
     days_since = _dynamic_memory_days_since_last_mentioned(mem, now)
     if days_since is None:
         return False
-    return days_since > _dynamic_memory_valid_days(mem)
+    return days_since >= max(0, int(DYNAMIC_MEMORY_BEDROOM_DAYS_VALID))
 
 
 def _is_marginal_dynamic_memory_for_prune(mem: dict, now) -> bool:
@@ -2677,7 +2662,7 @@ def _is_marginal_dynamic_memory_for_prune(mem: dict, now) -> bool:
     可从动态层落盘删除的记忆（不碰 core_cache）：
     - 卧室 tag 走短有效期，超过后直接退场；
     - 其它 tag 仍沿用综合权重低且距上次提及已久的边缘化规则。
-    与注入侧 _is_dynamic_memory_valid 独立。
+    物理淘汰是动态层召回生命周期的唯一出口。
     """
     if _dynamic_memory_tag(mem) == "图书馆":
         return False
@@ -2713,18 +2698,6 @@ def _should_prune_dynamic_memory(mem: dict, now, protected_ids: set[str]) -> boo
     if memory_id and memory_id in protected_ids:
         return False
     return _is_marginal_dynamic_memory_for_prune(mem, now)
-
-
-def _is_dynamic_memory_valid(mem: dict, now=None) -> bool:
-    """动态层记忆是否仍在有效期内。"""
-    from utils.time_aware import parse_iso_to_beijing, _now_beijing
-
-    now = now or _now_beijing()
-    last_mentioned = mem.get("last_mentioned") or mem.get("created_at") or ""
-    dt = parse_iso_to_beijing(last_mentioned)
-    if dt is None:
-        return True
-    return (now - dt).days <= _dynamic_memory_valid_days(mem)
 
 
 def _upsert_dynamic_memory_index(mem: dict) -> None:
@@ -2963,8 +2936,6 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
             except Exception as e:
                 logger.debug("动态层边缘淘汰日志失败 error=%s", e)
     memories = pruned
-    # 注入侧仍只使用「7 天内」记忆，与落盘淘汰规则独立
-    memories = [mem for mem in memories if _is_dynamic_memory_valid(mem, now)]
     messages = body.get("messages") or []
     # 取最后一条 user 内容做关键词
     last_user_text = ""
@@ -3059,9 +3030,9 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
                 vector_recalled = [
                     mem for mem in vector_recalled
                     if (
-                        # 动态层：保留原有效期过滤
-                        (str(mem.get("id") or "") in valid_ids and _is_dynamic_memory_valid(mem, now))
-                        # 核心缓存层：dynamic_vector_retriever 产出的临时 id 形如 core::<entry_id>，不走动态层 7 天过滤
+                        # 动态层：只要求条目仍存在，不再按独立天数二次过滤。
+                        str(mem.get("id") or "") in valid_ids
+                        # 核心缓存层：dynamic_vector_retriever 产出的临时 id 形如 core::<entry_id>。
                         or str(mem.get("id") or "").startswith("core::")
                     )
                 ]
@@ -3288,20 +3259,16 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
 def step_inject_du_notebook(body: dict) -> dict:
     """
     固定注入：渡的记事本（按条目，放静态 system 区）。
-    仅注入最近若干条，防止请求体过长。
+    注入全部现有条目。
     """
     entries = r2_store.get_du_notebook_entries() or []
     if not entries:
         return body
     lines = []
-    budget = 500
-    for it in entries[:20]:
+    for it in entries:
         line = f"- {(it.get('content') or '').strip()}"
         if not line or line == "-":
             continue
-        nxt = ("\n".join(lines) + ("\n" if lines else "") + line).strip()
-        if estimate_tokens(nxt) > budget:
-            break
         lines.append(line)
     if not lines:
         return body
@@ -3579,84 +3546,6 @@ def _round_messages_to_raw_text(round_messages: list) -> str:
     return "\n".join(lines).strip()
 
 
-def _normalize_for_raw_check(text: str) -> str:
-    """用于判断“是否在照抄原文”的轻量归一化。"""
-    if not text:
-        return ""
-    s = str(text).lower()
-    s = re.sub(r"\s+", "", s)
-    s = re.sub(r"[，。！？；：,.!?;:\"'“”‘’()（）\[\]{}<>《》\-_/\\|~`@#$%^&*+=]+", "", s)
-    return s
-
-
-def _looks_like_raw_copy(content: str, round_messages: list) -> bool:
-    """
-    粗略判断 DS 的 content 是否在照抄本轮原文。
-    规则偏保守：命中则走改写兜底，防止记忆里落“原话照搬”。
-    """
-    c = _normalize_for_raw_check(content)
-    if not c or len(c) < 8:
-        return False
-    for m in round_messages or []:
-        if not isinstance(m, dict):
-            continue
-        raw = m.get("content")
-        txt = ""
-        if isinstance(raw, str):
-            txt = raw
-        elif isinstance(raw, list):
-            parts = []
-            for p in raw:
-                if isinstance(p, dict) and p.get("type") == "text":
-                    parts.append(str(p.get("text") or ""))
-            txt = " ".join(parts)
-        n = _normalize_for_raw_check(txt)
-        if not n:
-            continue
-        if c == n:
-            return True
-        # 内容较长且几乎整段包含时，也视为照抄
-        if len(c) >= 16 and c in n:
-            return True
-    return False
-
-
-def _rewrite_non_raw_note(round_messages: list) -> str:
-    """照抄命中时的本地兜底：生成一句概括，避免原文直存。"""
-    user_txt = ""
-    asst_txt = ""
-    for m in round_messages or []:
-        if not isinstance(m, dict):
-            continue
-        role = (m.get("role") or "").lower()
-        raw = m.get("content")
-        txt = ""
-        if isinstance(raw, str):
-            txt = raw.strip()
-        elif isinstance(raw, list):
-            txt = " ".join(
-                str(p.get("text") or "").strip()
-                for p in raw
-                if isinstance(p, dict) and p.get("type") == "text"
-            ).strip()
-        if not txt:
-            continue
-        if role == "user" and not user_txt:
-            user_txt = txt
-        elif role == "assistant" and not asst_txt:
-            asst_txt = txt
-    # 用片段做主题，但避免整句原样落盘
-    topic_a = (user_txt[:18] + "…") if len(user_txt) > 18 else user_txt
-    topic_b = (asst_txt[:18] + "…") if len(asst_txt) > 18 else asst_txt
-    if topic_a and topic_b:
-        return f"我们围绕“{topic_a}”做了沟通，我也回应了“{topic_b}”，形成了当下共识。"
-    if topic_a:
-        return f"老婆提到“{topic_a}”，我记下了这轮重点。"
-    if topic_b:
-        return f"我对这轮话题做了回应，先记下当前结论。"
-    return "这轮聊了一个具体话题，我先记下重点。"
-
-
 def _apply_one_decision(
     window_id: str,
     round_index: int,
@@ -3722,20 +3611,11 @@ def _apply_one_decision(
         except Exception as e:
             logger.warning("动态记忆血缘记录失败 memory_id=%s action=%s error=%s", memory_id, action_name, e)
 
-    raw_check = ""
-
-    # 兜底：DS 标成 new/merge 但给了客厅/书房等，若原文有私密/亲密/性相关关键词则改标卧室
-    if (tag != "卧室" and "卧室" not in tag) and (action == "new" or content):
-        raw_check = _round_messages_to_raw_text(round_messages)
-        if any(kw in raw_check for kw in ("私密", "亲密", "性行为", "性暗示", "露骨", "露骨言语")):
-            tag = "卧室"
-
-    if tag == "卧室" or "卧室" in tag:
-        tag = "卧室"
+    if action in ("new", "merge") and tag not in {"客厅", "书房", "图书馆", "卧室"}:
+        logger.warning("动态层 %s 返回非法 tag=%s，本轮回退为 skip window_id=%s", action, tag, window_id)
+        return None
 
     if action == "new" and content:
-        if _looks_like_raw_copy(content, round_messages):
-            content = _rewrite_non_raw_note(round_messages)
         new_mem = {
             "id": str(uuid4()),
             "content": content,
@@ -3785,9 +3665,6 @@ def _apply_one_decision(
         if not fused_with_id:
             logger.warning("动态层 merge 未返回 fused_with_id，本轮回退为 skip window_id=%s", window_id)
             return None
-        if content and _looks_like_raw_copy(content, round_messages):
-            content = _rewrite_non_raw_note(round_messages)
-
         if str(fused_with_id).startswith("core::"):
             core_entry_id = str(fused_with_id)[len("core::") :].strip()
             core_items = r2_store.get_core_cache_pending() or []
@@ -4183,9 +4060,7 @@ def _summary_round_groups_to_process(
     if not existing_ranges:
         return [r2_store.get_conversation_rounds(window_id, last_n=every)]
 
-    first_seen = min(start for start, _end in existing_ranges)
-    lookback_start = max(1, current_round - every * 6 + 1)
-    start = max(first_seen, ((lookback_start - 1) // every) * every + 1)
+    start = min(span_start for span_start, _end in existing_ranges)
     ranges_to_process: list[tuple[int, int]] = []
     while start + every - 1 <= current_round:
         end = start + every - 1
@@ -4201,9 +4076,6 @@ def _summary_round_groups_to_process(
     if current_range not in ranges_to_process and current_range not in existing_ranges:
         ranges_to_process.append(current_range)
 
-    # 缺口补跑不能无限堆 DS 请求；保留最近两个缺口，并始终保留当前新组。
-    missing_ranges = [span for span in ranges_to_process if span != current_range]
-    ranges_to_process = missing_ranges[-2:] + ([current_range] if current_range in ranges_to_process else [])
     deduped_ranges: list[tuple[int, int]] = []
     seen: set[tuple[int, int]] = set()
     for span in ranges_to_process:

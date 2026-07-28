@@ -53,37 +53,6 @@ def _strip_rikkahub_time_artifacts(text: str) -> str:
     return out.strip()
 
 
-def _normalize_rikkahub_time_tool_result(text: str) -> str:
-    """
-    渡调用 RikkaHub 时间工具时，工具结果经过网关：只保留当前时间 HH:mm，去掉 year/month/weekday/date 等我们 system 里已有的，避免重复。
-    """
-    if not text or not isinstance(text, str):
-        return text
-    text = text.strip()
-    try:
-        data = json.loads(text)
-        if not isinstance(data, dict):
-            return text
-        t = data.get("time") or data.get("time_hm")
-        if not t:
-            return text
-        # "10:45:05" -> "10:45"；已是 "10:45" 则不变
-        if isinstance(t, str) and ":" in t:
-            parts = t.split(":")
-            if len(parts) >= 2:
-                return f"{parts[0]}:{parts[1]}"
-            return t
-        return text
-    except (json.JSONDecodeError, TypeError):
-        # 可能是 time_reminder 文本，尝试抽时间
-        m = re.search(r"(\d{1,2}:\d{2}(?::\d{2})?)", text)
-        if m:
-            raw = m.group(1)
-            parts = raw.split(":")
-            return f"{parts[0]}:{parts[1]}" if len(parts) >= 2 else raw
-        return text
-
-
 def _load_emoji_mapping() -> dict:
     """从 data/emoji_mapping.json 读取对照表，无文件或 key 为 _comment 的忽略。"""
     if not EMOJI_MAPPING_FILE.exists():
@@ -144,7 +113,7 @@ def clean_message_content_for_forward(content, msg: dict | None = None) -> str |
     """
     对单条 message 的 content 做「发给渡」清洗。
     content 可能是 str 或 list（多模态）。图片保留原样。
-    msg 为当前消息；若 role 为 tool（渡自己调了 RikkaHub 时间工具的结果），只保留时间 HH:mm，去掉日期/星期等已有信息，避免重复。
+    msg 为当前消息；role 为 tool 时保留完整工具结果。
     """
     strip_time = True
     if msg and (msg.get("role") or "").lower() == "tool":
@@ -152,8 +121,6 @@ def clean_message_content_for_forward(content, msg: dict | None = None) -> str |
     if content is None:
         return content
     if isinstance(content, str):
-        if not strip_time:
-            content = _normalize_rikkahub_time_tool_result(content)
         return apply_text_cleaning_for_forward(content, strip_rikkahub_time=strip_time)
     if isinstance(content, list):
         out = []
@@ -163,8 +130,6 @@ def clean_message_content_for_forward(content, msg: dict | None = None) -> str |
                 continue
             if part.get("type") == "text":
                 raw = part.get("text") or part.get("content") or ""
-                if not strip_time:
-                    raw = _normalize_rikkahub_time_tool_result(raw)
                 out.append({"type": "text", "text": apply_text_cleaning_for_forward(raw, strip_rikkahub_time=strip_time)})
             else:
                 out.append(part)
@@ -175,7 +140,7 @@ def clean_message_content_for_forward(content, msg: dict | None = None) -> str |
 def clean_message_for_r2(msg: dict) -> dict:
     """
     对单条 message 做「存 R2」完整清洗：Rikka + 表情包→文字 + 图片→描述/占位符。
-    若 role 为 tool（渡自己调时间工具的结果），只保留时间 HH:mm 再存。
+    若 role 为 tool，保留完整工具结果再存。
     返回新 message，不修改原对象。
     """
     msg = copy.deepcopy(msg)
@@ -184,8 +149,6 @@ def clean_message_for_r2(msg: dict) -> dict:
     if content is None:
         return msg
     if isinstance(content, str):
-        if not strip_time:
-            content = _normalize_rikkahub_time_tool_result(content)
         msg["content"] = apply_text_cleaning_for_r2(content, strip_rikkahub_time=strip_time)
         # reasoning（思维链）不做清洗，仅透传保存，前端默认折叠展示
         if msg.get("reasoning") is not None and not isinstance(msg.get("reasoning"), str):
@@ -199,8 +162,6 @@ def clean_message_for_r2(msg: dict) -> dict:
                 continue
             if part.get("type") == "text":
                 raw = part.get("text") or part.get("content") or ""
-                if not strip_time:
-                    raw = _normalize_rikkahub_time_tool_result(raw)
                 out.append({"type": "text", "text": apply_text_cleaning_for_r2(raw, strip_rikkahub_time=strip_time)})
             elif part.get("type") in ("image_url", "image"):
                 out.append({"type": "text", "text": image_desc.image_part_archive_text(part)})

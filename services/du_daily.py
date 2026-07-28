@@ -18,7 +18,6 @@ MARKER_END = "<<<END_DU_DAILY>>>"
 _HIDDEN_BLOCK = HiddenBlockParser.for_markers("DU_DAILY", MARKER_START, MARKER_END)
 
 _SLEEP_INACTIVITY_MINUTES = 60
-_MAX_TODAY_EVENTS = 8
 
 _CONFLICT_STRONG_RE = re.compile(
     r"(吵架|吵起来|吵过|冷暴力|退缩|主观能动性|你凶我|你又凶|不想说|不喜欢你了|"
@@ -88,7 +87,7 @@ def _extract_last_user_text(messages: list[dict]) -> str:
     return ""
 
 
-def _extract_recent_dialogue_facts(messages: list[dict], limit: int = 6) -> list[str]:
+def _extract_recent_dialogue_facts(messages: list[dict]) -> list[str]:
     rows: list[str] = []
     for msg in reversed(messages or []):
         if not isinstance(msg, dict):
@@ -101,9 +100,7 @@ def _extract_recent_dialogue_facts(messages: list[dict], limit: int = 6) -> list
             continue
         speaker = "辛玥" if role == "user" else "我"
         text = re.sub(r"\s+", " ", text).strip()
-        rows.append(f"{speaker}：{text[:180]}")
-        if len(rows) >= limit:
-            break
+        rows.append(f"{speaker}：{text}")
     return list(reversed(rows))
 
 
@@ -149,14 +146,11 @@ def _normalize_today_lines(lines: list[Any]) -> list[str]:
 
 
 def _normalize_today_events(lines: list[Any]) -> list[str]:
-    return _normalize_today_lines(lines)[-_MAX_TODAY_EVENTS:]
+    return _normalize_today_lines(lines)
 
 
-def _normalize_summary_text(text: Any, max_chars: int = 900) -> str:
-    s = " ".join(x.strip() for x in str(text or "").splitlines() if x.strip()).strip()
-    if len(s) > max_chars:
-        s = s[: max_chars - 1].rstrip() + "…"
-    return s
+def _normalize_summary_text(text: Any) -> str:
+    return " ".join(x.strip() for x in str(text or "").splitlines() if x.strip()).strip()
 
 
 def _archive_daily_state(state: dict, trigger_kind: str = "") -> None:
@@ -264,8 +258,7 @@ def _fallback_compress_today_lines(lines: list[str], fallback: str = "") -> str:
         return str(fallback or "").strip()
     if len(cleaned) == 1:
         return cleaned[0]
-    picked = cleaned[-3:]
-    summary = "；".join(picked).strip("； ").strip()
+    summary = "；".join(cleaned).strip("； ").strip()
     if summary and not summary.endswith(("。", "！", "？")):
         summary += "。"
     return summary
@@ -441,7 +434,7 @@ def build_chat_trigger(window_id: str, body: dict, headers: Optional[dict] = Non
     if _looks_like_conflict_or_relation_tension(text):
         facts = _extract_recent_dialogue_facts((body or {}).get("messages") or [])
         if not facts:
-            facts = [f"辛玥：{text[:180]}"]
+            facts = [f"辛玥：{text}"]
         return {
             "kind": "conflict",
             "hard": True,
@@ -487,7 +480,7 @@ def build_maintenance_trigger(body: dict, headers: Optional[dict] = None) -> dic
         "kind": str(hdrs.get("X-DU-DAILY-TRIGGER-KIND") or "maintenance").strip() or "maintenance",
         "hard": True,
         "reason": "内部维护触发",
-        "facts": facts[:8],
+        "facts": facts,
         "topic_key": str(hdrs.get("X-DU-DAILY-TOPIC") or "").strip() or "maintenance",
         "hidden_only": True,
     }
@@ -518,7 +511,7 @@ def format_inject_block(state: dict, trigger: Optional[dict] = None, maintenance
         facts = trigger.get("facts") or []
         if isinstance(facts, list) and facts:
             lines.append("可用事实：")
-            for item in facts[:8]:
+            for item in facts:
                 s = str(item or "").strip()
                 if s:
                     lines.append(f"- {s}")
@@ -593,7 +586,7 @@ def save_hidden_block(raw_block: str, trigger: Optional[dict] = None) -> bool:
             return False
         today_events = _normalize_today_events(state.get("today_events") or state.get("today_timeline") or [])
         seen = set(today_events)
-        for line in new_lines[:3]:
+        for line in new_lines:
             if line not in seen:
                 today_events.append(line)
                 seen.add(line)
@@ -668,7 +661,7 @@ def build_background_prompt(trigger: dict) -> str:
         lines.append(MARKER_END)
     if isinstance(facts, list) and facts:
         lines.append("可用事实：")
-        for item in facts[:8]:
+        for item in facts:
             s = str(item or "").strip()
             if s:
                 lines.append(f"- {s}")

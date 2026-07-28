@@ -20,6 +20,7 @@ from routes.miniapp.exchange_diary import register_routes as register_exchange_d
 from routes.miniapp.game_tools import register_routes as register_game_tools_routes
 from routes.miniapp.studyroom import register_routes as register_studyroom_routes
 from routes.miniapp.logs import register_routes as register_logs_routes
+from routes.miniapp.longterm_memory import register_routes as register_longterm_memory_routes
 from routes.miniapp.media import register_routes as register_media_routes
 from routes.miniapp.memory_organizer import register_routes as register_memory_organizer_routes
 from routes.miniapp.memory_panel import register_routes as register_memory_panel_routes
@@ -56,6 +57,7 @@ register_exchange_diary_routes(bp)
 register_game_tools_routes(bp)
 register_studyroom_routes(bp)
 register_logs_routes(bp)
+register_longterm_memory_routes(bp)
 register_media_routes(bp)
 register_memory_organizer_routes(bp)
 register_memory_panel_routes(bp)

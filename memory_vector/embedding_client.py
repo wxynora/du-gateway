@@ -11,7 +11,6 @@ from memory_vector.config import (
     CF_EMBEDDING_POOLING,
     OPENAI_API_KEY,
     EMBEDDING_MODEL,
-    EMBEDDING_MAX_CHARS,
     EMBED_CACHE_TTL_SECONDS,
     EMBED_CACHE_MAX_ITEMS,
     EMBED_REQUEST_TIMEOUT_SECONDS,
@@ -74,8 +73,6 @@ def strip_images_for_embedding(text: str) -> str:
 def normalize_text(text: str) -> str:
     t = strip_images_for_embedding(text).replace("\n", " ").strip()
     t = re.sub(r"\s+", " ", t)
-    if EMBEDDING_MAX_CHARS and len(t) > EMBEDDING_MAX_CHARS:
-        t = t[:EMBEDDING_MAX_CHARS]
     return t
 
 
@@ -128,7 +125,7 @@ def _embed_via_cloudflare(text: str) -> list[float]:
         raise RuntimeError("CF_ACCOUNT_ID / CLOUDFLARE_API_TOKEN 未配置")
     url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_EMBEDDING_MODEL}"
     headers = {"Authorization": f"Bearer {CF_API_TOKEN}"}
-    payload = {"text": text, "truncate_inputs": True}
+    payload = {"text": text}
     if CF_EMBEDDING_POOLING in ("mean", "cls"):
         payload["pooling"] = CF_EMBEDDING_POOLING
 
@@ -167,7 +164,7 @@ def _embed_many_via_cloudflare(texts: list[str], *, model: str) -> list[list[flo
         raise ValueError("Cloudflare embedding model 不能为空")
     url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{selected_model}"
     headers = {"Authorization": f"Bearer {CF_API_TOKEN}"}
-    payload = {"text": texts, "truncate_inputs": True}
+    payload = {"text": texts}
     started = time.time()
     resp = requests.post(url, headers=headers, json=payload, timeout=_timeout_seconds())
     elapsed_ms = int((time.time() - started) * 1000)

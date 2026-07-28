@@ -28,6 +28,7 @@ _MERGE_REASONS = {
     "temporal_update",
     "habit_generalization",
 }
+_VALID_MEMORY_TAGS = {"客厅", "书房", "图书馆", "卧室"}
 
 # 动态层 DS prompt（简短便签版，禁止散文）
 _DYNAMIC_LAYER_PROMPT = """你叫渡。
@@ -193,6 +194,30 @@ def _dynamic_layer_retry_instruction(issue: str, previous_content: str = "", *, 
             "ACTION 是 merge，但 MERGE_REASON 缺失或不在允许值中。\n"
             "请只从 consolidate / correction / invalidate / supersede / temporal_update / habit_generalization 选择一个；"
             "保持原来的 FUSED_WITH_ID 和完整 CONTENT，只输出固定标签格式，不要解释，不要 Markdown。"
+        )
+    if "merge_missing_or_invalid_ref" in issue:
+        return (
+            "\n\n【上一次输出需要重写】\n"
+            "ACTION 是 merge，但 FUSED_WITH_ID 缺失，或无法对应当前记忆列表里的任何 ref。\n"
+            "确实是同一具体事项时，必须填写当前列表里的准确 ref（如 M01）；"
+            "找不到明确 ref 时禁止 merge，有独立新信息就改为 new，没有则 skip。\n"
+            "只输出固定标签格式，不要解释，不要 Markdown。"
+        )
+    if "content_raw_copy" in issue:
+        return (
+            "\n\n【上一次输出需要重写】\n"
+            "CONTENT 照抄了本轮原话，不能直接保存。\n"
+            "保留原有事实与当时的具体感受，用渡的第一人称自然概括成一条完整便签；"
+            "不要返回原句，不要添加输入中不存在的共识、结论或情绪。\n"
+            "只输出固定标签格式，不要解释，不要 Markdown。"
+        )
+    if "missing_or_invalid_tag" in issue:
+        return (
+            "\n\n【上一次输出需要重写】\n"
+            "TAG 缺失或不在允许值中。\n"
+            "TAG 必须只填写 客厅 / 书房 / 图书馆 / 卧室 之一，并依据本轮实际内容判断；"
+            "不要输出组合标签或其他文字。\n"
+            "只输出固定标签格式，不要解释，不要 Markdown。"
         )
     scope = "本批里有记忆" if batch else "上一条记忆"
     prev = _one_line_preview(previous_content, limit=220)
@@ -544,10 +569,55 @@ def _decision_structural_issue(obj: dict) -> str:
     if action == "merge" and not _normalize_merge_reason(obj.get("merge_reason")):
         return "merge_missing_or_invalid_reason"
     if action in ("new", "merge"):
+        if str(obj.get("tag") or "").strip() not in _VALID_MEMORY_TAGS:
+            return "missing_or_invalid_tag"
         issue = _content_quality_issue(content_text)
         if issue:
             return issue
     return ""
+
+
+def _normalize_for_raw_check(text: str) -> str:
+    if not text:
+        return ""
+    normalized = str(text).lower()
+    normalized = re.sub(r"\s+", "", normalized)
+    return re.sub(r"[，。！？；：,.!?;:\"'“”‘’()（）\[\]{}<>《》\-_/\\|~`@#$%^&*+=]+", "", normalized)
+
+
+def _looks_like_round_raw_copy(content: str, round_messages: list) -> bool:
+    normalized_content = _normalize_for_raw_check(content)
+    if not normalized_content or len(normalized_content) < 8:
+        return False
+    for message in round_messages or []:
+        if not isinstance(message, dict):
+            continue
+        raw = message.get("content")
+        if isinstance(raw, str):
+            text = raw
+        elif isinstance(raw, list):
+            text = " ".join(
+                str(part.get("text") or "")
+                for part in raw
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        else:
+            text = ""
+        normalized_source = _normalize_for_raw_check(text)
+        if not normalized_source:
+            continue
+        if normalized_content == normalized_source:
+            return True
+        if len(normalized_content) >= 16 and normalized_content in normalized_source:
+            return True
+    return False
+
+
+def _round_messages_from_batch_item(item: Any) -> list:
+    if isinstance(item, dict):
+        messages = item.get("messages")
+        return messages if isinstance(messages, list) else []
+    return item if isinstance(item, list) else []
 
 
 def _extract_tagged_decision_blocks(text: str) -> Optional[list]:
@@ -621,8 +691,7 @@ def _build_query_from_round(round_messages: list) -> str:
         if txt:
             parts.append(txt)
     text = "\n".join(parts)
-    # 防止 query 过长影响 embedding，截断到适中长度
-    return text[:2000]
+    return text
 
 
 def call_dynamic_layer_ds(
@@ -652,7 +721,8 @@ def call_dynamic_layer_ds(
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
         return default
 
-    # 先在本地从 current_memories 里召回「候选记忆」，只把少量候选发给 DS，避免每轮灌入全部记忆导致 token 爆炸。
+    # 先在本地从 current_memories 里召回候选记忆；无命中或检索失败时保持空候选，
+    # 不再用“最近若干条”偷换相关候选。
     candidates = []
     try:
         from memory_vector.dynamic_vector_retriever import dynamic_vector_retrieve
@@ -667,18 +737,19 @@ def call_dynamic_layer_ds(
             if recalled:
                 candidates = recalled
     except Exception as e:
-        logger.debug("dynamic_layer_ds 本地检索候选失败，将回退为最近 N 条 error=%s", e)
-
-    if not candidates:
-        # 回退：取最近 N 条记忆作为候选
-        N = 10
-        candidates = (current_memories or [])[-N:]
+        logger.warning("dynamic_layer_ds 本地检索候选失败，本轮使用空候选 error=%s", e)
 
     prompt_memories, ref_to_id, valid_ids = _build_memory_ref_prompt_items(candidates)
     prompt = _DYNAMIC_LAYER_PROMPT.format(
         current_memories_json=json.dumps(prompt_memories or [], ensure_ascii=False),
         round_messages_json=json.dumps(round_messages or [], ensure_ascii=False),
     )
+    if not prompt_memories:
+        prompt += (
+            "\n\n【本轮候选状态】\n"
+            "当前没有可用的旧记忆候选，因此 ACTION 只能是 new 或 skip，禁止 merge，"
+            "FUSED_WITH_ID 与 MERGE_REASON 必须留空。"
+        )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload: dict[str, Any] = {
         "model": DEEPSEEK_CHAT_MODEL,
@@ -726,6 +797,15 @@ def call_dynamic_layer_ds(
             obj = _extract_json_from_ds_response(content)
             if isinstance(obj, dict):
                 structural_issue = _decision_structural_issue(obj)
+                if not structural_issue and str(obj.get("action") or "").strip().lower() == "merge":
+                    if not _resolve_fused_with_id(obj.get("fused_with_id"), ref_to_id, valid_ids):
+                        structural_issue = "merge_missing_or_invalid_ref"
+                if (
+                    not structural_issue
+                    and str(obj.get("action") or "").strip().lower() in ("new", "merge")
+                    and _looks_like_round_raw_copy(str(obj.get("content") or ""), round_messages)
+                ):
+                    structural_issue = "content_raw_copy"
                 attempts.append(
                     {
                         "attempt": attempt + 1,
@@ -813,15 +893,12 @@ def call_dynamic_layer_ds(
         emotion_label = str(obj.get("emotion_label") or "").strip().lower()
         scene_type = str(obj.get("scene_type") or "").strip()
         target_type = str(obj.get("target_type") or "").strip()
-        if action == "merge" and not content_text and not fused_with_id:
-            logger.warning("动态层 DS 返回 action=merge 但 content/fused_with_id 缺失，按 skip 处理")
-            action = "skip"
-        elif action == "merge" and content_text and not fused_with_id:
+        if action == "merge" and not fused_with_id:
             logger.warning(
-                "动态层 DS 返回 action=merge 但 fused_with_id 缺失或无法映射 raw=%s，降级为 new",
+                "动态层 DS 返回 action=merge 但 fused_with_id 缺失或无法映射 raw=%s，按 skip 处理",
                 raw_fused_with_id,
             )
-            action = "new"
+            action = "skip"
         elif action == "new" and not content_text:
             logger.warning("动态层 DS 返回 action=new 但 content 缺失，按 skip 处理")
             action = "skip"
@@ -941,7 +1018,7 @@ def _decision_action_counts(decisions: list) -> dict:
     return counts
 
 
-def _batch_structural_issues(arr: Any, expected_len: int) -> list[dict]:
+def _batch_structural_issues(arr: Any, expected_len: int, batch_rounds: list | None = None) -> list[dict]:
     issues: list[dict] = []
     if not isinstance(arr, list):
         return [{"index": 0, "issue": "batch_parse_failed", "content": ""}]
@@ -952,6 +1029,17 @@ def _batch_structural_issues(arr: Any, expected_len: int) -> list[dict]:
             issues.append({"index": idx + 1, "issue": "decision_not_object", "content": ""})
             continue
         issue = _decision_structural_issue(obj)
+        if (
+            not issue
+            and str(obj.get("action") or "").strip().lower() in ("new", "merge")
+            and batch_rounds
+            and idx < len(batch_rounds)
+            and _looks_like_round_raw_copy(
+                str(obj.get("content") or ""),
+                _round_messages_from_batch_item(batch_rounds[idx]),
+            )
+        ):
+            issue = "content_raw_copy"
         if issue:
             issues.append(
                 {
@@ -1022,7 +1110,7 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
             content = (content or "").strip()
             arr = _extract_json_array_from_ds_response(content)
             repairs = _repair_batch_content_tails(arr) if attempt == _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1 else []
-            issues = _batch_structural_issues(arr, len(batch_rounds))
+            issues = _batch_structural_issues(arr, len(batch_rounds), batch_rounds)
             attempts.append(
                 {
                     "attempt": attempt + 1,
@@ -1181,7 +1269,7 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
             content = (content or "").strip()
             arr = _extract_json_array_from_ds_response(content)
             repairs = _repair_batch_content_tails(arr) if attempt == _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1 else []
-            issues = _batch_structural_issues(arr, len(batch_rounds))
+            issues = _batch_structural_issues(arr, len(batch_rounds), batch_rounds)
             attempts.append(
                 {
                     "attempt": attempt + 1,
