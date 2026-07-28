@@ -30,6 +30,13 @@ _SENSE_HISTORY_MIN_INTERVAL_SECONDS = {
     "location": 30 * 60,
 }
 _SLEEP_SEGMENT_KEEP = 8
+_SLEEP_MIN_MINUTES = 30
+_SLEEP_RELIABILITY_PASS_SCORE = 3
+_SLEEP_STEPS_LOW_DELTA = 120
+_SLEEP_STEPS_HIGH_DELTA = 500
+_SLEEP_RESTING_HEART_RATE = 78
+_SLEEP_ELEVATED_HEART_RATE = 95
+_SLEEP_HIGH_HEART_RATE = 110
 _WAKE_ACTIVITY_CONFIRM_SECONDS = 3 * 60
 _AWAKE_FOREGROUND_BLOCKLIST_EXACT = {
     "android",
@@ -422,6 +429,96 @@ def _sleep_health_evidence(block: dict, latest_doc: dict, history: list[dict]) -
     return evidence
 
 
+def _assess_sleep_reliability(block: dict, health_evidence: dict) -> dict:
+    try:
+        duration_ms = int(block.get("durationMs") or 0)
+    except Exception:
+        duration_ms = 0
+    minutes = max(0, duration_ms // 60000)
+    reasons: list[str] = []
+    positive_signals: list[str] = []
+    negative_signals: list[str] = []
+
+    if minutes < _SLEEP_MIN_MINUTES:
+        return {
+            "classification": "rejected_sleep",
+            "confirmed": False,
+            "sleepScore": 0,
+            "sleepConfidence": 0.0,
+            "positiveSignals": positive_signals,
+            "negativeSignals": negative_signals,
+            "reasons": [f"duration_below_minimum:{minutes}m"],
+            "summaryReason": "sleep_too_short",
+        }
+
+    score = 3
+    reasons.append(f"duration_minimum_met:{minutes}m")
+    if minutes >= 45:
+        score += 1
+        positive_signals.append("duration_established")
+    if minutes >= 90:
+        score += 1
+        positive_signals.append("duration_strong")
+
+    evidence = health_evidence if isinstance(health_evidence, dict) else {}
+    heart = evidence.get("heartRate") if isinstance(evidence.get("heartRate"), dict) else {}
+    heart_count = _int_or_none(heart.get("sampleCount")) or 0
+    heart_average = _int_or_none(heart.get("average"))
+    heart_minimum = _int_or_none(heart.get("min"))
+    if heart_count >= 2 and heart_average is not None:
+        if heart_average >= _SLEEP_HIGH_HEART_RATE:
+            score -= 3
+            negative_signals.append("heart_rate_high")
+            reasons.append(f"heart_rate_high:avg{heart_average}")
+        elif heart_average >= _SLEEP_ELEVATED_HEART_RATE:
+            score -= 2
+            negative_signals.append("heart_rate_elevated")
+            reasons.append(f"heart_rate_elevated:avg{heart_average}")
+        elif heart_minimum is not None and heart_minimum <= _SLEEP_RESTING_HEART_RATE:
+            score += 1
+            positive_signals.append("sleep_like_heart_rate")
+            reasons.append(f"sleep_like_heart_rate:min{heart_minimum}_avg{heart_average}")
+        else:
+            reasons.append(f"heart_rate_neutral:avg{heart_average}")
+    elif heart_count == 1:
+        reasons.append("heart_rate_single_sample")
+    else:
+        reasons.append("heart_rate_missing")
+
+    steps = evidence.get("steps") if isinstance(evidence.get("steps"), dict) else {}
+    step_count = _int_or_none(steps.get("sampleCount")) or 0
+    step_delta = _int_or_none(steps.get("delta"))
+    if step_count >= 2 and step_delta is not None:
+        if step_delta <= _SLEEP_STEPS_LOW_DELTA:
+            score += 1
+            positive_signals.append("low_steps")
+            reasons.append(f"low_steps_delta:{step_delta}")
+        elif step_delta >= _SLEEP_STEPS_HIGH_DELTA:
+            score -= 3
+            negative_signals.append("steps_high")
+            reasons.append(f"steps_delta_high:{step_delta}")
+        else:
+            score -= 1
+            negative_signals.append("steps_moderate")
+            reasons.append(f"steps_delta_moderate:{step_delta}")
+    elif step_count == 1:
+        reasons.append("steps_single_sample")
+    else:
+        reasons.append("steps_missing")
+
+    accepted = score >= _SLEEP_RELIABILITY_PASS_SCORE
+    return {
+        "classification": "sleep" if accepted else "rejected_sleep",
+        "confirmed": accepted,
+        "sleepScore": score,
+        "sleepConfidence": round(max(0, min(5, score)) / 5.0, 2),
+        "positiveSignals": list(dict.fromkeys(positive_signals)),
+        "negativeSignals": list(dict.fromkeys(negative_signals)),
+        "reasons": reasons,
+        "summaryReason": "confirmed_session" if accepted else "sleep_low_confidence",
+    }
+
+
 def _aggregate_sleep_health_evidence(rows: list[dict]) -> dict:
     heart_count = 0
     heart_min = None
@@ -625,7 +722,6 @@ def _screen_logical_state(data: dict) -> str:
 
 
 def _prepare_screen_bucket_snapshot(previous: dict, patch: dict, latest_doc: dict | None = None, history: list[dict] | None = None) -> dict:
-    _ = latest_doc, history
     prev = previous if isinstance(previous, dict) else {}
     incoming = patch if isinstance(patch, dict) else {}
     merged = dict(prev)
@@ -686,24 +782,25 @@ def _prepare_screen_bucket_snapshot(previous: dict, patch: dict, latest_doc: dic
                 "endAt": end_at,
                 "durationMs": duration_ms,
                 "minutes": max(0, duration_ms // 60000),
-                "classification": "sleep",
-                "confirmed": True,
                 "wakeSource": str(incoming.get("screenWakeSource") or "").strip(),
                 "confirmedAt": event_at,
             }
             health_evidence = _sleep_health_evidence(block, latest_doc or {}, history or [])
             if health_evidence:
                 block["healthEvidence"] = health_evidence
-            summary, summary_reason = _merge_sleep_summary(prev, block)
+            block.update(_assess_sleep_reliability(block, health_evidence))
+            summary = None
+            summary_reason = str(block.get("summaryReason") or "")
+            if block.get("confirmed") is True:
+                summary, summary_reason = _merge_sleep_summary(prev, block)
             block["summaryIncluded"] = bool(summary)
-            if summary:
-                block["summaryReason"] = summary_reason
+            block["summaryReason"] = summary_reason
             merged["lastSleepBlock"] = block
             if summary:
                 merged["sleepSummary"] = summary
             merged.pop("daySleepSummary", None)
             merged["sleepSession"] = {
-                "state": "completed",
+                "state": "completed" if block.get("confirmed") is True else "rejected",
                 "deviceId": block["deviceId"],
                 "startAt": block["startAt"],
                 "endAt": block["endAt"],
