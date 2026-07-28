@@ -2826,6 +2826,9 @@ def chat_completions():
     body = step_inject_amap_mcp_tools(body)
     body = step_inject_websearch_tools(body)
     body = step_inject_reference_note(body)
+    from services.du_longterm_memory import inject_into_static_system as inject_du_longterm_memory
+
+    body = inject_du_longterm_memory(body)
     body = step_inject_du_midterm_memory(body, window_id)
     body = _inject_music_bgm_context(body, reply_channel=prompt_reply_channel)
     body = _inject_listen_invite_protocol(body, reply_channel=prompt_reply_channel)
