@@ -1098,14 +1098,10 @@ def _disable_followup_request() -> bool:
 
 
 def _inject_static_followup_instruction_for_request(body: dict, *, prompt_reply_channel: str) -> dict:
-    """Keep the static followup contract independent from whether this reply may enqueue one."""
+    """Keep the static followup contract independent from request runtime state."""
     if prompt_reply_channel == "xiaoai":
         return body
-    return _inject_followup_instruction(
-        body,
-        is_followup_generation=_is_followup_generation_request(),
-        should_archive=_should_archive_followup_generation_request(),
-    )
+    return _inject_followup_instruction(body)
 
 
 def _allow_tool_only_reply_request() -> bool:

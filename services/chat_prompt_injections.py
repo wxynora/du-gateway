@@ -152,11 +152,7 @@ def inject_voice_call_style_system(body: dict) -> dict:
     return body
 
 
-def inject_followup_instruction(body: dict, *, is_followup_generation: bool, should_archive: bool) -> dict:
-    # 延迟续话本身不再注入 followup 规则，避免模型继续排队形成连环续话。
-    # 但 trigger/弹窗/查屏这类后端唤醒会归档到正常对话，应保持和普通聊天一致的静态 system 前缀。
-    if is_followup_generation and not should_archive:
-        return body
+def inject_followup_instruction(body: dict) -> dict:
     if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
         return body
     instruction = build_followup_system_instruction().strip()
