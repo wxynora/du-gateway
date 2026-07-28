@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from services.image_desc import compress_base64_image_for_anthropic
+from services.qq_group_delivery import QQ_GROUP_CONTENT_MARKER
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import BEIJING_TZ, now_beijing_iso, parse_iso_to_beijing
@@ -255,16 +256,19 @@ def _recent_context_images(rows: list[dict]) -> list[dict]:
     return out
 
 
-def build_group_activity_context_for_wakeup() -> list[dict] | str:
+def build_group_activity_delivery_for_wakeup() -> dict:
     try:
         state = _load_state()
         items = _items_after_last_proactive([x for x in (state.get("items") or []) if isinstance(x, dict)])
     except Exception as e:
         logger.debug("qq_group_activity_build_skip error=%s", e)
-        return ""
+        return {}
     if not items:
-        return ""
+        return {}
     latest = items[-1]
+    group_id = str(latest.get("group_id") or "").strip()
+    if not group_id:
+        return {}
     older = items[:-1][-6:]
     latest_rows = [x for x in (latest.get("context") or [])[-_MAX_CONTEXT_ROWS:] if isinstance(x, dict)]
     image_entries = list(reversed(_recent_context_images(latest_rows)))
@@ -272,6 +276,12 @@ def build_group_activity_context_for_wakeup() -> list[dict] | str:
     lines = [
         "【辛玥近期的QQ群活动】",
         "上次你发信息后，小玥还没有在私聊回复你，但她期间在QQ群里有过发言。这些是近期群聊上下文，区分不同发言人，不要把群友的话当成小玥说的。",
+        (
+            f"如果你想直接去这个QQ群里接话或找小玥，回复正文开头写精确标记 {QQ_GROUP_CONTENT_MARKER}，"
+            "后面紧接你想在群里说的话；网关会去掉标记并把正文发到这段上下文对应的群。"
+            "如果本轮要求用 JSON 返回，就把这个标记写在 message 字段正文的开头。"
+            "想继续私下找她时不要写这个标记，也不要输出群号。"
+        ),
         "",
     ]
     if older:
@@ -304,7 +314,7 @@ def build_group_activity_context_for_wakeup() -> list[dict] | str:
         len(image_entries),
     )
     if not image_entries:
-        return text
+        return {"content": text, "group_id": group_id}
     content = [{"type": "text", "text": text}]
     for entry in image_entries:
         name = "辛玥" if bool(entry.get("is_owner")) else (str(entry.get("sender_name") or "").strip() or "群友")
@@ -321,4 +331,9 @@ def build_group_activity_context_for_wakeup() -> list[dict] | str:
                 "__skip_image_description": True,
             }
         )
-    return content
+    return {"content": content, "group_id": group_id}
+
+
+def build_group_activity_context_for_wakeup() -> list[dict] | str:
+    payload = build_group_activity_delivery_for_wakeup()
+    return payload.get("content") if isinstance(payload, dict) else ""

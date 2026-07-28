@@ -1240,18 +1240,25 @@ async function sendQqReplyToGroup(groupId, reply) {
   const { cleanText: replyClean, tag: stickerTag } = await extractStickerTag(pcmdHandled.visibleText);
   const stickerUrl = await resolveStickerUrl(stickerTag);
   const chunks = splitReplyByNewlineAndLen(replyClean, outChunkChars, maxReplyTotalChars);
+  let sentAny = false;
   for (const part of chunks) {
     await sendQqGroupText(groupId, part);
+    sentAny = true;
     if (sendDelayMs > 0) await sleep(sendDelayMs);
   }
   if (stickerUrl) {
     await sendQqGroupImage(groupId, stickerUrl);
+    sentAny = true;
     if (sendDelayMs > 0) await sleep(sendDelayMs);
   }
   if (voiceText) {
     const audioBytes = await callGatewayTts(voiceText);
-    if (audioBytes?.length) await sendQqGroupRecord(groupId, audioBytes);
+    if (audioBytes?.length) {
+      await sendQqGroupRecord(groupId, audioBytes);
+      sentAny = true;
+    }
   }
+  return sentAny;
 }
 
 async function handleGroupEvent(j) {
@@ -1373,6 +1380,44 @@ async function main() {
     const url = String(req.url || "");
     try {
       if (req.method === "GET" && url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      // 唤醒内容路由端点：群号由网关根据本轮 QQ 群上下文提供，不由模型填写。
+      if (req.method === "POST" && url === "/push/group") {
+        if (!verifyPush(req)) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "unauthorized" }));
+          return;
+        }
+        const body = await readJsonBody(req);
+        const text = String(body?.text || "").trim();
+        const groupId = Number(body?.group_id || 0);
+        if (!text) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "empty_text" }));
+          return;
+        }
+        if (!Number.isSafeInteger(groupId) || groupId <= 0) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "invalid_group_id" }));
+          return;
+        }
+        try {
+          const sent = await sendQqReplyToGroup(groupId, text);
+          if (!sent) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: false, error: "empty_after_parse" }));
+            return;
+          }
+        } catch (e) {
+          console.log(`[qq-onebot] /push/group 发送失败 group=${groupId}：${String(e?.message || e)}`);
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: String(e?.message || e) }));
+          return;
+        }
+        console.log(`[qq-onebot] /push/group 已发送 group=${groupId} preview=${text.slice(0, 80)}`);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
         return;

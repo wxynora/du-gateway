@@ -44,6 +44,7 @@ from services.telegram_bot import (
 from services import wakeup_event_log, wakeup_state
 from services.conversation_followup import (
     FOLLOWUP_TICK_SECONDS,
+    _send_via_qq_group,
     send_post_spring_dream_wakeup,
     send_spring_dream_wakeup,
     tick_conversation_followups,
@@ -61,6 +62,7 @@ from services.proactive_prompt_templates import (
     RANDOM_PROACTIVE_DECISION_SECTION_ID,
     RANDOM_PROACTIVE_DECISION_TEMPLATE,
 )
+from services.qq_group_delivery import qq_group_delivery_target, split_qq_group_delivery_marker
 from services.reply_channel_context import resolve_recent_reply_context
 
 logger = get_logger(__name__)
@@ -145,6 +147,7 @@ class ProactiveDecision:
     channel: str = ""           # 发送入口：wechat / qq；SumiTalk 暂不参与主动消息
     game: str = ""              # action=game 时选择的渡单机游戏 id
     executed_tools: tuple[str, ...] = ()
+    qq_group_id: str = ""       # 仅由网关根据本轮群聊上下文回填；模型不能填写
 
 
 _PROACTIVE_FORUM_TOOL_NAMES = frozenset({"forum_read_feed", "forum_open_thread", "cli"})
@@ -738,6 +741,30 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
     )
 
 
+def _apply_qq_group_delivery_to_decision(decision: ProactiveDecision, response_data: dict | None) -> ProactiveDecision:
+    if not isinstance(decision, ProactiveDecision):
+        return decision
+    marked, cleaned = split_qq_group_delivery_marker(decision.text)
+    if not marked:
+        return decision
+    decision.text = cleaned
+    raw_group_id = str((response_data or {}).get("du_qq_group_delivery_target") or "").strip()
+    try:
+        group_id = str(int(raw_group_id)) if int(raw_group_id) > 0 else ""
+    except Exception:
+        group_id = ""
+    if decision.should_send and cleaned and group_id:
+        decision.qq_group_id = group_id
+    else:
+        logger.warning(
+            "主动决策群聊标记未生效 should_send=%s has_text=%s has_group=%s",
+            decision.should_send,
+            bool(cleaned),
+            bool(group_id),
+        )
+    return decision
+
+
 def _format_proactive_decision_memory_for_system() -> str:
     """供主动决策轮次注入 system，不含闹钟。"""
     items = r2_store.get_proactive_decision_memory_items()
@@ -833,7 +860,7 @@ def _generate_schedule_reply(
     preferred_channel: str = "qq",
     reply_target: str = "",
     wakeup_kind: str = "system_alarm",
-) -> Optional[str]:
+) -> Optional[dict]:
     """用主上下文窗口生成闹钟提醒文案，但不直接发 Telegram。"""
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     model = _get_chat_model()
@@ -874,7 +901,12 @@ def _generate_schedule_reply(
         msg = (((data or {}).get("choices") or [{}])[0] or {}).get("message") or {}
         content = msg.get("content")
         text = content.strip() if isinstance(content, str) else str(content or "").strip()
-        return text or None
+        if not text:
+            return None
+        return {
+            "text": text,
+            "qq_group_id": qq_group_delivery_target(msg),
+        }
     except Exception as e:
         logger.warning("闹钟提醒生成异常: %s", e)
         return None
@@ -982,6 +1014,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         if not text:
             return ProactiveDecision(False, "", "empty_reply", action="empty", du_reason="模型空回复")
         decision = _parse_proactive_model_reply(text, no_token, default_channel=default_channel, channels=channels)
+        decision = _apply_qq_group_delivery_to_decision(decision, data)
         decision.executed_tools = _gateway_executed_tool_names(data)
         if decision.should_send and default_channel:
             decision.channel = default_channel
@@ -1273,7 +1306,7 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             reply_target or "auto",
             channels,
         )
-        reply_text = _generate_schedule_reply(
+        reply_result = _generate_schedule_reply(
             window_id=window_id,
             user_id=uid,
             prompt=reminder_prompt,
@@ -1281,6 +1314,7 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             reply_target=reply_target,
             wakeup_kind=wakeup_kind,
         )
+        reply_text = str((reply_result or {}).get("text") or "").strip()
         if not reply_text:
             logger.warning("闹钟提醒生成空回复 uid=%s item_id=%s", uid, str(it.get("id") or ""))
             wakeup_event_log.record_attempt_error(schedule_event_id, "提醒回复为空")
@@ -1292,18 +1326,30 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             continue
         ok = False
         sent_channel = ""
-        for channel in channels:
-            same_context = channel == generation_channel
-            ok = _dispatch_send(
-                channel,
-                text_to_send,
-                target_user_id=uid,
-                reply_target=reply_target if same_context else "",
-                window_id=window_id if same_context else f"tg_{uid}",
-            )
+        requested_group_id = str((reply_result or {}).get("qq_group_id") or "").strip()
+        if requested_group_id:
+            ok = _send_via_qq_group(text_to_send, requested_group_id, split=True)
             if ok:
-                sent_channel = channel
-                break
+                sent_channel = "qq_group"
+            else:
+                logger.warning(
+                    "闹钟发 QQ 群失败，回退原渠道 group_id=%s channels=%s",
+                    requested_group_id,
+                    channels,
+                )
+        if not ok:
+            for channel in channels:
+                same_context = channel == generation_channel
+                ok = _dispatch_send(
+                    channel,
+                    text_to_send,
+                    target_user_id=uid,
+                    reply_target=reply_target if same_context else "",
+                    window_id=window_id if same_context else f"tg_{uid}",
+                )
+                if ok:
+                    sent_channel = channel
+                    break
         logger.info("闹钟触发结果 uid=%s item_id=%s channel=%s ok=%s", uid, str(it.get("id") or ""), sent_channel or "none", ok)
         if not ok:
             wakeup_event_log.record_attempt_error(schedule_event_id, "提醒消息投递失败")
@@ -1445,6 +1491,35 @@ def _dispatch_send(
             return False
     logger.warning("主动消息发送入口不可用 channel=%s", channel)
     return False
+
+
+def _dispatch_proactive_decision_message(
+    decision: ProactiveDecision,
+    text: str,
+    *,
+    fallback_channel: str,
+    target_user_id: int,
+) -> tuple[bool, str, list[str]]:
+    attempted: list[str] = []
+    group_id = str(decision.qq_group_id or "").strip()
+    if group_id:
+        attempted.append("qq_group")
+        if _send_via_qq_group(text, group_id, split=True):
+            return True, "qq_group", attempted
+        logger.warning(
+            "随机主动消息发 QQ 群失败，回退原渠道 group_id=%s fallback_channel=%s",
+            group_id,
+            fallback_channel,
+        )
+    channel = str(fallback_channel or "").strip()
+    if not channel:
+        return False, "", attempted
+    attempted.append(channel)
+    return (
+        _dispatch_send(channel, text, target_user_id=target_user_id),
+        channel,
+        attempted,
+    )
 
 
 def _run_proactive_surf_action() -> dict:
@@ -1980,6 +2055,7 @@ def _ask_du_after_surf_result(
                 channel=default_channel,
             )
         decision = _parse_proactive_model_reply(text, TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN.strip() or "NO_CONTACT", default_channel=default_channel, channels=channels)
+        decision = _apply_qq_group_delivery_to_decision(decision, data)
         decision.executed_tools = _gateway_executed_tool_names(data)
         if (decision.action or "").strip().lower() == "surf":
             return ProactiveDecision(
@@ -2451,19 +2527,29 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     text_to_send = _sanitize_control_reply_for_delivery(text_to_send).strip()
     default_channel = channels[0] if channels else ""
     channel = _normalize_reply_channel(decision.channel or default_channel, default=default_channel, allowed=channels)
-    out["channel"] = channel
     logger.info(
-        "主动消息准备发送 channel=%s chat_id=%s text_preview=%s",
-        channel, uid, text_to_send[:80] + ("…" if len(text_to_send) > 80 else ""),
+        "主动消息准备发送 channel=%s qq_group=%s chat_id=%s text_preview=%s",
+        channel,
+        str(decision.qq_group_id or "").strip() or "-",
+        uid,
+        text_to_send[:80] + ("…" if len(text_to_send) > 80 else ""),
     )
     if not text_to_send:
         out["skip_reason"] = "empty_after_sanitize"
         return out
-    if not channel:
+    if not channel and not str(decision.qq_group_id or "").strip():
         out["skip_reason"] = "no_delivery_channel"
         return out
-    ok = _dispatch_send(channel, text_to_send, target_user_id=uid)
-    logger.info("主动消息发送结果 channel=%s chat_id=%s sent=%s", channel, uid, ok)
+    ok, actual_channel, attempted_channels = _dispatch_proactive_decision_message(
+        decision,
+        text_to_send,
+        fallback_channel=channel,
+        target_user_id=uid,
+    )
+    channel = actual_channel
+    out["channel"] = channel
+    out["attempted_channels"] = attempted_channels
+    logger.info("主动消息发送结果 channel=%s chat_id=%s sent=%s attempted=%s", channel, uid, ok, attempted_channels)
     out["sent"] = bool(ok)
     out["text_preview"] = (decision.text.strip()[:120] + "…") if len(decision.text.strip()) > 120 else decision.text.strip()
     if ok:

@@ -26,6 +26,7 @@ from services.telegram_bot import (
 )
 from services.hidden_blocks import HiddenBlockParser
 from services import wakeup_event_log
+from services.qq_group_delivery import qq_group_delivery_target
 from services.reply_channel_context import (
     normalize_reply_channel as _shared_normalize_reply_channel,
     resolve_recent_reply_context as _resolve_recent_reply_context,
@@ -291,6 +292,38 @@ def _send_via_qq(text: str, split: bool = True) -> bool:
         return r.status_code == 200 and bool((r.json() or {}).get("ok"))
     except Exception:
         logger.warning("延迟续话发 QQ 失败", exc_info=True)
+        return False
+
+
+def _send_via_qq_group(text: str, group_id: str, split: bool = True) -> bool:
+    try:
+        target_group_id = int(str(group_id or "").strip())
+    except Exception:
+        target_group_id = 0
+    if target_group_id <= 0:
+        logger.warning("唤醒发 QQ 群失败：group_id 无效")
+        return False
+    base_url = str(QQ_PROACTIVE_PUSH_URL or "http://127.0.0.1:8092/push").rstrip("/")
+    url = f"{base_url}/group" if base_url.endswith("/push") else f"{base_url}/push/group"
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    if QQ_PROACTIVE_PUSH_TOKEN:
+        headers["Authorization"] = f"Bearer {QQ_PROACTIVE_PUSH_TOKEN}"
+    try:
+        body = json.dumps(
+            {
+                "text": str(text or ""),
+                "group_id": str(target_group_id),
+                "split": bool(split),
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        r = requests.post(url, headers=headers, data=body, timeout=30)
+        if r.status_code == 200 and bool((r.json() or {}).get("ok")):
+            return True
+        logger.warning("QQ /push/group 失败 group_id=%s status=%s body=%s", target_group_id, r.status_code, (r.text or "")[:200])
+        return False
+    except Exception:
+        logger.warning("QQ /push/group 异常 group_id=%s", target_group_id, exc_info=True)
         return False
 
 
@@ -941,6 +974,45 @@ def _send_wakeup_event(
                 "reply_preview": outbound[:120],
                 "error": "",
             }
+        attempted_channels: list[str] = []
+        requested_group_id = qq_group_delivery_target(msg)
+        if requested_group_id:
+            attempted_channels.append("qq_group")
+            if _send_via_qq_group(outbound, requested_group_id, split=True):
+                archive_ok = True
+                if archive and archive_after_delivery:
+                    archive_ok = _archive_wakeup_after_delivery(
+                        window_id=context_window_id,
+                        request_messages=body.get("messages") or [],
+                        assistant_text=outbound,
+                        wakeup_kind=kind,
+                        reply_channel="qq",
+                    )
+                spring_archive = _archive_generated_spring_dream(
+                    delivery_status="sent",
+                    archive_channel="qq",
+                    archive_target=requested_group_id,
+                    attempted=attempted_channels,
+                )
+                return {
+                    "ok": True,
+                    "channel": "qq_group",
+                    "attempted_channels": attempted_channels,
+                    "preferred_channel": preferred_channel,
+                    "preferred_channel_at": str(preferred_meta.get("at") or ""),
+                    "locked_channel": bool(lock_preferred_channel),
+                    "archive_ok": bool(archive_ok),
+                    "spring_dream_archive_ok": bool(spring_archive.get("ok")) if spring_archive else True,
+                    "spring_dream_archive_id": str(spring_archive.get("id") or "") if spring_archive else "",
+                    "spring_dream_archive_r2_key": str(spring_archive.get("r2_key") or "") if spring_archive else "",
+                    "reply_preview": outbound[:120],
+                    "error": "",
+                }
+            logger.warning(
+                "QQ 群投递失败，回退原唤醒渠道 group_id=%s preferred_channel=%s",
+                requested_group_id,
+                preferred_channel,
+            )
         available_channels: list[str] = []
         if not lock_preferred_channel:
             from services.telegram_proactive import _available_channels
@@ -959,7 +1031,6 @@ def _send_wakeup_event(
                 "spring_dream_archive_id": str(spring_archive.get("id") or "") if spring_archive else "",
                 "spring_dream_archive_r2_key": str(spring_archive.get("r2_key") or "") if spring_archive else "",
             }
-        attempted_channels = []
         for channel in channels:
             attempted_channels.append(channel)
             send_target = preferred_target if channel == preferred_channel else str(target or "").strip()

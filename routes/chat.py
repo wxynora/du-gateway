@@ -104,9 +104,13 @@ from services.watch_action_flow import (
 )
 from services.watch_context import inject_watch_context as _inject_watch_context
 from services.qq_activity_context import (
-    build_group_activity_context_for_wakeup as _build_qq_group_activity_context_for_wakeup,
+    build_group_activity_delivery_for_wakeup as _build_qq_group_activity_delivery_for_wakeup,
     clear_group_activity_context as _clear_qq_group_activity_context,
     record_group_activity as _record_qq_group_activity,
+)
+from services.qq_group_delivery import (
+    apply_qq_group_delivery_marker as _apply_qq_group_delivery_marker,
+    split_qq_group_delivery_marker as _split_qq_group_delivery_marker,
 )
 from services.du_daily import (
     build_chat_trigger as build_du_daily_trigger,
@@ -217,6 +221,7 @@ logger = get_logger(__name__)
 sumitalk_logger = get_logger("sumitalk")
 bp = Blueprint("chat", __name__)
 
+_QQ_GROUP_DELIVERY_TARGET_BODY_KEY = "__du_qq_group_delivery_target"
 _SUMITALK_STREAM_ARCHIVE_QUEUE: queue.Queue = queue.Queue()
 _SUMITALK_STREAM_ARCHIVE_THREAD: threading.Thread | None = None
 _SUMITALK_STREAM_ARCHIVE_THREAD_LOCK = threading.Lock()
@@ -928,7 +933,8 @@ def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:
     reason = _clip_archive_text(str(decision.get("reason") or decision.get("du_reason") or "").strip(), 180)
     if reason:
         lines.append(f"理由：{reason}")
-    message = _clip_archive_text(str(decision.get("message") or "").strip(), 160)
+    _group_marked, archive_message = _split_qq_group_delivery_marker(str(decision.get("message") or "").strip())
+    message = _clip_archive_text(archive_message, 160)
     if message:
         lines.append(f"要发的话：{message}")
     channel = _clip_archive_text(str(decision.get("channel") or "").strip(), 40)
@@ -1141,7 +1147,9 @@ def _qq_group_activity_context_allowed(headers) -> bool:
 def _inject_qq_group_activity_context(body: dict) -> dict:
     if _is_du_daily_maintenance_request() or not _qq_group_activity_context_allowed(request.headers):
         return body
-    group_context = _build_qq_group_activity_context_for_wakeup()
+    delivery = _build_qq_group_activity_delivery_for_wakeup()
+    group_context = delivery.get("content") if isinstance(delivery, dict) else ""
+    group_id = str((delivery or {}).get("group_id") or "").strip() if isinstance(delivery, dict) else ""
     if not group_context:
         return body
     if isinstance(group_context, list):
@@ -1178,10 +1186,13 @@ def _inject_qq_group_activity_context(body: dict) -> dict:
             msg["content"] = (str(original or "").rstrip() + "\n\n" + context_text).strip()
         messages[target_idx] = msg
     body["messages"] = messages
+    if group_id:
+        body[_QQ_GROUP_DELIVERY_TARGET_BODY_KEY] = group_id
     logger.info(
-        "qq_group_activity_context_appended_to_user chars=%s images=%s",
+        "qq_group_activity_context_appended_to_user chars=%s images=%s group_id=%s",
         len(context_text),
         sum(1 for part in context_parts if part.get("type") == "image_url"),
+        group_id,
     )
     return body
 
@@ -2736,6 +2747,7 @@ def chat_completions():
 
     # QQ 群活动图片先进入消息体，随后统一走 base64 压缩；该类上下文图不生成图片描述。
     body = _inject_qq_group_activity_context(body)
+    qq_group_delivery_target = str(body.pop(_QQ_GROUP_DELIVERY_TARGET_BODY_KEY, "") or "").strip()
     # 走完整管道（清洗、注入记忆/总结、转发、存档）
     body = step_clean_images_and_save_desc(body, window_id)
     body = step_clean_for_forward(body)
@@ -3240,6 +3252,27 @@ def chat_completions():
                         (resp_json.get("choices") or [{}])[0]["message"] = response_msg
             except Exception:
                 logger.warning("合并 TG thinking 失败 window_id=%s", window_id, exc_info=True)
+        if _is_gateway_wakeup_request():
+            try:
+                response_msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+                if isinstance(response_msg, dict) and _apply_qq_group_delivery_marker(
+                    response_msg,
+                    group_id=qq_group_delivery_target,
+                    enabled=bool(qq_group_delivery_target),
+                ):
+                    (resp_json.get("choices") or [{}])[0]["message"] = response_msg
+                    logger.info(
+                        "qq_group_delivery_marker_consumed window_id=%s group_id=%s",
+                        window_id,
+                        qq_group_delivery_target,
+                    )
+            except Exception:
+                logger.warning(
+                    "处理 QQ 群投递标记失败 window_id=%s group_id=%s",
+                    window_id,
+                    qq_group_delivery_target,
+                    exc_info=True,
+                )
     if resp_json and (resp_json or {}).get("choices"):
         msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
         content_text = get_assistant_content_text(msg)
@@ -3359,6 +3392,8 @@ def chat_completions():
         logger.info("R2 未存档：上游无 choices 或响应为空")
     if _is_proactive_decision_request() and isinstance(resp_json, dict):
         resp_json["du_gateway_executed_tools"] = _executed_tool_names_from_messages(body.get("messages") or [])
+        if qq_group_delivery_target:
+            resp_json["du_qq_group_delivery_target"] = qq_group_delivery_target
 
     if is_sumitalk_request:
         msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
