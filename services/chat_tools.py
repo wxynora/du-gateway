@@ -534,6 +534,7 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
         "schedule_delete",
         "search_memory",
         "close_app",
+        "open_app",
         "create_system_alarm",
         "create_calendar_event",
         "show_choice_dialog",
