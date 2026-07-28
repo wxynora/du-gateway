@@ -13,6 +13,8 @@ R2_KEY_DU_DAILY_STATE = "global/du_daily_state.json"
 R2_KEY_DU_DAILY_ARCHIVE = "global/du_daily_archive.json"
 R2_KEY_DU_MIDTERM_MEMORY = "global/du_midterm_memory.json"
 R2_KEY_DU_LONGTERM_MEMORY = "global/du_longterm_memory/latest.json"
+R2_PREFIX_DU_LONGTERM_INCREMENTS = "global/du_longterm_memory/increments"
+R2_PREFIX_DU_LONGTERM_VERSIONS = "global/du_longterm_memory/versions"
 R2_KEY_XINYUE_PORTRAIT_CANDIDATES = "portrait_memory/xinyue_candidates.json"
 R2_KEY_DU_PORTRAIT_CANDIDATES = "portrait_memory/du_candidates.json"
 R2_KEY_INTERACTION_CANDIDATES = "portrait_memory/interaction_candidates.json"
@@ -260,6 +262,48 @@ def save_du_longterm_memory(data: dict) -> bool:
             return True
         except Exception as e:
             logger.error("save_du_longterm_memory 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def _du_longterm_increment_key(segment_id: str) -> str:
+    return f"{R2_PREFIX_DU_LONGTERM_INCREMENTS}/{str(segment_id or '').strip()}.json"
+
+
+def get_du_longterm_increment(segment_id: str) -> Optional[dict]:
+    sid = str(segment_id or "").strip()
+    client = _s3_client()
+    if not client or not sid:
+        return None
+    data = _read_json(client, _du_longterm_increment_key(sid))
+    return data if isinstance(data, dict) else None
+
+
+def save_du_longterm_increment(segment_id: str, data: dict) -> bool:
+    sid = str(segment_id or "").strip()
+    client = _s3_client()
+    if not client or not sid or not isinstance(data, dict):
+        return False
+    with _du_state_write_lock:
+        try:
+            _write_json(client, _du_longterm_increment_key(sid), data)
+            return True
+        except Exception as e:
+            logger.error("save_du_longterm_increment 失败 segment_id=%s error=%s", sid, e, exc_info=True)
+            return False
+
+
+def save_du_longterm_version(version_id: str, data: dict) -> bool:
+    vid = str(version_id or "").strip()
+    client = _s3_client()
+    if not client or not vid or not isinstance(data, dict):
+        return False
+    key = f"{R2_PREFIX_DU_LONGTERM_VERSIONS}/{vid}.json"
+    with _du_state_write_lock:
+        try:
+            _write_json(client, key, data)
+            return True
+        except Exception as e:
+            logger.error("save_du_longterm_version 失败 version_id=%s error=%s", vid, e, exc_info=True)
             return False
 
 

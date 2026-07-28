@@ -481,7 +481,21 @@ def generate_midterm_memory(*, save: bool = False, force: bool = False) -> dict:
         "updated_at": now,
     }
     ok = du_state_store.save_du_midterm_memory(payload)
-    return {"ok": bool(ok), "saved": bool(ok), "latest": latest, **({} if ok else {"error": "save_failed"})}
+    longterm_refresh_started = False
+    if ok:
+        try:
+            from services.du_longterm_memory import refresh_if_due_background as refresh_longterm_if_due
+
+            longterm_refresh_started = refresh_longterm_if_due(midterm=latest)
+        except Exception as e:
+            logger.warning("du_longterm 自动更新触发失败 error=%s", e, exc_info=True)
+    return {
+        "ok": bool(ok),
+        "saved": bool(ok),
+        "latest": latest,
+        "longterm_refresh_started": bool(longterm_refresh_started),
+        **({} if ok else {"error": "save_failed"}),
+    }
 
 
 def refresh_if_due_background() -> bool:
