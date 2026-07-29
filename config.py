@@ -435,8 +435,9 @@ FAILED_RESPONSE_ERROR_KEYWORDS = [k.strip() for k in _FAILED_KEYWORDS_STR.split(
 
 # 动态层注入：最多取 N 条记忆注入（0=不注入不调检索；默认 5）
 DYNAMIC_MEMORY_TOP_N = int(os.environ.get("DYNAMIC_MEMORY_TOP_N", "5"))
-# 动态层：记忆有效天数；普通 tag 默认 10 天，卧室 tag 单独更短，避免亲密片段堆成流水账。
+# 旧普通有效期值仅保留给兼容读取；召回链路不再使用它过滤，普通条目只要未物理淘汰就参与召回。
 DYNAMIC_MEMORY_DAYS_VALID = 10
+# 卧室 tag 的短有效期只用于物理淘汰；仍在动态层中的条目不再被召回链路二次过滤。
 DYNAMIC_MEMORY_BEDROOM_DAYS_VALID = int(os.environ.get("DYNAMIC_MEMORY_BEDROOM_DAYS_VALID", "3"))
 # 动态层边缘落盘淘汰（不碰 core_cache）：同时满足「综合权重 ≤ 阈值」且「距上次提及 ≥ N 天」则从 current.json 与向量索引删除。关：DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED=0
 _marg_prune_en = os.environ.get("DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED", "1").strip().lower()

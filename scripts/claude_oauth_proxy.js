@@ -612,6 +612,25 @@ function contentToText(content) {
   return String(content);
 }
 
+function splitGatewayRecentSummaryContent(content) {
+  const text = contentToText(content);
+  const prefix = "\n\n【近期记忆（最近）】\n";
+  const closing = "\n【以上为最近记忆】";
+  if (!text.startsWith(prefix) || !text.endsWith(closing)) return null;
+
+  const recentText = text.slice(prefix.length, -closing.length);
+  const paragraphs = recentText.split("\n\n");
+  if (!paragraphs.length || paragraphs.some((part) => !part)) return null;
+
+  const blocks = paragraphs.map((part, index) => ({
+    type: "text",
+    text: `${index === 0 ? prefix : "\n\n"}${part}`,
+    [SUMMARY_RECENT_SYSTEM_MARKER]: true,
+  }));
+  blocks.push({ type: "text", text: closing });
+  return blocks;
+}
+
 function inferImageMimeType(url, contentType) {
   const cleanType = String(contentType || "").split(";")[0].trim().toLowerCase();
   if (SUPPORTED_IMAGE_MIME_TYPES.has(cleanType)) return cleanType;
@@ -796,6 +815,13 @@ async function openaiToAnthropic(oai) {
 
   for (const msg of oai.messages || []) {
     if (msg.role === "system") {
+      const recentSummaryBlocks = msg[SUMMARY_RECENT_SYSTEM_MARKER]
+        ? splitGatewayRecentSummaryContent(msg.content)
+        : null;
+      if (recentSummaryBlocks) {
+        systemBlocks.push(...recentSummaryBlocks);
+        continue;
+      }
       const text = contentToText(msg.content);
       if (text) {
         const block = { type: "text", text };
@@ -1311,6 +1337,12 @@ function findCacheableSystemBefore(systemBlocks, endIdx) {
 }
 
 function findFinalCacheableSystemAfter(systemBlocks, startIdx) {
+  for (let i = systemBlocks.length - 1; i > startIdx; i -= 1) {
+    const item = systemBlocks[i];
+    if (item && typeof item === "object" && item[SUMMARY_RECENT_SYSTEM_MARKER]) {
+      return item;
+    }
+  }
   for (let i = systemBlocks.length - 1; i > startIdx; i -= 1) {
     const item = systemBlocks[i];
     if (!item || typeof item !== "object") continue;
