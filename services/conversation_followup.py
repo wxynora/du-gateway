@@ -159,6 +159,45 @@ def _post_spring_dream_prompt_override_for_trigger(wakeup_kind: str, created_at:
     return prepared
 
 
+def _schedule_sumitalk_proactive_voice_actions(
+    device_id: str,
+    message_id: str,
+    content: str,
+) -> tuple[str, ...]:
+    try:
+        from services.sumitalk_voice_sidecar import (
+            extract_complete_sumitalk_voices,
+            schedule_sumitalk_proactive_voice_sidecar,
+        )
+
+        task_ids: list[str] = []
+        for voice in extract_complete_sumitalk_voices(content):
+            task_id = schedule_sumitalk_proactive_voice_sidecar(
+                device_id=device_id,
+                message_id=message_id,
+                voice_index=voice.voice_index,
+                transcript=voice.transcript,
+            )
+            if task_id:
+                task_ids.append(task_id)
+            else:
+                sumitalk_logger.error(
+                    "followup_voice_schedule_failed "
+                    "device_id=%s message_id=%s voice_index=%s",
+                    device_id,
+                    message_id,
+                    voice.voice_index,
+                )
+        return tuple(task_ids)
+    except Exception:
+        sumitalk_logger.exception(
+            "followup_voice_schedule_failed device_id=%s message_id=%s",
+            device_id,
+            message_id,
+        )
+        return ()
+
+
 def _append_sumitalk_assistant_message_to_device(
     device_id: str,
     text: str,
@@ -252,6 +291,18 @@ def _append_sumitalk_assistant_message_to_device(
                 action_error or "enqueue_failed",
             )
             return False
+        voice_task_ids = _schedule_sumitalk_proactive_voice_actions(
+            did,
+            message_id,
+            content,
+        )
+        if voice_task_ids:
+            sumitalk_logger.info(
+                "followup_voice_scheduled device_id=%s message_id=%s voices=%s",
+                did,
+                message_id,
+                len(voice_task_ids),
+            )
         try:
             from services.realtime_publish import publish_assistant_message
 

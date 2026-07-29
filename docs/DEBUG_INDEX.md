@@ -105,9 +105,9 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 - Worker 事件先经 `realtime_publish -> realtime_app -> SumiTalkRunEventBroker` 到活跃 SSE；独立 FIFO 落库队列随后写 `sumitalk_chat_run_events`。SQLite 只用于首次连接、断线重连、sequence 缺口和 realtime 不可用时的 40ms 兜底。
 - SumiTalk 的 `assistant_final` 不等待 R2、摘要或动态记忆；这些工作进入单一 FIFO 后台归档队列，保证多轮顺序。其他入口的归档时序不变。
 - SumiTalk 拉黑模式状态与选中文案由 `storage/sumitalk_block_mode_store.py` 管理；`PUT /miniapp-api/sumitalk-block-mode` 将 `prompt_version_id/prompt_version_name/prompt_text` 与开关状态一次落盘且不裁切文案，旧状态缺字段时迁移到原 `BLOCK_NOTICE_TEXT` 默认版本。首次开启通知、成功投递的 SumiTalk 主动唤醒、定时续话及每段最多三次自动回复都在发送时读取同一份当前选中文案；独立归档路径仍只在归档成功后追加，消息继续使用 `role=user`、`skip_memory_summary` 与 `skip_dynamic_memory`。
-- 仅流式 SumiTalk 聊天会在 queue 入口跨 delta 识别并剥离 `<voice>...</voice>`；独立 sidecar 用 `job_id + source_part_id + voice_index` 在同一队列 SQLite 持久幂等，直接复用 MiniMax TTS、上传现有聊天媒体，并允许 `assistant_audio_ready` / `assistant_audio_failed` 晚于 `assistant_final`。`/voice-call/*`、通话分段 TTS、取消和播放状态不共用这套任务。
+- 流式 SumiTalk 聊天在 queue 入口跨 delta 识别并剥离 `<voice>...</voice>`；SumiTalk 主动唤醒在唯一 `deliver_chat_message` 入队成功后提取完整语音标签。两者复用同一 SQLite 持久 sidecar 和 MiniMax TTS/聊天媒体上传：流式任务继续发送允许晚于 `assistant_final` 的 `assistant_audio_ready` / `assistant_audio_failed`，主动任务则以 `message_id + voice_index` 生成稳定 task/part 并排队 App 已支持的 `deliver_chat_audio`，文字与音频 action 均保留 pending/done 幂等，App 重复收到同一 part 也不会再次下载或追加。App 轮询会恢复未完成或未投递的主动 sidecar；纯文字主动消息、QQ/TG、`/voice-call/*`、通话分段 TTS、取消和播放状态不受影响。
 - 一起看聊天仍走同一 SumiTalk job。请求顶层附带 `watch_session_id` 和完整 `watch_snapshot` 后，`services/watch_context.py` 按消息发送时 playhead 注入当前剧情、当会话已播缓存的相关片段和可配置的回复抵达窗口，并明确要求“小玥正在和你看同一段，不需要和她照搬复述你看到的剧情内容以及逐项描述剧情画面。”；当前相关片段召回只在本会话、本 timeline epoch、发送位置前已完整播放的 `watch_plot_chunks` 内按最近三条用户消息做会话内 BM25/IDF 排序，剧情/对白、标签、人物字段依次降权，人物名作为全片高频词自动降权，只命中人物名时最多取一段，有事件词命中时剔除仅靠同名进入的候选，最多注入四段且不进入网关长期记忆。当前只持久化剧情片段，不单独保存每轮召回 query、候选分数或最终命中项。`knowledge_mode` 只在网关内部决定是否附加截止快照的剧情背景，不作为标签传给主模型。回复抵达位置前的少量剧情可用于当轮正常回复；动作区只提供预计回复抵达后仍未结束、且位于快照后两分钟内的可靠片段，弹幕示例从这些片段选择并明确目标是实际显示时间，不再固定使用发送位置加 30 秒。`services/watch_action_flow.py` 在流式与非流式链路剥离短标记并发出 `watch_danmaku_action`；旧长 JSON 块只保留解析兼容，无效时间标记和既有时间窗口拒绝会记录 reason，但不增加新的动作拒绝条件。事件不使用主动消息 channel，seek 后旧 epoch 动作失效。
-- 事件契约和定向验证入口见 `docs/SumiTalk原生安卓后端流式接入.md`、`scripts/test_sumitalk_native_stream_backend.py` 与 `scripts/test_sumitalk_stream_voice_sidecar.py`。
+- 事件契约和定向验证入口见 `docs/SumiTalk原生安卓后端流式接入.md`、`scripts/test_sumitalk_native_stream_backend.py`、`scripts/test_sumitalk_stream_voice_sidecar.py` 与 `scripts/test_sumitalk_proactive_voice_delivery.py`。
 
 ### 4.2 Telegram
 
@@ -139,6 +139,8 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 - 微信 iLink 直连说明：`docs/wechat_ilink_direct.md`
 
 QQ 群上下文按发言人区分，不把群友内容当成小玥说的；入口消息仍进入统一聊天主链路。群聊上下文只允许后端随机主动决策、半小时硬触发、日历事件和系统闹钟使用；小家/身体/道具、延迟续话、屏幕检查、日记、游戏等其他后端事件与普通聊天均不注入。群聊上下文最多携带最近 5 张图片：OneBot 入口把 QQ 临时图片 URL 转成 base64，网关继续复用统一图片压缩；每张图片保留原群消息的发送者与时间，并在 `user` 多模态内容中紧邻图片前标注，避免把群友图片误认为小玥发送；不为这类上下文图生成图片描述；单张图片获取或压缩失败时只把该图回退为 `【图片】`，不影响其他图片和本轮唤醒。上下文存在时会同时告知渡可在回复正文开头使用 `[QQ_GROUP]`；随机主动决策的 JSON 把标记写在 `message` 字段开头。网关只从该上下文保存的来源群号生成后端投递元数据，模型不能选择群号；标记在归档和投递前剥离，经 OneBot connector `/push/group` 发回来源群，失败则回退原唤醒渠道。
+
+QQ 群 @ 入站黑名单位于 `connectors/qq_onebot/src/group_mention_blacklist.js`，由 `QQ_GROUP_MENTION_BLACKLIST` 配置，未配置时默认为 `3299553137,190689686`。命中成员 @ 本机器人时，`handleGroupEvent()` 在正文/语音/引用解析、群活动上报、群历史记录和网关调用之前直接返回，不调用模型、不发送回复；这些成员未 @ 的普通群消息及其他成员、QQ 私聊保持原行为。
 
 ### 4.4 回复通道连续性
 

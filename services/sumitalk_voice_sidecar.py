@@ -25,6 +25,7 @@ logger = logging.getLogger("sumitalk")
 _OPEN_TAG = "<voice>"
 _CLOSE_TAG = "</voice>"
 _COMPLETE_VOICE_RE = re.compile(r"<voice>[\s\S]*?</voice>", flags=re.IGNORECASE)
+_COMPLETE_VOICE_CAPTURE_RE = re.compile(r"<voice>([\s\S]*?)</voice>", flags=re.IGNORECASE)
 _VOICE_SIDECAR_WORKERS = max(1, int(os.environ.get("SUMITALK_VOICE_SIDECAR_WORKERS", "2") or "2"))
 _VOICE_SIDECAR_STALE_SECONDS = max(
     60.0,
@@ -36,6 +37,10 @@ _VOICE_EXECUTOR = ThreadPoolExecutor(
 )
 _STREAM_LOCK = threading.Lock()
 _STREAMS: dict[tuple[str, str], "_VoiceStreamParser"] = {}
+_SQLITE_JOURNAL_LOCK = threading.Lock()
+_SCHEMA_LOCK = threading.Lock()
+_PROACTIVE_RESUME_LOCK = threading.Lock()
+_PROACTIVE_LAST_RESUME_MONOTONIC = 0.0
 
 
 @dataclass(frozen=True)
@@ -139,6 +144,15 @@ def strip_complete_sumitalk_voice_tags(text: str) -> str:
     return _COMPLETE_VOICE_RE.sub("", str(text or ""))
 
 
+def extract_complete_sumitalk_voices(text: str) -> tuple[CompletedVoice, ...]:
+    completed: list[CompletedVoice] = []
+    for voice_index, match in enumerate(_COMPLETE_VOICE_CAPTURE_RE.finditer(str(text or ""))):
+        transcript = str(match.group(1) or "").strip()
+        if transcript:
+            completed.append(CompletedVoice(voice_index=voice_index, transcript=transcript))
+    return tuple(completed)
+
+
 def _connect() -> sqlite3.Connection:
     path_value = SUMITALK_CHAT_QUEUE_DB
     try:
@@ -152,11 +166,21 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), timeout=30, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=30000")
-    conn.execute("PRAGMA journal_mode=WAL")
+    current_journal = str(conn.execute("PRAGMA journal_mode").fetchone()[0] or "").lower()
+    if current_journal != "wal":
+        with _SQLITE_JOURNAL_LOCK:
+            current_journal = str(conn.execute("PRAGMA journal_mode").fetchone()[0] or "").lower()
+            if current_journal != "wal":
+                conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
 def _ensure_schema() -> None:
+    with _SCHEMA_LOCK:
+        _ensure_schema_locked()
+
+
+def _ensure_schema_locked() -> None:
     with _connect() as conn:
         conn.executescript(
             """
@@ -181,6 +205,9 @@ def _ensure_schema() -> None:
                 event_seq INTEGER,
                 event_lease_token TEXT,
                 event_locked_at REAL,
+                delivery_kind TEXT NOT NULL DEFAULT 'stream',
+                target_device_id TEXT,
+                target_message_id TEXT,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 PRIMARY KEY(job_id, source_part_id, voice_index)
@@ -189,6 +216,31 @@ def _ensure_schema() -> None:
                 ON sumitalk_chat_voice_sidecars(job_id, status, event_emitted);
             """
         )
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            columns = {
+                str(row["name"] or "")
+                for row in conn.execute(
+                    "PRAGMA table_info(sumitalk_chat_voice_sidecars)"
+                ).fetchall()
+            }
+            if "delivery_kind" not in columns:
+                conn.execute(
+                    "ALTER TABLE sumitalk_chat_voice_sidecars "
+                    "ADD COLUMN delivery_kind TEXT NOT NULL DEFAULT 'stream'"
+                )
+            if "target_device_id" not in columns:
+                conn.execute(
+                    "ALTER TABLE sumitalk_chat_voice_sidecars ADD COLUMN target_device_id TEXT"
+                )
+            if "target_message_id" not in columns:
+                conn.execute(
+                    "ALTER TABLE sumitalk_chat_voice_sidecars ADD COLUMN target_message_id TEXT"
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
 
 def _safe_source_part_id(part_id: str) -> str:
@@ -219,11 +271,69 @@ def schedule_sumitalk_voice_sidecar(
     voice_index: int,
     transcript: str,
 ) -> str:
+    return _schedule_voice_sidecar(
+        job_id=job_id,
+        part_id=part_id,
+        voice_index=voice_index,
+        transcript=transcript,
+        delivery_kind="stream",
+    )
+
+
+def schedule_sumitalk_proactive_voice_sidecar(
+    device_id: str,
+    message_id: str,
+    voice_index: int,
+    transcript: str,
+) -> str:
+    clean_device_id = str(device_id or "").strip()
+    clean_message_id = str(message_id or "").strip()
+    clean_transcript = str(transcript or "").strip()
+    if not clean_device_id or not clean_message_id or not clean_transcript:
+        return ""
+    synthetic_job_id = hashlib.sha256(
+        f"proactive\0{clean_device_id}\0{clean_message_id}".encode(
+            "utf-8",
+            errors="replace",
+        )
+    ).hexdigest()[:32]
+    return _schedule_voice_sidecar(
+        job_id=synthetic_job_id,
+        part_id=f"proactive-text-{clean_message_id}",
+        voice_index=voice_index,
+        transcript=clean_transcript,
+        delivery_kind="proactive_action",
+        target_device_id=clean_device_id,
+        target_message_id=clean_message_id,
+    )
+
+
+def _schedule_voice_sidecar(
+    *,
+    job_id: str,
+    part_id: str,
+    voice_index: int,
+    transcript: str,
+    delivery_kind: str,
+    target_device_id: str = "",
+    target_message_id: str = "",
+) -> str:
     clean_job_id = str(job_id or "").strip()
     source_part_id = _safe_source_part_id(part_id)
     clean_transcript = str(transcript or "").strip()
     index = max(0, int(voice_index or 0))
-    if not re.fullmatch(r"[a-f0-9]{32}", clean_job_id) or not clean_transcript:
+    clean_delivery_kind = str(delivery_kind or "stream").strip()
+    clean_device_id = str(target_device_id or "").strip()
+    clean_message_id = str(target_message_id or "").strip()
+    if (
+        not re.fullmatch(r"[a-f0-9]{32}", clean_job_id)
+        or not clean_transcript
+        or clean_delivery_kind not in {"stream", "proactive_action"}
+        or (
+            clean_delivery_kind == "proactive_action"
+            and (not clean_device_id or not clean_message_id)
+        )
+    ):
         return ""
     task_id = _voice_task_id(clean_job_id, source_part_id, index)
     now = time.time()
@@ -238,8 +348,9 @@ def schedule_sumitalk_voice_sidecar(
                 """
                 INSERT OR IGNORE INTO sumitalk_chat_voice_sidecars
                     (task_id, job_id, source_part_id, voice_index, event_part_id,
-                     transcript, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                     transcript, status, delivery_kind, target_device_id,
+                     target_message_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
                 """,
                 (
                     task_id,
@@ -248,12 +359,20 @@ def schedule_sumitalk_voice_sidecar(
                     index,
                     _event_part_id(source_part_id, index),
                     clean_transcript,
+                    clean_delivery_kind,
+                    clean_device_id,
+                    clean_message_id,
                     now,
                     now,
                 ),
             )
             row = conn.execute(
-                "SELECT transcript, status, event_emitted FROM sumitalk_chat_voice_sidecars WHERE task_id=?",
+                """
+                SELECT transcript, status, event_emitted, delivery_kind,
+                       target_device_id, target_message_id
+                FROM sumitalk_chat_voice_sidecars
+                WHERE task_id=?
+                """,
                 (task_id,),
             ).fetchone()
             if row is not None and str(row["transcript"] or "") != clean_transcript:
@@ -263,6 +382,19 @@ def schedule_sumitalk_voice_sidecar(
                     clean_job_id,
                     source_part_id,
                     index,
+                )
+            if row is not None and (
+                str(row["delivery_kind"] or "stream") != clean_delivery_kind
+                or str(row["target_device_id"] or "") != clean_device_id
+                or str(row["target_message_id"] or "") != clean_message_id
+            ):
+                logger.warning(
+                    "[SumiTalk] voice_sidecar_target_conflict "
+                    "task_id=%s delivery_kind=%s device_id=%s message_id=%s",
+                    task_id,
+                    clean_delivery_kind,
+                    clean_device_id,
+                    clean_message_id,
                 )
             status = str((row or {})["status"] or "") if row is not None else ""
             if status in {"ready", "failed"}:
@@ -562,11 +694,88 @@ def _release_event_dispatch(task_id: str, lease_token: str) -> None:
         )
 
 
+def _complete_event_dispatch(task_id: str, lease_token: str) -> bool:
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE sumitalk_chat_voice_sidecars
+            SET event_emitted=1, event_lease_token=NULL, event_locked_at=NULL, updated_at=?
+            WHERE task_id=? AND event_emitted=0 AND event_lease_token=?
+            """,
+            (time.time(), task_id, lease_token),
+        )
+    return cursor.rowcount == 1
+
+
+def _dispatch_proactive_sidecar_action(row: sqlite3.Row, lease_token: str) -> None:
+    task_id = str(row["task_id"] or "")
+    device_id = str(row["target_device_id"] or "").strip()
+    message_id = str(row["target_message_id"] or "").strip()
+    if str(row["status"] or "") == "failed":
+        if _complete_event_dispatch(task_id, lease_token):
+            logger.warning(
+                "[SumiTalk] proactive_voice_sidecar_failed "
+                "task_id=%s device_id=%s message_id=%s error=%s",
+                task_id,
+                device_id,
+                message_id,
+                str(row["error"] or ""),
+            )
+        return
+    try:
+        from storage import r2_store
+
+        part_id = str(row["event_part_id"] or "").strip()
+        action, action_error = r2_store.append_app_action(
+            "deliver_chat_audio",
+            {
+                "message_id": message_id,
+                "part_id": part_id,
+                "sidecar_task_id": task_id,
+                "media_id": str(row["media_id"] or ""),
+                "remote_url": str(row["audio_url"] or ""),
+                "mime": str(row["mime"] or "audio/mpeg"),
+                "duration_millis": int(row["duration_ms"] or 0),
+                "transcript": str(row["transcript"] or ""),
+                "voice_index": int(row["voice_index"] or 0),
+            },
+            device_id=device_id,
+            expires_in_sec=30 * 24 * 60 * 60,
+            source="proactive_followup",
+            idempotency_key=f"chat-audio:{device_id}:{message_id}:{part_id}",
+        )
+        if action_error or not action:
+            raise RuntimeError(action_error or "enqueue_failed")
+        if not _complete_event_dispatch(task_id, lease_token):
+            return
+        logger.info(
+            "[SumiTalk] proactive_voice_action_enqueued "
+            "task_id=%s device_id=%s message_id=%s part_id=%s duplicate=%s",
+            task_id,
+            device_id,
+            message_id,
+            part_id,
+            bool(action.get("duplicate")),
+        )
+    except Exception:
+        _release_event_dispatch(task_id, lease_token)
+        logger.exception(
+            "[SumiTalk] proactive_voice_action_failed "
+            "task_id=%s device_id=%s message_id=%s",
+            task_id,
+            device_id,
+            message_id,
+        )
+
+
 def _dispatch_sidecar_event(task_id: str) -> None:
     row = _claim_event_dispatch(task_id)
     if row is None:
         return
     lease_token = str(row["event_lease_token"] or "")
+    if str(row["delivery_kind"] or "stream") == "proactive_action":
+        _dispatch_proactive_sidecar_action(row, lease_token)
+        return
     job_id = str(row["job_id"] or "")
     if not _job_is_terminal(job_id):
         _release_event_dispatch(task_id, lease_token)
@@ -656,6 +865,45 @@ def _dispatch_completed_sidecars(job_id: str) -> None:
         ).fetchall()
     for row in rows:
         _dispatch_sidecar_event(str(row["task_id"] or ""))
+
+
+def resume_sumitalk_proactive_voice_sidecars() -> None:
+    global _PROACTIVE_LAST_RESUME_MONOTONIC
+    with _PROACTIVE_RESUME_LOCK:
+        monotonic_now = time.monotonic()
+        if monotonic_now - _PROACTIVE_LAST_RESUME_MONOTONIC < 5.0:
+            return
+        _PROACTIVE_LAST_RESUME_MONOTONIC = monotonic_now
+    _ensure_schema()
+    now = time.time()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM sumitalk_chat_voice_sidecars
+            WHERE delivery_kind='proactive_action' AND (
+                status='pending'
+                OR (status='processing' AND COALESCE(locked_at, 0)<?)
+                OR (status IN ('ready', 'failed') AND event_emitted=0)
+            )
+            ORDER BY created_at ASC, voice_index ASC
+            """,
+            (now - _VOICE_SIDECAR_STALE_SECONDS,),
+        ).fetchall()
+    for row in rows:
+        task_id = str(row["task_id"] or "")
+        if str(row["status"] or "") in {"ready", "failed"}:
+            _submit(_dispatch_sidecar_event, task_id)
+            continue
+        _schedule_voice_sidecar(
+            job_id=str(row["job_id"] or ""),
+            part_id=str(row["source_part_id"] or ""),
+            voice_index=int(row["voice_index"] or 0),
+            transcript=str(row["transcript"] or ""),
+            delivery_kind="proactive_action",
+            target_device_id=str(row["target_device_id"] or ""),
+            target_message_id=str(row["target_message_id"] or ""),
+        )
 
 
 def resume_sumitalk_voice_sidecars(job_id: str) -> None:

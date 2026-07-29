@@ -5,6 +5,10 @@ import process from "node:process";
 import { Blob } from "node:buffer";
 import dotenv from "dotenv";
 import { fileURLToPath } from "node:url";
+import {
+  parseQqGroupMentionBlacklist,
+  shouldIgnoreQqGroupMention,
+} from "./group_mention_blacklist.js";
 
 dotenv.config();
 
@@ -841,6 +845,7 @@ const ownerQqUserId = Number(envStr("QQ_OWNER_USER_ID", "1336091712") || 0);
 const ownerQqDisplayName = envStr("QQ_OWNER_DISPLAY_NAME", "辛玥");
 const reportGroupActivityEnabled = envBool("QQ_GROUP_ACTIVITY_REPORT_ENABLED", true);
 const groupActivityContextLimit = Math.max(1, envInt("QQ_GROUP_ACTIVITY_CONTEXT_MESSAGES", 20));
+const groupMentionBlacklist = parseQqGroupMentionBlacklist(envStr("QQ_GROUP_MENTION_BLACKLIST", ""));
 
 async function sendQqPrivateRichReply(userId, reply, options = {}) {
   const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
@@ -1266,6 +1271,10 @@ async function handleGroupEvent(j) {
   if (!groupId) return;
   const atTargets = groupAtTargets(j);
   const mentionsSelf = messageMentionsSelf(j);
+  if (shouldIgnoreQqGroupMention(j, mentionsSelf, groupMentionBlacklist)) {
+    logIgnoredEvent(j, "group_mention_blacklist");
+    return;
+  }
   const baseContent = mentionsSelf
     ? await contentWithoutSelfAt(j)
     : extractUserContentFromMessage(j?.message || j?.raw_message || "");

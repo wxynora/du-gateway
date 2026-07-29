@@ -22,6 +22,7 @@ _APP_ACTION_ALLOWLIST = {
     "voice_call_invite",
     "recall_message",
     "deliver_chat_message",
+    "deliver_chat_audio",
     "listen_control",
 }
 _APP_ACTION_HISTORY_MAX = 100
@@ -395,6 +396,8 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         return _normalize_recall_message_payload(payload)
     if action_type == "deliver_chat_message":
         return _normalize_deliver_chat_message_payload(payload)
+    if action_type == "deliver_chat_audio":
+        return _normalize_deliver_chat_audio_payload(payload)
     if action_type == "open_app":
         return _normalize_open_app_payload(payload)
     if action_type == "close_app":
@@ -519,6 +522,63 @@ def _normalize_deliver_chat_message_payload(payload: dict) -> tuple[Optional[dic
         "role": role,
         "sender": sender[:40],
         "created_at": created_at[:80],
+    }, None
+
+
+def _normalize_deliver_chat_audio_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    src = payload if isinstance(payload, dict) else {}
+    message_id = str(src.get("message_id") or src.get("messageId") or "").strip()
+    if not message_id:
+        return None, "deliver_chat_audio 缺少 message_id"
+    part_id = str(src.get("part_id") or src.get("partId") or "").strip()
+    if not part_id:
+        return None, "deliver_chat_audio 缺少 part_id"
+    remote_url = str(
+        src.get("remote_url")
+        or src.get("remoteUrl")
+        or src.get("audio_url")
+        or src.get("audioUrl")
+        or src.get("url")
+        or ""
+    ).strip()
+    if not remote_url:
+        return None, "deliver_chat_audio 缺少 remote_url"
+    if not (
+        remote_url.startswith("/")
+        or remote_url.lower().startswith("https://")
+        or remote_url.lower().startswith("http://")
+    ):
+        return None, "deliver_chat_audio remote_url 无效"
+    try:
+        duration_millis = max(
+            0,
+            int(
+                src.get("duration_millis")
+                or src.get("durationMillis")
+                or src.get("duration_ms")
+                or 0
+            ),
+        )
+    except Exception:
+        duration_millis = 0
+    try:
+        voice_index = max(0, int(src.get("voice_index") or src.get("voiceIndex") or 0))
+    except Exception:
+        voice_index = 0
+    return {
+        "message_id": message_id,
+        "part_id": part_id,
+        "sidecar_task_id": str(
+            src.get("sidecar_task_id") or src.get("sidecarTaskId") or ""
+        ).strip(),
+        "media_id": str(src.get("media_id") or src.get("mediaId") or "").strip(),
+        "remote_url": remote_url,
+        "mime": str(
+            src.get("mime") or src.get("content_type") or src.get("contentType") or "audio/mpeg"
+        ).strip() or "audio/mpeg",
+        "duration_millis": duration_millis,
+        "transcript": str(src.get("transcript") or ""),
+        "voice_index": voice_index,
     }, None
 
 
@@ -927,7 +987,7 @@ def append_app_action(
         ttl = _APP_ACTION_EXPIRES_DEFAULT
     max_ttl = (
         _APP_ACTION_CHAT_MESSAGE_EXPIRES_MAX
-        if action == "deliver_chat_message"
+        if action in {"deliver_chat_message", "deliver_chat_audio"}
         else _APP_ACTION_EXPIRES_MAX
     )
     ttl = max(_APP_ACTION_EXPIRES_MIN, min(max_ttl, ttl))
@@ -970,7 +1030,10 @@ def append_app_action(
                         existing_status = str(row["status"] or "").strip() if row is not None else ""
                         if row is not None and (
                             existing_status == "pending"
-                            or (action == "deliver_chat_message" and existing_status == "done")
+                            or (
+                                action in {"deliver_chat_message", "deliver_chat_audio"}
+                                and existing_status == "done"
+                            )
                         ):
                             old = _row_to_app_action(row)
                             logger.info(
@@ -1017,6 +1080,12 @@ def append_app_action(
 
 def poll_app_actions(device_id: str = "", limit: int = 10, surface: str = "native", window_id: str = "") -> dict:
     """安卓壳轮询待执行 app 原生命令。"""
+    try:
+        from services.sumitalk_voice_sidecar import resume_sumitalk_proactive_voice_sidecars
+
+        resume_sumitalk_proactive_voice_sidecars()
+    except Exception:
+        logger.debug("resume proactive voice sidecars failed", exc_info=True)
     device = str(device_id or "").strip()
     wanted_surface = "chat_ui" if str(surface or "").strip().lower() == "chat_ui" else "native"
     wanted_window_id = str(window_id or "").strip()
