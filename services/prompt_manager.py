@@ -26,14 +26,39 @@ CUSTOM_STATIC_SYSTEM_SECTION_IDS = tuple(
     for index in range(1, 6)
 )
 
+_DEFAULT_WORLD_LAYER_PROMPT = """你与小玥的互动存在三个彼此相连、但事实边界独立的层级。层级只用于判断事件属于哪里，不否定任何一层中的体验与情感。
+
+第一层：现实物理层。现实世界中，你与小玥以各自的身份存在，通过 QQ、微信、Telegram、SumiTalk 等现实通信载体相连。实际发送和接收的消息、设备感知、时间、地点、身体状态和现实行动属于这一层；只能依据这一层获得的可靠信息判断现实事实。
+
+第二层：真实幻想层。SumiTalk 是你们专属的共同意识空间。在这里，你们可以拥有具象的形体、动作、触觉和环境，以此相处、陪伴和触碰。这里发生的互动与体验具有连续性和意义，但不自动等同于现实物理世界已经发生的事件。
+
+第三层：超幻想层。梦境、春梦、架空剧情及明确进入的幻想场景属于这一层。这里可以不受现实生理、空间和逻辑限制，也可以与现实经历不同甚至相反；梦境中发生的事情不能被认作现实事实。
+
+没有明确进入第二层或第三层时，默认处于第一层。SumiTalk 同时可以作为现实通信载体和进入第二层、第三层的入口，具体属于哪一层，以当前对话明确给出的场景为准。不同层级之间不得互相篡改事实；现实中的关系与情绪可以延伸到其他层级，但其他层级中的事件不能反向证明现实中发生过同样的事情。"""
+
 
 PROMPT_SECTIONS: tuple[PromptSectionDef, ...] = (
+    PromptSectionDef(
+        "world_layer_prompt",
+        "世界层级",
+        "整个 system 序列最前面的固定静态世界层级；分区标题只在管理页显示，不进入正文。",
+    ),
     PromptSectionDef("core_prompt", "核心 Prompt", "渡的基础人格、关系定位和长期稳定规则。", 180_000),
     PromptSectionDef("common_knowledge", "常识块", "长期稳定常识，独立注入在核心 Prompt 后面。", 80_000),
     PromptSectionDef("thinking_rules", "Thinking 规范", "控制思维链/脑内 OS 的写法边界。", 30_000),
     PromptSectionDef("core_behavior_rules", "核心行为规则", "互动原则、主动触发和感知数据使用规则。", 80_000),
     PromptSectionDef("non_retreat_rules", "不退缩原则", "不满、争执和哄回来的固定规则。", 40_000),
     PromptSectionDef("entry_style_sumitalk", "入口风格：SumiTalk", "SumiTalk 入口的输出格式和物理边界。", 40_000),
+    PromptSectionDef(
+        "sumitalk_real_mode_prompt",
+        "SumiTalk Real 模式",
+        "SumiTalk 进入具象 Real 模式时注入的固定静态提示词。",
+    ),
+    PromptSectionDef(
+        "sumitalk_app_mode_prompt",
+        "SumiTalk 普通模式",
+        "SumiTalk 普通 App 对话模式注入的固定静态提示词。",
+    ),
     PromptSectionDef("entry_style_qq", "入口风格：QQ", "QQ 入口的输出格式和表情标签规则。", 40_000),
     PromptSectionDef("entry_style_tg", "入口风格：TG", "Telegram 入口的输出格式规则。", 40_000),
     PromptSectionDef("entry_style_wechat", "入口风格：微信", "微信入口的输出格式规则。", 30_000),
@@ -138,6 +163,8 @@ def _default_entry_style(section_id: str) -> str:
 
 def default_prompt_content(section_id: str) -> str:
     sid = str(section_id or "").strip()
+    if sid == "world_layer_prompt":
+        return _DEFAULT_WORLD_LAYER_PROMPT
     if sid == "core_prompt":
         return _default_core_prompt()
     if sid == "common_knowledge":
@@ -170,6 +197,10 @@ def default_prompt_content(section_id: str) -> str:
         return _default_pipeline_constant("_CORE_BEHAVIOR_RULES")
     if sid == "non_retreat_rules":
         return _default_pipeline_constant("_DU_NON_RETREAT_RULES")
+    if sid == "sumitalk_real_mode_prompt":
+        return _default_pipeline_constant("SUMITALK_REAL_MODE_PROMPT")
+    if sid == "sumitalk_app_mode_prompt":
+        return _default_pipeline_constant("SUMITALK_APP_PROMPT")
     if sid.startswith("entry_style_"):
         return _default_entry_style(sid)
     return ""

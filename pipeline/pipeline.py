@@ -628,7 +628,18 @@ def step_inject_sumitalk_real_mode(
         if not (isinstance(msg, dict) and msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER))
     ]
     body["messages"] = messages
-    prompt = SUMITALK_REAL_MODE_PROMPT if enabled else SUMITALK_APP_PROMPT if app_request else ""
+    if enabled:
+        prompt = _load_managed_static_prompt(
+            "sumitalk_real_mode_prompt",
+            SUMITALK_REAL_MODE_PROMPT,
+        )
+    elif app_request:
+        prompt = _load_managed_static_prompt(
+            "sumitalk_app_mode_prompt",
+            SUMITALK_APP_PROMPT,
+        )
+    else:
+        prompt = ""
     if not prompt:
         return body
 

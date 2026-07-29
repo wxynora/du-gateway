@@ -225,6 +225,36 @@ def inject_codex_oauth_prompt_system(body: dict, *, upstream_url: str) -> dict:
     return body
 
 
+def inject_world_layer_prompt_system(body: dict) -> dict:
+    """把世界层级作为独立静态 system 固定放在整个 system 序列最前。"""
+    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
+        return body
+    try:
+        from services.prompt_manager import default_prompt_content, get_managed_prompt_text
+
+        prompt = get_managed_prompt_text(
+            "world_layer_prompt",
+            lambda: default_prompt_content("world_layer_prompt"),
+        ).strip()
+    except Exception:
+        logger.exception("读取世界层级 Prompt 失败")
+        return body
+    if not prompt:
+        return body
+    messages = list(body.get("messages") or [])
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip().lower() != "system":
+            continue
+        if str(message.get("content") or "").strip() == prompt:
+            return body
+    messages.insert(0, {"role": "system", "content": prompt})
+    body = dict(body)
+    body["messages"] = messages
+    return body
+
+
 def inject_channel_nsfw_system(body: dict, *, reply_channel: str) -> dict:
     """在指定渠道请求中，把 NSFW 规则固定追加到入口 system 后面。"""
     if reply_channel not in _NSFW_REPLY_CHANNELS:

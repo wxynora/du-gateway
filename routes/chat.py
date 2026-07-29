@@ -147,6 +147,7 @@ from services.chat_prompt_injections import (
     inject_million_plan_player_static_system as _inject_million_plan_player_static_system,
     inject_silence_mode_system as _inject_silence_mode_system,
     inject_voice_call_style_system as _inject_voice_call_style_system,
+    inject_world_layer_prompt_system as _inject_world_layer_prompt_system,
 )
 from services.chat_archive_helpers import (
     compact_million_plan_round_for_archive as _compact_million_plan_round_for_archive,
@@ -2841,6 +2842,7 @@ def chat_completions():
         body = _inject_previous_claude_thinking_blocks(body, window_id)
     body = step_inject_thinking_block_rules(body)
     body = step_inject_custom_static_systems(body)
+    body = _inject_world_layer_prompt_system(body)
     body = step_inject_tool_result_cache(body)
     body = step_trim_messages_if_over_limit(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
