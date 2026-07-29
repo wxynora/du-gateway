@@ -940,19 +940,32 @@ function convertUsage(usage = {}) {
   return out;
 }
 
+function reduceAnthropicTextContent(contentBlocks = []) {
+  let text = "";
+  for (const part of Array.isArray(contentBlocks) ? contentBlocks : []) {
+    if (!part || part.type !== "text") continue;
+    const mode = String(part.mode || "").trim().toLowerCase();
+    const partText = String(part.text || "");
+    if (mode === "final" || mode === "snapshot") {
+      text = partText;
+    } else {
+      text += partText;
+    }
+  }
+  return text;
+}
+
 function anthropicToOpenai(ant, model, isStream) {
   if (isStream) return createOpenaiStreamConverter(model)(ant);
 
   const actualModel = String(ant.model || "").trim() || model;
-  const textParts = [];
+  const textContent = reduceAnthropicTextContent(ant.content);
   const reasoningParts = [];
   const thinkingBlocks = [];
   const fallbackBlocks = [];
   const toolCalls = [];
   for (const part of ant.content || []) {
-    if (part.type === "text") {
-      textParts.push(part.text || "");
-    } else if (part.type === "thinking") {
+    if (part.type === "thinking") {
       thinkingBlocks.push(part);
       const thinkingText = part.thinking || part.text || "";
       if (thinkingText) reasoningParts.push(thinkingText);
@@ -974,7 +987,7 @@ function anthropicToOpenai(ant, model, isStream) {
 
   const message = {
     role: "assistant",
-    content: textParts.join("") || (toolCalls.length ? null : ""),
+    content: textContent || (toolCalls.length ? null : ""),
   };
   if (reasoningParts.length) message.reasoning_content = reasoningParts.join("\n\n");
   if (thinkingBlocks.length) message.thinking_blocks = thinkingBlocks;

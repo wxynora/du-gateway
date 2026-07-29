@@ -963,12 +963,15 @@ def append_app_action(
                             JOIN app_actions AS a ON a.id = i.action_id
                             WHERE i.idem_key = ?
                               AND i.expires_at > ?
-                              AND a.status = 'pending'
                             LIMIT 1
                             """,
                             (idem, now_iso),
                         ).fetchone()
-                        if row is not None:
+                        existing_status = str(row["status"] or "").strip() if row is not None else ""
+                        if row is not None and (
+                            existing_status == "pending"
+                            or (action == "deliver_chat_message" and existing_status == "done")
+                        ):
                             old = _row_to_app_action(row)
                             logger.info(
                                 "app_action_enqueue_duplicate type=%s id=%s target_device=%s source=%s expires_at=%s",
