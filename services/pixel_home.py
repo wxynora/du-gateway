@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 
 PIXEL_HOME_MARKER_START = "<<<PIXEL_HOME>>>"
 PIXEL_HOME_MARKER_END = "<<<END_PIXEL_HOME>>>"
-PIXEL_HOME_SHORT_MARKER = "[du:home spot=study activity=写日记 desire=35]"
+PIXEL_HOME_SHORT_MARKER = "[du:home spot=xx activity=xx desire=xx]"
 _PIXEL_HOME_BLOCK = HiddenBlockParser.for_markers(
     "PIXEL_HOME",
     PIXEL_HOME_MARKER_START,
@@ -2241,6 +2241,13 @@ def save_actor_state(actor_key: str, spot: Any, activity: Any, *, source: str = 
     if key == "du":
         reference = _normalize_actor(current.get("xinyue"), DEFAULT_XINYUE_STATE)
         reference_spot = str(reference.get("spot") or "")
+        if str(source or "").strip() == "du_marker" and not str(spot or "").strip():
+            previous = _normalize_actor(
+                current.get("du"),
+                DEFAULT_DU_STATE,
+                reference_spot=reference_spot,
+            )
+            spot = previous.get("spot")
     actor = _normalize_actor(
         {"spot": spot, "activity": activity, "source": source, "updated_at": now_beijing_iso()},
         DEFAULT_DU_STATE if key == "du" else DEFAULT_XINYUE_STATE,
@@ -2364,7 +2371,7 @@ def save_pixel_home_hidden_block(payload: dict | None) -> bool:
         return False
     ok = True
     if spot or activity:
-        actor = save_actor_state("du", spot or "away", activity or "待着", source="du_marker")
+        actor = save_actor_state("du", spot, activity or "待着", source="du_marker")
         ok = bool(actor.get("ok"))
     if body_state:
         saved = save_du_body_state(body_state)
@@ -2411,6 +2418,7 @@ def format_rule_block() -> str:
         "小家的天气由独立虚构天气引擎生成，与现实城市、定位和真实天气无关。花园里的花有自己的季节和养护习性；你想去浇花、松土时可以主动行动，不需要等小玥先提出。先看当前花朵、土壤和天气状态再决定，例如下雨或土壤偏湿时不要机械重复浇花；做完后照常更新小家短隐藏标记，网关会从 garden 位置和 activity 自动记录养护结果。\n"
         "如果需要移动去别的房间做什么事，可以在回复正文之后、DU_FOLLOWUP 之前附加一行小家短隐藏标记：\n"
         f"{PIXEL_HOME_SHORT_MARKER}\n"
+        "spot 填当前所在位置，只有实际发生移动时才改变 spot。没有移动、只更新 activity 时可以省略 spot，网关会保留当前位置。\n"
         "写小家标记时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅/走回客厅/站到沙发旁边”，不要继续写 study，要写最终到达的房间，没有明确房间就写 away。\n"
         "如果正文描述你抱着/牵着/带着/陪着小玥一起移动，activity 里也要明确写出这个共同动作，例如“抱着小玥回卧室”；网关会据此同步小玥的小家位置。\n"
         "当【小家事件】或【当前身体状态】里出现道具、阴茎状态、体温或自然语言身体状态时，把它当成你此刻正在经历的身体状态来接话；先有身体反应和情绪反应，再自然回应小玥，不要机械复述字段，也不要当成后台资料忽略。不要把身体状态当任务来执行，当感受来接。\n"

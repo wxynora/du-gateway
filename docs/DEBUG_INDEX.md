@@ -201,6 +201,7 @@ QQ 群 @ 入站黑名单位于 `connectors/qq_onebot/src/group_mention_blacklist
 - 提示词、模式与设置：`routes/miniapp/settings.py`
 - 对话 job、历史与 reasoning：`routes/miniapp/sumitalk_chat_jobs.py`、`routes/miniapp/sumitalk_history.py`、`routes/miniapp/reasoning.py`
 - 日常面板与小家状态：`routes/miniapp/dashboard.py`；普通聊天中的小玥状态推断由 `services/pixel_home.py::infer_xinyue_state_from_text` 负责。洗澡意图使用 `chinese_calendar.is_workday` 按中国法定节假日与调休安排判断，北京时间真实工作日 08:00–17:00（不含 17:00）返回无更新并保持已有小家状态；法定休息日、其他时段和其他意图沿用原判定，不使用 weekday 兜底
+- 渡的小家短标记：`services/pixel_home.py::format_rule_block/save_pixel_home_hidden_block/save_actor_state`。格式示例使用 `spot=xx activity=xx desire=xx`，不再暗示默认书房；只有实际移动才改变 `spot`。`source=du_marker` 只更新 activity 且未提供 spot 时继承渡当前所在位置，明确提供合法 spot 时仍正常移动，不再因缺少 spot 回落为 `away`
 - 设备状态与动作：`routes/miniapp/device_state.py`、`routes/miniapp/device_actions.py`
 - 记忆、中期记忆与诊断：`routes/miniapp/memory_panel.py`、`routes/miniapp/midterm_memory.py`、`routes/miniapp/diagnostics.py`
 - 交换日记：`routes/miniapp/exchange_diary.py` + `storage/exchange_diary_store.py`；小玥评论后的唤醒由 `services/conversation_followup.py::send_exchange_diary_comment_wakeup` 将日记标题、`entry_id/comment_id` 和回复工具规则放入带 `__dynamic__=true` 的 system，评论原文只以 `小玥评论了你的日记：{评论内容}` 出现在 user，不进入 static/dynamic system。渡通过 `services/chat_tools.py` 创建评论时继续发送 `notification_kind=diary_comment` 的系统通知，payload 带 `entry_id/comment_id/reply_to_comment_id/sender`，回复目标作者为 `xy` 时标题为“渡回复了你的评论”，其他情况保持“渡评论了你的日记”。
