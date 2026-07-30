@@ -1359,7 +1359,7 @@ def send_exchange_diary_comment_wakeup(
         f"entry_id：{diary_entry_id}\n"
         f"comment_id：{diary_comment_id}\n"
         "你可以自己决定回复日记评论，或者直接发消息给小玥。"
-        "如果回复日记评论，请调用 exchange_diary_comment_create，"
+        "如果回复日记评论，请调用 exchange_diary，action=comment，"
         f"参数使用 entry_id={diary_entry_id}、reply_to_comment_id={diary_comment_id}，"
         "content 填写你要回复的内容；调用工具后不要再额外输出聊天正文。"
         "如果直接找她说话，就不要调用工具，只输出要发给她的话。"

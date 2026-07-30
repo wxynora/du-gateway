@@ -33,7 +33,7 @@
 - 原生 App / MiniApp 聚合：`routes/miniapp_api.py`
 - 静态 MiniApp：`routes/miniapp_static.py`
 
-`app.py` 当前注册：聊天、管理、Telegram webhook、MiniApp API、MCP、PC 指令、共读、渡的页笺、记忆、MiniApp 静态资源、感知、时间、Claude OAuth 同步、音乐分析、内部 STT、小爱音箱和 AI 农场代理。
+`app.py` 当前注册：聊天、管理、Telegram webhook、MiniApp API、MCP、PC 指令、共读、渡的页笺、记忆、MiniApp 静态资源、感知、时间、Claude OAuth 同步、音乐分析、内部 STT、小爱音箱、AI 农场代理和瓶中生态代理。
 
 ### 2.2 核心公开接口
 
@@ -69,7 +69,7 @@
 | 语音转写后处理 | `services/stt.py` | Gemini/OpenRouter 与 Deepgram 在统一返回边界压缩同一个非词汇填充音的超长连续重复：至少 5 次时保留 3 次并以中文省略号分隔；短重复、混合发声和有意义的词语重复保持原文 |
 | MiniApp 语音转写 | `routes/miniapp/media.py`、`POST /miniapp-api/chat-media/transcribe` | `text` 逐字使用 STT/Gemini 返回正文，不按 `duration_ms` 清洗停顿、笑声、哼唱等标记；`duration_ms` 只用于保存语音 attachment 时长 |
 | 幽默梗库 | `services/humor_meme_bank.py` | 默认梗以 SQLite 种子维护；模型侧按语境关键词与随机结果合计注入 3 条“梗文本＋用法”，不注入来源、公共重复规则或尾部标题；2026-07 已补入“OMG，你吓到我了” |
-| 工具定义与执行 | `services/chat_tools.py`、`services/device_action_tools.py`、`services/mcp_forum_tools.py` | 当前网关原生工具集中入口；设备工具先由 MCP 工具面注入，再由 `execute_tool()` 转交设备动作执行器。`open_app` 与 `close_app` 均接入该总分发；QQ 日常名称解析为 Android 包名，默认私聊 deep link，显式 `page=首页` 时只打开首页 |
+| 工具定义与执行 | `services/chat_tools.py`、`services/device_action_tools.py`、`services/mcp_forum_tools.py` | 当前网关原生工具集中入口；默认聊天工具面保留日历、设备动作与 `search_memory`，暂不向模型暴露 `forum_read_feed`、`forum_open_thread`、论坛 `cli` 和 `get_guide`，底层论坛执行与显式 `forum` 工具模式仍保留。交换日记统一声明为 `exchange_diary(action=create/list/read/comment)`，Stay with Du 统一声明为 `stay_with_du(action=write/delete)`，渡的后台日程统一声明为 `du_schedule(action=list/create/enable/disable/delete)`；11 个旧工具名不再注入但继续由 dispatcher 兼容执行，评论唤醒与日程提示均只引用新入口。设备工具由同一工具面注入，再由 `execute_tool()` 转交设备动作执行器；`open_app` 与 `close_app` 均接入该总分发；QQ 日常名称解析为 Android 包名，默认私聊 deep link，显式 `page=首页` 时只打开首页 |
 | 网关工具辅助 | `services/chat_tool_helpers.py`、`services/gateway_tools.py` | 领域工具复用同一执行边界 |
 | 工具使用摘要缓存 | `services/tool_result_cache.py`、`storage/runtime_sqlite.py`、`routes/miniapp/reasoning.py` | 工具循环结束后一次性写本地 SQLite；结果按工具清洗，不保存原始大 JSON；24 小时 TTL，按实际注入字符计数，超过 3000 字符时删除最早完整记录直至不高于 2000；思维链接口根据每轮已归档的 `static_breakdown` 返回当轮 `tool_cache.current_chars/max_chars`，不读取页面刷新时的全局现值 |
 | 身体状态四轮评估 | `services/du_body_evaluator.py`、`storage/du_body_eval_store.py`、`services/pixel_home.py` | 真实归档轮次独立进入 SQLite pending，每 4 轮或最旧等待 30 分钟时由 DS 逐轮输出 delta；保留模型默认 thinking、不设置人为输出上限并启用 JSON Output，解析失败日志只记录结束原因和 token/字符统计；apply 使用稳定幂等键并记录 before/delta/after 审计，最终失败仍保留原轮次供人工恢复，进程重启按 lease 接手；不改变动态记忆、近期总结或压缩移位计数，动态记忆 DS 不再请求、解析或返回 BODY delta。想做指数底层仍为 0–100；23:00–04:00 与 06:00–10:00 的有效等级加权为 `+1.5`，自制力同步 `-1.5`，显示、Prompt 与春梦概率保留 0.5 半档 |
@@ -78,7 +78,7 @@
 | Claude OAuth Proxy 用量快照 | `scripts/claude_oauth_proxy.js` | Anthropic unified rate-limit 响应头按白名单清洗后保存为独立 mode-600 JSON；默认与 `CLAUDE_OAUTH_FILE` 同目录，文件名 `claude-rate-limit-snapshot.json`，也可用 `CLAUDE_RATE_LIMIT_SNAPSHOT_FILE` 指定。Proxy 启动或首次读取状态时恢复快照，后续成功响应继续原子覆盖；文件只含更新时间、状态、重置时间及 5h/周利用率等脱敏元数据，不含 token、请求正文或路由 |
 | Claude OAuth Proxy 请求原样快照 | `scripts/claude_oauth_proxy.js` | `proxyToAnthropic()` 在每次实际 POST Anthropic 前，将与 `req.write()` 完全相同的最终 JSON payload 字节原样写成独立 mode-600 文件；system、messages、tools、正文与 `cache_control` 均不删减、不脱敏、不截断，HTTP Authorization/OAuth 请求头不写入。目录可由 `CLAUDE_REQUEST_SNAPSHOT_DIR` 指定，默认在 `CLAUDE_OAUTH_FILE` 同目录下的 `claude-request-snapshots/`；当前转发 VPS 实际路径为 `/home/duproxy/.cli-proxy-api/claude-request-snapshots/`。固定保留最近 10 份，第 11 份写入后删除最旧一份。排查转发格式或缓存边界时，直接按文件时间读取相邻快照并对完整 JSON 做 diff |
 | Claude 思考强度网关注入 | `routes/miniapp/upstreams.py`、`storage/upstream_store.py`、`services/upstream_policy.py` | App 通过独立设置接口按当前上游保存 `claude_thinking_effort`；网关对 `claude-opus-4-6/4-7/4-8/5` 与 `claude-fable-5` 转发时读取该值，注入 `thinking.type=adaptive`、`thinking.display=summarized` 与 `output_config.effort`。这不是 App 每轮聊天直接携带的字段 |
-| Prompt Cache 诊断 | `services/prompt_cache_debug.py` | 记录静态/动态构成与上游 usage 元数据；Thinking 规范保持独立 breakdown，QQ、TG、微信、SumiTalk、小爱音箱入口风格也不会被近期记忆块标记吞掉 |
+| Prompt Cache 诊断 | `services/prompt_cache_debug.py` | 记录静态/动态构成与上游 usage 元数据；Thinking 规范保持独立 breakdown，长期记忆与中期记忆分别显示，QQ、TG、微信、SumiTalk、小爱音箱入口风格也不会被近期记忆块标记吞掉 |
 
 当前 Claude 缓存前缀顺序固定为：tools → 第 1 个断点 → 固定静态子块（system 首项恒为世界层级；Codex OAuth 上游命中时专用 Prompt 紧随其后，再后是核心 Prompt；尾部为五个自定义静态 System 槽位中的非空项，按 1→5）→ 第 2 个断点 → 工具摘要 → 第 3 个断点 → 入口风格 → SumiTalk Real/App 互斥专属槽位 → 渡的日常 → 较稳定近期记忆 → 最近记忆正文小段 → 第 4 个断点 → 最近记忆固定收尾 → 常驻动态 → 临时动态 → Thinking 规范 → last4 → 对话消息。固定静态、工具摘要、入口风格、Real/App 互斥专属槽位、渡的日常、较稳定近期和最近记忆属于静态提示前缀的独立逻辑子块，按唯一顺序表收集；延迟续话、归档和禁止再次排队等请求运行态不得增删或改写固定 followup system 规则，只能影响原有后处理。Thinking 规范单独输出为显式携带 `__dynamic__=True` 的 system 段，位于临时动态之后、last4 之前，不与其他动态内容或 last4 合并；专用内部标记只供 gateway 排序与诊断，上游转发前删除，因此不新增缓存断点。常驻动态、临时动态、Thinking 和 last4 分别保持独立，不会拼进静态区。工具摘要 marker 由 Claude OAuth proxy 用来稳定设置其前后的第 2、第 3 断点；工具循环内部只收集结果，整条工具链收口后才批量更新摘要块。play 小纸条仍由 `services/pixel_home.py` 生成，内容与触发条件沿用原逻辑，只从静态尾段调整到临时动态位置。世界层级首次部署会因固定静态最前缀新增正文产生一次预期缓存重建，正文不变后的请求继续按既有断点复用。
 
@@ -123,7 +123,11 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 
 当前边界：webhook 快速入队，聚合、聊天调用和回复由独立 worker 完成；主动唤醒不依赖 Gunicorn worker 常驻。
 
+普通随机唤醒的主决策与随机冲浪后二次决策暂不提供论坛选项；主决策渲染会同步清理托管旧模板中既有的 `逛论坛`/`forum` 候选枚举，避免已保存 override 继续暴露旧选项。论坛 action 的旧解析和执行实现仍保留，未删除接口或历史数据。
+
 唤醒记录只保存实际安排的随机唤醒、延迟续话、日历/闹钟，以及真正命中的硬触发，不把后台轮询 tick 当成唤醒。记录覆盖计划、执行、动作完成或消息实际投递成功、失败和取消；用户在预定时间前发来新消息时，原随机唤醒或续话会记为已取消并保留原因。查询默认返回下一次已确定的计划和最近 30 条结束记录，不暴露投递目标或内部 metadata。
+
+随机主动唤醒的渡单机游戏统一注册在 `services/telegram_proactive.py::_PROACTIVE_SOLO_GAMES`，当前包含植物大战丧尸随机版、AI 农场和瓶中生态；注册表直接生成唤醒时的游戏选择，并决定后续实际游玩轮使用的工具与指令。以后新增任何渡单机游戏，都必须同步加入该注册表及必要的别名、直接 action 兼容和执行记录标签；共同游戏不进入这里。
 
 半小时硬触发严格从全局 `last_user_activity_at` 重新计时：真实聊天、小家操作和游戏互动都算用户互动，任一新互动都会重置计时；聊天归档只用于识别本次互动是否明确表达要离开。入睡意图按分句识别，过去或背景叙述中的“我睡觉”不会被当成当前要去睡觉。
 
@@ -160,7 +164,7 @@ QQ 群 @ 入站黑名单位于 `connectors/qq_onebot/src/group_mention_blacklist
 | 对话归档 | `storage/r2_conversation_store.py`、`storage/conversation_sqlite_store.py` | R2 持久化 + SQLite 运行索引 |
 | 窗口上下文 | `storage/r2_context_store.py` | 最近对话、摘要等上下文数据 |
 | 最近窗口 | `storage/recent_window_store.py` | 本地 `data/recent_windows.json`，最多保留 200 条 |
-| 动态层判断 | `services/dynamic_layer_ds.py`、`services/memory_merge_rules.py` | 产生 new / merge / out 等动态记忆决策；动态层与人工记忆重写共用同一份 merge / 迭代规则；merge 必须核对主体、对象、关系/行为和具体事项，只有关键词、标签、房间或宽泛语义相近时不得融合，名字羞耻症与渡的名字记忆是明确反例；merge 返回正文会完整替换旧正文，因此以选中旧记忆为底稿再融合本轮增量；未冲突内容继续合并同类项，重复表述去重、互补信息融合、关键事实与感受保留，不逐字搬运或堆叠旧正文；冲突部分不得无痕覆盖，其中被纠正的主观判断降回“当时的理解或误解”而不再作为当前事实，当时真实发生的感受与经历仍保留，本轮真实新增的具体情绪、动作或态度也必须保留；认知变化已自然成立时直接收住，不追加抽象点题；共享规则内含辛玥确认的空壳/底座三项 merge 示例并注明只学信息处理、不照抄句式；禁止固定时间句式、反省清单及无依据编造；merge 输出 `consolidate/correction/invalidate/supersede/temporal_update/habit_generalization` 六类规范原因，只有多次独立重复后归纳常态习惯或偏好时使用 `habit_generalization` 并转人工待审，普通同一事项补充仍自动 merge；动态记忆继续保留原有“事实 + 情绪”要求，只额外禁止“又 X 又 Y”情绪句式，不限制具体情绪词；缺失或非法原因进入现有重写机制，动态层血缘与待审候选保留原因字段；当前不按原因自动删除或淘汰记忆；在线候选检索 query 使用本轮完整文本，不再先裁成 2000 字；保留模型默认 thinking，不设置人为 `max_tokens` 上限 |
+| 动态层判断 | `services/dynamic_layer_ds.py`、`services/memory_merge_rules.py` | 产生 new / merge / out 等动态记忆决策；动态层与人工记忆重写共用同一份 merge / 迭代规则；merge 必须核对主体、对象、关系/行为和具体事项，只有关键词、标签、房间或宽泛语义相近时不得融合，名字羞耻症与渡的名字记忆是明确反例；只有当前内容明确表示这是不同日期发生的另一次一次性事件时，即使人物和行为相同也禁止 merge，有独立记忆价值时用 new，否则 skip；其余情况仍按原有的同一具体事项标准判断，同一过去事件不能仅因本轮正在谈论就改成现在，明确纠正事件时间时则可更新；merge 返回正文会完整替换旧正文，因此以选中旧记忆为底稿再融合本轮增量；未冲突内容继续合并同类项，重复表述去重、互补信息融合、关键事实与感受保留，不逐字搬运或堆叠旧正文；冲突部分不得无痕覆盖，其中被纠正的主观判断降回“当时的理解或误解”而不再作为当前事实，当时真实发生的感受与经历仍保留，本轮真实新增的具体情绪、动作或态度也必须保留；认知变化已自然成立时直接收住，不追加抽象点题；共享规则内含辛玥确认的空壳/底座三项 merge 示例并注明只学信息处理、不照抄句式；禁止固定时间句式、反省清单及无依据编造；merge 输出 `consolidate/correction/invalidate/supersede/temporal_update/habit_generalization` 六类规范原因，只有多次独立重复后归纳常态习惯或偏好时使用 `habit_generalization` 并转人工待审，普通同一事项补充仍自动 merge；动态记忆继续保留原有“事实 + 情绪”要求，只额外禁止“又 X 又 Y”情绪句式，不限制具体情绪词；缺失或非法原因进入现有重写机制，动态层血缘与待审候选保留原因字段；当前不按原因自动删除或淘汰记忆；在线候选检索 query 使用本轮完整文本，不再先裁成 2000 字；保留模型默认 thinking，不设置人为 `max_tokens` 上限 |
 | 动态层候选与结果校验 | `services/dynamic_layer_ds.py`、`pipeline/pipeline.py` | 在线候选检索无命中或异常时保持空列表，不再拿最近 10 条无关记忆替代；空候选 Prompt 明确只允许 `new/skip`。单条 merge 必须在现有重试阶段返回可解析到本轮候选的 ref，缺失或非法时定向重写，连续失败按 skip，绝不降级成 new。new/merge 正文照抄本轮原话时由 DS 定向重写，连续失败按 skip，网关不再用 18 字片段拼“形成共识”等通用便签。TAG 必须是客厅/书房/图书馆/卧室之一，缺失或非法时由 DS 重写，连续失败按 skip；应用层只做枚举校验，不再因原文出现“私密/亲密/性暗示”等关键词强改卧室。批处理与归档批处理共用 tag/照抄校验，沿用既有整批重试和最终失败边界 |
 | 记忆 embedding | `memory_vector/embedding_client.py` | 图片相关载荷仍先剥离，普通文本只做换行和空白归一化，不再按 `EMBEDDING_MAX_CHARS` 静默截断；Cloudflare 单条和批量请求都不发送 `truncate_inputs=true`，供应商输入过长时显式失败并沿用现有重试/异常路径，不再悄悄只嵌入前半段 |
 | 动态记忆检索 | `pipeline/pipeline.py`、`services/dynamic_memory_search.py`、`services/dynamic_memory_reranker.py` | 关键词、向量与 rerank 组合召回；物理淘汰是唯一召回生命周期出口，仍保存在动态层中的全部条目都进入 BM25 与向量候选资格判断，不再按独立 10 天有效期二次过滤；最终仍按相关性、权重、`DYNAMIC_MEMORY_TOP_N` 与动态 token budget 选取少量结果注入 |
@@ -171,7 +175,7 @@ QQ 群 @ 入站黑名单位于 `connectors/qq_onebot/src/group_mention_blacklist
 | 画像记忆 | `services/portrait_memory.py` | 画像候选与更新边界 |
 | 渡的日常 | `services/du_daily.py` | 对话硬触发事实不再只取最近 6 条或每条 180 字，维护事实不再只取 8 条；同日事件不再限制每次 3 条、累计 8 条，日总结不再裁成 900 字，兜底总结合并全部已有事件而非只取末 3 条；原有触发、去重、日切、归档与 R2 写入时机不变 |
 | 近期总结 | `services/deepseek_summary.py`、`pipeline/pipeline.py` | 每 4 轮生成一个近期记忆块，每 8 轮在同一次 DS 更新中执行分层压缩迁移；最近 / 稍早 / 更早最多分别保留 8 / 10 / 7 个，共 25 个，填充期只迁移为下个压缩点预留位置所需的数量，填满后每个压缩点依次迁移 2 个并淘汰最旧 2 个；生成/待补结果保存前与聊天注入前不再套总 token budget 二次裁剪；已有轮次元数据时会从首个已知分组起补全部缺口，不再只回看 6 组或每轮只处理最近 2 个缺口；近期记忆总结显式关闭 thinking，不包含 Notion 小本本分支，动态层不受影响 |
-| 记忆引用 | `services/dynamic_memory_citation.py` | 解析并回写实际引用标记 |
+| 记忆引用 | `pipeline/pipeline.py`、`services/dynamic_memory_citation.py` | 动态召回块按“开场 → 全部召回记忆 → `【以上为可召回记忆】` → 实际参考才标记 `[memory N]` 的规则”组装，先让模型完整阅读素材再给引用指令；流式与终态继续隐藏合法引用标记并回写真实 memory ID |
 | 记忆管理 | `routes/miniapp/memory_panel.py`、`routes/memory_api.py`、`storage/r2_store.py`、`pipeline/pipeline.py`、`services/memory_maintenance.py`、`services/memory_rewrite.py`、`services/memory_merge_rules.py` | 查询、重写、删除、维护和诊断；人工重写与动态层共用同一份 merge / 迭代规则，preview 以正式原文为底稿，有核心 `pending_merge` 且用户修正时同时提供待修正候选、`merge_reason` 和最高优先级 `rewrite_instructions`，不会直接接受旧候选；DS 只返回纯正文，App 协议中的 `reason` 保持空字符串；空内容、原文照抄、拒绝、JSON、Markdown 代码块或解释会自动重试一次，连续两次无效才返回准确的 502；preview 只读，只有用户确认调用 apply 后才写入；动态层 `habit_generalization` 不直接替换正式正文，而是由 `stage_dynamic_memory_merge()` 保存 `pending_merge`，通过后才应用正文与字段更新，拒绝则只清除候选；动态和核心待审均复用 `/memory-rewrite/apply` 与 `/memory-rewrite/reject`，动态确认后同步刷新索引、SQLite 镜像与审计；`POST /miniapp-api/dynamic-memory/<id>/retain` 原子增加一次 `mention_count` 并刷新 `last_mentioned`，未命中返回 404、写入失败返回 500；卧室 tag 满 3 天未提及时只通过物理淘汰从动态层、索引与血缘退出，不存在独立的 3 天注入过滤，core_cache 保护项不删除且仍可召回；其他动态记忆前 15 天不衰减、第 16 天起每天衰减 0.1 且最多衰减 2，仅在至少 15 天未提及且综合权重不高于 2 时删除，图书馆 tag 与 core_cache 来源记忆永久豁免 |
 
 亲密/卧室记忆仍使用动态记忆分类与独立生命周期；tag 只决定房间，不自动决定保存或抬高 importance。普通但具体、有独特画面或当下感受的亲密瞬间可记为 2；同段重复且无新增画面、感受或关系信息时 skip；有明显且日后仍值得回想的情绪分量才为 3；重要偏好、边界、承诺或关系变化才为 4；同一连续互动优先 merge，不额外侧写 Notion，也不进入不适合的核心缓存/画像路径。
@@ -213,6 +217,7 @@ QQ 群 @ 入站黑名单位于 `connectors/qq_onebot/src/group_mention_blacklist
 - 无限流游戏模式：`GET/PUT /miniapp-api/wenyou-mode`，状态由 `storage/wenyou_mode_store.py` 保存；默认关闭，模式开启时由统一聊天入口注入文游玩家工具
 - 小爱音箱：`routes/miniapp/xiaoai.py`
 - AI 农场：`routes/miniapp/aifarm.py`
+- 瓶中生态：App 状态/能力地址为 `routes/miniapp/cedareco.py`，受保护完整 Web/API 挂载为 `routes/cedareco_proxy.py`，共享池塘与工具接缝为 `services/cedareco_bridge.py`、`services/cedareco_tool.py`；固定上游运行包位于 `vendor/cedareco/`，sidecar 脚本为 `scripts/start_cedareco.sh`、`scripts/install_cedareco_service.sh`，完整边界见 `docs/cedareco-app-integration.md`
 
 一起看 Phase 2 分析 worker 入口为 `scripts/run_watch_analysis_worker.py`，安装脚本为 `scripts/install_watch_analysis_worker_service.sh`。新 session 先进入准备态；worker 可先执行 identify 和 timeline prepass，identify 会落库作品原语言正式片名与年份；人工填写正片起点时，identify 直接在该位置附近取样，避开 Bilibili 前置垫片。`partial/unknown` 会排队生成 `watch-knowledge-v13` 简短背景卡：Tavily basic 只执行一次 `《片名》剧情简介 主要人物 人物关系 世界观` 搜索，存在季集或分 P 时跟在书名号后，最多保留 3 个不同站点摘要；不限定站点、不调用角色目录。DS V4 Flash 不获得搜索工具，只负责整理作品身份、世界观、开场前情、主要人物与关系、专有名词和 3–5 条只说明主线方向的 `story_outline`；网关不规定人物数量，也不根据作品特定词硬补人物。卡片最多引用 3 条来源，不含结局、反转或逐场剧情；作品名、年份、人物姓名证据和置信度仍有门禁，单一可靠来源允许生成但会降低置信度。知识卡和字幕准备均进入可见终态后，只有 `POST .../start` 提交当前 `subtitle_lookup_id` 并确认卡片或明确跳过，才创建 rolling 任务。滚动取材计划会直接跨过已确认的 recap/intro/outro/preview/non_story，不再先送模型后仅丢弃结果。
 
@@ -255,7 +260,9 @@ HTML 使用当前页笺工具直接持久化；旧临时预览工具不再作为
 
 `deliver_chat_message` 由 `storage/app_action_store.py` 按调用方提供的稳定幂等键持久化；同键在 TTL 内且原 action 仍 pending 或已经 done 时，返回原 action 和原 payload，不新建第二条设备消息，也不以重投正文覆盖或扩增已保存的 `text`。failed/abandoned/expired 与其他 action 类型继续沿用原有语义，不被本幂等收紧覆盖。
 
-设备感知快照写入 `sense_latest`，24 小时短尾历史写入 `sense_history`；历史按感知类型分别限量，前台应用与会话高频上报不会挤掉屏幕、健康、位置和电量记录。`screen.sleepSession` 是唯一活动睡眠会话：手机熄屏建立候选；同一真实前台 App 或不同真实 App 的活动样本连续覆盖 3 分钟，或者电脑严格递增的新输入样本连续覆盖 3 分钟，才确认清醒并把睡眠结束时间回填到连续活动起点；活动样本间隔超过 3 分钟会重建窗口。单次亮屏、单条 App/电脑事件、延迟旧 `lastInputAt`、重复或倒退的电脑补报均不得结束睡眠，系统桌面等系统前台不启动手机活动窗口。睡眠候选少于 30 分钟直接拒绝；达到 30 分钟后按时长、区间心率和步数共同计算可靠程度，低心率与低步数增加可信度，持续偏高心率或明显步数增长降低可信度，样本缺失或只有单个样本不单独否决，可靠程度不足的候选标记为 `rejected_sleep`，不进入睡眠汇总也不成为主动醒来触发源。同日有效睡眠按日期聚合，跨零点归醒来日期；展示保留两端日期、分段累计和真实总时长。
+设备感知快照写入 `sense_latest`，24 小时短尾历史写入 `sense_history`；历史按感知类型分别限量，前台应用与会话高频上报不会挤掉屏幕、健康、位置和电量记录。`screen.sleepSession` 是唯一活动睡眠会话：手机熄屏建立候选；同一真实前台 App、不同真实 App 的活动样本或前台切换时已关闭的真实 App 连续会话覆盖 2 分钟，或者电脑严格递增的新输入样本连续覆盖 2 分钟，才确认清醒并把睡眠结束时间回填到连续活动起点；活动样本间隔超过 2 分钟会重建窗口。同一睡眠候选里的重复 `screen_off` 保留手机和电脑活动窗口，只有真正建立新候选才清空；单次亮屏、单条 App/电脑事件、延迟旧 `lastInputAt`、重复或倒退的电脑补报均不得结束睡眠，系统桌面等系统前台不单独启动手机活动窗口。睡眠候选少于 30 分钟直接拒绝；达到 30 分钟后按时长、区间心率和步数共同计算可靠程度，低心率与低步数增加可信度，持续偏高心率或明显步数增长降低可信度，样本缺失或只有单个样本不单独否决，可靠程度不足的候选标记为 `rejected_sleep`，不进入睡眠汇总也不成为主动醒来触发源。同日有效睡眠按日期聚合，跨零点归醒来日期；展示保留两端日期、分段累计和真实总时长，存在新睡眠候选时仍同时向渡注入已经确认的累计汇总。
+
+`POST /miniapp-api/device-state/location` 保存 `precision`、`age_ms`、`is_mock`、`coordinate_system`、`trusted`；非 trusted、非 fine、mock、accuracy 大于 150 米或 age 大于 600000 ms 的上报在去重、高德解析和持久化前返回 skipped，不覆盖最后可信位置。可信点的顶层 `lat/lng` 与 `wgs84_lat/lng` 保持 App 原始 WGS84，`services/amap_geocode.py` 先调用高德 `coordinate/convert`（`coordsys=gps`），再以独立 `gcj02_lat/lng` 调用 regeo。地址复用读取持久 `sense_latest.location`，沿用位置历史既有的 `0.001` 度邻近边界和 30 分钟时窗；高德转换或逆地理失败记录解析失败并保留上一次可信地址，不再写空地址。
 
 ### 8.4 游戏
 

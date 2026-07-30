@@ -3406,8 +3406,8 @@ def step_inject_forum_tools(body: dict) -> dict:
         "如果是提醒辛玥本人，优先使用手机系统能力："
         "单纯到点叫醒或提醒用 create_system_alarm，默认 skip_ui=true 直接创建；"
         "带具体日期、行程、地点或提前提醒用 create_calendar_event。"
-        "schedule_create 只用于提醒渡自己、重复提醒暂时无法落系统能力、或系统能力不可用时的内部兜底。"
-        "也可以用 schedule_list / schedule_enable / schedule_disable / schedule_delete 来管理已有提醒。"
+        "du_schedule(action=create) 只用于提醒渡自己、重复提醒暂时无法落系统能力、或系统能力不可用时的内部兜底。"
+        "也可以用 du_schedule(action=list/enable/disable/delete) 管理已有提醒。"
     )
     screen_check_hint = (
         "\n\n【查岗截图工具】"

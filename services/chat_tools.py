@@ -285,66 +285,34 @@ def get_chat_tools_for_inject() -> List[dict]:
         {
             "type": "function",
             "function": {
-                "name": "exchange_diary_create",
-                "description": "写一条交换日记，存入 MiniApp/R2 的交换日记库。默认作者为 du；如果是替辛玥记录，author 传 xy。",
+                "name": "exchange_diary",
+                "description": (
+                    "管理交换日记。action=create 写日记，content 必填；"
+                    "action=list 查看日记；action=read 读取一条完整正文和评论，id 必填；"
+                    "action=comment 评论或回复日记，entry_id/content 必填，回复评论时再传 reply_to_comment_id。"
+                    "作者默认 du；替辛玥记录时 author=xy。"
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["create", "list", "read", "comment"],
+                            "description": "要执行的操作",
+                        },
                         "title": {"type": "string", "description": "日记标题，可空；不传时会从正文生成短标题"},
-                        "content": {"type": "string", "description": "正文内容"},
+                        "content": {"type": "string", "description": "create 的日记正文或 comment 的评论正文"},
                         "mood": {"type": "string", "description": "可选心情 emoji"},
                         "author": {"type": "string", "description": "作者：du 或 xy，默认 du", "default": "du"},
                         "diary_date": {"type": "string", "description": "可选日记日期，YYYY-MM-DD；不传用今天"},
-                    },
-                    "required": ["content"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "exchange_diary_list",
-                "description": "查看交换日记。author 不传或传空时，把 du/xy 的日记混在一起按时间倒序取 limit 条；author=du 只看渡写的；author=xy 只看辛玥写的。返回里直接包含正文、最近评论和 comment id；需要看某一条的完整评论细节时再用 exchange_diary_read。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
                         "limit": {"type": "integer", "description": "最多返回条数，默认 5，最大 20", "default": 5},
                         "month": {"type": "string", "description": "可选月份筛选，如 2026-06"},
-                        "author": {"type": "string", "description": "可选：du / xy；不传或传空则混合时间线"},
                         "cursor": {"type": "string", "description": "可选翻页游标，来自上次返回的 next_cursor"},
-                    },
-                    "required": [],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "exchange_diary_read",
-                "description": "按 id 读取一条交换日记的完整正文和已有评论；id 来自 exchange_diary_list。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string", "description": "交换日记 id，例如 ed_20260627_xxxxxxxx"},
-                    },
-                    "required": ["id"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "exchange_diary_comment_create",
-                "description": "评论或回复一条交换日记。先用 exchange_diary_list 找到日记 id；不填 reply_to_comment_id 就是发普通评论，填 reply_to_comment_id 就是回复那条评论。默认作者为 du。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
+                        "id": {"type": "string", "description": "read 时的交换日记 id"},
                         "entry_id": {"type": "string", "description": "要评论的交换日记 id"},
-                        "content": {"type": "string", "description": "评论正文"},
                         "reply_to_comment_id": {"type": "string", "description": "可选。填某条评论的 id 表示回复那条评论；不填就是直接评论日记"},
-                        "author": {"type": "string", "description": "作者：du 或 xy，默认 du", "default": "du"},
                     },
-                    "required": ["entry_id", "content"],
+                    "required": ["action"],
                 },
             },
         },
@@ -367,40 +335,31 @@ def get_chat_tools_for_inject() -> List[dict]:
     tools.append({
         "type": "function",
         "function": {
-            "name": "stay_with_du_write",
-            "description": "写入 MiniApp 日常里的 Stay with Du。kind 必填：timeline=重要时间线；movie_want=想一起看的电影；movie_done=一起看过的电影；book_want=想一起读的书；book_done=一起读过的书。title 必填，note/date 可选。",
+            "name": "stay_with_du",
+            "description": (
+                "管理 MiniApp 日常里的 Stay with Du。action=write 时 kind/title 必填；"
+                "action=delete 时 kind 必填，并优先传 id，没有 id 时传 title 精确匹配，date 可缩小范围。"
+                "kind：timeline=重要时间线；movie_want/movie_done=想看/看过的电影；"
+                "book_want/book_done=想读/读过的书。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["write", "delete"],
+                        "description": "写入或删除",
+                    },
                     "kind": {
                         "type": "string",
                         "description": "timeline / movie_want / movie_done / book_want / book_done",
                     },
+                    "id": {"type": "string", "description": "delete 时优先使用的记录 id"},
                     "title": {"type": "string", "description": "标题、电影名或书名"},
                     "note": {"type": "string", "description": "可选备注；timeline 时作为节点描述"},
-                    "date": {"type": "string", "description": "可选日期，建议 YYYY-MM-DD；timeline 和 done 类不传则默认今天"},
+                    "date": {"type": "string", "description": "可选日期；write 时可指定日期，delete 时可区分同名条目"},
                 },
-                "required": ["kind", "title"],
-            },
-        },
-    })
-    tools.append({
-        "type": "function",
-        "function": {
-            "name": "stay_with_du_delete",
-            "description": "删除 MiniApp 日常里的 Stay with Du 一条记录。kind 必填；优先传 id。没有 id 时可传 title 精确匹配，date 可选用于缩小范围。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kind": {
-                        "type": "string",
-                        "description": "timeline / movie_want / movie_done / book_want / book_done",
-                    },
-                    "id": {"type": "string", "description": "记录 id，优先使用"},
-                    "title": {"type": "string", "description": "没有 id 时用标题、电影名或书名精确匹配"},
-                    "date": {"type": "string", "description": "可选日期，用于区分同名条目"},
-                },
-                "required": ["kind"],
+                "required": ["action", "kind"],
             },
         },
     })
@@ -450,6 +409,28 @@ def get_chat_tools_for_inject() -> List[dict]:
 
 def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str:
     """执行单个聊天工具，返回给模型的字符串结果。"""
+    args = dict(arguments) if isinstance(arguments, dict) else {}
+    if name == "exchange_diary":
+        action = str(args.pop("action", "") or "").strip().lower()
+        target = {
+            "create": "exchange_diary_create",
+            "list": "exchange_diary_list",
+            "read": "exchange_diary_read",
+            "comment": "exchange_diary_comment_create",
+        }.get(action)
+        if not target:
+            return "action 只能是 create/list/read/comment"
+        return execute_tool(target, args, context=context)
+    if name == "stay_with_du":
+        action = str(args.pop("action", "") or "").strip().lower()
+        target = {
+            "write": "stay_with_du_write",
+            "delete": "stay_with_du_delete",
+        }.get(action)
+        if not target:
+            return "action 只能是 write/delete"
+        return execute_tool(target, args, context=context)
+
     from services.gateway_tools import (
         DU_PAGE_TOOL_NAMES,
         DU_SURF_TOOL_NAMES,
@@ -536,6 +517,7 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
         "schedule_enable",
         "schedule_disable",
         "schedule_delete",
+        "du_schedule",
         "search_memory",
         "close_app",
         "open_app",

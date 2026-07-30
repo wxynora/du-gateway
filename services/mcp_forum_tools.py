@@ -120,34 +120,28 @@ TOOL_FORUM_GET_GUIDE = {
     },
 }
 
-TOOL_SCHEDULE_LIST = {
+TOOL_DU_SCHEDULE = {
     "type": "function",
     "function": {
-        "name": "schedule_list",
-        "description": "查看当前提醒列表（可按启用状态筛选）。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "enabled_only": {"type": "boolean", "description": "可选：true 仅返回启用项"},
-                "limit": {"type": "integer", "description": "可选：返回条数上限，默认 50"},
-            },
-        },
-    },
-}
-
-TOOL_SCHEDULE_CREATE = {
-    "type": "function",
-    "function": {
-        "name": "schedule_create",
+        "name": "du_schedule",
         "description": (
-            "创建网关内部提醒。提醒对象是老婆时，不要优先用这个工具："
-            "单纯到点叫醒/提醒优先用 create_system_alarm，默认 skip_ui=true 直接创建；带日期、行程、地点或提前提醒优先用 create_calendar_event。"
-            "仅在提醒渡自己、管理/兜底内部提醒、或重复提醒暂时无法落系统闹钟/日历时使用。"
-            "repeat 支持 once/daily/weekly；weekly 可传 weekly_weekdays（0-6，周一=0）一次创建多天。"
+            "管理渡自己的网关内部提醒。action=list 查看提醒；action=create 创建提醒，title 必填；"
+            "action=enable/disable/delete 管理已有提醒，id 必填。"
+            "提醒辛玥本人时优先使用手机系统能力：到点提醒用 create_system_alarm，"
+            "带日期、行程、地点或提前提醒用 create_calendar_event。"
+            "repeat 支持 once/daily/weekly；weekly 可传 weekly_weekdays（0-6，周一=0）。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "create", "enable", "disable", "delete"],
+                    "description": "要执行的日程操作",
+                },
+                "enabled_only": {"type": "boolean", "description": "可选：true 仅返回启用项"},
+                "limit": {"type": "integer", "description": "可选：返回条数上限，默认 50"},
+                "id": {"type": "string", "description": "enable/disable/delete 时的提醒 id"},
                 "title": {"type": "string", "description": "提醒标题"},
                 "repeat": {"type": "string", "description": "once/daily/weekly"},
                 "datetime": {"type": "string", "description": "once 模式必填：ISO 时间，例如 2026-03-20T21:30:00+08:00"},
@@ -160,35 +154,8 @@ TOOL_SCHEDULE_CREATE = {
                 "created_by": {"type": "string", "description": "可选：wife 或 du；不传默认 wife"},
                 "target_role": {"type": "string", "description": "可选：wife 或 du；表示提醒对象，不传默认 wife"},
             },
-            "required": ["title"],
+            "required": ["action"],
         },
-    },
-}
-
-TOOL_SCHEDULE_ENABLE = {
-    "type": "function",
-    "function": {
-        "name": "schedule_enable",
-        "description": "启用一条提醒。",
-        "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
-    },
-}
-
-TOOL_SCHEDULE_DISABLE = {
-    "type": "function",
-    "function": {
-        "name": "schedule_disable",
-        "description": "禁用一条提醒。",
-        "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
-    },
-}
-
-TOOL_SCHEDULE_DELETE = {
-    "type": "function",
-    "function": {
-        "name": "schedule_delete",
-        "description": "删除一条提醒。",
-        "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
     },
 }
 
@@ -230,11 +197,7 @@ def get_forum_tools_for_inject(mode: str = "chat") -> list[dict]:
     if not MCP_ENABLED:
         return []
     schedule_tools = [
-        TOOL_SCHEDULE_LIST,
-        TOOL_SCHEDULE_CREATE,
-        TOOL_SCHEDULE_ENABLE,
-        TOOL_SCHEDULE_DISABLE,
-        TOOL_SCHEDULE_DELETE,
+        TOOL_DU_SCHEDULE,
         TOOL_CLOSE_APP,
         TOOL_OPEN_APP,
         TOOL_CREATE_SYSTEM_ALARM,
@@ -331,6 +294,23 @@ def _execute_remote_forum_tool(name: str, args: dict) -> dict:
 def execute_forum_tool(name: str, arguments: dict) -> str:
     """在聊天工具链里执行论坛工具，返回字符串。"""
     args = arguments if isinstance(arguments, dict) else {}
+
+    if name == "du_schedule":
+        args = dict(args)
+        action = str(args.pop("action", "") or "").strip().lower()
+        target = {
+            "list": "schedule_list",
+            "create": "schedule_create",
+            "enable": "schedule_enable",
+            "disable": "schedule_disable",
+            "delete": "schedule_delete",
+        }.get(action)
+        if not target:
+            return json.dumps(
+                {"ok": False, "error": "action 只能是 list/create/enable/disable/delete"},
+                ensure_ascii=False,
+            )
+        return execute_forum_tool(target, args)
 
     if name.startswith("schedule_"):
         from storage import r2_store
