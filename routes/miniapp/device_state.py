@@ -229,8 +229,15 @@ def _sanitize_location_patch(body: dict, device_id: str) -> tuple[dict | None, s
         "deviceId": device_id,
         "lat": lat,
         "lng": lng,
+        "wgs84_lat": lat,
+        "wgs84_lng": lng,
         "capturedAt": str(body.get("captured_at") or body.get("capturedAt") or "").strip() or now_beijing_iso(),
         "source": str(body.get("source") or "sumitalk_native").strip()[:40] or "sumitalk_native",
+        "precision": str(body.get("precision") or "").strip().lower(),
+        "age_ms": _int_from_body(body, "age_ms"),
+        "is_mock": body.get("is_mock") is True,
+        "coordinate_system": str(body.get("coordinate_system") or "").strip().upper(),
+        "trusted": body.get("trusted") is True,
     }
     for src, dst in (
         ("accuracy", "accuracy"),
@@ -245,6 +252,22 @@ def _sanitize_location_patch(body: dict, device_id: str) -> tuple[dict | None, s
     if provider:
         patch["provider"] = provider[:40]
     return patch, None
+
+
+def _location_skip_reason(patch: dict) -> str:
+    if patch.get("trusted") is not True:
+        return "not_trusted"
+    if str(patch.get("precision") or "").strip().lower() != "fine":
+        return "precision_not_fine"
+    if patch.get("is_mock") is True:
+        return "mock_location"
+    accuracy = patch.get("accuracy")
+    if isinstance(accuracy, (int, float)) and accuracy > 150:
+        return "accuracy_too_low"
+    age_ms = patch.get("age_ms")
+    if isinstance(age_ms, int) and age_ms > 600000:
+        return "location_too_old"
+    return ""
 
 
 def _int_from_body(body: dict, *names: str) -> int | None:
@@ -588,12 +611,28 @@ def register_routes(bp) -> None:
         patch, err = _sanitize_location_patch(body, device_id)
         if err:
             return jsonify({"ok": False, "error": err}), 400
+        skip_reason = _location_skip_reason(patch or {})
+        if skip_reason:
+            return jsonify(
+                {
+                    "ok": True,
+                    "bucket": "location",
+                    "device_id": device_id,
+                    "skipped": True,
+                    "reason": skip_reason,
+                }
+            )
         if _is_duplicate_report_write("location", device_id, patch or {}):
             return _reporting_deduped_response("location", device_id)
         try:
             from services.amap_geocode import enrich_location_patch_with_amap_address
 
-            patch = enrich_location_patch_with_amap_address(patch or {})
+            latest = r2_store.get_sense_latest()
+            previous_location = latest.get("location") if isinstance(latest, dict) else {}
+            patch = enrich_location_patch_with_amap_address(
+                patch or {},
+                previous_location=previous_location if isinstance(previous_location, dict) else {},
+            )
         except Exception:
             logger.exception("miniapp location reverse geocode failed")
         ok = r2_store.merge_and_save_sense_bucket("location", patch or {})

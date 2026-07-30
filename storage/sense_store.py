@@ -9,6 +9,8 @@ from utils.time_aware import now_beijing_iso, parse_iso_to_beijing, today_beijin
 
 R2_KEY_SENSE_LATEST = "sense/latest.json"
 R2_KEY_SLEEP_SUMMARY_LATEST = "sense/sleep_summary/latest.json"
+LOCATION_NEARBY_COORDINATE_DELTA = 0.001
+LOCATION_RECENT_SECONDS = 30 * 60
 _SENSE_HISTORY_CAP = 200
 _SENSE_HISTORY_CAP_BY_TYPE = {
     "screen": 96,
@@ -27,7 +29,7 @@ _SENSE_HISTORY_MIN_INTERVAL_SECONDS = {
     "battery": 30 * 60,
     "foreground": 10 * 60,
     "health": 5 * 60,
-    "location": 30 * 60,
+    "location": LOCATION_RECENT_SECONDS,
 }
 _SLEEP_SEGMENT_KEEP = 8
 _SLEEP_MIN_MINUTES = 30
@@ -1385,7 +1387,7 @@ def _sense_history_should_append(existing: list, sense_type: str, bucket_snapsho
         try:
             lat_delta = abs(float(data.get("lat")) - float(last_data.get("lat")))
             lng_delta = abs(float(data.get("lng")) - float(last_data.get("lng")))
-            return lat_delta >= 0.001 or lng_delta >= 0.001
+            return lat_delta >= LOCATION_NEARBY_COORDINATE_DELTA or lng_delta >= LOCATION_NEARBY_COORDINATE_DELTA
         except Exception:
             return False
 
