@@ -397,7 +397,7 @@ def format_sense_snapshot_for_system() -> str:
     health_line = _format_health_line(health)
     screen_line = _format_screen_line(screen)
     sleep_guess_line = _format_sleep_guess_line(screen)
-    sleep_summary_line = None if sleep_guess_line else _format_last_sleep_summary_line(screen)
+    sleep_summary_line = _format_last_sleep_summary_line(screen)
     foreground_line = _format_foreground_line(foreground)
     app_sessions_line = _format_app_sessions_line(app_sessions)
     usage_line = _format_usage_line(usage)
@@ -424,11 +424,11 @@ def format_sense_snapshot_for_system() -> str:
         lines.append(loc_line)
     if health_line:
         lines.append(health_line)
+    if sleep_summary_line:
+        lines.append(sleep_summary_line)
     if sleep_guess_line:
         lines.append(sleep_guess_line)
-    elif sleep_summary_line:
-        lines.append(sleep_summary_line)
-    elif screen_line:
+    elif not sleep_summary_line and screen_line:
         lines.append(screen_line)
     if chat_activity_line:
         lines.append(chat_activity_line)

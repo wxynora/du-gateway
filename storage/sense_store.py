@@ -37,7 +37,7 @@ _SLEEP_STEPS_HIGH_DELTA = 500
 _SLEEP_RESTING_HEART_RATE = 78
 _SLEEP_ELEVATED_HEART_RATE = 95
 _SLEEP_HIGH_HEART_RATE = 110
-_WAKE_ACTIVITY_CONFIRM_SECONDS = 3 * 60
+_WAKE_ACTIVITY_CONFIRM_SECONDS = 2 * 60
 _AWAKE_FOREGROUND_BLOCKLIST_EXACT = {
     "android",
     "com.android.deskclock",
@@ -321,6 +321,52 @@ def _advance_wake_activity_window(
         "sampleCount": sample_count,
     }
     duration_seconds = (activity_dt - start_dt).total_seconds()
+    return next_window, duration_seconds >= _WAKE_ACTIVITY_CONFIRM_SECONDS
+
+
+def _advance_wake_activity_window_through_session(
+    current: Any,
+    *,
+    source: str,
+    device_id: str,
+    started_at: str,
+    ended_at: str,
+) -> tuple[dict, bool]:
+    session_start_dt = _dt(started_at)
+    session_end_dt = _dt(ended_at)
+    if not session_start_dt or not session_end_dt or session_end_dt <= session_start_dt:
+        return {}, False
+
+    existing = current if isinstance(current, dict) else {}
+    existing_start_at = str(existing.get("startAt") or "").strip()
+    existing_last_at = str(existing.get("lastAt") or "").strip()
+    existing_start_dt = _dt(existing_start_at)
+    existing_last_dt = _dt(existing_last_at)
+    connects_to_existing = (
+        str(existing.get("source") or "").strip() == source
+        and str(existing.get("deviceId") or "").strip() == device_id
+        and existing_start_dt is not None
+        and existing_last_dt is not None
+        and existing_start_dt <= existing_last_dt <= session_end_dt
+        and (
+            existing_last_dt >= session_start_dt
+            or (session_start_dt - existing_last_dt).total_seconds() <= _WAKE_ACTIVITY_CONFIRM_SECONDS
+        )
+    )
+    wake_started_at = existing_start_at if connects_to_existing else started_at
+    wake_started_dt = existing_start_dt if connects_to_existing else session_start_dt
+    try:
+        sample_count = max(1, int(existing.get("sampleCount") or 1)) + 1 if connects_to_existing else 2
+    except Exception:
+        sample_count = 2
+    next_window = {
+        "source": source,
+        "deviceId": device_id,
+        "startAt": wake_started_at,
+        "lastAt": ended_at,
+        "sampleCount": sample_count,
+    }
+    duration_seconds = (session_end_dt - wake_started_dt).total_seconds()
     return next_window, duration_seconds >= _WAKE_ACTIVITY_CONFIRM_SECONDS
 
 
@@ -701,6 +747,11 @@ def _is_explicit_foreground_wake(data: dict) -> bool:
     if str((data or {}).get("screenWakeSource") or "").strip() != "foreground_app":
         return False
     pkg = str((data or {}).get("foregroundPackageName") or (data or {}).get("packageName") or "").strip().lower()
+    return _is_real_foreground_package(pkg)
+
+
+def _is_real_foreground_package(pkg: str) -> bool:
+    pkg = str(pkg or "").strip().lower()
     if not pkg:
         return False
     if pkg in _AWAKE_FOREGROUND_BLOCKLIST_EXACT:
@@ -735,6 +786,14 @@ def _prepare_screen_bucket_snapshot(previous: dict, patch: dict, latest_doc: dic
     if incoming_event == "screen_off":
         prev_since = str(prev.get("screenOffSince") or "").strip()
         incoming_since = str(incoming.get("screenOffSince") or "").strip()
+        previous_session = prev.get("sleepSession") if isinstance(prev.get("sleepSession"), dict) else {}
+        previous_device = str(previous_session.get("deviceId") or prev.get("deviceId") or "").strip()
+        incoming_device = str(merged.get("deviceId") or "").strip()
+        continues_same_candidate = bool(
+            prev_since
+            and str(previous_session.get("state") or "").strip() == "candidate"
+            and previous_device == incoming_device
+        )
         # Repeated screen-off events continue the same candidate. A brief亮屏 without
         # subsequent app switching does not end it.
         since = prev_since or incoming_since or event_at
@@ -752,11 +811,12 @@ def _prepare_screen_bucket_snapshot(previous: dict, patch: dict, latest_doc: dic
             "deviceId": str(merged.get("deviceId") or prev.get("deviceId") or "").strip(),
             "startAt": since,
         }
-        merged.pop("wakeCandidateAt", None)
-        merged.pop("wakeCandidatePackages", None)
-        merged.pop("wakeCandidateRealPackages", None)
-        merged.pop("phoneWakeActivity", None)
-        merged.pop("pcWakeActivity", None)
+        if not continues_same_candidate:
+            merged.pop("wakeCandidateAt", None)
+            merged.pop("wakeCandidatePackages", None)
+            merged.pop("wakeCandidateRealPackages", None)
+            merged.pop("phoneWakeActivity", None)
+            merged.pop("pcWakeActivity", None)
         return merged
 
     if incoming_event in {"screen_on", "user_present"} and str(prev.get("screenOffSince") or "").strip():
@@ -988,8 +1048,28 @@ def update_app_sessions_from_foreground(foreground_patch: dict) -> bool:
             return False
 
 
+def _closed_real_foreground_session(latest: dict, device_id: str, ended_at: str) -> dict | None:
+    ended_dt = _dt(ended_at)
+    if not ended_dt:
+        return None
+    app_sessions = latest.get("app_sessions") if isinstance(latest.get("app_sessions"), dict) else {}
+    recent = app_sessions.get("recent") if isinstance(app_sessions.get("recent"), list) else []
+    for item in recent:
+        if not isinstance(item, dict):
+            continue
+        item_device = str(item.get("deviceId") or "").strip()
+        if item_device and item_device != device_id:
+            continue
+        if _dt(item.get("endedAt")) != ended_dt:
+            continue
+        if not _is_real_foreground_package(str(item.get("packageName") or "")):
+            continue
+        return item
+    return None
+
+
 def mark_screen_awake_from_foreground(foreground_patch: dict) -> bool:
-    """Confirm waking after three minutes of continuous real foreground activity."""
+    """Confirm waking after two minutes of continuous real foreground activity."""
     if not isinstance(foreground_patch, dict):
         return True
     device_id = str(foreground_patch.get("deviceId") or "").strip()
@@ -1016,16 +1096,43 @@ def mark_screen_awake_from_foreground(foreground_patch: dict) -> bool:
     is_real_foreground = _is_explicit_foreground_wake(screen_patch)
     latest = get_sense_latest()
     screen_bucket = latest.get("screen") if isinstance(latest.get("screen"), dict) else {}
-    if not str(screen_bucket.get("screenOffSince") or "").strip():
+    sleep_started_at = str(screen_bucket.get("screenOffSince") or "").strip()
+    sleep_started_dt = _dt(sleep_started_at)
+    if not sleep_started_at or not sleep_started_dt:
         return True
-    if not is_real_foreground:
+
+    closed_session = _closed_real_foreground_session(latest, device_id, observed_at)
+    closed_started_at = str((closed_session or {}).get("startedAt") or "").strip()
+    closed_ended_at = str((closed_session or {}).get("endedAt") or "").strip()
+    closed_started_dt = _dt(closed_started_at)
+    if closed_started_dt and closed_started_dt < sleep_started_dt:
+        closed_session = None
+        closed_started_at = ""
+        closed_ended_at = ""
+
+    if closed_session:
+        wake_window, confirmed = _advance_wake_activity_window_through_session(
+            screen_bucket.get("phoneWakeActivity"),
+            source="foreground_app",
+            device_id=device_id,
+            started_at=closed_started_at,
+            ended_at=closed_ended_at,
+        )
+        if not is_real_foreground:
+            closed_pkg = str(closed_session.get("packageName") or "").strip()
+            closed_app_name = str(closed_session.get("appName") or closed_pkg).strip() or closed_pkg
+            screen_patch["foregroundPackageName"] = closed_pkg[:160]
+            screen_patch["foregroundAppName"] = closed_app_name[:80]
+    elif is_real_foreground:
+        wake_window, confirmed = _advance_wake_activity_window(
+            screen_bucket.get("phoneWakeActivity"),
+            source="foreground_app",
+            device_id=device_id,
+            activity_at=observed_at,
+        )
+    else:
         return True
-    wake_window, confirmed = _advance_wake_activity_window(
-        screen_bucket.get("phoneWakeActivity"),
-        source="foreground_app",
-        device_id=device_id,
-        activity_at=observed_at,
-    )
+
     wake_started_at = str(wake_window.get("startAt") or observed_at).strip()
     if not confirmed:
         session = screen_bucket.get("sleepSession") if isinstance(screen_bucket.get("sleepSession"), dict) else {}
@@ -1046,7 +1153,7 @@ def mark_screen_awake_from_foreground(foreground_patch: dict) -> bool:
 
 
 def mark_screen_awake_from_pc_activity(activity_patch: dict) -> bool:
-    """Confirm waking after three minutes of continuous new OS input."""
+    """Confirm waking after two minutes of continuous new OS input."""
     if not isinstance(activity_patch, dict):
         return True
     last_input_at = str(activity_patch.get("lastInputAt") or activity_patch.get("last_input_at") or "").strip()
