@@ -8,7 +8,6 @@ import re
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from functools import wraps
 from typing import Any, Optional
@@ -35,7 +34,6 @@ from services.wenyou.common import (
 )
 from services.wenyou.constants import (
     _DEFAULT_PLAYER_COUNT,
-    _DEFAULT_TASKER_TOTAL,
     _WENYOU_ATTRIBUTE_KEYS,
     _WENYOU_CLEAR_BASE_REWARD,
     _WENYOU_CORE_ABILITY_ARCHETYPES,
@@ -76,8 +74,8 @@ from services.wenyou.catalog import (
     _catalog_item_definition,
 )
 from services.wenyou.candidate_prompts import (
-    _candidate_blueprint_prompt,
     _candidate_core_prompt,
+    _candidate_design_prompt,
     _candidate_opening_prompt,
     _clean_ds_block,
     _normalize_candidate_item,
@@ -353,6 +351,8 @@ def _normalize_framework(raw: dict) -> dict:
     gn = str(raw.get("genre_note") or "").strip()
     player_count = _normalize_player_count(raw)
     tasker_total = _normalize_tasker_total(raw, player_count)
+    npc_taskers = _normalize_npc_taskers(raw, tasker_total, player_count)
+    tasker_total = player_count + len(npc_taskers)
     out = {
         "instance_code": code,
         "instance_name": name,
@@ -372,7 +372,7 @@ def _normalize_framework(raw: dict) -> dict:
         "difficulty": _normalize_difficulty(raw.get("difficulty")),
         "player_count": player_count,
         "tasker_total": tasker_total,
-        "npc_taskers": _normalize_npc_taskers(raw, tasker_total, player_count),
+        "npc_taskers": npc_taskers,
         "encounter_profile": _normalize_encounter_profile(raw.get("encounter_profile")),
         "initial_stats": _normalize_initial_stats(raw),
         "is_tutorial": bool(raw.get("is_tutorial") or raw.get("tutorial") or str(raw.get("tutorial_id") or "") == _WENYOU_TUTORIAL_INSTANCE_ID),
@@ -4175,12 +4175,365 @@ def _candidate_instance_code(item: dict) -> str:
     return code[:16]
 
 
-def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: str, opening_text: str) -> dict:
+def _normalize_candidate_tasker_cast(
+    raw: Any,
+    *,
+    forced: bool = False,
+) -> tuple[Optional[dict], Optional[str]]:
+    data = raw if isinstance(raw, dict) else {}
+    try:
+        player_count = int(data.get("player_count"))
+        tasker_total = int(data.get("tasker_total"))
+    except (TypeError, ValueError):
+        return None, "任务者编制缺少有效的 player_count/tasker_total"
+    if player_count != _DEFAULT_PLAYER_COUNT:
+        return None, f"任务者编制 player_count 必须为 {_DEFAULT_PLAYER_COUNT}"
+    if tasker_total < player_count or tasker_total > 13:
+        return None, "任务者编制 tasker_total 必须为 2-13"
+    if forced and tasker_total < player_count + 2:
+        return None, "惩罚副本至少需要 2 名正常任务者"
+
+    taskers = data.get("npc_taskers")
+    private_state = data.get("npc_private_state")
+    if not isinstance(taskers, list):
+        return None, "任务者编制 npc_taskers 必须是数组"
+    if not isinstance(private_state, dict):
+        return None, "任务者编制 npc_private_state 必须是对象"
+    expected = tasker_total - player_count
+    if len(taskers) != expected:
+        return None, f"任务者编制数量不一致：需要 {expected} 名，实际 {len(taskers)} 名"
+
+    seen_names: set[str] = set()
+    for index, item in enumerate(taskers):
+        if not isinstance(item, dict):
+            return None, f"第 {index + 1} 名任务者档案不是对象"
+        name = str(item.get("name") or "").strip()
+        intent = str(item.get("intent") or "").strip()
+        blurb = str(item.get("blurb") or "").strip()
+        if not name or re.fullmatch(r"(?:NPC|任务者)[-_\s]*\d+", name, flags=re.I):
+            return None, f"第 {index + 1} 名任务者缺少真实姓名"
+        if name in seen_names:
+            return None, f"任务者姓名重复：{name}"
+        if not intent or not blurb:
+            return None, f"任务者 {name} 缺少当前意图或公开特征"
+        secret = private_state.get(name)
+        if not isinstance(secret, dict):
+            return None, f"任务者 {name} 缺少同名隐藏状态"
+        if not str(secret.get("intent") or "").strip() or not str(secret.get("trigger") or "").strip():
+            return None, f"任务者 {name} 缺少真实目标或行动触发"
+        seen_names.add(name)
+
+    normalized_taskers = _normalize_npc_taskers(
+        {
+            "player_count": player_count,
+            "tasker_total": tasker_total,
+            "npc_taskers": taskers,
+        },
+        tasker_total,
+        player_count,
+    )
+    normalized_private: dict[str, dict] = {}
+    for tasker in normalized_taskers:
+        name = str(tasker.get("name") or "").strip()
+        secret = private_state.get(name) if isinstance(private_state.get(name), dict) else {}
+        try:
+            trouble_chance = int(secret.get("trouble_chance") or 0)
+        except (TypeError, ValueError):
+            trouble_chance = 0
+        stance = str(secret.get("stance") or "unknown").strip().lower()
+        if stance not in {"good", "neutral", "bad", "unknown"}:
+            stance = "unknown"
+        normalized_private[name] = {
+            "stance": stance,
+            "intent": str(secret.get("intent") or "").strip()[:160],
+            "trouble_chance": max(0, min(100, trouble_chance)),
+            "trigger": str(secret.get("trigger") or "").strip()[:180],
+        }
+    return {
+        "player_count": player_count,
+        "tasker_total": tasker_total,
+        "npc_taskers": normalized_taskers,
+        "npc_private_state": normalized_private,
+    }, None
+
+
+def _generated_framework_semantic_errors(raw: Any, *, require_opening: bool = True) -> list[str]:
+    data = raw if isinstance(raw, dict) else {}
+    errors: list[str] = []
+    blueprint = data.get("instance_blueprint") if isinstance(data.get("instance_blueprint"), dict) else {}
+    mainline = blueprint.get("mainline") if isinstance(blueprint.get("mainline"), list) else []
+    side_quests = blueprint.get("side_quests") if isinstance(blueprint.get("side_quests"), list) else []
+    hidden_side_quests = (
+        blueprint.get("hidden_side_quests")
+        if isinstance(blueprint.get("hidden_side_quests"), list)
+        else []
+    )
+    clue_graph = blueprint.get("clue_graph") if isinstance(blueprint.get("clue_graph"), list) else []
+    threat_clocks = blueprint.get("threat_clocks") if isinstance(blueprint.get("threat_clocks"), list) else []
+    opening_contract = (
+        blueprint.get("opening_contract")
+        if isinstance(blueprint.get("opening_contract"), dict)
+        else {}
+    )
+
+    if len(mainline) < 3:
+        errors.append("主线不足 3 个可执行阶段")
+    if not side_quests:
+        errors.append("缺少普通支线")
+    if not hidden_side_quests:
+        errors.append("缺少隐藏支线")
+    if not threat_clocks:
+        errors.append("缺少威胁时钟")
+
+    clue_by_id: dict[str, dict] = {}
+    for clue in clue_graph:
+        if not isinstance(clue, dict):
+            continue
+        clue_id = str(clue.get("id") or "").strip()
+        if not clue_id:
+            errors.append("线索图存在无 id 线索")
+            continue
+        if clue_id in clue_by_id:
+            errors.append(f"线索 id 重复：{clue_id}")
+            continue
+        clue_by_id[clue_id] = clue
+        if not str(clue.get("public_text") or "").strip():
+            errors.append(f"线索 {clue_id} 缺少公开内容")
+        leads_to = clue.get("leads_to")
+        if not isinstance(leads_to, list):
+            errors.append(f"线索 {clue_id} 的 leads_to 不是数组")
+    if not clue_by_id:
+        errors.append("缺少结构化线索图")
+    else:
+        for clue_id, clue in clue_by_id.items():
+            for target in clue.get("leads_to") or []:
+                target_id = str(target or "").strip()
+                if target_id and target_id not in clue_by_id:
+                    errors.append(f"线索 {clue_id} 指向不存在的线索 {target_id}")
+
+    mainline_required: list[str] = []
+    final_required: set[str] = set()
+    for index, phase in enumerate(mainline):
+        if not isinstance(phase, dict):
+            errors.append(f"主线阶段 {index + 1} 不是对象")
+            continue
+        if not str(phase.get("phase") or "").strip() or not str(phase.get("goal") or "").strip():
+            errors.append(f"主线阶段 {index + 1} 缺少 phase/goal")
+        if not str(phase.get("fail_forward") or "").strip():
+            errors.append(f"主线阶段 {index + 1} 缺少 fail_forward")
+        required = phase.get("required_clues")
+        if not isinstance(required, list) or not [x for x in required if str(x).strip()]:
+            errors.append(f"主线阶段 {index + 1} 没有关联关键线索")
+            continue
+        required_ids = [str(x).strip() for x in required if str(x).strip()]
+        mainline_required.extend(required_ids)
+        if index == len(mainline) - 1:
+            final_required.update(required_ids)
+
+    def validate_quests(rows: list[Any], label: str) -> None:
+        for index, quest in enumerate(rows):
+            if not isinstance(quest, dict):
+                errors.append(f"{label} {index + 1} 不是对象")
+                continue
+            if not str(quest.get("id") or "").strip() or not str(quest.get("goal") or "").strip():
+                errors.append(f"{label} {index + 1} 缺少 id/goal")
+            if not str(quest.get("resolution") or "").strip():
+                errors.append(f"{label} {index + 1} 缺少完成条件")
+            if not str(quest.get("fail_forward") or "").strip():
+                errors.append(f"{label} {index + 1} 缺少 fail_forward")
+            required = quest.get("required_clues")
+            if not isinstance(required, list) or not [x for x in required if str(x).strip()]:
+                errors.append(f"{label} {index + 1} 没有关联线索")
+                continue
+            for clue_id in required:
+                cid = str(clue_id or "").strip()
+                if cid and cid not in clue_by_id:
+                    errors.append(f"{label}引用不存在的线索 {cid}")
+
+    validate_quests(side_quests, "普通支线")
+    validate_quests(hidden_side_quests, "隐藏支线")
+
+    for clue_id in mainline_required:
+        clue = clue_by_id.get(clue_id)
+        if not clue:
+            errors.append(f"主线引用不存在的线索 {clue_id}")
+            continue
+        methods = clue.get("obtain_methods")
+        if not isinstance(methods, list) or len([x for x in methods if str(x).strip()]) < 2:
+            errors.append(f"主线关键线索 {clue_id} 缺少替代获取方式")
+
+    for index, clock in enumerate(threat_clocks):
+        if not isinstance(clock, dict):
+            errors.append(f"威胁时钟 {index + 1} 不是对象")
+            continue
+        if not all(str(clock.get(key) or "").strip() for key in ("id", "name", "trigger", "consequence")):
+            errors.append(f"威胁时钟 {index + 1} 缺少 id/name/trigger/consequence")
+        try:
+            if int(clock.get("max") or 0) <= 0:
+                errors.append(f"威胁时钟 {index + 1} 的 max 无效")
+        except (TypeError, ValueError):
+            errors.append(f"威胁时钟 {index + 1} 的 max 无效")
+
+    npc_taskers = data.get("npc_taskers") if isinstance(data.get("npc_taskers"), list) else []
+    npc_arcs = blueprint.get("npc_arcs") if isinstance(blueprint.get("npc_arcs"), dict) else {}
+    for tasker in npc_taskers:
+        if not isinstance(tasker, dict):
+            continue
+        tasker_name = str(tasker.get("name") or "").strip()
+        if not tasker_name:
+            continue
+        arc = npc_arcs.get(tasker_name)
+        if not isinstance(arc, dict):
+            errors.append(f"任务者 {tasker_name} 缺少同名 npc_arc")
+            continue
+        missing = [
+            key
+            for key in ("public_pressure", "private_goal", "turning_point", "exit_condition")
+            if not str(arc.get(key) or "").strip()
+        ]
+        if missing:
+            errors.append(f"任务者 {tasker_name} 的 npc_arc 缺少 {','.join(missing)}")
+
+    anchors = opening_contract.get("scene_anchors")
+    clean_anchors = [str(x).strip() for x in anchors if str(x).strip()] if isinstance(anchors, list) else []
+    initial_clue_id = str(opening_contract.get("initial_clue_id") or "").strip()
+    initial_anomaly = str(opening_contract.get("initial_anomaly") or "").strip()
+    if len(clean_anchors) < 2:
+        errors.append("开场合同缺少至少 2 个场景锚点")
+    if not initial_clue_id or initial_clue_id not in clue_by_id:
+        errors.append("开场合同 initial_clue_id 未关联真实线索")
+    if not initial_anomaly:
+        errors.append("开场合同缺少 initial_anomaly")
+
+    encounter = data.get("encounter_profile") if isinstance(data.get("encounter_profile"), dict) else {}
+    common = encounter.get("common") if isinstance(encounter.get("common"), list) else []
+    elite = encounter.get("elite") if isinstance(encounter.get("elite"), list) else []
+    boss = encounter.get("boss") if isinstance(encounter.get("boss"), dict) else {}
+    spawn_rules = encounter.get("spawn_rules") if isinstance(encounter.get("spawn_rules"), list) else []
+    ecology_rules = encounter.get("ecology_rules") if isinstance(encounter.get("ecology_rules"), list) else []
+    territories = encounter.get("territories") if isinstance(encounter.get("territories"), list) else []
+    if not common:
+        errors.append("怪物生态缺少普通怪/常见异常")
+    if not elite:
+        errors.append("怪物生态缺少精英怪/高压异常")
+    if not boss:
+        errors.append("怪物生态缺少 Boss/核心异常")
+    if not spawn_rules:
+        errors.append("怪物生态缺少生成或迁移规则")
+    if not ecology_rules:
+        errors.append("怪物生态缺少种群/环境关联")
+    if not territories:
+        errors.append("怪物生态缺少领地规则")
+
+    def validate_monsters(rows: list[Any], label: str) -> None:
+        for index, monster in enumerate(rows):
+            if not isinstance(monster, dict):
+                errors.append(f"{label} {index + 1} 不是对象")
+                continue
+            missing = [
+                key
+                for key in ("id", "name", "role", "territory", "behavior", "public_text")
+                if not str(monster.get(key) or "").strip()
+            ]
+            if missing:
+                errors.append(f"{label} {index + 1} 缺少 {','.join(missing)}")
+            for key in ("signs", "triggers", "counterplay", "ecology_links"):
+                value = monster.get(key)
+                if not isinstance(value, list) or not [x for x in value if str(x).strip()]:
+                    errors.append(f"{label} {index + 1} 缺少 {key}")
+
+    validate_monsters(common, "普通怪")
+    validate_monsters(elite, "精英怪")
+    if boss:
+        validate_monsters([boss], "Boss")
+        if boss.get("default_invincible") is not True or boss.get("can_be_killed") is True:
+            errors.append("Boss 必须默认不可正面击杀")
+        counterplay = boss.get("counterplay")
+        if not isinstance(counterplay, list) or len([x for x in counterplay if str(x).strip()]) < 2:
+            errors.append("Boss 缺少至少两种处理方向")
+        paths = boss.get("resolution_paths") if isinstance(boss.get("resolution_paths"), list) else []
+        if len(paths) < 2:
+            errors.append("Boss 缺少至少两条可执行解法")
+        methods: set[str] = set()
+        resolution_clues: set[str] = set()
+        for index, path in enumerate(paths):
+            if not isinstance(path, dict):
+                errors.append(f"Boss 解法 {index + 1} 不是对象")
+                continue
+            method = str(path.get("method") or "").strip()
+            if not method:
+                errors.append(f"Boss 解法 {index + 1} 缺少 method")
+            elif method in methods:
+                errors.append(f"Boss 解法 method 重复：{method}")
+            methods.add(method)
+            steps = path.get("steps")
+            if not isinstance(steps, list) or len([x for x in steps if str(x).strip()]) < 2:
+                errors.append(f"Boss 解法 {method or index + 1} 缺少至少两个步骤")
+            if not str(path.get("failure_cost") or "").strip():
+                errors.append(f"Boss 解法 {method or index + 1} 缺少失败代价")
+            required = path.get("required_clues")
+            if not isinstance(required, list) or not [x for x in required if str(x).strip()]:
+                errors.append(f"Boss 解法 {method or index + 1} 没有关联线索")
+                continue
+            for clue_id in required:
+                cid = str(clue_id or "").strip()
+                resolution_clues.add(cid)
+                if cid and cid not in clue_by_id:
+                    errors.append(f"Boss 解法引用不存在的线索 {cid}")
+        for clue_id in mainline_required:
+            clue = clue_by_id.get(clue_id) or {}
+            if clue_id not in final_required and not (clue.get("leads_to") or []) and clue_id not in resolution_clues:
+                errors.append(f"主线关键线索 {clue_id} 没有连接后续线索或 Boss 解法")
+
+    for index, rule in enumerate(spawn_rules):
+        if not isinstance(rule, dict) or not all(
+            str(rule.get(key) or "").strip() for key in ("trigger", "territory", "telegraph", "limit")
+        ) or not isinstance(rule.get("spawns"), list):
+            errors.append(f"生成规则 {index + 1} 缺少 trigger/spawns/territory/telegraph/limit")
+    for index, rule in enumerate(ecology_rules):
+        if not isinstance(rule, dict) or not all(
+            str(rule.get(key) or "").strip() for key in ("source", "target", "relationship", "effect")
+        ):
+            errors.append(f"生态关系 {index + 1} 缺少 source/target/relationship/effect")
+
+    if require_opening:
+        opening = str(data.get("opening") or "").strip()
+        if not opening:
+            errors.append("缺少开场正文")
+        else:
+            matched = sum(1 for anchor in clean_anchors if anchor in opening)
+            if len(clean_anchors) >= 2 and matched < 2:
+                errors.append("开场未包含至少两个蓝图场景锚点")
+            if initial_anomaly and initial_anomaly not in opening:
+                errors.append("开场未包含蓝图 initial_anomaly")
+    return list(dict.fromkeys(errors))
+
+
+def _generated_framework_tasker_error(framework: dict) -> Optional[str]:
+    fw = framework if isinstance(framework, dict) else {}
+    secret = fw.get("gm_secret") if isinstance(fw.get("gm_secret"), dict) else {}
+    _cast, error = _normalize_candidate_tasker_cast(
+        {
+            "player_count": fw.get("player_count"),
+            "tasker_total": fw.get("tasker_total"),
+            "npc_taskers": fw.get("npc_taskers"),
+            "npc_private_state": secret.get("npc_private_state"),
+        }
+    )
+    return error
+
+
+def _framework_from_candidate_text(
+    item: dict,
+    core_text: str,
+    design: dict,
+    opening_text: str,
+    tasker_cast: dict,
+) -> dict:
     title = str(item.get("title") or "未命名副本").strip()[:40] or "未命名副本"
     genre = _normalize_instance_genre(item.get("instance_genre"))
     difficulty = _normalize_difficulty(item.get("difficulty"))
     core = _clean_ds_block(core_text, 1200)
-    blueprint = _clean_ds_block(blueprint_text, 1400)
     opening = _clean_ds_block(opening_text, 900)
     premise = str(item.get("premise") or "").strip()
     task = str(item.get("core_task") or "").strip()
@@ -4194,17 +4547,26 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
     conflict = task or f"在【{title}】中确认副本规则，找到通关路径并存活到主神结算。"
     failure_hint = risk or "违反关键规则会触发副本惩罚，具体代价随剧情推进显露。"
     genre_note = (tagline or hook or twist or f"本局以{genre}节奏推进。")[:300]
-    blueprint_logline = core.splitlines()[0].strip() if core.splitlines() else conflict
-    try:
-        player_count = int(item.get("player_count") or _DEFAULT_PLAYER_COUNT)
-    except Exception:
-        player_count = _DEFAULT_PLAYER_COUNT
-    player_count = max(1, min(13, player_count))
-    try:
-        tasker_total = int(item.get("tasker_total") or item.get("tasker_count") or _DEFAULT_TASKER_TOTAL)
-    except Exception:
-        tasker_total = _DEFAULT_TASKER_TOTAL
-    tasker_total = max(player_count, min(13, max(2, tasker_total)))
+    player_count = int(tasker_cast.get("player_count") or _DEFAULT_PLAYER_COUNT)
+    tasker_total = int(tasker_cast.get("tasker_total") or player_count)
+    npc_taskers = tasker_cast.get("npc_taskers") if isinstance(tasker_cast.get("npc_taskers"), list) else []
+    npc_private_state = (
+        tasker_cast.get("npc_private_state")
+        if isinstance(tasker_cast.get("npc_private_state"), dict)
+        else {}
+    )
+    design_public = design.get("public") if isinstance(design.get("public"), dict) else {}
+    design_secret = design.get("gm_secret") if isinstance(design.get("gm_secret"), dict) else {}
+    instance_blueprint = (
+        copy.deepcopy(design.get("instance_blueprint"))
+        if isinstance(design.get("instance_blueprint"), dict)
+        else {}
+    )
+    encounter_profile = (
+        copy.deepcopy(design.get("encounter_profile"))
+        if isinstance(design.get("encounter_profile"), dict)
+        else {}
+    )
     raw = {
         "instance_code": _candidate_instance_code(item),
         "instance_name": title,
@@ -4220,7 +4582,7 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
         "player2_name": "玩家二",
         "player2_instance_name": "",
         "player2_role": "新任务者。",
-        "npc_taskers": [],
+        "npc_taskers": npc_taskers,
         "conflict": conflict,
         "failure_hint": failure_hint,
         "reward_hint": "通关后按完成度获得主神积分、经验与可能的线索/道具回报。",
@@ -4228,74 +4590,18 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
             "instance_name": title,
             "genre": [genre],
             "difficulty": difficulty,
-            "visible_rules": [hook] if hook else [],
+            "visible_rules": design_public.get("visible_rules") if isinstance(design_public.get("visible_rules"), list) else ([hook] if hook else []),
             "public_task": conflict,
         },
         "gm_secret": {
-            "true_rules": [hook] if hook else [],
-            "false_rules": [],
+            "true_rules": design_secret.get("true_rules") if isinstance(design_secret.get("true_rules"), list) else ([hook] if hook else []),
+            "false_rules": design_secret.get("false_rules") if isinstance(design_secret.get("false_rules"), list) else [],
             "npc_goals": {},
-            "hidden_endings": [{"name": "未揭悬念", "condition": twist}] if twist else [],
+            "npc_private_state": npc_private_state,
+            "hidden_endings": design_secret.get("hidden_endings") if isinstance(design_secret.get("hidden_endings"), list) else ([{"name": "未揭悬念", "condition": twist}] if twist else []),
         },
-        "instance_blueprint": {
-            "blueprint_version": 1,
-            "logline": blueprint_logline[:240],
-            "mainline": [
-                {
-                    "phase": "开场",
-                    "goal": "确认主神任务与第一处异常",
-                    "required_clues": [],
-                    "fail_forward": "如果玩家错过线索，由广播、环境变化或代价更高的事件继续推进。",
-                    "notes": blueprint[:500],
-                },
-                {
-                    "phase": "探索",
-                    "goal": "验证关键规则，找到通关路径",
-                    "required_clues": [],
-                    "fail_forward": "用倒计时、污染、追逐或资源损耗推进。",
-                },
-                {
-                    "phase": "收束",
-                    "goal": "完成通关条件，或触发隐藏结局/失败结算",
-                    "required_clues": [],
-                    "fail_forward": "进入高风险结算，由主神给出明确后果。",
-                },
-            ],
-            "side_quests": [],
-            "hidden_side_quests": [],
-            "hidden_endings": [{"name": "未揭悬念", "hint": twist}] if twist else [],
-            "clue_graph": [
-                {
-                    "id": "opening_anomaly",
-                    "public_text": (hook or tagline or premise or title)[:160],
-                    "leads_to": [],
-                    "is_required_for_mainline": True,
-                }
-            ],
-            "npc_arcs": {},
-            "threat_clocks": [],
-            "hard_constraints": [
-                "不能过早直接揭示真结局",
-                "关键线索错过时必须 fail-forward，而不是让剧情卡死",
-                "不要替玩家做行动决定",
-                "正常任务者必须有可见行动压力，不能只是背景板。",
-                "副本规则需要通过行动验证，不能一次性公开完整答案。",
-                "主神/系统提示只在关键节点短促出现，保持压迫感。",
-                "失败要以威胁推进、身份怀疑、伤亡、封锁或代价结算继续剧情。",
-                "Boss 或核心异常默认不可正面战胜，需要削弱、封印、规避、感化或揭真相路径。",
-            ],
-        },
-        "encounter_profile": {
-            "common": [],
-            "elite": [],
-            "boss": {
-                "name": "核心压力源",
-                "default_invincible": True,
-                "counterplay": ["削弱", "封印", "规避", "撤离"],
-            },
-            "spawn_rules": [],
-            "balance_notes": "候选扩展开局默认先缓存简表，后续可由怪物生成器补全数值。",
-        },
+        "instance_blueprint": instance_blueprint,
+        "encounter_profile": encounter_profile,
         "initial_stats": {
             "points": 100,
             "player1": dict(_default_player_stats()),
@@ -4323,9 +4629,9 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
             "维持双方 NPC 身份。",
             "不能暴露玩家、任务者或外来者身份。",
             "用符合身份的行为推动正常任务者进度。",
-        ]
+        ] + list(raw["public"].get("visible_rules") or [])
         raw["public"]["public_task"] = raw["conflict"]
-        raw["gm_secret"]["true_rules"] = [
+        raw["gm_secret"]["true_rules"] = list(raw["gm_secret"].get("true_rules") or []) + [
             "本局是临时 NPC 惩罚副本；正常任务者才是表层通关队伍。",
             "玩家一与玩家二都是副本原住民 NPC，不属于正常任务者队伍。",
             "玩家不是来自己通关，而是通过 NPC 身份推动正常任务者验证规则、削弱或规避核心异常。",
@@ -4336,33 +4642,13 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
             "玩家一和玩家二只能通过符合 NPC 身份的反应、关系、线索、阻碍或求助推动任务者，不可直接剧透。",
             "正文仍固定玩家一视角，玩家二只能通过玩家一可见、可听、可交流的信息呈现。",
         ]
-        raw["gm_secret"]["hidden_endings"] = [
+        raw["gm_secret"]["hidden_endings"] = list(raw["gm_secret"].get("hidden_endings") or []) + [
             {"name": "身份无损", "condition": "玩家一和玩家二始终维持 NPC 身份，并让正常任务者完成主线关键进度。"},
             {"name": "暴露失败", "condition": "任一玩家主动说出系统/任务者/外来者真相，或两人的 NPC 身份被任务者与异常阵营同时识破。"},
         ]
-        raw["instance_blueprint"]["logline"] = (blueprint_logline or "临时 NPC 在别人的副本里演好身份并推动主线。")[:240]
-        raw["instance_blueprint"]["mainline"] = [
-            {
-                "phase": "入戏",
-                "goal": "确认玩家一和玩家二的 NPC 身份、社会位置、关系、行动边界，以及正常任务者正在接近的公开任务。",
-                "required_clues": [],
-                "fail_forward": "如果玩家暂时无法推进，由副本人物、任务者误判、两人关系牵引或异常压力迫使他们做出符合身份的反应。",
-                "notes": blueprint[:500],
-            },
-            {
-                "phase": "推动",
-                "goal": "玩家一和玩家二用 NPC 身份能做的事，间接给出线索、制造合理冲突或阻止错误路线。",
-                "required_clues": [],
-                "fail_forward": "线索错过时，用发病、问话、家族/组织关系、环境异变或任务者二次调查继续推进。",
-            },
-            {
-                "phase": "收束",
-                "goal": "正常任务者完成关键判断或通关节点，玩家一和玩家二避免暴露并等待系统确认归档。",
-                "required_clues": [],
-                "fail_forward": "若暴露风险过高，进入强制撤离、评级下降或惩罚失败结算。",
-            },
-        ]
-        raw["instance_blueprint"]["hard_constraints"] = [
+        raw["instance_blueprint"]["hard_constraints"] = list(
+            raw["instance_blueprint"].get("hard_constraints") or []
+        ) + [
             "这是无限流惩罚副本，不是普通角色扮演剧本。",
             "玩家一和玩家二都不是正常任务者，不能按普通通关副本推进。",
             "两名玩家 NPC 公开姓名必须使用各自玩家代号，不能另起姓名。",
@@ -4375,7 +4661,7 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
             "债务、污染、复活、契约只作为后端触发原因，不得写成剧情主线。",
             "不要替玩家做行动决定，不要直接剧透隐藏真相。",
         ]
-    return _normalize_framework(raw)
+    return raw
 
 
 def _tutorial_framework() -> dict:
@@ -4530,11 +4816,18 @@ def generate_framework_random(target_difficulty: Optional[str] = None) -> tuple[
     data = _extract_json_object(text)
     if not data:
         return None, "文游：框架解析失败，请重试开局。"
-    return _normalize_framework(data), None
+    tasker_error = _generated_framework_tasker_error(data)
+    if tasker_error:
+        return None, f"文游：框架任务者编制无效（{tasker_error}）。"
+    semantic_errors = _generated_framework_semantic_errors(data)
+    if semantic_errors:
+        return None, f"文游：框架语义验收失败（{'；'.join(semantic_errors)}）。"
+    framework = _normalize_framework(data)
+    return framework, None
 
 
 def generate_framework_from_candidate(candidate: Any) -> tuple[Optional[dict], Optional[str]]:
-    """候选扩展：DS 只写文本块，后端组装结构，避免严格 JSON 脆弱解析。"""
+    """候选扩展：依次生成核心短稿、严格 JSON 结构设计和受蓝图约束的开场。"""
     item = _normalize_candidate_item(candidate, 0)
     if not item:
         return None, "文游：候选设定为空，无法扩展。"
@@ -4554,42 +4847,49 @@ def generate_framework_from_candidate(candidate: Any) -> tuple[Optional[dict], O
     if not core_text:
         return None, "文游：候选扩展失败（core 为空）。"
 
-    jobs = {
-        "blueprint": (_candidate_blueprint_prompt(item, core_text), 0.72, 75),
-        "opening": (_candidate_opening_prompt(item, core_text), 0.82, 75),
-    }
-    outputs: dict[str, str] = {}
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="wenyou-expand") as pool:
-        futures = {
-            pool.submit(
-                call_wenyou_deepseek,
-                [{"role": "user", "content": prompt}],
-                _FRAMEWORK_SYSTEM,
-                temperature,
-                timeout,
-            ): name
-            for name, (prompt, temperature, timeout) in jobs.items()
-        }
-        for fut in as_completed(futures):
-            name = futures[fut]
-            try:
-                text = fut.result()
-            except Exception as e:
-                logger.warning("文游候选扩展子任务失败 part=%s error=%s", name, e, exc_info=True)
-                return None, f"文游：候选扩展失败（{name} 异常）。"
-            if not text:
-                return None, f"文游：候选扩展失败（{name} 无响应）。"
-            clean = _clean_ds_block(text, 1400 if name == "blueprint" else 900)
-            if not clean:
-                return None, f"文游：候选扩展失败（{name} 为空）。"
-            outputs[name] = clean
+    design_text = call_wenyou_deepseek(
+        [{"role": "user", "content": _candidate_design_prompt(item, core_text)}],
+        _FRAMEWORK_SYSTEM,
+        0.68,
+        75,
+    )
+    if not design_text:
+        return None, "文游：候选扩展失败（结构设计无响应）。"
+    design = _extract_json_object(design_text)
+    if not design:
+        return None, "文游：候选扩展失败（结构设计不是有效 JSON）。"
 
-    fw = _framework_from_candidate_text(
+    tasker_cast, tasker_error = _normalize_candidate_tasker_cast(
+        design,
+        forced=bool(item.get("forced")),
+    )
+    if tasker_error or not tasker_cast:
+        return None, f"文游：候选扩展失败（{tasker_error or '任务者编制无效'}）。"
+    design_errors = _generated_framework_semantic_errors(design, require_opening=False)
+    if design_errors:
+        return None, f"文游：候选扩展语义验收失败（{'；'.join(design_errors)}）。"
+
+    opening_text = call_wenyou_deepseek(
+        [{"role": "user", "content": _candidate_opening_prompt(item, core_text, design)}],
+        _FRAMEWORK_SYSTEM,
+        0.82,
+        75,
+    )
+    opening = _clean_ds_block(opening_text, 900)
+    if not opening:
+        return None, "文游：候选扩展失败（opening 无响应或为空）。"
+
+    raw_framework = _framework_from_candidate_text(
         item,
         core_text,
-        outputs.get("blueprint") or "",
-        outputs.get("opening") or "",
+        design,
+        opening,
+        tasker_cast,
     )
+    semantic_errors = _generated_framework_semantic_errors(raw_framework)
+    if semantic_errors:
+        return None, f"文游：候选扩展语义验收失败（{'；'.join(semantic_errors)}）。"
+    fw = _normalize_framework(raw_framework)
     logger.info("文游候选扩展完成 candidate=%s elapsed=%.2fs", item.get("id"), time.monotonic() - started)
     return fw, None
 
@@ -4604,20 +4904,48 @@ def generate_framework_custom(keywords: str) -> tuple[Optional[dict], Optional[s
     data = _extract_json_object(text)
     if not data:
         return None, "文游：框架解析失败，请重试。"
-    return _normalize_framework(data), None
+    tasker_error = _generated_framework_tasker_error(data)
+    if tasker_error:
+        return None, f"文游：框架任务者编制无效（{tasker_error}）。"
+    semantic_errors = _generated_framework_semantic_errors(data)
+    if semantic_errors:
+        return None, f"文游：框架语义验收失败（{'；'.join(semantic_errors)}）。"
+    framework = _normalize_framework(data)
+    return framework, None
 
 def _new_session(framework: dict) -> dict:
     gid = str(uuid4())
     ts = now_beijing_iso()
     opening = framework.get("opening") or "【主神提示】副本同步完成。白光散去，你们已抵达任务区域。"
     fw = _framework_for_runtime(framework)
+    blueprint = fw.get("instance_blueprint") if isinstance(fw.get("instance_blueprint"), dict) else {}
+    initial_clocks: list[dict] = []
+    for clock in blueprint.get("threat_clocks") or []:
+        if not isinstance(clock, dict):
+            continue
+        clock_id = str(clock.get("id") or "").strip()
+        if not clock_id:
+            continue
+        try:
+            max_value = max(1, int(clock.get("max") or 6))
+        except (TypeError, ValueError):
+            max_value = 6
+        initial_clocks.append(
+            {
+                **copy.deepcopy(clock),
+                "id": clock_id,
+                "name": str(clock.get("name") or clock_id),
+                "value": 0,
+                "max": max_value,
+            }
+        )
     session = {
         "gameId": gid,
         "startedAt": ts,
         "phase": "instance_running",
         "framework": framework,
         "stats": _stats_runtime_from_framework(fw),
-        "clocks": [],
+        "clocks": initial_clocks,
         "event_log": [],
         "last_state_patch": None,
         "history": [
@@ -5045,7 +5373,7 @@ def cmd_story(user_id: int, keywords: Optional[str]) -> str:
 
 @_serialized_user_operation
 def cmd_story_from_candidate(user_id: int, candidate: Any) -> str:
-    """处理大厅候选扩展开局；完整副本框架由并行 DS 子任务生成。"""
+    """处理大厅候选扩展开局；完整副本框架由顺序 DS 结构设计链生成。"""
     uid = int(user_id)
     item = _normalize_candidate_item(candidate, 0)
     if not item:
@@ -5524,7 +5852,7 @@ def get_session_view(user_id: int) -> dict:
                 "conflict": str(fw.get("conflict") or ""),
                 "failure_hint": str(fw.get("failure_hint") or ""),
                 "reward_hint": str(fw.get("reward_hint") or ""),
-                "tasker_total": int(fw.get("tasker_total") or _DEFAULT_TASKER_TOTAL),
+                "tasker_total": int(fw.get("tasker_total") or fw.get("player_count") or _DEFAULT_PLAYER_COUNT),
                 "player_count": int(fw.get("player_count") or _DEFAULT_PLAYER_COUNT),
                 "npc_taskers": fw.get("npc_taskers") or [],
             },
@@ -6650,6 +6978,17 @@ def _monster_template_to_instance(raw: Any, index: int, tier: str = "common", di
         "weaken_conditions": _normalize_text_list(raw.get("weaken_conditions"), 120, 6),
         "seal_conditions": _normalize_text_list(raw.get("seal_conditions"), 120, 6),
         "escape_conditions": _normalize_text_list(raw.get("escape_conditions"), 120, 6),
+        "role": _compact_text(raw.get("role"), 120),
+        "territory": _compact_text(raw.get("territory"), 120),
+        "behavior": _compact_text(raw.get("behavior"), 180),
+        "signs": _normalize_text_list(raw.get("signs"), 120, 8),
+        "triggers": _normalize_text_list(raw.get("triggers"), 120, 8),
+        "ecology_links": _normalize_text_list(raw.get("ecology_links"), 160, 8),
+        "resolution_paths": [
+            copy.deepcopy(path)
+            for path in (raw.get("resolution_paths") if isinstance(raw.get("resolution_paths"), list) else [])
+            if isinstance(path, dict)
+        ],
         "public_text": _compact_text(raw.get("public_text") or raw.get("desc") or raw.get("role") or "", 180),
     }
 

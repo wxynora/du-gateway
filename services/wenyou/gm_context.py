@@ -34,6 +34,7 @@ def _format_tasker_regiment_for_gm(fw: dict) -> str:
         f"- 难度等级：**{diff}**（D 最易，S 最险；越高则环境越危险、规则越苛刻，NPC 中越容易混有「大佬」或「炮灰」，恶意与博弈也更强）。",
         f"- 编制：tasker_total={total}，当前玩家角色 {pc} 名（玩家一「{p1n}」、玩家二「{p2n}」），NPC 任务者 {npc_count} 名，须在同一副本规则下互动（NPC 可分批登场、可退场或死亡，但须有因果，不得无交代消失）。",
         "- NPC 可与难度相应（内部定位可区分新人/炮灰/老练/大佬），但这些定位不得直接告知玩家；玩家只能通过剧情表现自行判断。注意：NPC 真实立场对玩家默认不可知，不得在设定里直给“好/坏”结论；禁止过度血腥虐待描写。",
+        "- 其他任务者不是副本原住民、玩家随从或等候触发的背景板。每轮按各自当前意图判断是否观察、试探、合作、隐瞒、争夺、利用他人或撤退；他们首先为自己的通关、生存与结算负责，不会无条件围着玩家行动。",
         "",
         "NPC 任务者档案（须在剧情中落实）：",
     ]
@@ -107,7 +108,7 @@ def _format_blueprint_for_gm(fw: dict) -> str:
         },
         "encounter_profile": _normalize_encounter_profile(fw.get("encounter_profile")),
     }
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))[:4000]
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _gm_list_text(items: Any, *, limit: int = 8, item_limit: int = 180) -> list[str]:

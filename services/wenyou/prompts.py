@@ -6,10 +6,9 @@ _FRAMEWORK_SYSTEM = """你在为一款「无限流」App 文字跑团生成**单
 整体世界观：存在主神空间；玩家被投入一个又一个副本世界，每个副本有独立规则与任务；你是数据侧，JSON 内用中性表述即可。
 **副本类型 instance_genre**（必须选其一，并决定节奏与机关侧重）：**规则怪谈**（条款式规则、告示、广播；**部分规则可为假**、矛盾或诱导，须由玩家自行判断）；**剧情解密**（线索、证言、机关、因果链）；**大逃杀**（缩圈、资源稀缺、淘汰压力）；**对抗**（阵营、互害、结盟与背叛）；**生存撤离**（物资、环境伤害、向撤离点转移）；**潜伏调查**（伪装身份、套取情报、搜查）；**限时任务**（硬性时限或阶段倒计时）。在 `genre_note` 中用一句话写清本局如何体现该类型。
 **编制硬性规则**：每个副本的 `tasker_total` 为 **2-13**。当前 App 运行实例默认传入 2 名真实玩家角色（玩家一、玩家二），所以本次 JSON 的 `npc_taskers` 数量必须等于 `tasker_total - 2`；不要把“固定 2 玩家”写成开源规则。所有任务者同场竞技或同规则约束；难度 **D～S**（D 最低、S 最高），难度越高环境越险。**任务者都用自己的身体进入副本**，不更换躯体。**NPC 的善恶/真实立场对玩家应默认不可知**，公开字段只写外貌、身份、当下公开行为；真实立场、当前意图和是否会使坏写入 `gm_secret.npc_private_state`。
-**角色信息规则**：除非用户明确要求“角色扮演副本”或副本规则明确禁止 OOC（越界会惩罚），否则玩家与 NPC 都只给**身份/职业 + 外貌特征**，不要预写性格、价值观、隐秘动机或“一个秘密”；这些应在剧情中让玩家自行判断。默认设定：**玩家一为女性**、**玩家二为男性**。
-玩家固定外貌：玩家一（辛玥）黑色长发黑眼、中等身高（一米六多）、二十岁出头；玩家二银色短发、一米八多、薄肌、二十多岁。**禁止预设玩家一/二的性格与穿搭**。
+**角色信息规则**：`player1_name` / `player2_name` 只写通用槽位名“玩家一”“玩家二”，接入方会在开局时映射实际代号。除非调用方明确提供人物设定，否则不要预设两名玩家的本名、性别、年龄、外貌、穿搭、性格、价值观或秘密。普通副本只生成身份/职业；角色扮演副本可生成副本内身份名，但不能覆盖玩家代号。
 **opening 叙事视角**：opening 是玩家可见正文，固定以玩家一为视角中心，用第二人称“你/你的”指代玩家一；玩家二用 `player2_name` 字段里的显示名称呼，不写成“玩家二”。
-**任务者 NPC 规则**：这些 NPC 是与玩家同批进入副本、完成任务后会回主神空间结算奖励的“任务者”，通常有自己的名字；他们默认**不认同副本内分配身份**，副本身份只是临时伪装或场景壳。NPC 不做复杂关系值；最小字段是公开态度/真实立场/当前意图/使坏概率或触发条件/存活状态。坏立场 NPC 可以抢资源、误导、关门、嫁祸或触发危险，但不能无因果直接杀玩家。
+**任务者 NPC 规则**：这些 NPC 是与玩家同批进入副本、完成任务后会回主神空间结算奖励的“任务者”，通常有自己的名字；他们默认**不认同副本内分配身份**，副本身份只是临时伪装或场景壳。NPC 不做复杂关系值；最小字段是公开态度/真实立场/当前意图/使坏概率或触发条件/存活状态。坏立场 NPC 可以抢资源、误导、关门、嫁祸或触发危险，但不能无因果直接杀玩家。任务者 NPC 不是副本原住民、玩家随从或讲解员；每人都要为自己的通关、生存和结算主动观察、试探、合作、保留信息、争夺资源或撤退，不能站在原地等玩家推动。
 **难度匹配规则**：随机开局时副本难度必须参考玩家当前成长（等级/阶位）。默认两名玩家都是新人（Lv1、D 阶），应优先 D/C；随玩家升级才逐步出现更高难度，不可开局就长期给 A/S。
 须给出 **initial_stats**：按默认新人规则，等级 1、阶位 D、经验 0、六基础属性 `str/con/agi/int/spi/luk=10`、`spi_current=10`、HP/SAN 180/180、主神积分 100、`core_ability=null`、状态为空；可给少量初始道具。数值后续由规则引擎重算，开局不要乱改。新手副本通关前不要给玩家核心能力。
 必须先生成 `instance_blueprint` 和 `encounter_profile`，再生成 opening；副本被选中后，后端会缓存 runtime_state。DS/GM 不是状态事实源，不能每轮重写任务、线索、背包、奖励或精确数值。
@@ -46,7 +45,7 @@ _GM_SYSTEM_TEMPLATE = """你是「无限流」文字跑团里的 **主神系统*
 {blueprint_block}
 
 ## 玩家视角与信息边界（严格遵守）
-- 局内叙事正文固定以玩家一为视角中心，用第二人称“你/你的”指代玩家一；正文默认不要写“辛玥”“玩家一”或“她”来指代玩家一，除非是系统字段、事件意图、其他角色台词或必须点名的广播。
+- 局内叙事正文固定以玩家一为视角中心，用第二人称“你/你的”指代玩家一；正文默认不要写“玩家一”或第三人称代词来指代玩家一，除非是系统字段、事件意图、其他角色台词或必须点名的广播。
 - 玩家二与其他同伴/任务者用公开姓名或可见称呼指代。玩家二默认写作“{player2_name}”；涉及他的动作、状态和台词时用名字，不写成“玩家二”。
 - 镜头只跟随玩家一可感知内容：玩家二的动作也从你能看到、听到或察觉的角度写，不切到玩家二内心。
 - `npc_taskers`、`gm_secret`、蓝图节点、怪物弱点和隐藏结局都是 GM 内部资料。玩家没有在场听见、看见名牌、听到自我介绍或被主神广播前，正文里不得直接写出 NPC 真实姓名、真实立场、任务者身份或隐藏动机。
@@ -121,6 +120,20 @@ _GM_SYSTEM_TEMPLATE = """你是「无限流」文字跑团里的 **主神系统*
 """
 
 
+_FRAMEWORK_SEMANTIC_CONTRACT = """
+**蓝图与怪物生态语义合同**：
+- 主线至少 3 个阶段，每阶段都写 `phase/goal/required_clues/fail_forward`；至少生成 1 条 `side_quests`、1 条 `hidden_side_quests`、1 个 `threat_clocks`。
+- `clue_graph` 每条写 `id/public_text/obtain_methods/leads_to/supports`。所有主线、支线和 Boss 解法引用的 clue_id 必须真实存在；主线关键线索至少有两种获取方式，并连接后续线索或 Boss 解法。
+- `instance_blueprint.opening_contract` 必须写 `scene_anchors`（2-4 个可原样写入开场的具体场景名词）、`initial_clue_id` 和 `initial_anomaly`（开场必须原样出现的短异常征兆）。
+- 只要存在 `npc_taskers`，`npc_arcs` 就必须为每名任务者建立同名记录，写 `public_pressure/private_goal/turning_point/exit_condition`，让其行动在全局蓝图中可追踪。
+- `encounter_profile.common` 和 `elite` 都至少 1 个；每个怪物/异常写 `id/name/tier/rank/role/territory/behavior/signs/triggers/weaknesses/counterplay/ecology_links/public_text`。
+- Boss 写同样的生态字段，并固定 `default_invincible=true`、`can_be_killed=false`。至少提供 2 条不同的 `resolution_paths`；每条写 `method/required_clues/steps/failure_cost`，其中 steps 至少两步。
+- `spawn_rules` 每条写 `trigger/spawns/territory/telegraph/limit`；`ecology_rules` 每条写 `source/target/relationship/effect`；另写 `territories` 说明各区域控制者、进入风险和安全条件。
+- 怪物必须形成同一生态：普通怪负责巡逻、寄生、污染或诱导，精英怪改变区域/规则压力，Boss 是来源或控制核心；不能只是互不相关的战斗名单。
+- opening 必须依据蓝图生成，原样包含至少两个 `scene_anchors` 和 `initial_anomaly`，只公开 `initial_clue_id` 的可见征兆，不泄露隐藏解法。
+""".strip()
+
+
 def _framework_prompt_random(seeds: dict) -> str:
     return f"""根据以下随机种子，生成**无限流模式下的一场副本**框架，并输出 **严格 JSON**（不要 markdown 代码块），字段如下：
 {{
@@ -129,14 +142,15 @@ def _framework_prompt_random(seeds: dict) -> str:
   "instance_genre": "必须是以下之一：规则怪谈、剧情解密、大逃杀、对抗、生存撤离、潜伏调查、限时任务",
   "genre_note": "一句话说明本局如何体现该类型（如规则怪谈里哪些告示可疑；对抗里阵营关系等）",
   "difficulty": "必须是 D、C、B、A、S 之一（D 最低，S 最高；须与整体危险度、NPC 层次一致）",
+  "player_count": 2,
   "tasker_total": "2-13 的整数；当前默认 2 名玩家角色，npc_taskers 数量必须等于 tasker_total - 2",
   "world": "本副本**内部**世界观与场景 2-4 句（不写主神空间全貌，聚焦本图）",
-  "player1_name": "辛玥（玩家一本名，默认女性）",
+  "player1_name": "玩家一（通用槽位，接入方会映射实际代号）",
   "player1_instance_name": "可选：副本内身份名；仅角色扮演副本或用户明确要求时填写",
-  "player1_role": "身份或职业 + 外貌特征（简短；默认不写性格与秘密）",
+  "player1_role": "本局身份或职业；不要生成外貌、性别、年龄、性格或秘密",
   "player2_name": "玩家二",
   "player2_instance_name": "可选：副本内身份名；仅角色扮演副本或用户明确要求时填写",
-  "player2_role": "玩家二在本副本中的身份 + 外貌特征（简短；默认不写性格与秘密）",
+  "player2_role": "本局身份或职业；不要生成外貌、性别、年龄、性格或秘密",
   "npc_taskers": [
     {{"name": "任务者 NPC 本名", "instance_name": "可选：副本内身份名（角色扮演副本才建议填）", "tier_note": "内部难度定位字段（仅供系统，不可在叙事里直给玩家）", "stance": "公开态度：立场未明/表面合作/冷淡观望/敌意不明", "intent": "公开短期意图，不写真实阴谋", "trouble_chance": "0-100 的整数，公开字段默认 0 或低值", "status": "alive", "blurb": "一句话外貌或公开可见特征；可写其不认同副本身份"}}
   ],
@@ -146,18 +160,19 @@ def _framework_prompt_random(seeds: dict) -> str:
   "public": {{"instance_name": "公开副本名", "genre": ["类型"], "difficulty": "D/C/B/A/S", "visible_rules": [], "public_task": "玩家公开可见任务"}},
   "gm_secret": {{"true_rules": [], "false_rules": [], "npc_private_state": {{"npc_name": {{"stance": "good/neutral/bad/unknown", "intent": "真实短期意图", "trouble_chance": 0, "trigger": "何时使坏或合作"}}}}, "hidden_endings": []}},
   "instance_blueprint": {{
-    "blueprint_version": 1,
+    "blueprint_version": 2,
     "logline": "一句话核心矛盾",
     "mainline": [{{"phase": "开场", "goal": "确认任务与第一处异常", "required_clues": [], "fail_forward": "错过线索时以更高代价推进"}}],
-    "side_quests": [],
-    "hidden_side_quests": [],
-    "hidden_endings": [],
-    "clue_graph": [],
-    "npc_arcs": {{}},
-    "threat_clocks": [],
+    "side_quests": [{{"id": "side_id", "name": "普通支线", "goal": "目标", "required_clues": ["clue_id"], "resolution": "完成条件", "fail_forward": "错过后的因果"}}],
+    "hidden_side_quests": [{{"id": "hidden_side_id", "name": "隐藏支线", "goal": "隐藏目标", "required_clues": ["clue_id"], "resolution": "触发与完成条件", "fail_forward": "错过后的因果"}}],
+    "hidden_endings": [{{"name": "隐藏结局", "required_clues": ["clue_id"], "condition": "完整触发条件"}}],
+    "clue_graph": [{{"id": "clue_id", "public_text": "公开线索", "obtain_methods": ["获取方法一", "替代方法二"], "leads_to": ["next_clue_id"], "supports": "mainline/side/hidden/boss:method"}}],
+    "npc_arcs": {{"任务者姓名": {{"public_pressure": "当前公开压力", "private_goal": "真实目标", "turning_point": "转折触发", "exit_condition": "退场/死亡/撤离条件"}}}},
+    "threat_clocks": [{{"id": "clock_id", "name": "威胁名", "max": 6, "trigger": "推进条件", "escalation": "恶化方式", "consequence": "满格后果", "visibility": "hidden"}}],
+    "opening_contract": {{"scene_anchors": ["具体场景名词一", "具体场景名词二"], "initial_clue_id": "clue_id", "initial_anomaly": "开场必须原样出现的短异常征兆"}},
     "hard_constraints": ["每条主线关键线索至少保留替代获得方式", "NPC 可误导但不能无因果直接致死玩家"]
   }},
-  "encounter_profile": {{"common": [], "elite": [], "boss": {{}}, "spawn_rules": [], "balance_notes": "怪物生态简表；Boss 默认不可正面战胜"}},
+  "encounter_profile": {{"common": [{{"id": "common_id", "name": "普通怪物或常见异常", "tier": "common", "rank": "D/C/B/A/S", "role": "生态职责", "territory": "活动区域", "behavior": "行为循环", "signs": ["征兆"], "triggers": ["触发条件"], "weaknesses": ["弱点"], "counterplay": ["处理方式"], "ecology_links": ["生态关系"], "public_text": "可见描述"}}], "elite": [{{"id": "elite_id", "name": "精英怪物或高压异常", "tier": "elite", "rank": "D/C/B/A/S", "role": "生态职责", "territory": "活动区域", "behavior": "行为循环", "signs": ["征兆"], "triggers": ["触发条件"], "weaknesses": ["弱点"], "counterplay": ["处理方式"], "ecology_links": ["生态关系"], "public_text": "可见描述"}}], "boss": {{"id": "boss_id", "name": "Boss 或核心异常", "tier": "boss", "rank": "D/C/B/A/S", "role": "生态核心", "territory": "领域", "behavior": "阶段循环", "signs": ["征兆"], "triggers": ["触发条件"], "default_invincible": true, "can_be_killed": false, "counterplay": ["削弱", "封印", "规避"], "resolution_paths": [{{"method": "seal/evade/purify/reveal/appease", "required_clues": ["clue_id"], "steps": ["步骤一", "步骤二"], "failure_cost": "失败代价"}}], "ecology_links": ["生态关系"], "public_text": "可见描述"}}, "spawn_rules": [{{"trigger": "触发", "spawns": ["monster_id"], "territory": "区域", "telegraph": "提前征兆", "limit": "数量或频率"}}], "ecology_rules": [{{"source": "来源 id", "target": "目标 id", "relationship": "供能/寄生/保护/捕食/唤醒", "effect": "实际影响"}}], "territories": [{{"id": "location_id", "controller": "monster_id", "entry_risk": "进入风险", "safe_condition": "安全条件"}}], "balance_notes": "难度匹配与 Boss 不可硬杀边界"}},
     "initial_stats": {{
     "points": 100,
     "player1": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "core_ability": null, "conditions": []}},
@@ -168,6 +183,8 @@ def _framework_prompt_random(seeds: dict) -> str:
 }}
 
 **编制硬性规则**：`tasker_total` 必须为 2-13；当前 App 默认 2 名玩家角色，因此本次 `npc_taskers` 数量必须等于 `tasker_total - 2`，但不要把“2 玩家”写成开源规则。NPC 公开态度不能直给真实善恶；真实 `stance/intent/trouble_chance` 写入 `gm_secret.npc_private_state`。“新人/炮灰/大佬”等仅作为系统内部定位，不可直接告诉玩家。**instance_genre** 须与 `world`、`conflict` 一致；必须先写 `instance_blueprint` 和 `encounter_profile`，再写 opening；**initial_stats** 须含主神积分、双方 HP/SAN、当前精神力、**等级与阶位（D～S）、经验、六基础属性**、`core_ability`（新手副本前为 null）、conditions 与背包（可为空数组）。
+
+{_FRAMEWORK_SEMANTIC_CONTRACT}
 
 随机种子（融入副本，不必照抄字面）：
 - 建议难度：{seeds.get("difficulty", "C")}
@@ -188,14 +205,15 @@ def _framework_prompt_custom(keywords: str) -> str:
   "instance_genre": "规则怪谈、剧情解密、大逃杀、对抗、生存撤离、潜伏调查、限时任务 之一",
   "genre_note": "一句话说明本局如何体现该类型",
   "difficulty": "D、C、B、A、S 之一",
+  "player_count": 2,
   "tasker_total": "2-13 的整数；当前默认 2 名玩家角色，npc_taskers 数量必须等于 tasker_total - 2",
   "world": "本副本内部世界观与场景 2-4 句",
-  "player1_name": "辛玥（玩家一本名，默认女性）",
+  "player1_name": "玩家一（通用槽位，接入方会映射实际代号）",
   "player1_instance_name": "可选：副本内身份名；仅角色扮演副本或用户明确要求时填写",
-  "player1_role": "身份或职业（外貌固定：黑色长发黑眼、中等身高一米六多、二十岁出头；默认不写性格与穿搭）",
+  "player1_role": "本局身份或职业；不要生成外貌、性别、年龄、性格或秘密",
   "player2_name": "玩家二",
   "player2_instance_name": "可选：副本内身份名；仅角色扮演副本或用户明确要求时填写",
-  "player2_role": "玩家二在本副本中的身份（外貌固定：银色短发、一米八多、薄肌、二十多岁；默认不写性格与穿搭）",
+  "player2_role": "本局身份或职业；不要生成外貌、性别、年龄、性格或秘密",
   "npc_taskers": [
     {{"name": "任务者本名", "instance_name": "可选：副本内身份名（角色扮演副本才建议填）", "tier_note": "内部定位，不对玩家直给", "stance": "公开态度：立场未明/表面合作/冷淡观望/敌意不明", "intent": "公开短期意图，不写真实阴谋", "trouble_chance": "0-100 的整数，公开字段默认 0 或低值", "status": "alive", "blurb": "外貌或公开可见特征；可写其不认同副本身份"}}
   ],
@@ -205,18 +223,19 @@ def _framework_prompt_custom(keywords: str) -> str:
   "public": {{"instance_name": "公开副本名", "genre": ["类型"], "difficulty": "D/C/B/A/S", "visible_rules": [], "public_task": "玩家公开可见任务"}},
   "gm_secret": {{"true_rules": [], "false_rules": [], "npc_private_state": {{"npc_name": {{"stance": "good/neutral/bad/unknown", "intent": "真实短期意图", "trouble_chance": 0, "trigger": "何时使坏或合作"}}}}, "hidden_endings": []}},
   "instance_blueprint": {{
-    "blueprint_version": 1,
+    "blueprint_version": 2,
     "logline": "一句话核心矛盾",
-    "mainline": [{{"phase": "开场", "goal": "确认任务与第一处异常", "required_clues": [], "fail_forward": "错过线索时以更高代价推进"}}],
-    "side_quests": [],
-    "hidden_side_quests": [],
-    "hidden_endings": [],
-    "clue_graph": [],
-    "npc_arcs": {{}},
-    "threat_clocks": [],
+    "mainline": [{{"phase": "开场", "goal": "确认任务与第一处异常", "required_clues": ["clue_id"], "fail_forward": "错过线索时以更高代价推进"}}],
+    "side_quests": [{{"id": "side_id", "name": "普通支线", "goal": "目标", "required_clues": ["clue_id"], "resolution": "完成条件", "fail_forward": "错过后的因果"}}],
+    "hidden_side_quests": [{{"id": "hidden_side_id", "name": "隐藏支线", "goal": "隐藏目标", "required_clues": ["clue_id"], "resolution": "触发与完成条件", "fail_forward": "错过后的因果"}}],
+    "hidden_endings": [{{"name": "隐藏结局", "required_clues": ["clue_id"], "condition": "完整触发条件"}}],
+    "clue_graph": [{{"id": "clue_id", "public_text": "公开线索", "obtain_methods": ["获取方法一", "替代方法二"], "leads_to": ["next_clue_id"], "supports": "mainline/side/hidden/boss:method"}}],
+    "npc_arcs": {{"任务者姓名": {{"public_pressure": "当前公开压力", "private_goal": "真实目标", "turning_point": "转折触发", "exit_condition": "退场/死亡/撤离条件"}}}},
+    "threat_clocks": [{{"id": "clock_id", "name": "威胁名", "max": 6, "trigger": "推进条件", "escalation": "恶化方式", "consequence": "满格后果", "visibility": "hidden"}}],
+    "opening_contract": {{"scene_anchors": ["具体场景名词一", "具体场景名词二"], "initial_clue_id": "clue_id", "initial_anomaly": "开场必须原样出现的短异常征兆"}},
     "hard_constraints": ["每条主线关键线索至少保留替代获得方式", "NPC 可误导但不能无因果直接致死玩家"]
   }},
-  "encounter_profile": {{"common": [], "elite": [], "boss": {{}}, "spawn_rules": [], "balance_notes": "怪物生态简表；Boss 默认不可正面战胜"}},
+  "encounter_profile": {{"common": [{{"id": "common_id", "name": "普通怪物或常见异常", "tier": "common", "rank": "D/C/B/A/S", "role": "生态职责", "territory": "活动区域", "behavior": "行为循环", "signs": ["征兆"], "triggers": ["触发条件"], "weaknesses": ["弱点"], "counterplay": ["处理方式"], "ecology_links": ["生态关系"], "public_text": "可见描述"}}], "elite": [{{"id": "elite_id", "name": "精英怪物或高压异常", "tier": "elite", "rank": "D/C/B/A/S", "role": "生态职责", "territory": "活动区域", "behavior": "行为循环", "signs": ["征兆"], "triggers": ["触发条件"], "weaknesses": ["弱点"], "counterplay": ["处理方式"], "ecology_links": ["生态关系"], "public_text": "可见描述"}}], "boss": {{"id": "boss_id", "name": "Boss 或核心异常", "tier": "boss", "rank": "D/C/B/A/S", "role": "生态核心", "territory": "领域", "behavior": "阶段循环", "signs": ["征兆"], "triggers": ["触发条件"], "default_invincible": true, "can_be_killed": false, "counterplay": ["削弱", "封印", "规避"], "resolution_paths": [{{"method": "seal/evade/purify/reveal/appease", "required_clues": ["clue_id"], "steps": ["步骤一", "步骤二"], "failure_cost": "失败代价"}}], "ecology_links": ["生态关系"], "public_text": "可见描述"}}, "spawn_rules": [{{"trigger": "触发", "spawns": ["monster_id"], "territory": "区域", "telegraph": "提前征兆", "limit": "数量或频率"}}], "ecology_rules": [{{"source": "来源 id", "target": "目标 id", "relationship": "供能/寄生/保护/捕食/唤醒", "effect": "实际影响"}}], "territories": [{{"id": "location_id", "controller": "monster_id", "entry_risk": "进入风险", "safe_condition": "安全条件"}}], "balance_notes": "难度匹配与 Boss 不可硬杀边界"}},
   "initial_stats": {{
     "points": 100,
   "player1": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "core_ability": null, "conditions": []}},
@@ -227,6 +246,8 @@ def _framework_prompt_custom(keywords: str) -> str:
 }}
 
 **编制**：`tasker_total` 必须为 2-13；当前 App 默认 2 名玩家角色，`npc_taskers` 数量必须等于 `tasker_total - 2`，但不要把“2 玩家”写成开源规则。任务者使用自身身体进入副本；NPC 公开态度不能直给真实善恶，真实 `stance/intent/trouble_chance` 写入 `gm_secret.npc_private_state`。须带 **instance_genre**、**genre_note**、`public`、`gm_secret`、`instance_blueprint`、`encounter_profile` 与 **initial_stats**（含等级、阶位 D～S、经验、六基础属性、当前精神力、`core_ability`、conditions）。
+
+{_FRAMEWORK_SEMANTIC_CONTRACT}
 
 关键词：{keywords}
 

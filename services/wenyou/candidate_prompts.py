@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Any, Optional
 
@@ -5,6 +6,7 @@ from utils.time_aware import now_beijing_iso
 
 from services.wenyou.common import _normalize_difficulty, _normalize_instance_genre
 from services.wenyou.constants import _WENYOU_TUTORIAL_INSTANCE_ID
+from services.wenyou.prompts import _FRAMEWORK_SEMANTIC_CONTRACT
 
 
 def _normalize_candidate_item(raw: Any, index: int = 0) -> Optional[dict]:
@@ -223,61 +225,76 @@ def _candidate_canon_block(item: dict, core_text: str) -> str:
     ).strip()
 
 
-def _forced_candidate_blueprint_prompt(item: dict, core_text: str = "") -> str:
-    player1_code = str(item.get("player1_name_hint") or "玩家一").strip() or "玩家一"
-    player2_code = str(item.get("player2_name_hint") or "玩家二").strip() or "玩家二"
-    return f"""基于【已确定核心设定】生成「无限流 · 惩罚副本」蓝图短稿。
+def _candidate_design_prompt(item: dict, core_text: str = "") -> str:
+    forced = bool(item.get("forced"))
+    mode_rules = (
+        """- 本局是惩罚副本：玩家一和玩家二都在副本中扮演原住民 NPC，但仍占本局 player_count=2；npc_taskers 只列正常进入副本并负责表层通关的任务者。
+- tasker_total 至少为 4，确保至少有 2 名正常任务者。
+- 主线、支线、线索图和怪物解法要围绕两名玩家 NPC 的身份展开，但不能让玩家自己按普通任务者路线通关。
+- 玩家 NPC 公开姓名后续由接入方用代号映射；蓝图只写“玩家一”“玩家二”，不得另造本名。
+- 额外写清身份暴露给正常任务者和怪物阵营的不同后果。"""
+        if forced
+        else """- 玩家一和玩家二占 player_count=2；npc_taskers 只列除此之外的任务者。
+- 两名玩家名称只写通用槽位“玩家一”“玩家二”，不要生成真实姓名、性别、年龄或固定外貌。
+- 所有玩家与其他任务者按普通无限流逻辑求生、验证规则并争取结算。"""
+    )
+    return f"""基于【已确定核心设定】生成本局完整结构设计，输出严格 JSON，不要 Markdown、代码块或解释。
 
-本局底层结构：
-- 这仍然是无限流副本：存在主神空间、正常任务者队伍、规则、线索、危险、通关目标和结算。
-- 但玩家一和玩家二都不是正常任务者；两人是一起被塞进副本世界的 NPC。
-- 正常任务者才是表层主角，他们的主线可以围绕玩家一 NPC、玩家二 NPC，或两人共同关系展开。
-- 玩家一和玩家二的隐藏工作是演好各自 NPC，用符合身份的方式推动正常任务者进度，并避免暴露。
-- 蓝图内部要明确两人的 NPC 身份、关系、可配合边界；正文运行时仍固定玩家一视角。
-- 本局不是让玩家自己通关；玩家只能通过 NPC 身份把正常任务者推到验证规则、找到弱点、封印/规避核心异常的路上。
+输出顶层字段：
+{{
+  "player_count": 2,
+  "tasker_total": "根据本局实际选择的 2-13 整数",
+  "npc_taskers": [
+    {{
+      "name": "唯一真实姓名，不能写任务者3或NPC1",
+      "instance_name": "角色扮演副本的身份名，否则空字符串",
+      "tier_note": "新人/普通/老练/资深",
+      "stance": "公开态度",
+      "intent": "当前可见行动意图",
+      "trouble_chance": 0,
+      "status": "alive",
+      "blurb": "身份或职业、可见特征和此刻行为"
+    }}
+  ],
+  "npc_private_state": {{
+    "与 npc_taskers.name 完全一致的名字": {{
+      "stance": "good/neutral/bad/unknown",
+      "intent": "真实短期目标",
+      "trouble_chance": 0,
+      "trigger": "何时合作、争抢、误导、关门、嫁祸或撤退"
+    }}
+  }},
+  "public": {{"visible_rules": ["初始公开或疑似规则"]}},
+  "gm_secret": {{
+    "true_rules": ["真实规则"],
+    "false_rules": ["误导规则"],
+    "hidden_endings": [{{"name": "隐藏结局", "condition": "可执行条件"}}]
+  }},
+  "instance_blueprint": {{"按下方语义合同生成完整对象": true}},
+  "encounter_profile": {{"按下方语义合同生成完整对象": true}}
+}}
 
-{_forced_common_generation_constraints()}
+{_FRAMEWORK_SEMANTIC_CONTRACT}
 
-输出要求：
-- 只写自然语言，不要 JSON，不要 markdown 代码块，不要表格。
-- 按三段写：入戏、推动、收束。
-- 每段都写：两名玩家 NPC 的表演目标 / 正常任务者进度 / 可给出的线索或阻碍 / 规则验证方式 / 系统压迫节点 / 任一方暴露风险 / 错过时如何付代价 fail-forward。
-- 额外列出：玩家一 NPC 身份契约、玩家二 NPC 身份契约、两人关系或配合边界、正常任务者公开任务、身份违和钩子、Boss/异常对玩家 NPC 的危险牵引、暴露给任务者/怪物阵营的后果、隐藏支线/隐藏结局方向。
-- 玩家 NPC 身份可以很核心，甚至是被救援、被调查、被怀疑、被保护或被献祭的对象；越核心越危险。
-- 玩家一 NPC 的公开姓名必须使用「{player1_code}」，玩家二 NPC 的公开姓名必须使用「{player2_code}」；不得另起姓名。
-- 结算原因只写成“后端清算原因”，不得让债务/污染/复活/契约成为剧情主线。
-- 怪物或 Boss 默认不可由玩家一或玩家二正面解决；两人只能通过 NPC 身份引导任务者发现削弱、封印、规避或真相路径。
-- 只给 GM/后端内部短纲，不要整段剧透给玩家。
+任务者额外规则：
+- tasker_total 不得习惯性固定成 6；结合场景空间、难度和玩法选择人数。
+- npc_taskers 数量必须严格等于 tasker_total - 2，姓名唯一；npc_private_state 必须提供同名记录。
+- 每名任务者都有自己的通关、生存和结算目标，不是副本原住民、玩家随从、讲解员或背景板。
+- 公开字段不直给真实善恶；真实目标和触发只写 npc_private_state。
+{mode_rules}
 
 【已确定核心设定】
 {_candidate_canon_block(item, core_text)}
 """
 
 
-def _candidate_blueprint_prompt(item: dict, core_text: str = "") -> str:
-    if item.get("forced"):
-        return _forced_candidate_blueprint_prompt(item, core_text)
-    return f"""基于【已确定核心设定】生成副本蓝图短稿。
-
-{_infinite_flow_generation_constraints()}
-
-输出要求：
-- 只写自然语言，不要 JSON，不要 markdown 代码块，不要表格。
-- 按三段写：开场、探索、收束。
-- 每段写“阶段目标 / 关键线索 / 规则验证方式 / 正常任务者可见行为 / 系统压迫节点 / 错过线索时如何付代价推进”。
-- 额外列出：普通支线、隐藏支线、隐藏结局、威胁时钟、NPC 任务者立场边界、怪物/核心压力源简表。
-- NPC 任务者立场边界只写公开态度和可见行为，不直给真实善恶；真实立场留给后端隐藏状态。
-- 怪物生态只写普通怪/精英怪/Boss 或核心压力源的用途和解法；Boss 默认不可正面战胜。
-- 结算只看真实玩家角色/玩家队伍；NPC 结局只作为支线/隐藏目标证据，不自动影响评级。
-- 如果候选写明“强制清算：是”，蓝图必须列出身份边界、暴露给任务者/怪物阵营的后果，以及成功/失败如何回到后端清算；不要写成普通任务者竞赛。
-- 只给 GM/后端内部短纲，不要整段剧透给玩家。
-
-【已确定核心设定】
-{_candidate_canon_block(item, core_text)}
-"""
+def _candidate_design_context(design: Optional[dict]) -> str:
+    if not isinstance(design, dict):
+        return ""
+    return "\n\n【已验收结构设计】\n" + json.dumps(design, ensure_ascii=False, separators=(",", ":"))
 
 
-def _forced_candidate_opening_prompt(item: dict, core_text: str = "") -> str:
+def _forced_candidate_opening_prompt(item: dict, core_text: str = "", design: Optional[dict] = None) -> str:
     player1_code = str(item.get("player1_name_hint") or "玩家一").strip() or "玩家一"
     player2_code = str(item.get("player2_name_hint") or "玩家二").strip() or "玩家二"
     return f"""基于【已确定核心设定】生成「无限流 · 惩罚副本」开场正文。
@@ -299,15 +316,16 @@ def _forced_candidate_opening_prompt(item: dict, core_text: str = "") -> str:
 - 不要输出任务者名单、线索列表、规则档案或情报卡。
 - 如果写系统/主神广播，必须独立成行：`【系统提示】广播内容`。
 - 不要替玩家做行动决定，不要写玩家主动解释系统或直接剧透。
+- 必须原样写入 `opening_contract` 中至少两个 `scene_anchors` 和 `initial_anomaly`；开场只展示 `initial_clue_id` 的公开征兆。
 
 【已确定核心设定】
-{_candidate_canon_block(item, core_text)}
+{_candidate_canon_block(item, core_text)}{_candidate_design_context(design)}
 """
 
 
-def _candidate_opening_prompt(item: dict, core_text: str = "") -> str:
+def _candidate_opening_prompt(item: dict, core_text: str = "", design: Optional[dict] = None) -> str:
     if item.get("forced"):
-        return _forced_candidate_opening_prompt(item, core_text)
+        return _forced_candidate_opening_prompt(item, core_text, design)
     return f"""基于【已确定核心设定】生成副本开场正文。
 
 {_infinite_flow_generation_constraints()}
@@ -324,7 +342,8 @@ def _candidate_opening_prompt(item: dict, core_text: str = "") -> str:
 - 不要输出任务者名单、线索列表、规则档案或情报卡。普通环境描写不是线索。
 - 如果候选写明“强制清算：是”，开场要让玩家感到入口被锁定/被迫接入，但不要把隐藏规则、清算队列或后端状态直接念成说明书。
 - 不要替玩家做行动决定。
+- 必须原样写入 `opening_contract` 中至少两个 `scene_anchors` 和 `initial_anomaly`；开场只展示 `initial_clue_id` 的公开征兆。
 
 【已确定核心设定】
-{_candidate_canon_block(item, core_text)}
+{_candidate_canon_block(item, core_text)}{_candidate_design_context(design)}
 """

@@ -7,7 +7,7 @@ from services.wenyou.common import (
     _slug_id,
     _to_non_negative_int,
 )
-from services.wenyou.constants import _DEFAULT_PLAYER_COUNT, _DEFAULT_TASKER_TOTAL
+from services.wenyou.constants import _DEFAULT_PLAYER_COUNT
 
 
 def _default_player_stats() -> dict:
@@ -236,6 +236,7 @@ def _normalize_instance_blueprint(raw: Any, fw: Optional[dict] = None) -> dict:
         "clue_graph": _normalize_blueprint_list(data.get("clue_graph"), 16),
         "npc_arcs": data.get("npc_arcs") if isinstance(data.get("npc_arcs"), dict) else {},
         "threat_clocks": _normalize_blueprint_list(data.get("threat_clocks"), 8),
+        "opening_contract": data.get("opening_contract") if isinstance(data.get("opening_contract"), dict) else {},
         "hard_constraints": _normalize_text_list(data.get("hard_constraints"), 140, 12),
     }
     if not blueprint["mainline"]:
@@ -293,6 +294,8 @@ def _normalize_encounter_profile(raw: Any) -> dict:
         "elite": _normalize_blueprint_list(data.get("elite"), 4),
         "boss": boss,
         "spawn_rules": _normalize_blueprint_list(data.get("spawn_rules"), 12),
+        "ecology_rules": _normalize_blueprint_list(data.get("ecology_rules"), 12),
+        "territories": _normalize_blueprint_list(data.get("territories"), 12),
         "balance_notes": str(data.get("balance_notes") or "").strip()[:500],
     }
 
@@ -307,7 +310,7 @@ def _normalize_player_count(raw: dict) -> int:
 
 def _normalize_tasker_total(raw: dict, player_count: int) -> int:
     arr = raw.get("npc_taskers")
-    fallback = player_count + len(arr) if isinstance(arr, list) and arr else _DEFAULT_TASKER_TOTAL
+    fallback = player_count + len(arr) if isinstance(arr, list) else player_count
     try:
         total = int(raw.get("tasker_total") or fallback)
     except Exception:
@@ -325,34 +328,24 @@ def _normalize_npc_taskers(raw: dict, tasker_total: Optional[int] = None, player
     total = int(tasker_total or _normalize_tasker_total(raw, pc))
     npc_count = max(0, min(12, total - pc))
     out: list[dict] = []
-    for i in range(npc_count):
-        if i < len(arr) and isinstance(arr[i], dict):
-            d = arr[i]
-            out.append(
-                {
-                    "name": str(d.get("name") or f"NPC{i+1}")[:48].strip(),
-                    "instance_name": str(d.get("instance_name") or d.get("alias_name") or "")[:48].strip(),
-                    "tier_note": str(d.get("tier_note") or "未知")[:32].strip(),
-                    "stance": str(d.get("stance") or "立场未明")[:48].strip(),
-                    "intent": str(d.get("intent") or "")[:80].strip(),
-                    "trouble_chance": max(0, min(100, _to_non_negative_int(d.get("trouble_chance"), 0))),
-                    "status": str(d.get("status") or "alive")[:24].strip() or "alive",
-                    "blurb": str(d.get("blurb") or "")[:200].strip(),
-                }
-            )
-        else:
-            out.append(
-                {
-                    "name": f"任务者{i+3}",
-                    "instance_name": "",
-                    "tier_note": "待定",
-                    "stance": "立场未明",
-                    "intent": "",
-                    "trouble_chance": 0,
-                    "status": "alive",
-                    "blurb": "主神档案尚未同步",
-                }
-            )
+    for d in arr[:npc_count]:
+        if not isinstance(d, dict):
+            continue
+        name = str(d.get("name") or "")[:48].strip()
+        if not name:
+            continue
+        out.append(
+            {
+                "name": name,
+                "instance_name": str(d.get("instance_name") or d.get("alias_name") or "")[:48].strip(),
+                "tier_note": str(d.get("tier_note") or "未知")[:32].strip(),
+                "stance": str(d.get("stance") or "立场未明")[:48].strip(),
+                "intent": str(d.get("intent") or "")[:80].strip(),
+                "trouble_chance": max(0, min(100, _to_non_negative_int(d.get("trouble_chance"), 0))),
+                "status": str(d.get("status") or "alive")[:24].strip() or "alive",
+                "blurb": str(d.get("blurb") or "")[:200].strip(),
+            }
+        )
     return out
 
 
@@ -365,10 +358,8 @@ def _framework_for_runtime(fw: Optional[dict]) -> dict:
     out["genre_note"] = gn[:300] if gn else ""
     out["player_count"] = _normalize_player_count(out)
     out["tasker_total"] = _normalize_tasker_total(out, out["player_count"])
-    n = out.get("npc_taskers")
-    expected_npc = max(0, int(out["tasker_total"]) - int(out["player_count"]))
-    if not isinstance(n, list) or len(n) != expected_npc:
-        out["npc_taskers"] = _normalize_npc_taskers(out, out["tasker_total"], out["player_count"])
+    out["npc_taskers"] = _normalize_npc_taskers(out, out["tasker_total"], out["player_count"])
+    out["tasker_total"] = out["player_count"] + len(out["npc_taskers"])
     public, gm_secret = _normalize_public_secret(out, out)
     out["public"] = public
     out["gm_secret"] = gm_secret
