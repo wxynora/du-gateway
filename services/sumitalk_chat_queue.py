@@ -1782,6 +1782,8 @@ def _consume_sumitalk_chat_stream(result, job_id: str) -> tuple[int, dict]:
         return 502, {"error": stream_error}
     if not done_seen and not finish_reason:
         return 502, {"error": "流式响应异常中断"}
+    if done_seen and not content_parts and not finish_reason:
+        return 502, {"error": "流式响应正常结束但未返回正文或结束原因"}
     if text_started:
         emit_live_sumitalk_chat_job_event(
             job_id,

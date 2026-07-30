@@ -1075,6 +1075,21 @@ function createOpenaiStreamConverter(model) {
   };
 
   return (event) => {
+    if (event?.type === "error") {
+      const detail = event.error && typeof event.error === "object" ? event.error : {};
+      const type = String(detail.type || "api_error");
+      const message = String(detail.message || "Anthropic streaming error");
+      const requestId = String(event.request_id || detail.request_id || "");
+      return {
+        error: {
+          type,
+          message,
+          code: type,
+          ...(requestId ? { request_id: requestId } : {}),
+        },
+      };
+    }
+
     if (event.type === "message_start") {
       messageId = event.message?.id || messageId;
       servingModel = String(event.message?.model || "").trim() || servingModel;
@@ -1179,6 +1194,69 @@ function createOpenaiStreamConverter(model) {
 
     return null;
   };
+}
+
+function pipeAnthropicStreamToOpenAI(proxyRes, res, requestModel) {
+  let buffer = "";
+  let streamFailed = false;
+  const decoder = new StringDecoder("utf8");
+  const streamConverter = createOpenaiStreamConverter(requestModel);
+
+  const forwardEvent = (event) => {
+    if (streamFailed) return;
+    const converted = streamConverter(event);
+    if (!converted) return;
+    if (converted.error) {
+      streamFailed = true;
+      const errorType = String(converted.error.type || "api_error");
+      const requestId = String(converted.error.request_id || "");
+      log(`Anthropic stream error type=${errorType}${requestId ? ` request_id=${requestId}` : ""}`);
+    }
+    res.write(`data: ${JSON.stringify(converted)}\n\n`);
+  };
+
+  const consumeLine = (line) => {
+    if (streamFailed || !line.startsWith("data: ")) return;
+    const raw = line.slice(6).trim();
+    if (!raw || raw === "[DONE]") return;
+    try {
+      forwardEvent(JSON.parse(raw));
+    } catch {}
+  };
+
+  proxyRes.on("data", (chunk) => {
+    buffer += decoder.write(chunk);
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) consumeLine(line);
+  });
+  proxyRes.on("end", () => {
+    buffer += decoder.end();
+    if (!streamFailed && buffer.trim()) {
+      for (const line of buffer.split("\n")) consumeLine(line);
+    }
+    if (!streamFailed) {
+      res.write("data: [DONE]\n\n");
+    }
+    res.end();
+  });
+  proxyRes.on("error", (error) => {
+    if (!streamFailed) {
+      streamFailed = true;
+      const message = String(error?.message || "Anthropic stream interrupted");
+      log(`Anthropic stream transport error: ${message}`);
+      res.write(
+        `data: ${JSON.stringify({
+          error: {
+            type: "stream_transport_error",
+            message,
+            code: "stream_transport_error",
+          },
+        })}\n\n`
+      );
+    }
+    res.end();
+  });
 }
 
 // ──────────────────────────────────────
@@ -1789,47 +1867,7 @@ const server = http.createServer(async (req, res) => {
           "Cache-Control": "no-cache",
           Connection: "keep-alive",
         });
-
-        let buffer = "";
-        const decoder = new StringDecoder("utf8");
-        const streamConverter = createOpenaiStreamConverter(requestModel);
-        proxyRes.on("data", (chunk) => {
-          buffer += decoder.write(chunk);
-          const lines = buffer.split("\n");
-          buffer = lines.pop();
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const raw = line.slice(6).trim();
-            if (raw === "[DONE]") continue;
-            try {
-              const event = JSON.parse(raw);
-              const converted = streamConverter(event);
-              if (converted) {
-                res.write(`data: ${JSON.stringify(converted)}\n\n`);
-              }
-            } catch {}
-          }
-        });
-        proxyRes.on("end", () => {
-          buffer += decoder.end();
-          if (buffer.trim()) {
-            for (const line of buffer.split("\n")) {
-              if (!line.startsWith("data: ")) continue;
-              const raw = line.slice(6).trim();
-              if (!raw || raw === "[DONE]") continue;
-              try {
-                const event = JSON.parse(raw);
-                const converted = streamConverter(event);
-                if (converted) {
-                  res.write(`data: ${JSON.stringify(converted)}\n\n`);
-                }
-              } catch {}
-            }
-          }
-          res.write("data: [DONE]\n\n");
-          res.end();
-        });
-        proxyRes.on("error", () => res.end());
+        pipeAnthropicStreamToOpenAI(proxyRes, res, requestModel);
       } else {
         const data = await readStreamText(proxyRes);
         const anthropicResp = JSON.parse(data);
