@@ -288,6 +288,7 @@ def execute_du_page_tool(name: str, arguments: dict) -> str:
 def get_gateway_tools_for_inject() -> List[dict]:
     """返回当前可注入的网关工具。"""
     from services.aifarm_tool import get_aifarm_tools_for_inject
+    from services.cedareco_tool import get_cedareco_tools_for_inject
     from services.du_pages import get_du_page_tools_for_inject
     from services.secret_drawer import get_secret_drawer_tools_for_inject
 
@@ -299,6 +300,7 @@ def get_gateway_tools_for_inject() -> List[dict]:
         *get_secret_drawer_tools_for_inject(),
         *get_du_page_tools_for_inject(),
         *get_aifarm_tools_for_inject(),
+        *get_cedareco_tools_for_inject(),
     ]
 
 

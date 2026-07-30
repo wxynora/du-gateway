@@ -169,6 +169,14 @@ _PROACTIVE_SOLO_GAMES = {
             "再根据工具结果调用同一个工具做至少一件实际的农场操作。"
         ),
     },
+    "cedareco": {
+        "title": "瓶中生态",
+        "tool": "cedareco",
+        "instruction": (
+            '先调用 cedareco，command 填“status”，看看池塘当前状态；'
+            "再根据工具结果调用同一个工具做至少一步实际的生态操作。"
+        ),
+    },
 }
 
 _PROACTIVE_SOLO_GAME_ALIASES = {
@@ -182,6 +190,9 @@ _PROACTIVE_SOLO_GAME_ALIASES = {
     "aifarm": "farm",
     "ai_农场": "farm",
     "农场": "farm",
+    "cedar_eco": "cedareco",
+    "cedar-eco": "cedareco",
+    "瓶中生态": "cedareco",
 }
 
 
@@ -369,6 +380,7 @@ _SELF_ACTION_TOOL_LABELS = {
     "secret_drawer": "整理了秘密抽屉",
     "random_imitator_td": "玩了植物大战丧尸随机版",
     "farm": "玩了 AI 农场",
+    "cedareco": "玩了瓶中生态",
     "note_write": "写了便签",
 }
 
@@ -665,8 +677,9 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
         "玩游戏": "game",
         "random_imitator_td": "game",
         "farm": "game",
+        "cedareco": "game",
     }
-    if action in {"random_imitator_td", "farm"} and not requested_game:
+    if action in {"random_imitator_td", "farm", "cedareco"} and not requested_game:
         requested_game = action
     action = alias.get(action, action)
     none_like = {"no_contact", "none", "silent", "skip"}

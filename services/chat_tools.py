@@ -485,6 +485,10 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
         from services.aifarm_tool import execute_aifarm_tool
 
         return execute_aifarm_tool(arguments if isinstance(arguments, dict) else {})
+    if name == "cedareco":
+        from services.cedareco_tool import execute_cedareco_tool
+
+        return execute_cedareco_tool(arguments if isinstance(arguments, dict) else {})
     if name in ("get_time_info", "get_weather", "get_almanac"):
         from services.weather_almanac import execute_weather_almanac_tool
         return execute_weather_almanac_tool(name, arguments)

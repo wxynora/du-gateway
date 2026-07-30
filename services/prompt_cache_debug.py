@@ -44,6 +44,8 @@ def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
         return "拟态心跳规则"
     if stripped.startswith("【小家状态写入规则】"):
         return "小家规则"
+    if stripped.startswith("【长期记忆"):
+        return "长期记忆"
     if stripped.startswith("【最近一段时间"):
         return "中期记忆"
     if stripped.startswith("【相处模式候选"):
@@ -78,6 +80,7 @@ def _static_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
         ("【核心XP与互动逻辑】", "NSFW规则"),
         ("【渡的拟态心跳", "拟态心跳规则"),
         ("【小家状态写入规则】", "小家规则"),
+        ("【长期记忆", "长期记忆"),
         ("【最近一段时间", "中期记忆"),
         ("【相处模式候选", "相处模式候选"),
         ("【Stay with Du】", "Stay with Du"),

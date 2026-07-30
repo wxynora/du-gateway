@@ -30,6 +30,7 @@ from routes.music_melody_api import bp as music_melody_api_bp
 from routes.internal_stt_api import bp as internal_stt_api_bp
 from routes.xiaoai_api import bp as xiaoai_api_bp
 from routes.aifarm_proxy import bp as aifarm_proxy_bp
+from routes.cedareco_proxy import bp as cedareco_proxy_bp
 
 # 确保数据目录存在
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -52,6 +53,7 @@ app.register_blueprint(music_melody_api_bp)
 app.register_blueprint(internal_stt_api_bp)
 app.register_blueprint(xiaoai_api_bp)
 app.register_blueprint(aifarm_proxy_bp)
+app.register_blueprint(cedareco_proxy_bp)
 
 try:
     from services.du_body_evaluator import resume_pending_workers

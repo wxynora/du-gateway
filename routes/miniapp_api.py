@@ -43,6 +43,7 @@ from routes.miniapp.wakeup_events import register_routes as register_wakeup_even
 from routes.miniapp.watch import register_routes as register_watch_routes
 from routes.miniapp.xiaoai import register_routes as register_xiaoai_routes
 from routes.miniapp.aifarm import register_routes as register_aifarm_routes
+from routes.miniapp.cedareco import register_routes as register_cedareco_routes
 
 
 bp = Blueprint("miniapp_api", __name__, url_prefix="/miniapp-api")
@@ -80,6 +81,7 @@ register_wakeup_event_routes(bp)
 register_watch_routes(bp)
 register_xiaoai_routes(bp)
 register_aifarm_routes(bp)
+register_cedareco_routes(bp)
 
 
 def _resolve_primary_chat_window_id() -> str:
