@@ -319,6 +319,11 @@ def _render_random_proactive_decision_prompt(
     }
     for key, value in replacements.items():
         text = text.replace(key, value)
+    text = text.replace("、逛论坛", "")
+    text = text.replace("逛论坛、", "")
+    text = re.sub(r'\s*\|\s*"forum"', "", text)
+    text = re.sub(r'"forum"\s*\|\s*', "", text)
+    text = text.replace("|forum", "").replace("forum|", "")
     return text.replace("X.X", hours_text).strip()
 
 
@@ -2003,7 +2008,7 @@ def _ask_du_after_surf_result(
         f"你刚才选择冲浪的理由：{str(initial_reason or '').strip() or '（未说明）'}\n\n"
         f"{_format_proactive_surf_result_for_du(surf_result)}\n\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
-        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "forum" | "drawer" | "game" | "other" 之一。不要再填 "surf"。\n'
+        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "drawer" | "game" | "other" 之一。不要再填 "surf"。\n'
         '- reason：字符串，简短说明你为什么这么选（必填）。\n'
         '- message：字符串；当 action 为 send_message 时，填要发给她的正文；其它 action 时可为空或填补充说明。\n'
         '- game：字符串；当 action 为 game 时，按下方单机游戏列表填写；其它 action 时留空。\n'

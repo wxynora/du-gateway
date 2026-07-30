@@ -3260,7 +3260,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
         citation_hint = (
             "\n如果回复实际参考了某条记忆，请在相关句尾写对应标记（如 [memory 1]）；"
         )
-    inject = "\n\n听了老婆的话，我想起来了一些之前的事——" + citation_hint + "\n" + "\n".join(lines) + "\n【以上为可召回记忆】"
+    inject = "\n\n听了老婆的话，我想起来了一些之前的事——\n" + "\n".join(lines) + "\n【以上为可召回记忆】" + citation_hint
     body = _append_to_dynamic_system(body, inject)
     if citation_map:
         body[DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY] = citation_map

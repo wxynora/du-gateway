@@ -219,11 +219,12 @@ TOOL_SEARCH_MEMORY = {
 }
 
 
-def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
+def get_forum_tools_for_inject(mode: str = "chat") -> list[dict]:
     """
     返回给模型的论坛/日程工具列表。
     mode:
     - daily: 仅日常高频（闹钟相关）
+    - chat: 日常高频 + 记忆检索，不暴露论坛工具
     - forum: 日常 + 论坛高频（发帖/评论/看帖）
     """
     if not MCP_ENABLED:
@@ -245,6 +246,8 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
     ]
     if mode == "daily":
         return schedule_tools
+    if mode == "chat":
+        return schedule_tools + [TOOL_SEARCH_MEMORY]
     high_level = [
         TOOL_FORUM_READ_FEED,
         TOOL_FORUM_OPEN_THREAD,

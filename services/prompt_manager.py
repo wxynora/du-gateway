@@ -75,7 +75,7 @@ PROMPT_SECTIONS: tuple[PromptSectionDef, ...] = (
     PromptSectionDef(
         RANDOM_PROACTIVE_DECISION_SECTION_ID,
         "随机唤醒决策",
-        "普通随机唤醒时用于让渡决定发消息、不打扰、写日记、逛论坛或上网冲浪的文案。",
+        "普通随机唤醒时用于让渡决定发消息、不打扰、写日记或上网冲浪的文案。",
         80_000,
     ),
     PromptSectionDef(
