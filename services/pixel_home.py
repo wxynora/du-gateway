@@ -7,6 +7,8 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Any
 
+from chinese_calendar import is_workday as is_china_workday
+
 from services.hidden_blocks import HiddenBlockParser
 from services.pixel_home_garden import build_garden_state, record_garden_actions
 from services.pixel_home_weather import build_virtual_home_weather
@@ -2492,6 +2494,9 @@ def infer_xinyue_state_from_text(text: str) -> dict | None:
     if code_context:
         return {"spot": "study", "activity": "工作", "source": "chat_infer"}
     if re.search(r"(我要|我去|我准备|我先|我打算|去)?洗澡(了|啦|一下|去)?", compact):
+        now_dt = _now_dt()
+        if is_china_workday(now_dt.date()) and 8 <= now_dt.hour < 17:
+            return None
         return {"spot": "bath", "activity": "洗澡", "source": "chat_infer"}
     if _MEAL_INTENT_RE.search(compact) and not _MEAL_QUESTION_RE.search(compact) and not _MEAL_NEGATION_RE.search(compact):
         return {"spot": "kitchen", "activity": "吃饭", "source": "chat_infer"}
