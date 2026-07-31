@@ -404,6 +404,8 @@ def get_chat_tools_for_inject() -> List[dict]:
     })
     from services.weather_almanac import get_weather_almanac_tools
     tools.extend(get_weather_almanac_tools())
+    from services.captivity_simulator_reference import get_reference_tool_schema
+    tools.append(get_reference_tool_schema())
     return tools
 
 

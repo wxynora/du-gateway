@@ -4,6 +4,7 @@ import hashlib
 import json
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from uuid import uuid4
@@ -12,7 +13,7 @@ from utils.time_aware import now_beijing_iso, BEIJING_TZ
 
 from botocore.exceptions import ClientError
 
-from config import R2_BUCKET_NAME
+from config import DATA_DIR, R2_BUCKET_NAME
 from storage.co_read_store import (
     assemble_co_read_upload,
     create_co_read_upload,
@@ -300,10 +301,17 @@ R2_KEY_DYNAMIC_DS_AUDIT = "dynamic_memory/ds_audit.json"
 R2_KEY_DYNAMIC_MAINTENANCE_REPORT = "dynamic_memory/maintenance_report.json"
 R2_KEY_TRIP_PLANS_PREFIX = "travel_plans"
 
+try:
+    import fcntl
+except Exception:  # pragma: no cover - production Linux and local macOS provide fcntl.
+    fcntl = None
+
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
 _notebook_write_lock = threading.Lock()
 _trip_plan_write_lock = threading.Lock()
+_conversation_followups_write_lock = threading.Lock()
+_conversation_followups_lock_path = DATA_DIR / "conversation_followups.lock"
 _conversation_followups_bootstrap_lock = threading.Lock()
 _CONVERSATION_FOLLOWUPS_BOOTSTRAPPED = False
 
@@ -652,47 +660,101 @@ def get_conversation_followups() -> list[dict]:
     return _read_conversation_followups_from_r2()
 
 
-def save_conversation_followups(items: list[dict]) -> bool:
-    """保存会话级延迟续话任务（覆盖）。"""
+@contextmanager
+def _conversation_followups_write_guard():
+    """Serialize followup queue read/modify/write across gateway and proactive processes."""
+    with _conversation_followups_write_lock:
+        if fcntl is None:
+            yield
+            return
+        _conversation_followups_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with _conversation_followups_lock_path.open("a+b") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _save_conversation_followups_unlocked(items: list[dict]) -> bool:
     client = _s3_client()
     if not client:
         return False
     payload = {"items": [dict(x) for x in (items or []) if isinstance(x, dict)]}
-    with _global_write_lock:
-        try:
-            _write_json(client, R2_KEY_CONVERSATION_FOLLOWUPS, payload)
-            conversation_followup_store.replace_items(payload["items"])
-            return True
-        except Exception as e:
-            logger.error("save_conversation_followups 失败 error=%s", e, exc_info=True)
-            return False
+    try:
+        _write_json(client, R2_KEY_CONVERSATION_FOLLOWUPS, payload)
+        conversation_followup_store.replace_items(payload["items"])
+        return True
+    except Exception as e:
+        logger.error("save_conversation_followups 失败 error=%s", e, exc_info=True)
+        return False
+
+
+def save_conversation_followups(items: list[dict]) -> bool:
+    """保存会话级延迟续话任务（覆盖）。"""
+    with _conversation_followups_write_guard():
+        return _save_conversation_followups_unlocked(items)
+
+
+def mutate_conversation_followups(mutator) -> tuple[bool, Any]:
+    """Run one authoritative followup queue read/modify/write under the process-shared lock."""
+    if not callable(mutator):
+        return False, None
+    with _conversation_followups_write_guard():
+        current = _read_conversation_followups_from_r2()
+        if not current and conversation_followup_store.has_items():
+            current = conversation_followup_store.get_items()
+        next_items, result = mutator([dict(item) for item in current])
+        if not isinstance(next_items, list):
+            return False, result
+        return _save_conversation_followups_unlocked(next_items), result
+
+
+def patch_conversation_followups(
+    item_updates: dict[str, dict],
+    *,
+    deleted_item_ids: set[str] | list[str] = (),
+) -> tuple[bool, list[dict]]:
+    """Patch only this tick's items while preserving followups created by another process."""
+    updates = {
+        str(item_id or "").strip(): dict(item)
+        for item_id, item in (item_updates or {}).items()
+        if str(item_id or "").strip() and isinstance(item, dict)
+    }
+    deleted = {
+        str(item_id or "").strip()
+        for item_id in (deleted_item_ids or ())
+        if str(item_id or "").strip()
+    }
+
+    def _apply(items: list[dict]):
+        merged: list[dict] = []
+        for current in items:
+            item_id = str(current.get("id") or "").strip()
+            original_status = str(current.get("status") or "").strip().lower()
+            if item_id in deleted and original_status in {"sent", "cancelled", "expired"}:
+                continue
+            updated = updates.get(item_id)
+            if updated is not None and original_status in ("", "pending"):
+                current = dict(updated)
+            merged.append(current)
+        return merged, [dict(item) for item in merged]
+
+    ok, merged_items = mutate_conversation_followups(_apply)
+    return ok, merged_items if isinstance(merged_items, list) else []
 
 
 def append_conversation_followup(item: dict) -> bool:
     """追加一条会话级延迟续话任务。"""
     if not isinstance(item, dict):
         return False
-    client = _s3_client()
-    if not client:
-        return False
-    with _global_write_lock:
-        try:
-            data = _read_json(client, R2_KEY_CONVERSATION_FOLLOWUPS)
-            if not isinstance(data, dict):
-                data = {}
-            items = data.get("items")
-            if not isinstance(items, list):
-                items = []
-            items.insert(0, dict(item))
-            if len(items) > 200:
-                items = items[:200]
-            data["items"] = items
-            _write_json(client, R2_KEY_CONVERSATION_FOLLOWUPS, data)
-            conversation_followup_store.replace_items([dict(x) for x in items if isinstance(x, dict)])
-            return True
-        except Exception as e:
-            logger.error("append_conversation_followup 失败 error=%s", e, exc_info=True)
-            return False
+
+    def _append(items: list[dict]):
+        items.insert(0, dict(item))
+        return items[:200], None
+
+    ok, _ = mutate_conversation_followups(_append)
+    return ok
 
 
 def get_last_user_activity_at() -> Optional[str]:

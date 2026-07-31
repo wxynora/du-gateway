@@ -86,6 +86,10 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 
 小家事件及 App 内涩涩走格棋、囚禁模拟器的 `sync-du` 请求通过 `X-DU-SUMITALK-PROMPT-ASSEMBLY` 复用 SumiTalk 的提示词组装表面，但不改实际回复、投递和归档渠道；小家/游戏状态作为临时动态 system，各入口保留自己的 user 内容。实现入口为 `services/conversation_followup.py::_send_wakeup_event` 与 `routes/chat.py::chat_completions`，`return_only`、游戏工具和续跑规则不受影响。以后新注册的 App 游戏，只要存在发给渡的模型消息，也必须复用该 SumiTalk 组装表面：不得自行拼静态 system，不得把游戏状态塞进静态缓存前缀，只允许替换本游戏的临时动态 system 与 user 内容；纯查看或本地状态变更接口不触发模型请求。
 
+五子棋是辛玥明确指定的例外：`services/gomoku_followup.py::send_gomoku_wakeup()` 仍复用 SumiTalk 组装表面，但棋局状态固定作为普通 system 发送并显式使用 `dynamic_system_event=False`，局内输入作为独立 user 原文发送；没有输入时 user 正文固定为 `小玥没有回复内容`。不得把五子棋状态改成动态 system，也不得给 user 正文加包装语。渡不使用游戏工具，普通回合只能在回复首行原样输出 `【落子：行-列】`、`【求和：请求】` 或有可撤棋子时的 `【悔棋：请求】`；处理小玥请求时只能输出对应的 `【求和：同意/拒绝】` 或 `【悔棋：同意/拒绝】`。后端按当前 pending 上下文只应用一种行动；半角冒号、异体横线、首行前后空格、指令不在第一行或与当前请求类型不匹配均不接受。
+
+囚禁模拟器只读参考工具 `captivity_simulator_reference` 是 `services/chat_tools.py::get_chat_tools_for_inject()` 的常驻成员，普通聊天与游戏唤醒经过统一 pipeline 后使用同一 tools 列表和顺序；囚禁唤醒不得再通过 `_send_wakeup_event(tools=...)` 临时前置该工具。其协议 property key 固定为 Claude 兼容的 `category`，中文分类枚举、说明和参考正文保持中文；执行端保留旧中文 key 兼容，但声明端不得再输出中文 JSON Schema key。
+
 `step_inject_tool_result_cache()` 使用 `pipeline/pipeline.py` 的唯一 `_SYSTEM_PROMPT_REGION_ORDER` 和 `_SYSTEM_PROMPT_CACHE_GROUPS`：固定静态段、工具摘要段、工具摘要后的静态尾段、常驻动态段、临时动态段、独立 Thinking 动态段、last4 段。每个逻辑子块在组装期间保持独立，最终每段最多输出一条 system；五个自定义静态槽位在组装期间保持编号顺序并追加到固定静态段末尾，空槽跳过，最终随固定静态段合并。Claude OAuth proxy 识别工具摘要 marker 后，四个断点依次位于最后一个 tool、工具摘要之前的最后一个可缓存 system、工具摘要末尾和最近记忆当前最后一个正文小段末尾；最近记忆仍按原文与原顺序发送，但 proxy 会按既有双换行小段生成连续 Anthropic text blocks，把固定 `【以上为最近记忆】` 收尾留在第 4 个断点之后。新增小段时旧末段保持为可回看前缀，BP4 向新末段移动并写入该前缀；当前末小段随后整块改写时，lookback 回退命中前一个曾作为 BP4 写入的小段，只重建发生变化的当前小段。若更早小段或其他前缀内容被改写，仍按 Anthropic 前缀规则从最近一个此前实际写入的断点起重建；缓存过期或前一写入位置超出 20-block lookback 时不能复用。工具摘要变化只重建第 3、第 4 段，入口风格、Real/App、渡的日常和近期记忆变化只影响其所在及后续断点。入口风格、Real/App 和近期记忆保持对应逻辑块，play 进入临时动态段，Thinking 紧邻 last4 之前并显式携带 `__dynamic__=True`；内部 `__thinking_rules__`、`__temporary_dynamic__`、`__last4__` 仅用于网关排序，在转发上游前统一移除，`__dynamic__` 继续供已有缓存适配层识别动态内容。
 
 ## 4. 对话入口与异步 worker
@@ -125,13 +129,15 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 
 普通随机唤醒的主决策与随机冲浪后二次决策暂不提供论坛选项；主决策渲染会同步清理托管旧模板中既有的 `逛论坛`/`forum` 候选枚举，避免已保存 override 继续暴露旧选项。论坛 action 的旧解析和执行实现仍保留，未删除接口或历史数据。
 
-唤醒记录只保存实际安排的随机唤醒、延迟续话、日历/闹钟，以及真正命中的硬触发，不把后台轮询 tick 当成唤醒。记录覆盖计划、执行、动作完成或消息实际投递成功、失败和取消；用户在预定时间前发来新消息时，原随机唤醒或续话会记为已取消并保留原因。查询默认返回下一次已确定的计划和最近 30 条结束记录，不暴露投递目标或内部 metadata。
+唤醒记录只保存实际安排的随机唤醒、延迟续话、日历/闹钟，以及真正命中的硬触发，不把后台轮询 tick 当成唤醒。记录覆盖计划、执行、动作完成或消息实际投递成功、失败和取消；用户在预定时间前发来新消息时，原随机唤醒或续话会记为已取消并保留原因。延迟续话队列的创建和 worker 回写共用 `storage/r2_store.py` 的主机级文件锁；worker 只按任务 ID 合并本轮状态，不再用调用网关前的整表快照覆盖并发新增任务。每轮 tick 会以当前 pending 队列清理本轮开始前已失去对应任务的 followup 计划，刚创建的计划不参与该次清理。查询默认返回下一次已确定的计划和最近 30 条结束记录，不暴露投递目标或内部 metadata。
 
 随机主动唤醒的渡单机游戏统一注册在 `services/telegram_proactive.py::_PROACTIVE_SOLO_GAMES`，当前包含植物大战丧尸随机版、AI 农场和瓶中生态；注册表直接生成唤醒时的游戏选择，并决定后续实际游玩轮使用的工具与指令。以后新增任何渡单机游戏，都必须同步加入该注册表及必要的别名、直接 action 兼容和执行记录标签；共同游戏不进入这里。
 
+随机主动唤醒选中写日记、秘密抽屉或渡单机游戏后，由 `services/telegram_proactive.py::_run_proactive_diary_action/_run_proactive_drawer_action/_run_proactive_game_action` 追加独立动作执行轮；执行轮 Prompt 固定按“刚才所选动作、第一轮理由、现在需要调用的工具及动作要求、完成后的简短说明、最近互动与节流信息”排列。论坛旧执行分支保持同一顺序但仍不可从当前第一轮选项进入；随机冲浪继续由后端先实际执行 `du_surf`，再按“选择、理由、已执行结果、最终决策要求、最近互动”回喂渡。
+
 半小时硬触发严格从全局 `last_user_activity_at` 重新计时：真实聊天、小家操作和游戏互动都算用户互动，任一新互动都会重置计时；聊天归档只用于识别本次互动是否明确表达要离开。入睡意图按分句识别，过去或背景叙述中的“我睡觉”不会被当成当前要去睡觉。
 
-春梦本体提示词由 Prompt 管理区 `spring_dream_wakeup` 提供，模板中的 `{{fragments}}` 会替换为本轮抽到的梦境碎片；自定义模板漏写占位符时，后端会把碎片补在模板末尾。春梦后唤醒只消费当前睡眠 session 中六小时内的 pending 状态，其他旧 session 会失效清理；网关空回复时使用同一梦境重试一次，成功后仍只记录一次发送。只要主模型生成了非空春梦正文，专用梦境归档都会保存，并用 `sent`、`unconfirmed` 或 `not_dispatched` 标记投递状态；普通对话归档仍只记录确认投递成功的消息。梦境归档由 `GET /miniapp-api/spring-dream-archives`、`GET /miniapp-api/spring-dream-archives/<id>` 查询，`DELETE /miniapp-api/spring-dream-archives/<id>` 单条删除；删除会同步清理 SQLite、R2 正文对象、当天索引与最近索引，不存在返回 404，任一删除步骤失败返回 500。
+春梦本体提示词由 Prompt 管理区 `spring_dream_wakeup` 提供，模板中的 `{{fragments}}` 会替换为本轮抽到的梦境碎片；自定义模板漏写占位符时，后端会把碎片补在模板末尾。春梦后唤醒只消费当前睡眠 session 中六小时内的 pending 状态，其他旧 session 会失效清理；网关空回复时使用同一梦境重试一次，成功后仍只记录一次发送。只要主模型生成了非空春梦正文，专用梦境归档都会保存，并用 `sent`、`unconfirmed` 或 `not_dispatched` 标记投递状态；普通对话归档仍只记录确认投递成功的消息。SumiTalk 成功投递时，可展示的 reasoning 文本与同一正文进入 `deliver_chat_message`、历史提示和实时提示，原生 App 复用已有折叠思考块；送达后普通对话归档同时保留 canonical `reasoning`、`reasoning_details` 与原始 `thinking_blocks/signature`，供 `/miniapp-api/reasoning/latest` 和后续 Claude carryover 使用。签名结构不进入 App action，其他外发渠道也不新增思考正文。梦境归档由 `GET /miniapp-api/spring-dream-archives`、`GET /miniapp-api/spring-dream-archives/<id>` 查询，`DELETE /miniapp-api/spring-dream-archives/<id>` 单条删除；删除会同步清理 SQLite、R2 正文对象、当天索引与最近索引，不存在返回 404，任一删除步骤失败返回 500。
 
 统一图片上游处理位于 `services/image_desc.py::compress_images_for_anthropic()`：base64 图片复用现有 Anthropic 尺寸压缩；HTTP(S) 远程图片由网关下载、校验真实图片格式、复用同一压缩后转成 data URL，再进入上游。远程图片连接超时 5 秒、读取超时 30 秒，不设置图片字节数或条数截断；单张下载、响应或格式校验失败时只把该图片替换为 `【图片】`，同轮其他文字和图片继续处理。SumiTalk 与 QQ 普通图片的 URL 因此不再交给 Claude OAuth Proxy 临时下载。
 
@@ -218,7 +224,7 @@ QQ 群 @ 入站黑名单位于 `connectors/qq_onebot/src/group_mention_blacklist
 - 无限流游戏模式：`GET/PUT /miniapp-api/wenyou-mode`，状态由 `storage/wenyou_mode_store.py` 保存；默认关闭，模式开启时由统一聊天入口注入文游玩家工具
 - 小爱音箱：`routes/miniapp/xiaoai.py`
 - AI 农场：`routes/miniapp/aifarm.py`
-- 瓶中生态：App 状态/能力地址为 `routes/miniapp/cedareco.py`，受保护完整 Web/API 挂载为 `routes/cedareco_proxy.py`，共享池塘与工具接缝为 `services/cedareco_bridge.py`、`services/cedareco_tool.py`；固定上游运行包位于 `vendor/cedareco/`，sidecar 脚本为 `scripts/start_cedareco.sh`、`scripts/install_cedareco_service.sh`，完整边界见 `docs/cedareco-app-integration.md`
+- 瓶中生态：App 状态/能力地址为 `routes/miniapp/cedareco.py`，受保护完整 Web/API 挂载为 `routes/cedareco_proxy.py`，共享池塘与工具接缝为 `services/cedareco_bridge.py`、`services/cedareco_tool.py`；固定上游运行包位于 `vendor/cedareco/`，移动端观察窗在 `vendor/cedareco/web/` 移除重复页头/刷新/伪重连并让池塘、图鉴、年鉴互斥切换，sidecar 脚本为 `scripts/start_cedareco.sh`、`scripts/install_cedareco_service.sh`，完整边界见 `docs/cedareco-app-integration.md`
 
 一起看 Phase 2 分析 worker 入口为 `scripts/run_watch_analysis_worker.py`，安装脚本为 `scripts/install_watch_analysis_worker_service.sh`。新 session 先进入准备态；worker 可先执行 identify 和 timeline prepass，identify 会落库作品原语言正式片名与年份；人工填写正片起点时，identify 直接在该位置附近取样，避开 Bilibili 前置垫片。`partial/unknown` 会排队生成 `watch-knowledge-v13` 简短背景卡：Tavily basic 只执行一次 `《片名》剧情简介 主要人物 人物关系 世界观` 搜索，存在季集或分 P 时跟在书名号后，最多保留 3 个不同站点摘要；不限定站点、不调用角色目录。DS V4 Flash 不获得搜索工具，只负责整理作品身份、世界观、开场前情、主要人物与关系、专有名词和 3–5 条只说明主线方向的 `story_outline`；网关不规定人物数量，也不根据作品特定词硬补人物。卡片最多引用 3 条来源，不含结局、反转或逐场剧情；作品名、年份、人物姓名证据和置信度仍有门禁，单一可靠来源允许生成但会降低置信度。知识卡和字幕准备均进入可见终态后，只有 `POST .../start` 提交当前 `subtitle_lookup_id` 并确认卡片或明确跳过，才创建 rolling 任务。滚动取材计划会直接跨过已确认的 recap/intro/outro/preview/non_story，不再先送模型后仅丢弃结果。
 
@@ -269,9 +275,12 @@ HTML 使用当前页笺工具直接持久化；旧临时预览工具不再作为
 
 - 游戏工具聚合：`routes/miniapp/game_tools.py`
 - 统一工具运行时：`services/game_tool_runtime.py`
+- 五子棋：`services/gomoku_game.py`、`services/gomoku_followup.py`、`POST /miniapp-api/game-tools/gomoku/sync-du`
 - 私密走格棋：`services/private_board_tool.py`
 - 随机版塔防：`services/random_imitator_td_tool.py`
 - 文游：`services/wenyou/*`、`storage/wenyou_sqlite_store.py`
+
+五子棋固定为 15×15；每次 `new_game` 随机分配黑白，黑方先手。引擎在落子后检查横、竖和两条斜线五连、占位、越界、轮次与满盘和棋，并以原子 JSON 存档保存棋盘、完整 `moves`、`pending_request` 和最近协商结果。只有当前行动方能发起求和或悔棋；pending 期间棋盘冻结且原行动方不变。拒绝后由发起方继续；同意求和以 `agreed_draw` 结束；同意悔棋撤回发起方最近一手及其后全部棋子、由剩余历史重建棋盘并让发起方重走，没有己方历史落子时不能悔棋。渡执黑开局时直接同步空棋盘，Prompt 省略整行“小玥刚刚落子”；处理小玥请求时改用已锁定的求和或悔棋决定 Prompt，处理完渡请求后的下一次普通 Prompt 只附加本次同意/拒绝结果。渡侧空棋盘只写“当前棋盘：全空”；非空棋盘以 `●/○/·` 表示黑/白/空，每个非空行固定输出 `1-5｜6-10｜11-15` 三段五格，连续全空行才合并为行号范围，非空行不得省略。开局/重开、小玥成功落子、请求、原生弹窗同意或拒绝以及既有 `/sync-du` 都调用 `mark_shared_game_user_activity` 刷新真实互动时间；状态读取和仅选交点不刷新。`scripts/test_gomoku_game.py` 使用临时存档、mock 唤醒和 mock 活动入口覆盖双方分色、先手、非法落子、五连、压缩棋盘、三组 Prompt 原文、普通 system/真实或空 user、七种精确首行指令、双方求和/悔棋、同步应用及互动时间，不调用真实模型或共享存储。
 
 文游玩家工具默认不进入聊天工具集。App 负责管理“无限流游戏模式”这个全局开关；开启后，统一聊天入口都会注入 `buy_item`、`roll_gacha`、`inventory_action`、`use_item`、`transfer`，关闭后所有入口都不注入。
 

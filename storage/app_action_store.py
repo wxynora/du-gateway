@@ -514,7 +514,10 @@ def _normalize_deliver_chat_message_payload(payload: dict) -> tuple[Optional[dic
     ).strip() or "sumitalk-main"
     created_at = str(src.get("created_at") or src.get("createdAt") or "").strip()
     sender = str(src.get("sender") or ("笨笨" if role == "benben" else "渡")).strip()
-    return {
+    reasoning = str(
+        src.get("reasoning") or src.get("reasoning_content") or ""
+    ).strip()
+    normalized = {
         "message_id": message_id[:160],
         "text": text,
         "conversation_id": conversation_id,
@@ -522,7 +525,10 @@ def _normalize_deliver_chat_message_payload(payload: dict) -> tuple[Optional[dic
         "role": role,
         "sender": sender[:40],
         "created_at": created_at[:80],
-    }, None
+    }
+    if reasoning:
+        normalized["reasoning"] = reasoning
+    return normalized, None
 
 
 def _normalize_deliver_chat_audio_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:

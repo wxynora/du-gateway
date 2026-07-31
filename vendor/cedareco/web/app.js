@@ -21,7 +21,6 @@ let modalCleanup = null;
 const bindingNode = document.getElementById("binding");
 const appNode = document.getElementById("pond-app");
 const bindForm = document.getElementById("bind-form");
-const serverUrlInput = document.getElementById("server-url");
 const bindError = document.getElementById("bind-error");
 const connectionNode = document.getElementById("connection");
 const modal = document.getElementById("modal");
@@ -47,14 +46,6 @@ function clear(node) {
   return node;
 }
 
-function defaultServerUrl() {
-  return MOUNTED_URL;
-}
-
-function normalizeUrl(value) {
-  return String(value || "").trim().replace(/\/+$/u, "");
-}
-
 function assetUrl(path) {
   return new URL(ASSET_PREFIX + path, location.href).href;
 }
@@ -78,7 +69,7 @@ async function api(path, options = {}) {
 }
 
 function showConnection(ok, message) {
-  connectionNode.textContent = message || (ok ? "已连接" : "连接中断");
+  connectionNode.textContent = message || (ok ? "实时同步" : "连接中断");
   connectionNode.classList.toggle("bad", !ok);
 }
 
@@ -224,7 +215,12 @@ async function renderAnnals() {
 
 async function selectView(name) {
   currentView = name;
-  document.querySelectorAll(".tab").forEach(node => node.classList.toggle("active", node.dataset.view === name));
+  document.querySelectorAll(".tab").forEach(node => {
+    const active = node.dataset.view === name;
+    node.classList.toggle("active", active);
+    node.setAttribute("aria-selected", String(active));
+    node.tabIndex = active ? 0 : -1;
+  });
   document.querySelectorAll(".view").forEach(node => { node.hidden = node.id !== `view-${name}`; });
   if (name === "state") await loadState();
   else if (name === "codex") await renderCodex();
@@ -587,6 +583,9 @@ async function connect(candidate) {
 bindForm.addEventListener("submit", async event => {
   event.preventDefault();
   bindError.hidden = true;
+  const retryButton = bindForm.querySelector("button");
+  retryButton.disabled = true;
+  retryButton.textContent = "正在重连…";
   const candidate = { url: MOUNTED_URL };
   try {
     await connect(candidate);
@@ -594,23 +593,19 @@ bindForm.addEventListener("submit", async event => {
     binding = null;
     bindError.textContent = error.message;
     bindError.hidden = false;
+  } finally {
+    retryButton.disabled = false;
+    retryButton.textContent = "重新加载";
   }
 });
 
-document.getElementById("refresh").addEventListener("click", () => selectView(currentView));
-document.getElementById("change-server").addEventListener("click", () => {
-  binding = { url: MOUNTED_URL };
-  latestState = null;
-  if (pollTimer) clearInterval(pollTimer);
-  appNode.hidden = true;
-  bindingNode.hidden = false;
-});
 document.getElementById("modal-close").addEventListener("click", closeModal);
 modal.addEventListener("click", event => { if (event.target === modal) closeModal(); });
 document.addEventListener("keydown", event => { if (event.key === "Escape" && !modal.hidden) closeModal(); });
-document.querySelectorAll(".tab").forEach(node => node.addEventListener("click", () => selectView(node.dataset.view)));
+document.querySelectorAll(".tab").forEach(node => node.addEventListener("click", () => {
+  selectView(node.dataset.view).catch(() => {});
+}));
 
-serverUrlInput.value = defaultServerUrl();
 connect(binding).catch(error => {
   binding = { url: MOUNTED_URL };
   appNode.hidden = true;

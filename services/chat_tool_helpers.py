@@ -22,11 +22,11 @@ _TOOL_MIDSTREAM_TEXT_RE = re.compile(
 )
 _TOOL_MIDSTREAM_RETRY_INSTRUCTION = (
     "如果还需要信息，直接继续调用工具；不知道该调用什么工具就直接进行最终回复。\n"
-    "如果已经够了，直接给最终答复。"
+    "如果已经够了，直接继续回应小玥。"
 )
 _TOOL_EMPTY_FINAL_RETRY_INSTRUCTION = (
     "前面的工具已经执行过了。\n"
-    "如果还需要信息，直接继续调用工具；如果已经够了，必须直接给用户一条可见的最终回复。\n"
+    "如果还需要信息，直接继续调用工具；如果已经够了，必须直接给小玥一条可见的回复。\n"
     "不要返回空 content，不要只给 reasoning / thinking。"
 )
 _TOOL_EVENT_SECRET_RE = re.compile(

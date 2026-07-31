@@ -9,6 +9,7 @@ from flask import jsonify, request
 
 from services.game_tool_runtime import (
     GAME_ID_CAPTIVITY_SIMULATOR,
+    GAME_ID_GOMOKU,
     execute_game_command,
     get_random_imitator_td_spectator_view,
     list_game_tools,
@@ -581,6 +582,152 @@ def _mark_private_board_sync_activity(synced_at: str, *, source: str = "private_
         )
     except Exception:
         return
+
+
+def _mark_gomoku_activity(
+    occurred_at: str,
+    *,
+    source: str,
+    detail: dict | None = None,
+) -> None:
+    activity_time = str(occurred_at or "").strip() or now_beijing_iso()
+    try:
+        from services.user_activity_context import mark_shared_game_user_activity
+
+        mark_shared_game_user_activity(
+            game_id=GAME_ID_GOMOKU,
+            occurred_at=activity_time,
+            source=source,
+            detail=detail or {},
+        )
+    except Exception:
+        return
+
+
+def _mark_gomoku_sync_activity(synced_at: str, *, detail: dict | None = None) -> None:
+    _mark_gomoku_activity(
+        synced_at,
+        source="gomoku_sync_du",
+        detail=detail,
+    )
+
+
+def _gomoku_color_label(value: str) -> str:
+    return "黑" if str(value or "").strip() == "black" else "白"
+
+
+def _gomoku_request_label(value: str) -> str:
+    return "求和" if str(value or "").strip() == "draw" else "悔棋"
+
+
+def _gomoku_system_text(payload: dict) -> str:
+    state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+    players = state.get("players") if isinstance(state.get("players"), dict) else {}
+    xinyue_color = _gomoku_color_label(str(players.get("xinyue") or ""))
+    du_color = _gomoku_color_label(str(players.get("du") or ""))
+    last_move = state.get("last_move") if isinstance(state.get("last_move"), dict) else {}
+    pending = state.get("pending_request") if isinstance(state.get("pending_request"), dict) else {}
+    request_event = state.get("last_request_event") if isinstance(state.get("last_request_event"), dict) else {}
+
+    from services.gomoku_game import render_board_for_system
+
+    lines = [
+        "小玥正在和你玩「五子棋」。这是棋局状态同步，不是主聊天正文。",
+        f"本局为 15 行 × 15 列；小玥执{xinyue_color}；你执{du_color}。黑先手",
+        "坐标使用“行-列”，范围都是 1-15，例如 8-8。",
+    ]
+    if str(pending.get("requester") or "") == "xinyue" and str(pending.get("responder") or "") == "du":
+        request_type = str(pending.get("type") or "")
+        if request_type == "draw":
+            lines.extend(
+                [
+                    "小玥向你请求和棋。",
+                    "当前棋局行动方：小玥",
+                    "当前需要你处理：小玥的求和请求",
+                    render_board_for_system(state),
+                    "",
+                    "请决定是否同意。回复第一行必须单独写精确指令「【求和：同意】」或「【求和：拒绝】」，想对小玥说的话另起一行。",
+                ]
+            )
+            return "\n".join(lines).strip()
+        lines.extend(
+            [
+                "小玥请求悔棋。若你同意，将撤回小玥最近一手以及此后已落下的棋子，并轮到小玥重新行动。",
+                "当前棋局行动方：小玥",
+                "当前需要你处理：小玥的悔棋请求",
+                render_board_for_system(state),
+                "",
+                "请决定是否同意。回复第一行必须单独写精确指令「【悔棋：同意】」或「【悔棋：拒绝】」，想对小玥说的话另起一行。",
+            ]
+        )
+        return "\n".join(lines).strip()
+
+    if str(request_event.get("requester") or "") == "du":
+        decision_label = "同意" if str(request_event.get("decision") or "") == "accepted" else "拒绝"
+        request_label = _gomoku_request_label(str(request_event.get("type") or ""))
+        lines.append(f"小玥刚刚{decision_label}了你的{request_label}请求。")
+    elif str(last_move.get("actor") or "") == "xinyue":
+        lines.append(f"小玥刚刚落子：{int(last_move.get('row') or 0)}-{int(last_move.get('col') or 0)}")
+    lines.extend(["当前行动方：你", render_board_for_system(state), ""])
+    lines.extend(
+        [
+            f"现在轮到你执{du_color}行动。回复第一行必须单独写以下精确指令之一：",
+            f"「【落子：行-列】」：请根据当前棋盘选择一个空位，每次只落一枚{du_color}子。",
+            "「【求和：请求】」",
+        ]
+    )
+    if any(str(move.get("actor") or "") == "du" for move in (state.get("moves") or [])):
+        lines.append("「【悔棋：请求】」")
+    lines.append("每次只能选择一种行动，想对小玥说的话另起一行。")
+    return "\n".join(lines).strip()
+
+
+_GOMOKU_MOVE_DIRECTIVE_RE = re.compile(r"^【落子：(\d{1,2})-(\d{1,2})】$")
+_GOMOKU_DIRECTIVE_ACTIONS = {
+    "【求和：请求】": "request_draw",
+    "【求和：同意】": "accept_draw",
+    "【求和：拒绝】": "reject_draw",
+    "【悔棋：请求】": "request_undo",
+    "【悔棋：同意】": "accept_undo",
+    "【悔棋：拒绝】": "reject_undo",
+}
+
+
+def _parse_gomoku_reply(reply_text: str) -> dict | None:
+    lines = str(reply_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if not lines:
+        return None
+    match = _GOMOKU_MOVE_DIRECTIVE_RE.fullmatch(lines[0])
+    chat_text = "\n".join(lines[1:]).strip()
+    if match:
+        return {
+            "action": "move",
+            "row": int(match.group(1)),
+            "col": int(match.group(2)),
+            "chat_text": chat_text,
+        }
+    action = _GOMOKU_DIRECTIVE_ACTIONS.get(lines[0])
+    if not action:
+        return None
+    return {"action": action, "chat_text": chat_text}
+
+
+def _gomoku_user_activity_source(command: str) -> str:
+    first_command = str(command or "").strip().split(maxsplit=1)[0].lower()
+    return {
+        "new": "gomoku_new_game",
+        "new_game": "gomoku_new_game",
+        "开局": "gomoku_new_game",
+        "重开": "gomoku_new_game",
+        "place": "gomoku_xinyue_move",
+        "落子": "gomoku_xinyue_move",
+        "request_draw": "gomoku_xinyue_draw_request",
+        "request_undo": "gomoku_xinyue_undo_request",
+        "accept_draw": "gomoku_xinyue_draw_accept",
+        "reject_draw": "gomoku_xinyue_draw_reject",
+        "accept_undo": "gomoku_xinyue_undo_accept",
+        "reject_undo": "gomoku_xinyue_undo_reject",
+    }.get(first_command, "")
 
 
 def _mark_captivity_simulator_sync_activity(synced_at: str, *, detail: dict | None = None) -> None:
@@ -2305,6 +2452,153 @@ def register_routes(bp) -> None:
     def miniapp_random_imitator_td_view():
         return jsonify(get_random_imitator_td_spectator_view()), 200
 
+    @bp.route("/game-tools/gomoku/sync-du", methods=["POST"])
+    def miniapp_gomoku_sync_du():
+        body = request.get_json(silent=True) or {}
+        save_id = str(body.get("save_id") or "default").strip() or "default"
+        user_content = str(body.get("message") or "")
+        payload = execute_game_command(GAME_ID_GOMOKU, "status", save_id)
+        if not payload.get("ok"):
+            return jsonify(payload), 500
+        state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+        if not state.get("started"):
+            return jsonify({"ok": False, "error": "还没有开始新局。", "state": state}), 400
+        if state.get("game_over"):
+            return jsonify({"ok": False, "error": "本局已经结束。", "state": state}), 409
+        pending = state.get("pending_request") if isinstance(state.get("pending_request"), dict) else {}
+        waiting_for_du_decision = (
+            str(pending.get("requester") or "") == "xinyue"
+            and str(pending.get("responder") or "") == "du"
+        )
+        if pending and not waiting_for_du_decision:
+            return jsonify({"ok": False, "error": "正在等待小玥处理渡的请求。", "state": state}), 409
+        if not waiting_for_du_decision and str(state.get("turn_actor") or "") != "du":
+            return jsonify({"ok": False, "error": "现在还没轮到渡。", "state": state}), 409
+
+        system_text = _gomoku_system_text(payload)
+        panel_target = str(body.get("reply_target") or _get_panel_device_id()).strip()
+        try:
+            from services.reply_channel_context import resolve_recent_reply_context
+
+            context = resolve_recent_reply_context(default_target=panel_target)
+        except Exception:
+            context = {}
+        channel = str(context.get("channel") or "").strip().lower()
+        window_id = str(context.get("window_id") or "").strip()
+        target = str(context.get("target") or "").strip() or panel_target
+        meta = context.get("meta") if isinstance(context.get("meta"), dict) else {}
+        if not window_id:
+            return jsonify({"ok": False, "error": "缺少最近聊天窗口", "state": state}), 400
+
+        synced_at = now_beijing_iso()
+        _mark_gomoku_sync_activity(
+            synced_at,
+            detail={
+                "game_id": GAME_ID_GOMOKU,
+                "save_id": save_id,
+                "window_id": window_id,
+                "target": target,
+                "phase": "game_sync",
+            },
+        )
+
+        from services.gomoku_followup import send_gomoku_wakeup
+
+        wakeup = send_gomoku_wakeup(
+            window_id=window_id,
+            target=target,
+            system_text=system_text,
+            user_content=user_content,
+            preferred_channel=channel,
+            preferred_meta=meta,
+            return_only=True,
+        )
+        if not bool((wakeup or {}).get("ok")):
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": str((wakeup or {}).get("error") or "渡这次没有成功回应。"),
+                    "state": state,
+                    "synced_at": synced_at,
+                }
+            ), 502
+
+        raw_reply_text = str((wakeup or {}).get("reply_text") or (wakeup or {}).get("reply_preview") or "")
+        parsed_reply = _parse_gomoku_reply(raw_reply_text)
+        if not parsed_reply:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "渡的回复首行没有有效五子棋指令。",
+                    "state": state,
+                    "reply_text": raw_reply_text,
+                    "synced_at": synced_at,
+                }
+            ), 422
+        action = str(parsed_reply.get("action") or "")
+        if waiting_for_du_decision:
+            request_type = str(pending.get("type") or "")
+            allowed_actions = (
+                {"accept_draw", "reject_draw"}
+                if request_type == "draw"
+                else {"accept_undo", "reject_undo"}
+            )
+        else:
+            allowed_actions = {"move", "request_draw", "request_undo"}
+        if action not in allowed_actions:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "渡的回复首行不是当前允许的五子棋指令。",
+                    "state": state,
+                    "reply_text": raw_reply_text,
+                    "synced_at": synced_at,
+                }
+            ), 422
+
+        if action == "move":
+            row = int(parsed_reply.get("row") or 0)
+            col = int(parsed_reply.get("col") or 0)
+            command = f"du_place {row}-{col}"
+        else:
+            row = 0
+            col = 0
+            command = f"du_{action}"
+        chat_text = str(parsed_reply.get("chat_text") or "")
+        applied = execute_game_command(GAME_ID_GOMOKU, command, save_id)
+        if not applied.get("ok"):
+            invalid_action = {"action": action}
+            if action == "move":
+                invalid_action.update({"row": row, "col": col})
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": str(applied.get("message") or applied.get("error") or "渡的行动无效。"),
+                    "error_code": str(applied.get("error") or "INVALID_ACTION"),
+                    "state": applied.get("state") or state,
+                    "reply_text": chat_text,
+                    **invalid_action,
+                    "synced_at": synced_at,
+                }
+            ), 422
+        response_payload = {
+            "ok": True,
+            "state": applied.get("state") or {},
+            "player_text": applied.get("player_text") or "",
+            "reply_text": chat_text,
+            "action": action,
+            "channel": str((wakeup or {}).get("channel") or ""),
+            "synced_at": synced_at,
+        }
+        if action == "move":
+            response_payload["move"] = {
+                    "actor": "du",
+                    "color": str(((applied.get("state") or {}).get("players") or {}).get("du") or ""),
+                    "row": row,
+                    "col": col,
+            }
+        return jsonify(response_payload), 200
+
     @bp.route("/game-tools/private_board/sync-du", methods=["POST"])
     def miniapp_private_board_sync_du():
         body = request.get_json(silent=True) or {}
@@ -2664,7 +2958,40 @@ def register_routes(bp) -> None:
             payload = current_payload
         else:
             payload = execute_game_command(game_id, command, save_id)
+        if normalized_game_id == GAME_ID_GOMOKU and payload.get("ok"):
+            activity_source = _gomoku_user_activity_source(command)
+            if activity_source:
+                _mark_gomoku_activity(
+                    now_beijing_iso(),
+                    source=activity_source,
+                    detail={
+                        "game_id": GAME_ID_GOMOKU,
+                        "save_id": save_id,
+                        "command": first_command,
+                        "phase": "user_action",
+                    },
+                )
         if str(payload.get("game_id") or "") == "captivity_simulator":
             payload = _captivity_simulator_public_payload(payload)
-        status = 200 if payload.get("ok") else (404 if payload.get("error") == "UNKNOWN_GAME" else 500)
+        if payload.get("ok"):
+            status = 200
+        elif payload.get("error") == "UNKNOWN_GAME":
+            status = 404
+        elif normalized_game_id == GAME_ID_GOMOKU:
+            status = (
+                409
+                if payload.get("error")
+                in {
+                    "NOT_YOUR_TURN",
+                    "CELL_OCCUPIED",
+                    "GAME_OVER",
+                    "REQUEST_PENDING",
+                    "NO_PENDING_REQUEST",
+                    "NO_MOVE_TO_UNDO",
+                    "NOT_REQUEST_RESPONDER",
+                }
+                else 400
+            )
+        else:
+            status = 500
         return jsonify(payload), status

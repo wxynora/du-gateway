@@ -13,6 +13,7 @@ logger = get_logger(__name__)
 
 GAME_ID_RANDOM_IMITATOR_TD = "random_imitator_td"
 GAME_ID_PRIVATE_BOARD = "private_board"
+GAME_ID_GOMOKU = "gomoku"
 GAME_ID_CAPTIVITY_SIMULATOR = "captivity_simulator"
 GAME_TOOL_LOOP_MARKER = "game_tool_loop"
 GAME_TOOL_SKIP_DYNAMIC_MEMORY_WRITE = "skip_dynamic_memory_write"
@@ -39,6 +40,7 @@ class GameRegistration:
 GAME_SAVE_ROOTS: dict[str, Path] = {
     GAME_ID_RANDOM_IMITATOR_TD: DATA_DIR / "random_imitator_td",
     GAME_ID_PRIVATE_BOARD: DATA_DIR / GAME_ID_PRIVATE_BOARD,
+    GAME_ID_GOMOKU: DATA_DIR / GAME_ID_GOMOKU,
     GAME_ID_CAPTIVITY_SIMULATOR: DATA_DIR / GAME_ID_CAPTIVITY_SIMULATOR,
 }
 _GAME_REGISTRY: dict[str, GameRegistration] = {}
@@ -54,6 +56,8 @@ _GAME_ALIASES = {
     "涩涩走格棋": GAME_ID_PRIVATE_BOARD,
     "私密走格棋": GAME_ID_PRIVATE_BOARD,
     "瑟瑟桌游": GAME_ID_PRIVATE_BOARD,
+    "五子棋": GAME_ID_GOMOKU,
+    "gomoku": GAME_ID_GOMOKU,
     "captivity-simulator": GAME_ID_CAPTIVITY_SIMULATOR,
     "囚禁模拟器": GAME_ID_CAPTIVITY_SIMULATOR,
 }
@@ -118,6 +122,15 @@ def _ensure_builtin_games_registered() -> None:
         executor=_execute_private_board,
         save_root=GAME_SAVE_ROOTS[GAME_ID_PRIVATE_BOARD],
         aliases=("private-board", "sex-board", "涩涩走格棋", "私密走格棋", "瑟瑟桌游"),
+    )
+    register_game(
+        game_id=GAME_ID_GOMOKU,
+        title="五子棋",
+        tool="gomoku",
+        commands=["status", "new_game", "place 8-8", "end_game"],
+        executor=_execute_gomoku,
+        save_root=GAME_SAVE_ROOTS[GAME_ID_GOMOKU],
+        aliases=("gomoku", "五子棋"),
     )
     register_game(
         game_id=GAME_ID_CAPTIVITY_SIMULATOR,
@@ -453,6 +466,66 @@ def _execute_private_board(
         logger.exception("game tool failed game_id=%s save_id=%s", GAME_ID_PRIVATE_BOARD, resolved_save_id)
         return game_tool_error_payload(
             game_id=GAME_ID_PRIVATE_BOARD,
+            tool_name=tool_name,
+            save_id=resolved_save_id,
+            error="EXECUTION_FAILED",
+            message=str(exc),
+        )
+
+
+def _execute_gomoku(
+    *,
+    command: str,
+    save_id: str,
+    save_root: Path | None,
+    tool_name: str,
+) -> dict[str, Any]:
+    root = Path(save_root) if save_root is not None else GAME_SAVE_ROOTS[GAME_ID_GOMOKU]
+    resolved_save_id = safe_save_id(save_id)
+    save_path = _save_path(root, resolved_save_id)
+    try:
+        from services.gomoku_game import run_command
+
+        result = run_command(command, save_path=save_path)
+        if not result.get("ok"):
+            return {
+                "ok": False,
+                "tool": tool_name,
+                "game_id": GAME_ID_GOMOKU,
+                "save_id": resolved_save_id,
+                "error": str(result.get("error") or "INVALID_MOVE"),
+                "message": str(result.get("message") or "五子棋操作失败。"),
+                "player_text": str(result.get("player_text") or ""),
+                "state": result.get("state") or {},
+                "game_over": bool(result.get("game_over")),
+                "winner": str(result.get("winner") or ""),
+                "result": str(result.get("result") or ""),
+            }
+        payload = game_tool_success_payload(
+            game_id=GAME_ID_GOMOKU,
+            tool_name=tool_name,
+            save_id=resolved_save_id,
+            text=str(result.get("du_text") or result.get("text") or ""),
+            checkpoint=bool(result.get("game_over")),
+            checkpoint_instruction=GAME_TOOL_GAME_OVER_INSTRUCTION if result.get("game_over") else "",
+            checkpoint_reason="game_over" if result.get("game_over") else "",
+            game_over=bool(result.get("game_over")),
+            result=str(result.get("result") or ""),
+        )
+        payload.update(
+            {
+                "message": str(result.get("message") or ""),
+                "player_text": str(result.get("player_text") or result.get("message") or ""),
+                "state": result.get("state") or {},
+                "winner": str(result.get("winner") or ""),
+                "commands": ["status", "new_game", "place 8-8", "end_game"],
+            }
+        )
+        return payload
+    except Exception as exc:
+        logger.exception("game tool failed game_id=%s save_id=%s", GAME_ID_GOMOKU, resolved_save_id)
+        return game_tool_error_payload(
+            game_id=GAME_ID_GOMOKU,
             tool_name=tool_name,
             save_id=resolved_save_id,
             error="EXECUTION_FAILED",

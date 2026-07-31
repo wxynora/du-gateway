@@ -38,13 +38,13 @@ def get_reference_tool_schema() -> dict[str, Any]:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "分类": {
+                    "category": {
                         "type": "string",
                         "enum": list(REFERENCE_CATEGORIES),
                         "description": "选择要查看的中文分类。",
                     }
                 },
-                "required": ["分类"],
+                "required": ["category"],
                 "additionalProperties": False,
             },
         },

@@ -1638,11 +1638,10 @@ def _run_proactive_diary_action(
     now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso()) or datetime.now()
     user_prompt = (
         "你刚才在随机唤醒里选择了写日记/记事。\n"
-        "现在不是重新做选择，也不要输出 JSON；请直接去写。\n"
-        "请调用 exchange_diary_create 写一条交换日记。\n"
+        f"你刚才选择写日记的理由：{str(initial_reason or '').strip() or '（未说明）'}\n"
+        "现在需要调用 exchange_diary_create 写一条交换日记。\n"
         "写完后用一句很短的话说明已经写好；如果工具失败，也用一句话说明失败原因。\n"
-        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。\n"
-        f"你刚才选择写日记的理由：{str(initial_reason or '').strip() or '（未说明）'}"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。"
     )
     body = {
         "model": _get_chat_model(),
@@ -1706,11 +1705,10 @@ def _run_proactive_forum_action(
     now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso()) or datetime.now()
     user_prompt = (
         "你刚才在随机唤醒里选择了逛论坛。\n"
-        "现在不是重新做选择，也不要输出 JSON；请直接去论坛看看。\n"
-        "优先调用 forum_read_feed 浏览信息流；如果看到你想继续看的帖子，再调用 forum_open_thread 打开一篇。\n"
+        f"你刚才选择逛论坛的理由：{str(initial_reason or '').strip() or '（未说明）'}\n"
+        "现在需要调用 forum_read_feed 浏览信息流；如果看到你想继续看的帖子，再调用 forum_open_thread 打开一篇。\n"
         "看完后用一句很短的话说明你看了什么；如果工具失败，也用一句话说明失败原因。\n"
-        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。\n"
-        f"你刚才选择逛论坛的理由：{str(initial_reason or '').strip() or '（未说明）'}"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。"
     )
     body = {
         "model": _get_chat_model(),
@@ -1804,12 +1802,11 @@ def _run_proactive_drawer_action(
     now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso()) or datetime.now()
     user_prompt = (
         "你刚才在随机唤醒里选择了整理秘密抽屉/随机翻旧条目。\n"
-        "现在不是重新做选择，也不要输出 JSON；请直接去秘密抽屉做一件小事。\n"
-        "可以调用 secret_drawer：优先看 stats；如果有待整理条目，就 list 后 update 补标题、标签或 why；"
+        f"你刚才选择秘密抽屉的理由：{str(initial_reason or '').strip() or '（未说明）'}\n"
+        "现在需要调用 secret_drawer 去秘密抽屉做一件小事：优先看 stats；如果有待整理条目，就 list 后 update 补标题、标签或 why；"
         "如果没有待整理，就 random 翻一条旧记录，必要时 update 置顶、封存或补一句为什么存。\n"
         "做完后用一句很短的话说明你做了什么；如果工具失败，也用一句话说明失败原因。\n"
-        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。\n"
-        f"你刚才选择秘密抽屉的理由：{str(initial_reason or '').strip() or '（未说明）'}"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。"
     )
     body = {
         "model": _get_chat_model(),
@@ -1884,12 +1881,12 @@ def _run_proactive_game_action(
     now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso()) or datetime.now()
     user_prompt = (
         f"你刚才在随机唤醒里选择了玩《{spec['title']}》。\n"
-        "现在不是重新做选择，也不要输出 JSON；请直接实际玩一会。\n"
+        f"你刚才选择玩游戏的理由：{str(initial_reason or '').strip() or '（未说明）'}\n"
+        f"现在需要调用 {spec['tool']} 工具实际玩一会。\n"
         f"这次只能使用 {spec['tool']} 工具来玩，不要改用其它游戏工具，也不要只用文字假装已经玩过。\n"
         f"{spec['instruction']}\n"
         "完成这次游玩后，用一句很短的话记录刚才做了什么；如果工具失败，也如实说明失败原因。\n"
-        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。\n"
-        f"你刚才选择玩游戏的理由：{str(initial_reason or '').strip() or '（未说明）'}"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。"
     )
     body = {
         "model": _get_chat_model(),
@@ -2002,10 +1999,10 @@ def _ask_du_after_surf_result(
         channel_field_desc = '- channel：当前没有可用发送入口；不要选择 "send_message"。\n'
     now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso()) or datetime.now()
     user_prompt = (
-        "你刚才选择了随机冲浪，后端已经实际调用 du_surf，并把结果交给你。\n"
-        "现在请基于这些素材做最终决定。不要再调用 du_surf，也不要只说“我去冲浪”。\n"
-        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。\n"
-        f"你刚才选择冲浪的理由：{str(initial_reason or '').strip() or '（未说明）'}\n\n"
+        "你刚才在随机唤醒里选择了随机冲浪。\n"
+        f"你刚才选择随机冲浪的理由：{str(initial_reason or '').strip() or '（未说明）'}\n"
+        "后端已经实际调用 du_surf，并把结果交给你。\n"
+        "现在需要基于这些素材做最终决定。不要再调用 du_surf，也不要只说“我去冲浪”。\n\n"
         f"{_format_proactive_surf_result_for_du(surf_result)}\n\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
         '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "drawer" | "game" | "other" 之一。不要再填 "surf"。\n'
@@ -2019,7 +2016,10 @@ def _ask_du_after_surf_result(
             else f'示例：{{"action":"no_contact","reason":"当前没有可用发送入口","message":"","channel":""}}\n'
         )
     )
-    user_prompt = f"{user_prompt.rstrip()}\n\n{_proactive_solo_game_options_prompt()}"
+    user_prompt = (
+        f"{user_prompt.rstrip()}\n\n{_proactive_solo_game_options_prompt()}\n\n"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。"
+    )
     body = {
         "model": _get_chat_model(),
         "messages": [

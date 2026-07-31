@@ -4,48 +4,33 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="light">
-  <title>瓶中生态 · 独立前端</title>
+  <title>瓶中生态</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main class="page">
     <section id="binding" class="binding card">
-      <p class="eyebrow">CEDAR ECO · STANDALONE</p>
-      <h1>池塘正在连线</h1>
-      <p class="lead">这扇观察窗只连接当前 App 里的同一座池塘。</p>
+      <p class="eyebrow">瓶中生态 · 连接状态</p>
+      <h1>正在寻找池塘</h1>
+      <p class="lead">观察窗只会连接 App 里的这一座池塘。</p>
       <form id="bind-form" class="bind-form">
-        <label>当前池塘<input id="server-url" type="url" required readonly></label>
-        <button class="primary" type="submit">重新连接</button>
+        <button class="primary" type="submit">重新加载</button>
       </form>
-      <p id="bind-error" class="error" hidden></p>
-      <details>
-        <summary>还是连不上？</summary>
-        <p>回到游戏大厅后重新进入，或检查瓶中生态服务是否已经启动。</p>
-      </details>
+      <p id="bind-error" class="error" role="status" aria-live="polite" hidden></p>
+      <p class="help">仍然没有回应时，返回游戏大厅后重新进入。</p>
     </section>
 
     <section id="pond-app" hidden>
-      <header class="topbar card">
-        <div>
-          <p class="eyebrow">瓶中生态 · 人类观察窗</p>
-          <h1>我的池塘</h1>
-        </div>
-        <div class="top-actions">
-          <span id="connection" class="connection">已连接</span>
-          <button id="refresh" type="button">刷新</button>
-          <button id="change-server" type="button">重新连接</button>
-        </div>
-      </header>
-
-      <nav class="tabs" aria-label="池塘页面">
-        <button class="tab active" data-view="state" type="button">池塘</button>
-        <button class="tab" data-view="codex" type="button">图鉴</button>
-        <button class="tab" data-view="annals" type="button">年鉴</button>
+      <nav class="tabs" aria-label="池塘页面" role="tablist">
+        <button class="tab active" data-view="state" type="button" role="tab" aria-selected="true" aria-controls="view-state">池塘</button>
+        <button class="tab" data-view="codex" type="button" role="tab" aria-selected="false" aria-controls="view-codex">图鉴</button>
+        <button class="tab" data-view="annals" type="button" role="tab" aria-selected="false" aria-controls="view-annals">年鉴</button>
       </nav>
+      <p id="connection" class="connection" role="status" aria-live="polite">实时同步</p>
 
-      <section id="view-state" class="view"></section>
-      <section id="view-codex" class="view" hidden></section>
-      <section id="view-annals" class="view" hidden></section>
+      <section id="view-state" class="view" role="tabpanel"></section>
+      <section id="view-codex" class="view" role="tabpanel" hidden></section>
+      <section id="view-annals" class="view" role="tabpanel" hidden></section>
     </section>
   </main>
 

@@ -27,6 +27,7 @@ from services.telegram_bot import (
 from services.hidden_blocks import HiddenBlockParser
 from services import wakeup_event_log
 from services.qq_group_delivery import qq_group_delivery_target
+from services.reasoning_utils import extract_reasoning_text_and_details
 from services.reply_channel_context import (
     normalize_reply_channel as _shared_normalize_reply_channel,
     resolve_recent_reply_context as _resolve_recent_reply_context,
@@ -203,6 +204,7 @@ def _append_sumitalk_assistant_message_to_device(
     text: str,
     created_at: str | None = None,
     window_id: str = "",
+    reasoning: str = "",
 ) -> bool:
     from routes.miniapp.sumitalk_history import (
         _SUMITALK_HISTORY_LOCK,
@@ -223,6 +225,7 @@ def _append_sumitalk_assistant_message_to_device(
     resolved_window_id = _resolve_sumitalk_delivery_window_id(window_id, did)
     storage_key = _sumitalk_history_storage_key(did, resolved_window_id)
     now_iso = str(created_at or now_beijing_iso()).strip() or now_beijing_iso()
+    reasoning_text = str(reasoning or "").strip()
     message_digest = hashlib.sha256(
         f"{did}\0{now_iso}\0{content}".encode("utf-8", errors="ignore")
     ).hexdigest()[:24]
@@ -233,6 +236,8 @@ def _append_sumitalk_assistant_message_to_device(
         "content": content,
         "createdAt": now_iso,
     }
+    if reasoning_text:
+        message["reasoning"] = reasoning_text
     with _SUMITALK_HISTORY_LOCK:
         data = _load_sumitalk_histories()
         current = data.get(storage_key) if isinstance(data, dict) else None
@@ -267,17 +272,20 @@ def _append_sumitalk_assistant_message_to_device(
             len(content),
             len(merged_messages),
         )
+        action_payload = {
+            "message_id": message_id,
+            "text": content,
+            "conversation_id": "du-private",
+            "window_id": resolved_window_id,
+            "role": "assistant",
+            "sender": "渡",
+            "created_at": now_iso,
+        }
+        if reasoning_text:
+            action_payload["reasoning"] = reasoning_text
         action, action_error = r2_store.append_app_action(
             "deliver_chat_message",
-            {
-                "message_id": message_id,
-                "text": content,
-                "conversation_id": "du-private",
-                "window_id": resolved_window_id,
-                "role": "assistant",
-                "sender": "渡",
-                "created_at": now_iso,
-            },
+            action_payload,
             device_id=did,
             expires_in_sec=30 * 24 * 60 * 60,
             source="proactive_followup",
@@ -385,6 +393,7 @@ def _dispatch_followup(
     created_at: str,
     split: bool = True,
     window_id: str = "",
+    reasoning: str = "",
 ) -> bool:
     ch = _normalize_reply_channel(channel, default="sumitalk", allow_tg=True)
     try:
@@ -419,6 +428,7 @@ def _dispatch_followup(
         text,
         created_at=created_at,
         window_id=window_id,
+        reasoning=reasoning,
     )
 
 
@@ -542,26 +552,26 @@ def queue_followup(window_id: str, headers: dict, assistant_text: str, created_a
         "source_preview": clean_text[:120],
         "attempts": 0,
     }
-    items = r2_store.get_conversation_followups() or []
-    changed = False
-    cancelled_old_items: list[dict] = []
-    if not continue_chain:
-        for old in items:
-            if not isinstance(old, dict):
-                continue
-            if str(old.get("thread_key") or "") != thread_key:
-                continue
-            if str(old.get("status") or "").strip().lower() != FOLLOWUP_STATUS_PENDING:
-                continue
-            old["status"] = FOLLOWUP_STATUS_CANCELLED
-            old["cancelled_at"] = created_iso
-            old["cancel_reason"] = "superseded_by_new_reply"
-            cancelled_old_items.append(old)
-            changed = True
-    items.insert(0, item)
-    if len(items) > 200:
-        items = items[:200]
-    ok = r2_store.save_conversation_followups(items)
+
+    def _queue(items: list[dict]):
+        cancelled_old_items: list[dict] = []
+        if not continue_chain:
+            for old in items:
+                if not isinstance(old, dict):
+                    continue
+                if str(old.get("thread_key") or "") != thread_key:
+                    continue
+                if str(old.get("status") or "").strip().lower() != FOLLOWUP_STATUS_PENDING:
+                    continue
+                old["status"] = FOLLOWUP_STATUS_CANCELLED
+                old["cancelled_at"] = created_iso
+                old["cancel_reason"] = "superseded_by_new_reply"
+                cancelled_old_items.append(dict(old))
+        items.insert(0, item)
+        return items[:200], cancelled_old_items
+
+    ok, cancelled_old_items = r2_store.mutate_conversation_followups(_queue)
+    cancelled_old_items = cancelled_old_items if isinstance(cancelled_old_items, list) else []
     if ok:
         for old in cancelled_old_items:
             wakeup_event_log.cancel_active_event(
@@ -588,7 +598,7 @@ def queue_followup(window_id: str, headers: dict, assistant_text: str, created_a
         item["trigger_at"],
         chain_id,
         followup_index,
-        changed,
+        bool(cancelled_old_items),
     )
     return clean_text, bool(ok)
 
@@ -733,6 +743,7 @@ def _dispatch_choice_dialog_reply(
     text: str,
     created_at: str | None = None,
     window_id: str = "",
+    reasoning: str = "",
 ) -> bool:
     ch = _normalize_reply_channel(channel, default="", allow_tg=True)
     if ch in {"wechat", "qq"}:
@@ -746,6 +757,7 @@ def _dispatch_choice_dialog_reply(
             text,
             created_at or now_beijing_iso(),
             window_id=window_id,
+            reasoning=reasoning,
         )
     return False
 
@@ -755,6 +767,7 @@ def _archive_wakeup_after_delivery(
     window_id: str,
     request_messages: list,
     assistant_text: str,
+    assistant_message: dict | None = None,
     wakeup_kind: str,
     reply_channel: str,
 ) -> bool:
@@ -768,6 +781,17 @@ def _archive_wakeup_after_delivery(
     archive_assistant = {"role": "assistant", "content": str(assistant_text or "").strip()}
     if not archive_assistant["content"]:
         return False
+    source_message = assistant_message if isinstance(assistant_message, dict) else {}
+    reasoning_text, reasoning_details, reasoning_omitted = extract_reasoning_text_and_details(source_message)
+    if reasoning_text:
+        archive_assistant["reasoning"] = reasoning_text
+    if reasoning_details:
+        archive_assistant["reasoning_details"] = reasoning_details
+    thinking_blocks = source_message.get("thinking_blocks")
+    if isinstance(thinking_blocks, list) and thinking_blocks:
+        archive_assistant["thinking_blocks"] = thinking_blocks
+    if reasoning_omitted:
+        archive_assistant["reasoning_omitted"] = True
     try:
         from pipeline.pipeline import step_archive_round
         from services.chat_archive_helpers import run_nonstream_post_archive_in_background
@@ -938,6 +962,7 @@ def _send_wakeup_event(
                 "reply_preview": str(msg.get("content") or "")[:120],
                 "error": "",
             }
+        reasoning_text, _reasoning_details, _reasoning_omitted = extract_reasoning_text_and_details(msg)
         content = msg.get("content")
         if isinstance(content, list):
             parts = []
@@ -1036,6 +1061,7 @@ def _send_wakeup_event(
                         window_id=context_window_id,
                         request_messages=body.get("messages") or [],
                         assistant_text=outbound,
+                        assistant_message=msg,
                         wakeup_kind=kind,
                         reply_channel="qq",
                     )
@@ -1091,6 +1117,7 @@ def _send_wakeup_event(
                 outbound,
                 created_at=created_at,
                 window_id=context_window_id,
+                reasoning=reasoning_text,
             ):
                 archive_ok = True
                 if archive and archive_after_delivery:
@@ -1098,6 +1125,7 @@ def _send_wakeup_event(
                         window_id=context_window_id,
                         request_messages=body.get("messages") or [],
                         assistant_text=outbound,
+                        assistant_message=msg,
                         wakeup_kind=kind,
                         reply_channel=channel,
                     )
@@ -1305,8 +1333,6 @@ def send_captivity_simulator_wakeup(
     player_message: str = "",
 ) -> dict:
     """立即让渡看到小玥同步来的囚禁模拟器局面。"""
-    from services.captivity_simulator_reference import get_reference_tool_schema
-
     game_channel_message = (
         f"（囚禁模拟器频道）\n小玥：{str(player_message or '').strip()}"
         if str(player_message or "").strip()
@@ -1333,7 +1359,6 @@ def send_captivity_simulator_wakeup(
         allow_followup=not return_only,
         return_only=return_only,
         skip_post_archive_body_delta=True,
-        tools=[get_reference_tool_schema()],
         sumitalk_prompt_assembly=True,
     )
 
@@ -1520,9 +1545,18 @@ def tick_conversation_followups() -> dict:
     if not items:
         return {"ok": True, "checked": 0, "sent": 0, "cancelled": 0, "pending": 0, "now": now_iso}
     changed = False
+    changed_ids: set[str] = set()
     sent = 0
     cancelled = 0
     pending = 0
+
+    def _mark_changed(item: dict) -> None:
+        nonlocal changed
+        changed = True
+        item_id = str((item or {}).get("id") or "").strip()
+        if item_id:
+            changed_ids.add(item_id)
+
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -1545,7 +1579,7 @@ def tick_conversation_followups() -> dict:
                 success=False,
                 error="续话时间无效",
             )
-            changed = True
+            _mark_changed(item)
             continue
         if trigger_dt > now_dt:
             pending += 1
@@ -1567,7 +1601,7 @@ def tick_conversation_followups() -> dict:
                 success=False,
                 error="续话上下文缺失",
             )
-            changed = True
+            _mark_changed(item)
             continue
         if _has_new_user_activity(window_id, created_at):
             item["status"] = FOLLOWUP_STATUS_CANCELLED
@@ -1579,7 +1613,7 @@ def tick_conversation_followups() -> dict:
                 reason="小玥在预定时间前发来了新消息",
             )
             cancelled += 1
-            changed = True
+            _mark_changed(item)
             continue
         attempts = int(item.get("attempts") or 0)
         if attempts >= 3:
@@ -1596,7 +1630,7 @@ def tick_conversation_followups() -> dict:
                     success=False,
                     error="续话已达到最大尝试次数",
                 )
-            changed = True
+            _mark_changed(item)
             continue
         event = wakeup_event_log.start_event(
             kind="followup",
@@ -1622,7 +1656,7 @@ def tick_conversation_followups() -> dict:
         if not text:
             item["last_error"] = "empty_gateway_reply"
             wakeup_event_log.record_attempt_error(event_id, "回复为空")
-            changed = True
+            _mark_changed(item)
             pending += 1
             continue
         ok = _dispatch_followup(
@@ -1657,10 +1691,12 @@ def tick_conversation_followups() -> dict:
             item["last_error"] = "dispatch_failed"
             wakeup_event_log.record_attempt_error(event_id, "消息投递失败")
             pending += 1
-        changed = True
+        _mark_changed(item)
+    latest_items = items
+    can_reconcile_plans = True
     if changed:
-        keep = []
         cutoff = now_dt - timedelta(days=3)
+        deleted_item_ids: set[str] = set()
         for item in items:
             ts = parse_iso_to_beijing(str(item.get("created_at") or "").strip())
             if ts and ts < cutoff and str(item.get("status") or "").strip().lower() in {
@@ -1668,9 +1704,37 @@ def tick_conversation_followups() -> dict:
                 FOLLOWUP_STATUS_CANCELLED,
                 FOLLOWUP_STATUS_EXPIRED,
             }:
-                continue
-            keep.append(item)
-        r2_store.save_conversation_followups(keep)
+                item_id = str(item.get("id") or "").strip()
+                if item_id:
+                    deleted_item_ids.add(item_id)
+        updates = {
+            str(item.get("id") or "").strip(): dict(item)
+            for item in items
+            if str(item.get("id") or "").strip() in changed_ids
+        }
+        saved, merged_items = r2_store.patch_conversation_followups(
+            updates,
+            deleted_item_ids=deleted_item_ids,
+        )
+        if saved:
+            latest_items = merged_items
+        else:
+            can_reconcile_plans = False
+            logger.error("延迟续话任务增量回写失败 changed=%s deleted=%s", len(updates), len(deleted_item_ids))
+    active_sources = {
+        _followup_event_source_key(item)
+        for item in latest_items
+        if isinstance(item, dict)
+        and str(item.get("status") or "").strip().lower() in ("", FOLLOWUP_STATUS_PENDING)
+        and str(item.get("id") or "").strip()
+    }
+    if can_reconcile_plans:
+        wakeup_event_log.cancel_missing_plans(
+            kind="followup",
+            active_source_keys=active_sources,
+            reason="对应续话任务已不存在",
+            updated_before=now_iso,
+        )
     return {
         "ok": True,
         "checked": len(items),

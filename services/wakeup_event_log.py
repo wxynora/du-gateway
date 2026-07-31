@@ -445,15 +445,31 @@ def cancel_active_event(*, kind: str, source_key: str, reason: str) -> dict:
     return cancel_event(str(event.get("event_id") or ""), reason)
 
 
-def cancel_missing_plans(*, kind: str, active_source_keys: set[str], reason: str) -> int:
+def cancel_missing_plans(
+    *,
+    kind: str,
+    active_source_keys: set[str],
+    reason: str,
+    updated_before: str = "",
+) -> int:
     ensure_schema()
     clean_kind = _clean(kind, 80)
     clean_keys = {_clean(x, 240) for x in active_source_keys if _clean(x, 240)}
+    clean_before = _clean(updated_before, 80)
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT event_id, source_key FROM wakeup_events WHERE kind=? AND status=?",
-            (clean_kind, STATUS_PLANNED),
-        ).fetchall()
+        if clean_before:
+            rows = conn.execute(
+                """
+                SELECT event_id, source_key FROM wakeup_events
+                WHERE kind=? AND status=? AND updated_at<?
+                """,
+                (clean_kind, STATUS_PLANNED, clean_before),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT event_id, source_key FROM wakeup_events WHERE kind=? AND status=?",
+                (clean_kind, STATUS_PLANNED),
+            ).fetchall()
     count = 0
     for row in rows:
         if str(row["source_key"] or "") in clean_keys:
