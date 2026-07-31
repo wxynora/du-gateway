@@ -6,7 +6,6 @@ import json
 from services.conversation_followup import build_followup_system_instruction
 from services.entry_style_prompt import entry_style_for_channel
 from services.upstream_policy import is_local_cliproxyapi_url
-from services.voice_line_prompt import build_voice_line_rules
 from storage import silence_mode_store
 from utils.log import get_logger
 
@@ -119,34 +118,6 @@ def inject_entry_style_system(body: dict, *, reply_channel: str, is_miniapp: boo
             _ENTRY_STYLE_SYSTEM_MARKER: True,
         },
     )
-    body = dict(body)
-    body["messages"] = messages
-    return body
-
-
-def inject_voice_call_style_system(body: dict) -> dict:
-    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
-        return body
-    marker = "【语音通话台词规范】"
-    instruction = "\n".join(
-        [
-            marker,
-            "你现在在语音通话里回复，最终文本会直接转成语音。",
-            "只输出需要朗读的正文，不要输出 <voice> 标签、动作注解、括号提示或表演说明。",
-            build_voice_line_rules(),
-        ]
-    ).strip()
-    messages = list(body.get("messages") or [])
-    for msg in messages:
-        if isinstance(msg, dict) and str(msg.get("role") or "").strip().lower() == "system":
-            if marker in str(msg.get("content") or ""):
-                return body
-    insert_idx = 0
-    for i, msg in enumerate(messages):
-        if not isinstance(msg, dict) or str(msg.get("role") or "").strip().lower() != "system":
-            break
-        insert_idx = i + 1
-    messages.insert(insert_idx, {"role": "system", "content": instruction})
     body = dict(body)
     body["messages"] = messages
     return body

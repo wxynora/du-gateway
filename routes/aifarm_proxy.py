@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 import requests
 from flask import Blueprint, Response, request
@@ -23,18 +24,22 @@ _POST_ACTIONS = {
     "codex": {"star"},
 }
 _GET_SECTIONS = {"", "ranch", "ta", "expedition", "codex", "leaderboard"}
+_UPSTREAM_BASE_PATH = urlparse(AIFARM_UPSTREAM_URL).path.rstrip("/")
+_UPSTREAM_UI_PREFIXES = tuple(dict.fromkeys((f"{_UPSTREAM_BASE_PATH}/ui/", "/ui/")))
 
 
 def _rewrite_html(body: bytes) -> bytes:
     text = body.decode("utf-8", errors="replace")
-    text = text.replace('="/ui/', '="/aifarm/ui/')
-    text = text.replace("='/ui/", "='/aifarm/ui/")
+    for prefix in _UPSTREAM_UI_PREFIXES:
+        text = text.replace(f'="{prefix}', '="/aifarm/ui/')
+        text = text.replace(f"='{prefix}", "='/aifarm/ui/")
     return text.encode("utf-8")
 
 
 def _rewrite_location(value: str) -> str:
-    if value.startswith("/ui/"):
-        return "/aifarm" + value
+    for prefix in _UPSTREAM_UI_PREFIXES:
+        if value.startswith(prefix):
+            return "/aifarm/ui/" + value[len(prefix):]
     return value
 
 

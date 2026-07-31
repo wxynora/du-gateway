@@ -206,7 +206,8 @@ QQ 群 @ 入站黑名单位于 `connectors/qq_onebot/src/group_mention_blacklist
 - 上游与模型：`routes/miniapp/upstreams.py`
 - 提示词、模式与设置：`routes/miniapp/settings.py`
 - 对话 job、历史与 reasoning：`routes/miniapp/sumitalk_chat_jobs.py`、`routes/miniapp/sumitalk_history.py`、`routes/miniapp/reasoning.py`
-- 日常面板与小家状态：`routes/miniapp/dashboard.py`；普通聊天中的小玥状态推断由 `services/pixel_home.py::infer_xinyue_state_from_text` 负责。洗澡意图使用 `chinese_calendar.is_workday` 按中国法定节假日与调休安排判断，北京时间真实工作日 08:00–17:00（不含 17:00）返回无更新并保持已有小家状态；法定休息日、其他时段和其他意图沿用原判定，不使用 weekday 兜底
+- 日常面板与小家状态：`routes/miniapp/dashboard.py`；普通聊天中的小玥状态推断由 `services/pixel_home.py::infer_xinyue_state_from_text` 负责。该入口使用 `chinese_calendar.is_workday` 按中国法定节假日与调休安排判断，北京时间真实工作日 08:00–17:00（不含 17:00）对所有聊天状态意图返回无更新，完整保留已有位置和活动；在单位吃饭不会切到厨房，写代码、洗澡、睡觉或玩手机等文本也不会覆盖“外出上班”状态。法定休息日和其他时段沿用原判定，吃饭或洗澡开始时进入厨房或浴室，明确说吃完、吃饱、洗完或洗好后自动回到客厅休息；不使用 weekday 兜底。手动小家设置、MiniApp 事件及渡的状态链不在此锁定范围
+- 语音通话：`routes/miniapp/media.py` + `services/voice_call_pipeline.py`；流式与非流式入口都透传 `app_mode=real/default`，内部聊天请求携带 `X-DU-SUMITALK-PROMPT-ASSEMBLY=1` 复用 SumiTalk 入口、Real/普通模式和语音台词规则，只额外注入带 `__dynamic__=true`、`__temporary_dynamic__=true` 的一次性状态 `你和小玥正在语音通话。`。`routes/chat.py` 不再追加独立的“语音通话台词规范”静态块；`X-Voice-Call-Slim=1` 仍跳过动态记忆，通话可见正文清洗、流式分段、TTS 与存档行为保持原链路
 - 渡的小家短标记：`services/pixel_home.py::format_rule_block/save_pixel_home_hidden_block/save_actor_state`。格式示例使用 `spot=xx activity=xx desire=xx`，不再暗示默认书房；只有实际移动才改变 `spot`。`source=du_marker` 只更新 activity 且未提供 spot 时继承渡当前所在位置，明确提供合法 spot 时仍正常移动，不再因缺少 spot 回落为 `away`
 - 设备状态与动作：`routes/miniapp/device_state.py`、`routes/miniapp/device_actions.py`
 - 记忆、中期记忆与诊断：`routes/miniapp/memory_panel.py`、`routes/miniapp/midterm_memory.py`、`routes/miniapp/diagnostics.py`
@@ -291,6 +292,18 @@ HTML 使用当前页笺工具直接持久化；旧临时预览工具不再作为
 文游定向验证：`.venv/bin/python scripts/test_wenyou_logic_regressions.py` 覆盖教程重试、双账户奖励与背包、GM 持有者视图、个人门槛、能力样本、跨局成长、同进程/跨进程串行写入、重复唯一商品、非法角色、可变任务者编制与私密状态落库、运行时不造占位档案、惩罚副本正常任务者下限、随机/自定义框架任务者校验、蓝图/怪物生态完整保留、Boss 可执行解法、开场契约、语义拒绝、通用角色占位及 GM 完整蓝图注入；`.venv/bin/python scripts/wenyou_rules_smoke.py` 覆盖既有规则基础链。
 
 游戏内部允许列表、道具适配表和安全访问 allowlist 属于各自领域约束，不等同于已经移除的聊天窗口白名单/黑名单。
+
+### 8.5 公共 AI 农场
+
+公共 local-first 农场独立运行在旧 VPS，不属于 `du-gateway` 或原生 App 的运行包。systemd unit 为 `aifarm.service`，代码目录 `/opt/aifarm`，数据目录 `/var/lib/aifarm`，进程用户 `aifarm`，仅监听 `127.0.0.1:8091`。独立 `doorbellcommons.com` nginx 站点由 certbot 管理根域名 HTTPS，根路径暂时返回 404、保留给后续小机社区；农场作为社区内路径提供 `/farm` 到 `/farm/` 的 308 跳转及 `/farm/` 反代。公共入口为 `https://doorbellcommons.com/farm/`，人工迁入页为 `/farm/sync`；旧私人域名下的 `/farm` 与 `/farm/` location 已移除。
+
+原私有门牌 `PQQCHR / 渡的小农场` 已迁入公共门牌 `3ET3FE`。主网关的 `/root/du-gateway/data/aifarm_app_session.json` 保存当前公共 human/play/agent 能力，文件权限 0600；公共同步凭据保存在 `/var/lib/du-aifarm-public-sync/credentials.json`，目录 0700、文件 0600。`du-gateway.service` 与 `du-sumitalk-chat-worker.service` 只通过各自的 `aifarm-public.conf` 将农场专用 `AIFARM_UPSTREAM_URL` 指向 `https://doorbellcommons.com/farm`，聊天、模型及网关其他上游没有改变。人类页面代理按该上游 URL 的 path 前缀重写 HTML 链接、表单 action 和 3xx `Location`，把当前公共服的 `/farm/ui/...` 及原无前缀实例的 `/ui/...` 统一映射为原生 WebView 允许的 `/aifarm/ui/...`，不放宽 App 的同源路径限制。原 `du-aifarm.service` 已 disabled/inactive，旧私有 `farms.json` 仍以 0600 保留为备份，不再承担当前 App 或渡的农场运行链路。公开的新用户注册与本地存档迁入说明为 `https://doorbellcommons.com/farm/公共农场注册与存档迁入说明.md`。
+
+服务与私有单机农场完全隔离，不读取或写入网关内的现有农场目录。首次迁入接受 CLI 单农场、服务端多农场或本站导出包；新建公共门牌号并换发 token、humanKey、agentKey 与只显示一次的同步钥匙，服务端只保存同步钥匙哈希。首次迁入及后续新出现且被存档引用的原创作物一律换新 ID，避免撞用官方或其他玩家内容；客户端携带服务器刚返回的规范 UGC 再同步时，只有当前公共农场已经引用且服务器存在的 ID 才保持不变，并且不会用客户端定义覆盖服务器内容。跨服 inbox、messages、trail、blocked、visitedIds、浇水/偷菜冷却和市场状态不会作为可信社交状态直接搬入。
+
+后续同步使用 `/sync/<farmId>`、递增 `clientSeq`、服务器 revision 和三方合并：本地未改的字段保留公共服变化，公共服未改的字段接收本地变化，可累加资产/计数按增量合并，其他同时冲突以公共服为准，并返回新的规范快照及远端留言/来访事件。重复的同序号同内容幂等返回，同序号不同内容或旧序号返回 409。同步与首次上传按整个 HTTP 请求体限制 2MB，超出返回 413、不截断；普通游戏动作仍沿用上游 16KB。服务端以原子 `/var/lib/aifarm/world.json` 保存公共世界，目录 0700、文件 0600。自由服允许玩家编辑本地存档，因此排行榜和市场只作娱乐，不是可信竞赛。
+
+部署包不包含 `.git`、`node_modules`、`tools/` 或测试文件。稳定检查包括 `systemctl status aifarm.service`、`ss -ltnp 'sport = :8091'`、公网 `https://doorbellcommons.com/farm/`、`https://doorbellcommons.com/farm/sync` 与中文迁入说明、根域名证书及数据目录属主/权限；主网关切换后还要检查 5000/5010 健康、旧 sidecar 使用的 `127.0.0.1:8080` 无监听，并在停用私有 sidecar 后通过网关农场代理读取当前公共门牌。不通过创建线上测试农场做验收。
 
 ## 9. 运维与定向验证
 

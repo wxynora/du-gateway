@@ -146,7 +146,6 @@ from services.chat_prompt_injections import (
     inject_followup_instruction as _inject_followup_instruction,
     inject_million_plan_player_static_system as _inject_million_plan_player_static_system,
     inject_silence_mode_system as _inject_silence_mode_system,
-    inject_voice_call_style_system as _inject_voice_call_style_system,
     inject_world_layer_prompt_system as _inject_world_layer_prompt_system,
 )
 from services.chat_archive_helpers import (
@@ -2528,7 +2527,7 @@ def chat_completions():
     wenyou_player_tools_enabled = _wenyou_player_tool_mode_enabled()
     app_mode = str(body.pop("app_mode", "") or "").strip().lower()
     sumitalk_real_mode = bool(
-        is_sumitalk_request
+        sumitalk_prompt_assembly
         and app_mode == "real"
     )
     req_model = str(upstream_store.get_cached_active_model(refresh_if_missing=False) or "").strip()
@@ -2773,8 +2772,6 @@ def chat_completions():
         reply_channel=reply_channel,
     )
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
-    if slim_voice_call:
-        body = _inject_voice_call_style_system(body)
     skip_dynamic_memory = _skip_dynamic_memory_request() or slim_voice_call
     skip_post_archive_dynamic_memory_write = _skip_post_archive_dynamic_memory_request()
     skip_post_archive_body_delta = _skip_post_archive_body_delta_request()

@@ -592,6 +592,7 @@ def register_routes(bp) -> None:
         call_id = (request.form.get("call_id") or "").strip() or str(uuid4())
         call_started_at = (request.form.get("call_started_at") or "").strip() or now_beijing_iso()
         user_text_override = (request.form.get("user_text_override") or "").strip()
+        app_mode = (request.form.get("app_mode") or "default").strip().lower()
         duration_ms = _safe_duration_ms(request.form.get("duration_ms") or request.form.get("durationMs"))
         max_duration_ms = max(0, int(VOICE_CALL_MAX_SECONDS or 0)) * 1000
         if duration_ms > 0 and max_duration_ms > 0 and duration_ms > max_duration_ms + 1000:
@@ -609,6 +610,7 @@ def register_routes(bp) -> None:
             window_id=window_id,
             user_text_override=user_text_override,
             duration_ms=duration_ms,
+            app_mode=app_mode,
         )
         if status >= 400:
             return jsonify(payload), status
@@ -649,6 +651,7 @@ def register_routes(bp) -> None:
         call_id = (request.form.get("call_id") or "").strip() or str(uuid4())
         call_started_at = (request.form.get("call_started_at") or "").strip() or now_beijing_iso()
         user_text_override = (request.form.get("user_text_override") or "").strip()
+        app_mode = (request.form.get("app_mode") or "default").strip().lower()
         turn_id = f"turn_{uuid4().hex}"
 
         @stream_with_context
@@ -693,6 +696,7 @@ def register_routes(bp) -> None:
                     user_text,
                     window_id=window_id,
                     audio_observations=audio_observations,
+                    app_mode=app_mode,
                 ):
                     kind = str((event or {}).get("kind") or "").strip()
                     if kind == "degraded":

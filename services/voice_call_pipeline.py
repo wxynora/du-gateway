@@ -18,6 +18,8 @@ from utils.log import get_logger
 
 logger = get_logger(__name__)
 
+_VOICE_CALL_STATUS_SYSTEM = "你和小玥正在语音通话。"
+
 
 class VoiceCallPipelineError(RuntimeError):
     def __init__(self, message: str, status_code: int = 502):
@@ -70,7 +72,14 @@ def _resolve_voice_model():
 def _build_voice_user_messages(user_text, audio_observations=""):
     text = str(user_text or "").strip()
     observations = str(audio_observations or "").strip()
-    messages = []
+    messages = [
+        {
+            "role": "system",
+            "__dynamic__": True,
+            "__temporary_dynamic__": True,
+            "content": _VOICE_CALL_STATUS_SYSTEM,
+        }
+    ]
     if observations:
         messages.append(
             {
@@ -86,6 +95,10 @@ def _build_voice_user_messages(user_text, audio_observations=""):
         )
     messages.append({"role": "user", "content": text})
     return messages
+
+
+def _normalize_voice_app_mode(app_mode=""):
+    return "real" if str(app_mode or "").strip().lower() == "real" else "default"
 
 
 def transcribe_voice_call_input(
@@ -214,7 +227,7 @@ def _voice_stream_error_message(response):
     return "聊天服务返回 HTTP %s" % int(getattr(response, "status_code", 502) or 502)
 
 
-def stream_voice_chat_pipeline(user_text, window_id="", audio_observations=""):
+def stream_voice_chat_pipeline(user_text, window_id="", audio_observations="", app_mode="default"):
     text = str(user_text or "").strip()
     if not text:
         raise VoiceCallPipelineError("语音识别结果为空", 422)
@@ -225,11 +238,13 @@ def stream_voice_chat_pipeline(user_text, window_id="", audio_observations=""):
         "messages": _build_voice_user_messages(text, audio_observations),
         "model": model,
         "stream": True,
+        "app_mode": _normalize_voice_app_mode(app_mode),
     }
     headers = {
         "Content-Type": "application/json",
         "X-Window-Id": resolve_voice_call_window_id(window_id),
         "X-Voice-Call-Slim": "1",
+        "X-DU-SUMITALK-PROMPT-ASSEMBLY": "1",
     }
     if MAIN_GATEWAY_BEARER_TOKEN:
         headers["Authorization"] = "Bearer %s" % MAIN_GATEWAY_BEARER_TOKEN
@@ -310,18 +325,24 @@ def stream_voice_chat_pipeline(user_text, window_id="", audio_observations=""):
             pass
 
 
-def call_voice_chat_pipeline(user_text, window_id="", audio_observations=""):
+def call_voice_chat_pipeline(user_text, window_id="", audio_observations="", app_mode="default"):
     text = str(user_text or "").strip()
     if not text:
         return "", "语音识别结果为空"
     model = _resolve_voice_model()
     if not model:
         return "", "当前没有可用模型"
-    body = {"messages": _build_voice_user_messages(text, audio_observations), "model": model, "stream": False}
+    body = {
+        "messages": _build_voice_user_messages(text, audio_observations),
+        "model": model,
+        "stream": False,
+        "app_mode": _normalize_voice_app_mode(app_mode),
+    }
     headers = {
         "Content-Type": "application/json",
         "X-Window-Id": resolve_voice_call_window_id(window_id),
         "X-Voice-Call-Slim": "1",
+        "X-DU-SUMITALK-PROMPT-ASSEMBLY": "1",
     }
     if MAIN_GATEWAY_BEARER_TOKEN:
         headers["Authorization"] = "Bearer %s" % MAIN_GATEWAY_BEARER_TOKEN
@@ -359,7 +380,17 @@ def call_voice_chat_pipeline(user_text, window_id="", audio_observations=""):
     return reply_text, None
 
 
-def run_voice_call(audio_bytes, mime_type, filename, window_id="", status_cb=None, audio_chunk_cb=None, user_text_override="", duration_ms=0):
+def run_voice_call(
+    audio_bytes,
+    mime_type,
+    filename,
+    window_id="",
+    status_cb=None,
+    audio_chunk_cb=None,
+    user_text_override="",
+    duration_ms=0,
+    app_mode="default",
+):
     if not audio_bytes:
         return {"ok": False, "error": "音频为空"}, 400
     try:
@@ -396,6 +427,7 @@ def run_voice_call(audio_bytes, mime_type, filename, window_id="", status_cb=Non
         user_text=user_text,
         window_id=window_id,
         audio_observations=audio_observations,
+        app_mode=app_mode,
     )
     if reply_err:
         return {"ok": False, "error": reply_err, "user_text": user_text}, 502

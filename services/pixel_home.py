@@ -2476,6 +2476,15 @@ _MEAL_INTENT_RE = re.compile(
     r"|(?:我)?(?:点了|点个|点份|点好|点|拿了|取了|去拿|准备拿)(?:外卖)"
     r"|(?:外卖到了|外卖到啦|外卖到喽)"
 )
+_MEAL_FINISHED_RE = re.compile(
+    r"(?:^|我)(?:刚|刚刚|已经|终于)?(?:吃完(?:饭)?|吃好(?:饭)?|吃饱)(?:了|啦|咯|喽)?(?!吗|没)"
+)
+_SHOWER_FINISHED_RE = re.compile(
+    r"(?:^|我)(?:刚|刚刚|已经|终于)?(?:洗完(?:澡)?|洗好(?:澡)?)(?:了|啦|咯|喽)?(?!吗|没)"
+)
+_STATE_FINISHED_QUESTION_RE = re.compile(
+    r"(?:洗完|洗好|吃完|吃好|吃饱).{0,4}(?:吗|没|没有|是不是)"
+)
 _TEXT_SPOT_ALIASES = sorted(
     ((alias, spot) for alias, spot in SPOT_ALIASES.items() if alias and not alias.isascii() and spot != "home"),
     key=lambda item: len(item[0]),
@@ -2497,14 +2506,18 @@ def infer_xinyue_state_from_text(text: str) -> dict | None:
     raw = str(text or "").strip()
     if not raw:
         return None
+    now_dt = _now_dt()
+    if is_china_workday(now_dt.date()) and 8 <= now_dt.hour < 17:
+        return None
     compact = re.sub(r"\s+", "", raw.lower())
+    if not _STATE_FINISHED_QUESTION_RE.search(compact) and (
+        _SHOWER_FINISHED_RE.search(compact) or _MEAL_FINISHED_RE.search(compact)
+    ):
+        return {"spot": "sofa", "activity": "休息", "source": "chat_infer"}
     code_context = bool(_CODE_CONTEXT_RE.search(compact))
     if code_context:
         return {"spot": "study", "activity": "工作", "source": "chat_infer"}
     if re.search(r"(我要|我去|我准备|我先|我打算|去)?洗澡(了|啦|一下|去)?", compact):
-        now_dt = _now_dt()
-        if is_china_workday(now_dt.date()) and 8 <= now_dt.hour < 17:
-            return None
         return {"spot": "bath", "activity": "洗澡", "source": "chat_infer"}
     if _MEAL_INTENT_RE.search(compact) and not _MEAL_QUESTION_RE.search(compact) and not _MEAL_NEGATION_RE.search(compact):
         return {"spot": "kitchen", "activity": "吃饭", "source": "chat_infer"}
