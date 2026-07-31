@@ -19,7 +19,8 @@ cp .env.example .env
 - `GATEWAY_BASE_URL`
 - `GATEWAY_CHAT_PATH`
 - 根目录 `.env` 里的 `TELEGRAM_PROACTIVE_TARGET_USER_ID`
-- `QQ_BOT_USER_ID`：机器人自己的 QQ 号，默认 `3195570280`
+- `QQ_BOT_USER_ID`：机器人自己的 QQ 号，默认 `3877162412`
+- `QQ_GROUP_ID`：唯一允许接收群消息、记录群聊上下文和主动投递的群，默认 `515831305`
 - `QQ_OWNER_USER_ID`：本人 QQ 号，默认 `1336091712`
 - `QQ_OWNER_DISPLAY_NAME`：本人展示名，默认 `辛玥`
 
@@ -43,7 +44,7 @@ http://127.0.0.1:8092/onebot/events
 ### 4) 当前行为
 
 - QQ 私聊直接走共享的 TG 窗口上下文
-- QQ 群聊只在机器人被 @ 时回复，群聊上下文同样走共享的 TG 窗口上下文
+- QQ 群聊只处理 `QQ_GROUP_ID` 绑定群；在绑定群中被 @ 时回复，群聊上下文同样走共享的 TG 窗口上下文
 - 群聊会带 @ 之前最近 10 条群消息作为公开上下文，格式包含群昵称/QQ 号；`QQ_OWNER_USER_ID` 会额外标记为“当前用户/辛玥”
 - 群聊不跑动态记忆层
 - 同一用户 15 秒内多条消息会合并成一次请求

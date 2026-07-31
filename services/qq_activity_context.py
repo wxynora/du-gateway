@@ -4,6 +4,7 @@ import base64
 from datetime import datetime, timedelta
 from typing import Any
 
+from config import QQ_GROUP_ID
 from services.image_desc import compress_base64_image_for_anthropic
 from services.qq_group_delivery import QQ_GROUP_CONTENT_MARKER
 from storage import r2_store
@@ -19,6 +20,10 @@ _MAX_TEXT_CHARS = 180
 _CONTEXT_TTL_HOURS = 24
 _IMAGE_CONTEXT_TTL_HOURS = 1
 _MAX_CONTEXT_IMAGES = 5
+
+
+def _is_bound_group_id(value: Any) -> bool:
+    return str(value or "").strip() == str(QQ_GROUP_ID or "").strip()
 
 
 def _clip_text(value: Any, limit: int = _MAX_TEXT_CHARS) -> str:
@@ -149,6 +154,8 @@ def record_group_activity(payload: dict) -> bool:
     if not isinstance(payload, dict) or not bool(payload.get("is_owner")):
         return False
     row = _row_from_payload(payload)
+    if not _is_bound_group_id(row.get("group_id")):
+        return False
     if not row.get("text") and not row.get("images"):
         return False
     msg_id = row.get("message_id") or f"{row.get('group_id')}|{row.get('user_id')}|{row.get('at')}|{row.get('text')[:40]}"
@@ -259,7 +266,13 @@ def _recent_context_images(rows: list[dict]) -> list[dict]:
 def build_group_activity_delivery_for_wakeup() -> dict:
     try:
         state = _load_state()
-        items = _items_after_last_proactive([x for x in (state.get("items") or []) if isinstance(x, dict)])
+        items = _items_after_last_proactive(
+            [
+                x
+                for x in (state.get("items") or [])
+                if isinstance(x, dict) and _is_bound_group_id(x.get("group_id"))
+            ]
+        )
     except Exception as e:
         logger.debug("qq_group_activity_build_skip error=%s", e)
         return {}
@@ -270,7 +283,11 @@ def build_group_activity_delivery_for_wakeup() -> dict:
     if not group_id:
         return {}
     older = items[:-1][-6:]
-    latest_rows = [x for x in (latest.get("context") or [])[-_MAX_CONTEXT_ROWS:] if isinstance(x, dict)]
+    latest_rows = [
+        x
+        for x in (latest.get("context") or [])[-_MAX_CONTEXT_ROWS:]
+        if isinstance(x, dict) and _is_bound_group_id(x.get("group_id"))
+    ]
     image_entries = list(reversed(_recent_context_images(latest_rows)))
 
     lines = [

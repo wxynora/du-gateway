@@ -876,6 +876,9 @@ def _send_wakeup_event(
     post_spring_prompt_override = _post_spring_dream_prompt_override_for_trigger(kind, created_at)
     if post_spring_prompt_override:
         prompt = str(post_spring_prompt_override.get("prompt") or "").strip() or prompt
+    forbid_qq_delivery = kind in {"spring_dream", "random_spring_dream", "post_spring_dream"} or bool(
+        post_spring_prompt_override
+    )
     preferred_channel, preferred_target, preferred_meta = _choice_dialog_delivery_preference(target)
     override_channel = _normalize_reply_channel(preferred_channel_override, default="", allow_tg=True)
     if override_channel:
@@ -1069,6 +1072,34 @@ def _send_wakeup_event(
             }
         attempted_channels: list[str] = []
         requested_group_id = qq_group_delivery_target(msg)
+        if forbid_qq_delivery and (requested_group_id or preferred_channel == "qq"):
+            spring_archive = _archive_generated_spring_dream(
+                delivery_status="not_dispatched",
+                archive_channel="qq",
+                archive_target=requested_group_id or preferred_target or target,
+                attempted=attempted_channels,
+            )
+            logger.info(
+                "春梦相关唤醒禁止投递 QQ window_id=%s kind=%s qq_group=%s",
+                context_window_id,
+                kind or "post_spring_dream_override",
+                bool(requested_group_id),
+            )
+            return {
+                "ok": False,
+                "channel": "",
+                "attempted_channels": attempted_channels,
+                "preferred_channel": preferred_channel,
+                "preferred_channel_at": str(preferred_meta.get("at") or ""),
+                "locked_channel": bool(lock_preferred_channel),
+                "archive_ok": bool(spring_archive.get("ok")) if spring_archive else True,
+                "spring_dream_archive_ok": bool(spring_archive.get("ok")) if spring_archive else True,
+                "spring_dream_archive_id": str(spring_archive.get("id") or "") if spring_archive else "",
+                "spring_dream_archive_r2_key": str(spring_archive.get("r2_key") or "") if spring_archive else "",
+                "dispatched": False,
+                "reply_preview": outbound[:120],
+                "error": "qq_delivery_forbidden",
+            }
         if requested_group_id:
             attempted_channels.append("qq_group")
             if _send_via_qq_group(outbound, requested_group_id, split=True):
@@ -1122,6 +1153,8 @@ def _send_wakeup_event(
 
             available_channels = _available_channels()
         channels = _choice_dialog_delivery_channels(preferred_channel, available_channels, preferred_target)
+        if forbid_qq_delivery:
+            channels = [channel for channel in channels if channel != "qq"]
         if not channels:
             spring_archive = _archive_generated_spring_dream(
                 delivery_status="not_dispatched",

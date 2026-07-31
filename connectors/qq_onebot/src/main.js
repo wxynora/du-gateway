@@ -864,8 +864,9 @@ const maxConsecutiveGroupMentionReplies = Math.max(
   1,
   envInt("QQ_GROUP_MAX_CONSECUTIVE_MENTION_REPLIES", 5)
 );
-const configuredBotUserId = Number(envStr("QQ_BOT_USER_ID", "3195570280") || 0);
+const configuredBotUserId = Number(envStr("QQ_BOT_USER_ID", "3877162412") || 0);
 let resolvedBotUserId = configuredBotUserId;
+const configuredGroupId = Number(envStr("QQ_GROUP_ID", "515831305") || 0);
 const logInboundEvents = envBool("QQ_INBOUND_EVENT_LOG", true);
 const logGroupEvents = envBool("QQ_GROUP_EVENT_LOG", true);
 const ownerQqUserId = Number(envStr("QQ_OWNER_USER_ID", "1336091712") || 0);
@@ -873,6 +874,12 @@ const ownerQqDisplayName = envStr("QQ_OWNER_DISPLAY_NAME", "辛玥");
 const reportGroupActivityEnabled = envBool("QQ_GROUP_ACTIVITY_REPORT_ENABLED", true);
 const groupActivityContextLimit = Math.max(1, envInt("QQ_GROUP_ACTIVITY_CONTEXT_MESSAGES", 20));
 const groupMentionBlacklist = parseQqGroupMentionBlacklist(envStr("QQ_GROUP_MENTION_BLACKLIST", ""));
+
+function isBoundGroupId(groupId) {
+  return Number.isSafeInteger(configuredGroupId)
+    && configuredGroupId > 0
+    && Number(groupId || 0) === configuredGroupId;
+}
 
 async function sendQqPrivateRichReply(userId, reply, options = {}) {
   const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
@@ -1347,6 +1354,10 @@ async function sendQqReplyToGroup(groupId, reply, options = {}) {
 async function handleGroupEvent(j) {
   const groupId = Number(j?.group_id || 0);
   if (!groupId) return;
+  if (!isBoundGroupId(groupId)) {
+    logIgnoredEvent(j, "unbound_group");
+    return;
+  }
   const atTargets = groupAtTargets(j);
   const mentionsSelf = messageMentionsSelf(j);
   if (shouldIgnoreQqGroupMention(j, mentionsSelf, groupMentionBlacklist)) {
@@ -1502,6 +1513,11 @@ async function main() {
         if (!Number.isSafeInteger(groupId) || groupId <= 0) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: false, error: "invalid_group_id" }));
+          return;
+        }
+        if (!isBoundGroupId(groupId)) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "group_not_bound" }));
           return;
         }
         try {

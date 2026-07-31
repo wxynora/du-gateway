@@ -560,7 +560,7 @@ def _resolve_open_app_target(arguments: dict) -> tuple[dict | None, str]:
         app_name = "QQ"
         page_key = _normalize_app_alias(page)
         if not target_url and page_key not in {"首页", "home"}:
-            du_qq = str(os.environ.get("QQ_BOT_USER_ID") or "3195570280").strip()
+            du_qq = str(os.environ.get("QQ_BOT_USER_ID") or "3877162412").strip()
             if not du_qq.isdigit():
                 return None, "QQ 中渡的账号配置不可用"
             target_url = f"mqqwpa://im/chat?chat_type=wpa&uin={du_qq}&version=1&src_type=web"

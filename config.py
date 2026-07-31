@@ -691,6 +691,7 @@ WECHAT_PROACTIVE_PUSH_TOKEN = _strip_inline_env_comment(os.environ.get("WECHAT_P
 # QQ：QQ_PROACTIVE_PUSH_URL=http://127.0.0.1:8092/push（connector 内的 push server）
 QQ_PROACTIVE_PUSH_URL = os.environ.get("QQ_PROACTIVE_PUSH_URL", "").strip()
 QQ_PROACTIVE_PUSH_TOKEN = _strip_inline_env_comment(os.environ.get("QQ_PROACTIVE_PUSH_TOKEN", ""))
+QQ_GROUP_ID = (os.environ.get("QQ_GROUP_ID", "").strip() or "515831305")
 
 # QQ / NapCat 掉线巡检：检测二维码文件，一旦进入扫码登录态就发 Telegram 告警
 QQ_ENTRY_WATCHDOG_ENABLED = os.environ.get("QQ_ENTRY_WATCHDOG_ENABLED", "").strip().lower() in ("1", "true", "yes")
