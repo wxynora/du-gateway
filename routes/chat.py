@@ -236,6 +236,7 @@ def _run_sumitalk_stream_archive_queue() -> None:
                 request_messages,
                 assistant_message,
                 round_cleaned,
+                reply_channel,
                 skip_dynamic_memory_write,
                 skip_body_delta,
             ) = task
@@ -244,6 +245,7 @@ def _run_sumitalk_stream_archive_queue() -> None:
                 request_messages,
                 assistant_message,
                 round_cleaned_for_r2=round_cleaned,
+                reply_channel=reply_channel,
                 skip_dynamic_memory_write=skip_dynamic_memory_write,
                 skip_body_delta=skip_body_delta,
             )
@@ -1458,6 +1460,7 @@ def _stream_with_r2_archive(
                 request_messages,
                 assistant_message,
                 round_cleaned_for_r2=round_cleaned,
+                reply_channel=reply_channel,
                 skip_dynamic_memory_write=skip_dynamic_memory_write,
                 skip_body_delta=skip_body_delta,
             )
@@ -1473,6 +1476,7 @@ def _stream_with_r2_archive(
                 messages_snapshot,
                 assistant_snapshot,
                 round_snapshot,
+                reply_channel,
                 skip_dynamic_memory_write,
                 skip_body_delta,
             )
@@ -3271,6 +3275,7 @@ def chat_completions():
                     qq_group_delivery_target,
                     exc_info=True,
                 )
+    archived_round_index = 0
     if resp_json and (resp_json or {}).get("choices"):
         msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
         content_text = get_assistant_content_text(msg)
@@ -3331,6 +3336,7 @@ def chat_completions():
             game_tool_used = _tool_trace_has_game_tool_loop(tc_trace)
             archive_skip_dynamic_memory_write = skip_post_archive_dynamic_memory_write or game_tool_used
             archive_skip_body_delta = skip_post_archive_body_delta or game_tool_used
+            archive_reply_channel = "" if _is_gateway_wakeup_request() else reply_channel
             if game_tool_used:
                 logger.info("game tool 回合命中，归档后动态记忆与 BODY delta 跳过 window_id=%s", window_id)
             last_user = _last_user_message(body.get("messages"))
@@ -3346,9 +3352,14 @@ def chat_completions():
                 )
                 if reply_channel in _NONSTREAM_FAST_RETURN_CHANNELS:
                     archived = step_archive_round(
-                        window_id, archive_messages, msg_for_r2, round_cleaned_for_r2=round_cleaned
+                        window_id,
+                        archive_messages,
+                        msg_for_r2,
+                        round_cleaned_for_r2=round_cleaned,
+                        reply_channel=archive_reply_channel,
                     )
                     if archived:
+                        archived_round_index = int(archived.get("round_index") or 0)
                         _run_nonstream_post_archive_in_background(
                             window_id=window_id,
                             round_index=int(archived.get("round_index") or 0),
@@ -3358,18 +3369,27 @@ def chat_completions():
                             skip_body_delta=archive_skip_body_delta,
                         )
                 else:
-                    step_archive_and_maybe_summary(
+                    archived = step_archive_and_maybe_summary(
                         window_id,
                         archive_messages,
                         msg_for_r2,
                         round_cleaned_for_r2=round_cleaned,
+                        reply_channel=archive_reply_channel,
                         skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
                         skip_body_delta=archive_skip_body_delta,
                     )
+                    if archived:
+                        archived_round_index = int(archived.get("round_index") or 0)
             else:
                 if reply_channel in _NONSTREAM_FAST_RETURN_CHANNELS:
-                    archived = step_archive_round(window_id, archive_messages, msg_for_r2)
+                    archived = step_archive_round(
+                        window_id,
+                        archive_messages,
+                        msg_for_r2,
+                        reply_channel=archive_reply_channel,
+                    )
                     if archived:
+                        archived_round_index = int(archived.get("round_index") or 0)
                         _run_nonstream_post_archive_in_background(
                             window_id=window_id,
                             round_index=int(archived.get("round_index") or 0),
@@ -3379,15 +3399,20 @@ def chat_completions():
                             skip_body_delta=archive_skip_body_delta,
                         )
                 else:
-                    step_archive_and_maybe_summary(
+                    archived = step_archive_and_maybe_summary(
                         window_id,
                         archive_messages,
                         msg_for_r2,
+                        reply_channel=archive_reply_channel,
                         skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
                         skip_body_delta=archive_skip_body_delta,
                     )
+                    if archived:
+                        archived_round_index = int(archived.get("round_index") or 0)
     else:
         logger.info("R2 未存档：上游无 choices 或响应为空")
+    if archived_round_index > 0 and _is_gateway_wakeup_request() and isinstance(resp_json, dict):
+        resp_json["du_gateway_archive_round_index"] = archived_round_index
     if _is_proactive_decision_request() and isinstance(resp_json, dict):
         resp_json["du_gateway_executed_tools"] = _executed_tool_names_from_messages(body.get("messages") or [])
         if qq_group_delivery_target:

@@ -2581,9 +2581,39 @@ def register_routes(bp) -> None:
                     "synced_at": synced_at,
                 }
             ), 422
+        game_chat_messages = []
+        if user_content.strip():
+            game_chat_messages.append({"speaker": "xinyue", "text": user_content})
+        if chat_text.strip():
+            game_chat_messages.append({"speaker": "du", "text": chat_text})
+        synced_state = applied.get("state") or {}
+        if game_chat_messages:
+            append_command = "append_chat " + json.dumps(
+                {"messages": game_chat_messages},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            appended = execute_game_command(GAME_ID_GOMOKU, append_command, save_id)
+            if not appended.get("ok"):
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": str(
+                            appended.get("message")
+                            or appended.get("error")
+                            or "本局悄悄话保存失败。"
+                        ),
+                        "error_code": str(appended.get("error") or "CHAT_SAVE_FAILED"),
+                        "state": appended.get("state") or synced_state,
+                        "reply_text": chat_text,
+                        "action": action,
+                        "synced_at": synced_at,
+                    }
+                ), 500
+            synced_state = appended.get("state") or synced_state
         response_payload = {
             "ok": True,
-            "state": applied.get("state") or {},
+            "state": synced_state,
             "player_text": applied.get("player_text") or "",
             "reply_text": chat_text,
             "action": action,
@@ -2593,7 +2623,7 @@ def register_routes(bp) -> None:
         if action == "move":
             response_payload["move"] = {
                     "actor": "du",
-                    "color": str(((applied.get("state") or {}).get("players") or {}).get("du") or ""),
+                    "color": str((synced_state.get("players") or {}).get("du") or ""),
                     "row": row,
                     "col": col,
             }

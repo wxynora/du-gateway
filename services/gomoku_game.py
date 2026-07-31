@@ -24,6 +24,7 @@ DEFAULT_SAVE_PATH = DATA_DIR / GAME_ID / "default.json"
 BOARD_SIZE = 15
 SCHEMA_VERSION = 1
 ACTORS = ("xinyue", "du")
+CHAT_SPEAKERS = ACTORS
 EMPTY = ""
 BLACK = "black"
 WHITE = "white"
@@ -57,6 +58,20 @@ def run_command(command: str = "", save_path: str | Path | None = None) -> dict[
                 message="当前棋局如下。" if state.get("started") else "还没有开始新局。",
                 command=command or "status",
             )
+
+        if action == "append_chat":
+            raw_messages = args.get("messages")
+            messages = _normalized_game_chat_messages(raw_messages)
+            if not isinstance(raw_messages, list) or not messages or len(messages) != len(raw_messages):
+                return _error_result(state, "INVALID_CHAT_MESSAGE", "本局悄悄话内容无效。", command)
+            if not state.get("started"):
+                return _error_result(state, "GAME_NOT_STARTED", "还没有开始新局。", command)
+            state["game_chat_messages"] = [
+                *_normalized_game_chat_messages(state.get("game_chat_messages")),
+                *messages,
+            ]
+            _save_state(path, state)
+            return _result(state, message="已保存本局悄悄话。", command=command)
 
         if action == "end_game":
             if not state.get("started"):
@@ -159,6 +174,14 @@ def _parse_command(command: str) -> tuple[str, dict[str, Any]]:
         return "open", {}
     first, _, tail = raw.partition(" ")
     normalized = first.strip().lower()
+    if normalized == "append_chat":
+        try:
+            payload = json.loads(tail)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        messages = payload.get("messages") if isinstance(payload, dict) else None
+        return "append_chat", {"messages": messages}
+
     negotiation_commands = {
         "request_draw": ("request", "xinyue", "draw", ""),
         "du_request_draw": ("request", "du", "draw", ""),
@@ -239,6 +262,7 @@ def _new_state() -> dict[str, Any]:
         "turn_actor": black_actor,
         "last_move": None,
         "moves": [],
+        "game_chat_messages": [],
         "pending_request": None,
         "last_request_event": None,
         "game_over": False,
@@ -260,6 +284,7 @@ def _empty_state() -> dict[str, Any]:
         "turn_actor": "",
         "last_move": None,
         "moves": [],
+        "game_chat_messages": [],
         "pending_request": None,
         "last_request_event": None,
         "game_over": False,
@@ -313,6 +338,7 @@ def _normalize_state(data: dict[str, Any]) -> dict[str, Any]:
             moves.append({"actor": actor, "color": color, "row": row, "col": col})
     state["moves"] = moves
     state["last_move"] = deepcopy(moves[-1]) if moves else None
+    state["game_chat_messages"] = _normalized_game_chat_messages(state.get("game_chat_messages"))
     state["game_over"] = bool(state.get("game_over"))
     if state["game_over"]:
         state["turn_actor"] = ""
@@ -545,6 +571,20 @@ def _normalized_request_event(raw: Any) -> dict[str, str] | None:
     return {"type": request_type, "requester": requester, "decision": decision}
 
 
+def _normalized_game_chat_messages(raw: Any) -> list[dict[str, str]]:
+    source = raw if isinstance(raw, list) else []
+    messages: list[dict[str, str]] = []
+    for item in source:
+        if not isinstance(item, dict):
+            continue
+        speaker = str(item.get("speaker") or "")
+        text = item.get("text")
+        if speaker not in CHAT_SPEAKERS or not isinstance(text, str) or not text.strip():
+            continue
+        messages.append({"speaker": speaker, "text": text})
+    return messages
+
+
 def _has_five(board: list[list[str]], *, row: int, col: int, color: str) -> bool:
     for row_step, col_step in ((0, 1), (1, 0), (1, 1), (1, -1)):
         count = 1
@@ -597,6 +637,9 @@ def _public_state(state: dict[str, Any]) -> dict[str, Any]:
         "turn_actor": str(state.get("turn_actor") or ""),
         "last_move": deepcopy(state.get("last_move")),
         "moves": deepcopy(state.get("moves") or []),
+        "game_chat_messages": deepcopy(
+            _normalized_game_chat_messages(state.get("game_chat_messages"))
+        ),
         "pending_request": deepcopy(state.get("pending_request")),
         "last_request_event": deepcopy(state.get("last_request_event")),
         "can_request_undo": _actor_has_move(state, str(state.get("turn_actor") or "")),

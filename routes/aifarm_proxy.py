@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import requests
 from flask import Blueprint, Response, request
@@ -24,8 +24,14 @@ _POST_ACTIONS = {
     "codex": {"star"},
 }
 _GET_SECTIONS = {"", "ranch", "ta", "expedition", "codex", "leaderboard"}
-_UPSTREAM_BASE_PATH = urlparse(AIFARM_UPSTREAM_URL).path.rstrip("/")
+_UPSTREAM_PARSED_URL = urlparse(AIFARM_UPSTREAM_URL)
+_UPSTREAM_BASE_PATH = _UPSTREAM_PARSED_URL.path.rstrip("/")
 _UPSTREAM_UI_PREFIXES = tuple(dict.fromkeys((f"{_UPSTREAM_BASE_PATH}/ui/", "/ui/")))
+_UPSTREAM_ORIGIN = (
+    _UPSTREAM_PARSED_URL.scheme.lower(),
+    (_UPSTREAM_PARSED_URL.hostname or "").lower(),
+    _UPSTREAM_PARSED_URL.port or (443 if _UPSTREAM_PARSED_URL.scheme.lower() == "https" else 80),
+)
 
 
 def _rewrite_html(body: bytes) -> bytes:
@@ -37,6 +43,24 @@ def _rewrite_html(body: bytes) -> bytes:
 
 
 def _rewrite_location(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme and parsed.netloc:
+        try:
+            origin = (
+                parsed.scheme.lower(),
+                (parsed.hostname or "").lower(),
+                parsed.port or (443 if parsed.scheme.lower() == "https" else 80),
+            )
+        except ValueError:
+            return value
+        if origin != _UPSTREAM_ORIGIN:
+            return value
+        for prefix in _UPSTREAM_UI_PREFIXES:
+            if parsed.path.startswith(prefix):
+                path = "/aifarm/ui/" + parsed.path[len(prefix):]
+                return urlunparse(("", "", path, parsed.params, parsed.query, parsed.fragment))
+        return value
+
     for prefix in _UPSTREAM_UI_PREFIXES:
         if value.startswith(prefix):
             return "/aifarm/ui/" + value[len(prefix):]

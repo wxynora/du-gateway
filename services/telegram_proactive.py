@@ -148,6 +148,7 @@ class ProactiveDecision:
     game: str = ""              # action=game 时选择的渡单机游戏 id
     executed_tools: tuple[str, ...] = ()
     qq_group_id: str = ""       # 仅由网关根据本轮群聊上下文回填；模型不能填写
+    archive_round_index: int = 0
 
 
 _PROACTIVE_FORUM_TOOL_NAMES = frozenset({"forum_read_feed", "forum_open_thread", "cli"})
@@ -924,6 +925,7 @@ def _generate_schedule_reply(
         return {
             "text": text,
             "qq_group_id": qq_group_delivery_target(msg),
+            "archive_round_index": int((data or {}).get("du_gateway_archive_round_index") or 0),
         }
     except Exception as e:
         logger.warning("闹钟提醒生成异常: %s", e)
@@ -1034,6 +1036,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         decision = _parse_proactive_model_reply(text, no_token, default_channel=default_channel, channels=channels)
         decision = _apply_qq_group_delivery_to_decision(decision, data)
         decision.executed_tools = _gateway_executed_tool_names(data)
+        decision.archive_round_index = int((data or {}).get("du_gateway_archive_round_index") or 0)
         if decision.should_send and default_channel:
             decision.channel = default_channel
         return decision
@@ -1372,6 +1375,18 @@ def schedule_tick(target_user_id: int = 0) -> dict:
         if not ok:
             wakeup_event_log.record_attempt_error(schedule_event_id, "提醒消息投递失败")
             continue
+        archived_channel = "qq" if sent_channel == "qq_group" else sent_channel
+        if not r2_store.update_conversation_round_channel(
+            window_id,
+            int((reply_result or {}).get("archive_round_index") or 0),
+            archived_channel,
+        ):
+            logger.warning(
+                "闹钟提醒实际通道回写失败 window_id=%s round_index=%s channel=%s",
+                window_id,
+                int((reply_result or {}).get("archive_round_index") or 0),
+                archived_channel,
+            )
         wakeup_event_log.finish_event(
             schedule_event_id,
             success=True,
@@ -2571,6 +2586,18 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     out["sent"] = bool(ok)
     out["text_preview"] = (decision.text.strip()[:120] + "…") if len(decision.text.strip()) > 120 else decision.text.strip()
     if ok:
+        archived_channel = "qq" if channel == "qq_group" else channel
+        if not r2_store.update_conversation_round_channel(
+            window_id,
+            int(decision.archive_round_index or 0),
+            archived_channel,
+        ):
+            logger.warning(
+                "主动联络实际通道回写失败 window_id=%s round_index=%s channel=%s",
+                window_id,
+                int(decision.archive_round_index or 0),
+                archived_channel,
+            )
         r2_store.save_last_proactive_contact_at(now_iso)
         trigger = _build_du_daily_trigger_from_proactive(decision, hours, sent=True)
         if trigger:

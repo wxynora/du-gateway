@@ -22,6 +22,7 @@ LEGACY_EMPTY_CONVERSATION_KEY = "windows//conversation.json"
 CONVERSATION_COMPACT_SCHEMA_VERSION = 2
 CONVERSATION_RECENT_MAX_ROUNDS = 120
 CONVERSATION_GUARD_BACKUP_DAYS = 3
+CONVERSATION_ROUND_CHANNELS = frozenset({"sumitalk", "qq", "tg", "wechat", "xiaoai"})
 
 _conversation_write_lock = threading.Lock()
 
@@ -60,6 +61,11 @@ def _round_index_value(round_entry: dict) -> int:
         return int((round_entry or {}).get("index") or 0)
     except Exception:
         return 0
+
+
+def _normalize_round_channel(channel: str) -> str:
+    value = str(channel or "").strip().lower()
+    return value if value in CONVERSATION_ROUND_CHANNELS else ""
 
 
 def _sort_rounds(rounds: list[dict]) -> list[dict]:
@@ -294,7 +300,14 @@ def _conversations_key_for_date(window_id: str, date: str) -> str:
     return f"conversations/{date}/window_{safe_id}.json"
 
 
-def append_conversation_round(window_id: str, round_index: int, messages: list, timestamp: str = "", action_note: str = "") -> bool:
+def append_conversation_round(
+    window_id: str,
+    round_index: int,
+    messages: list,
+    timestamp: str = "",
+    action_note: str = "",
+    channel: str = "",
+) -> bool:
     """
     追加一轮对话原文。
     ① 写 windows/<id>/rounds/<index>.json（单轮存档）
@@ -310,7 +323,12 @@ def append_conversation_round(window_id: str, round_index: int, messages: list, 
     try:
         wid_norm = normalize_window_id(window_id)
         ts = (timestamp or "").strip() or now_beijing_iso()
-        round_entry = {"index": round_index, "timestamp": ts, "messages": messages}
+        round_entry = {
+            "index": round_index,
+            "timestamp": ts,
+            "channel": _normalize_round_channel(channel),
+            "messages": messages,
+        }
         if str(action_note or "").strip():
             round_entry["action_note"] = str(action_note).strip()
         with _conversation_write_lock:
@@ -408,6 +426,121 @@ def append_conversation_round(window_id: str, round_index: int, messages: list, 
         return True
     except Exception as e:
         logger.error("append_conversation_round 失败 window_id=%s round_index=%s error=%s", window_id, round_index, e, exc_info=True)
+        return False
+
+
+def update_conversation_round_channel(window_id: str, round_index: int, channel: str) -> bool:
+    """在实际投送成功后，把该轮通道同步到当前使用的全部轮次副本。"""
+    try:
+        idx = int(round_index or 0)
+    except Exception:
+        idx = 0
+    normalized_channel = _normalize_round_channel(channel)
+    if idx <= 0 or not normalized_channel:
+        return False
+    client = _s3_client()
+    if not client:
+        logger.warning(
+            "R2 client 未配置，跳过 update_conversation_round_channel window_id=%s round_index=%s",
+            window_id,
+            idx,
+        )
+        return False
+
+    try:
+        with _conversation_write_lock:
+            round_key = _conversation_round_key(window_id, idx)
+            stored_round = _read_json(client, round_key)
+            if not isinstance(stored_round, dict) or _round_index_value(stored_round) != idx:
+                logger.warning(
+                    "轮次通道回写失败：单轮存档不存在 window_id=%s round_index=%s",
+                    window_id,
+                    idx,
+                )
+                return False
+
+            updated_round = dict(stored_round)
+            updated_round["channel"] = normalized_channel
+            _write_json(client, round_key, updated_round)
+
+            recent_key = _conversation_recent_key(window_id)
+            recent_payload = _read_json(client, recent_key)
+            recent_rounds = recent_payload.get("rounds") if isinstance(recent_payload, dict) else None
+            recent_updated = False
+            if isinstance(recent_rounds, list):
+                next_recent = []
+                for item in recent_rounds:
+                    if isinstance(item, dict) and _round_index_value(item) == idx:
+                        item = dict(item)
+                        item["channel"] = normalized_channel
+                        recent_updated = True
+                    next_recent.append(item)
+                if recent_updated:
+                    recent_payload = dict(recent_payload)
+                    recent_payload["rounds"] = next_recent
+                    recent_payload["updated_at"] = now_beijing_iso()
+                    _write_json(client, recent_key, recent_payload)
+
+            backup_dates = [today_beijing()]
+            timestamp_date = str(updated_round.get("timestamp") or "").strip()[:10]
+            if len(timestamp_date) == 10 and timestamp_date not in backup_dates:
+                backup_dates.append(timestamp_date)
+            backup_updated = False
+            for backup_date in backup_dates:
+                backup_key = _conversations_key_for_date(window_id, backup_date)
+                backup_payload = _read_json(client, backup_key)
+                backup_rounds = backup_payload.get("rounds") if isinstance(backup_payload, dict) else None
+                if not isinstance(backup_rounds, list):
+                    continue
+                changed = False
+                next_backup_rounds = []
+                for item in backup_rounds:
+                    if isinstance(item, dict) and _round_index_value(item) == idx:
+                        item = dict(item)
+                        item["channel"] = normalized_channel
+                        changed = True
+                    next_backup_rounds.append(item)
+                if changed:
+                    backup_payload = dict(backup_payload)
+                    backup_payload["rounds"] = next_backup_rounds
+                    _write_json(client, backup_key, backup_payload)
+                    backup_updated = True
+
+            sqlite_updated = True
+            if conversation_sqlite_store.has_window(window_id):
+                sqlite_updated = conversation_sqlite_store.upsert_round(
+                    normalize_window_id(window_id),
+                    updated_round,
+                    recent_keep=CONVERSATION_RECENT_MAX_ROUNDS,
+                )
+
+            if not recent_updated or not backup_updated or not sqlite_updated:
+                logger.warning(
+                    "轮次通道副本同步不完整 window_id=%s round_index=%s channel=%s recent=%s backup=%s sqlite=%s",
+                    window_id,
+                    idx,
+                    normalized_channel,
+                    recent_updated,
+                    backup_updated,
+                    sqlite_updated,
+                )
+                return False
+        logger.info(
+            "轮次实际投送通道已回写 window_id=%s round_index=%s channel=%s",
+            window_id,
+            idx,
+            normalized_channel,
+        )
+        return True
+    except Exception as e:
+        logger.error(
+            "update_conversation_round_channel 失败 window_id=%s round_index=%s channel=%s error=%s",
+            window_id,
+            idx,
+            normalized_channel,
+            e,
+            exc_info=True,
+        )
         return False
 
 def overwrite_conversation_rounds(window_id: str, rounds: list[dict]) -> bool:

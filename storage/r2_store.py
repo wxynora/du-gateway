@@ -82,6 +82,7 @@ from storage.r2_conversation_store import (
     list_conversation_rounds_preview,
     normalize_window_id,
     overwrite_conversation_rounds,
+    update_conversation_round_channel,
 )
 from storage.r2_context_store import (
     IMAGE_DESC_RECENT_LIMIT,

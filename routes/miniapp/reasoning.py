@@ -907,6 +907,7 @@ def register_routes(bp) -> None:
                             "window_id": target,
                             "index": idx,
                             "timestamp": ts,
+                            "channel": str(r.get("channel") or "").strip(),
                             "reasoning": reasoning_text,
                             "cache_debug": cache_debug_items,
                             "tool_cache": _build_tool_cache_stats(cache_debug_items),

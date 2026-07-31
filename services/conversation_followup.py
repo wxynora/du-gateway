@@ -625,7 +625,14 @@ def _has_new_user_activity(window_id: str, since_iso: str) -> bool:
     return False
 
 
-def _call_gateway_followup(window_id: str, channel: str, reason: str, chain_id: str, followup_index: int, root_created_at: str) -> Optional[str]:
+def _call_gateway_followup(
+    window_id: str,
+    channel: str,
+    reason: str,
+    chain_id: str,
+    followup_index: int,
+    root_created_at: str,
+) -> Optional[dict]:
     try:
         from storage.upstream_store import get_cached_active_model
 
@@ -669,10 +676,15 @@ def _call_gateway_followup(window_id: str, channel: str, reason: str, chain_id: 
             logger.warning("延迟续话调用网关失败 status=%s body=%s", r.status_code, (r.text or "")[:300])
             return None
         data = r.json() if r.content else {}
+        try:
+            archive_round_index = int((data or {}).get("du_gateway_archive_round_index") or 0)
+        except Exception:
+            archive_round_index = 0
         msg = (((data or {}).get("choices") or [{}])[0] or {}).get("message") or {}
         content = msg.get("content")
         if isinstance(content, str):
-            return content.strip() or None
+            text = content.strip()
+            return {"text": text, "archive_round_index": archive_round_index} if text else None
         if isinstance(content, list):
             parts = []
             for part in content:
@@ -682,7 +694,7 @@ def _call_gateway_followup(window_id: str, channel: str, reason: str, chain_id: 
                     elif isinstance(part.get("text"), str):
                         parts.append(str(part.get("text") or ""))
             text = "\n".join(x.strip() for x in parts if str(x).strip()).strip()
-            return text or None
+            return {"text": text, "archive_round_index": archive_round_index} if text else None
         return None
     except Exception:
         logger.warning("延迟续话调用网关异常", exc_info=True)
@@ -801,6 +813,7 @@ def _archive_wakeup_after_delivery(
             request_messages if isinstance(request_messages, list) else [],
             archive_assistant,
             round_cleaned_for_r2=[archive_user, archive_assistant],
+            reply_channel=_normalize_reply_channel(reply_channel, default="", allow_tg=True),
         )
         if archived:
             run_nonstream_post_archive_in_background(
@@ -948,6 +961,10 @@ def _send_wakeup_event(
             logger.warning("后端事件唤醒调用网关失败 status=%s body=%s", r.status_code, (r.text or "")[:300])
             return {"ok": False, "error": f"gateway_http_{r.status_code}"}
         data = r.json() if r.content else {}
+        try:
+            gateway_archive_round_index = int((data or {}).get("du_gateway_archive_round_index") or 0)
+        except Exception:
+            gateway_archive_round_index = 0
         msg = (((data or {}).get("choices") or [{}])[0] or {}).get("message") or {}
         if isinstance(msg, dict) and bool(msg.get("tool_only_reply_done")):
             return {
@@ -958,7 +975,7 @@ def _send_wakeup_event(
                 "preferred_channel_at": str(preferred_meta.get("at") or ""),
                 "locked_channel": bool(lock_preferred_channel),
                 "tool_only": True,
-                "archive_ok": True,
+                "archive_ok": bool(not archive or archive_after_delivery or gateway_archive_round_index > 0),
                 "reply_preview": str(msg.get("content") or "")[:120],
                 "error": "",
             }
@@ -1065,6 +1082,15 @@ def _send_wakeup_event(
                         wakeup_kind=kind,
                         reply_channel="qq",
                     )
+                elif archive:
+                    archive_ok = bool(
+                        gateway_archive_round_index > 0
+                        and r2_store.update_conversation_round_channel(
+                            context_window_id,
+                            gateway_archive_round_index,
+                            "qq",
+                        )
+                    )
                 spring_archive = _archive_generated_spring_dream(
                     delivery_status="sent",
                     archive_channel="qq",
@@ -1128,6 +1154,15 @@ def _send_wakeup_event(
                         assistant_message=msg,
                         wakeup_kind=kind,
                         reply_channel=channel,
+                    )
+                elif archive:
+                    archive_ok = bool(
+                        gateway_archive_round_index > 0
+                        and r2_store.update_conversation_round_channel(
+                            context_window_id,
+                            gateway_archive_round_index,
+                            channel,
+                        )
                     )
                 if (
                     channel == "sumitalk"
@@ -1643,7 +1678,7 @@ def tick_conversation_followups() -> dict:
             metadata={"window_id": window_id, "chain_id": str(item.get("chain_id") or "")},
         )
         event_id = str(event.get("event_id") or "")
-        text = _call_gateway_followup(
+        generated = _call_gateway_followup(
             window_id=window_id,
             channel=str(item.get("reply_channel") or "sumitalk"),
             reason=str(item.get("reason") or "").strip(),
@@ -1651,6 +1686,8 @@ def tick_conversation_followups() -> dict:
             followup_index=int(item.get("followup_index") or 1),
             root_created_at=str(item.get("root_created_at") or item.get("created_at") or "").strip(),
         )
+        text = str((generated or {}).get("text") or "").strip()
+        archive_round_index = int((generated or {}).get("archive_round_index") or 0)
         item["attempts"] = attempts + 1
         item["last_attempt_at"] = now_iso
         if not text:
@@ -1667,6 +1704,26 @@ def tick_conversation_followups() -> dict:
             window_id=window_id,
         )
         if ok:
+            actual_channel = _normalize_reply_channel(
+                str(item.get("reply_channel") or "sumitalk"),
+                default="sumitalk",
+                allow_tg=True,
+            )
+            archive_channel_ok = bool(
+                archive_round_index > 0
+                and r2_store.update_conversation_round_channel(
+                    window_id,
+                    archive_round_index,
+                    actual_channel,
+                )
+            )
+            if not archive_channel_ok:
+                logger.warning(
+                    "延迟续话实际通道回写失败 window_id=%s round_index=%s channel=%s",
+                    window_id,
+                    archive_round_index,
+                    actual_channel,
+                )
             item["status"] = FOLLOWUP_STATUS_SENT
             item["sent_at"] = now_iso
             item["sent_preview"] = text[:120]

@@ -3936,9 +3936,10 @@ def step_archive_and_maybe_summary(
     request_messages: list,
     assistant_message: dict,
     round_cleaned_for_r2: Optional[list] = None,
+    reply_channel: str = "",
     skip_dynamic_memory_write: bool = False,
     skip_body_delta: bool = False,
-) -> None:
+) -> Optional[dict]:
     """
     存档本轮对话到 R2（完整清洗版）；每 4 轮异步更新实时层「渡的回忆」；动态层演化占位。
     与文档三数据流程一致：① 原文存档（windows/ + conversations/）② 满 4 轮更新实时层 ③ 动态层处理占位。
@@ -3950,9 +3951,10 @@ def step_archive_and_maybe_summary(
         request_messages,
         assistant_message,
         round_cleaned_for_r2=round_cleaned_for_r2,
+        reply_channel=reply_channel,
     )
     if not archived:
-        return
+        return None
     step_run_post_archive_tasks(
         window_id,
         archived["round_index"],
@@ -3960,6 +3962,7 @@ def step_archive_and_maybe_summary(
         skip_dynamic_memory_write=skip_dynamic_memory_write,
         skip_body_delta=skip_body_delta,
     )
+    return archived
 
 
 def step_archive_round(
@@ -3967,6 +3970,7 @@ def step_archive_round(
     request_messages: list,
     assistant_message: dict,
     round_cleaned_for_r2: Optional[list] = None,
+    reply_channel: str = "",
 ) -> Optional[dict]:
     """同步写入本轮对话存档与 latest4，返回后续慢任务需要的 round_index/round_messages。"""
     last_user = None
@@ -3984,10 +3988,19 @@ def step_archive_round(
     )
     action_note = _build_action_note_from_tool_calls((assistant_message or {}).get("tool_calls"))
     from utils.time_aware import now_beijing_iso
+    from services.reply_channel_context import normalize_reply_channel
 
     round_index = r2_store.get_next_round_index(window_id)
     ts = now_beijing_iso()
-    ok = r2_store.append_conversation_round(window_id, round_index, round_messages, timestamp=ts, action_note=action_note)
+    channel = normalize_reply_channel(reply_channel, default="", allow_tg=True)
+    ok = r2_store.append_conversation_round(
+        window_id,
+        round_index,
+        round_messages,
+        timestamp=ts,
+        action_note=action_note,
+        channel=channel,
+    )
     if not ok:
         logger.warning("本轮对话 R2 存档失败 window_id=%s round_index=%s", window_id, round_index)
         return None

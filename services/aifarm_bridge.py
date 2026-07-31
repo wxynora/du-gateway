@@ -31,6 +31,17 @@ AIFARM_HUMAN_NAME = os.environ.get("AIFARM_HUMAN_NAME", "辛玥").strip() or "�
 _HUMAN_KEY_RE = re.compile(r"^[a-fA-F0-9]{32}$")
 _AGENT_KEY_RE = re.compile(r"^[A-Za-z0-9]{8,32}$")
 _ACTION_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+_READ_ONLY_AGENT_ACTIONS = frozenset({
+    "status",
+    "shop",
+    "bag",
+    "encyclopedia",
+    "market",
+    "leaderboard",
+    "expedition",
+    "ledger",
+    "help",
+})
 _STATE_LOCK = threading.RLock()
 
 
@@ -198,11 +209,14 @@ def run_agent_action(arguments: dict[str, Any] | None) -> dict[str, Any]:
     if state is None:
         state = ensure_session()
     agent_path = _agent_path_from_state(state)
+    method = "GET" if action in _READ_ONLY_AGENT_ACTIONS else "POST"
+    request_data = {"params": args} if method == "GET" else {"json": args}
     try:
-        response = requests.post(
-            f"{AIFARM_UPSTREAM_URL}{agent_path}/{action}",
-            json=args,
+        response = requests.request(
+            method=method,
+            url=f"{AIFARM_UPSTREAM_URL}{agent_path}/{action}",
             timeout=15,
+            **request_data,
         )
     except requests.RequestException as exc:
         raise AIFarmBridgeError("AI 农场服务还没启动。") from exc
