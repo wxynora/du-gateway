@@ -790,8 +790,50 @@ async function onebotApi(action, params) {
   return data || {};
 }
 
+const legacyQqOutputSendDelay = envStr("QQ_OUTPUT_SEND_DELAY_MS", "");
+const legacyQqOutputSendDelayMs = legacyQqOutputSendDelay
+  ? Math.max(0, Math.trunc(envInt("QQ_OUTPUT_SEND_DELAY_MS", 0)))
+  : null;
+const qqOutputSendDelayMinMs = Math.max(
+  0,
+  Math.trunc(envInt("QQ_OUTPUT_SEND_DELAY_MIN_MS", legacyQqOutputSendDelayMs ?? 3000))
+);
+const qqOutputSendDelayMaxMs = Math.max(
+  qqOutputSendDelayMinMs,
+  Math.trunc(envInt("QQ_OUTPUT_SEND_DELAY_MAX_MS", legacyQqOutputSendDelayMs ?? 5000))
+);
+let qqOutboundSendTail = Promise.resolve();
+let lastQqOutboundSendFinishedAt = 0;
+
+function nextQqOutboundSendDelayMs() {
+  const span = qqOutputSendDelayMaxMs - qqOutputSendDelayMinMs;
+  return qqOutputSendDelayMinMs + Math.floor(Math.random() * (span + 1));
+}
+
+function enqueueQqOutboundSend(action, params) {
+  const send = qqOutboundSendTail.then(async () => {
+    if (lastQqOutboundSendFinishedAt > 0) {
+      const waitMs = Math.max(
+        0,
+        lastQqOutboundSendFinishedAt + nextQqOutboundSendDelayMs() - Date.now()
+      );
+      if (waitMs > 0) await sleep(waitMs);
+    }
+    try {
+      return await onebotApi(action, params);
+    } finally {
+      lastQqOutboundSendFinishedAt = Date.now();
+    }
+  });
+  qqOutboundSendTail = send.catch(() => {});
+  return send;
+}
+
 async function sendQqText(userId, text) {
-  return onebotApi("send_private_msg", { user_id: Number(userId), message: String(text || "") });
+  return enqueueQqOutboundSend("send_private_msg", {
+    user_id: Number(userId),
+    message: String(text || ""),
+  });
 }
 
 function qqGroupMessageWithOptionalReply(segment, replyMessageId = "") {
@@ -811,19 +853,19 @@ async function sendQqGroupText(groupId, text, replyMessageId = "") {
         rawReplyId
       )
     : String(text || "");
-  return onebotApi("send_group_msg", { group_id: Number(groupId), message });
+  return enqueueQqOutboundSend("send_group_msg", { group_id: Number(groupId), message });
 }
 
 
 async function sendQqImage(userId, imageUrl) {
-  return onebotApi("send_private_msg", {
+  return enqueueQqOutboundSend("send_private_msg", {
     user_id: Number(userId),
     message: [{ type: "image", data: { file: String(imageUrl || "").trim() } }],
   });
 }
 
 async function sendQqGroupImage(groupId, imageUrl, replyMessageId = "") {
-  return onebotApi("send_group_msg", {
+  return enqueueQqOutboundSend("send_group_msg", {
     group_id: Number(groupId),
     message: qqGroupMessageWithOptionalReply(
       { type: "image", data: { file: String(imageUrl || "").trim() } },
@@ -834,7 +876,7 @@ async function sendQqGroupImage(groupId, imageUrl, replyMessageId = "") {
 
 async function sendQqRecord(userId, audioBytes) {
   const b64 = Buffer.from(audioBytes || []).toString("base64");
-  return onebotApi("send_private_msg", {
+  return enqueueQqOutboundSend("send_private_msg", {
     user_id: Number(userId),
     message: [{ type: "record", data: { file: `base64://${b64}` } }],
   });
@@ -842,7 +884,7 @@ async function sendQqRecord(userId, audioBytes) {
 
 async function sendQqGroupRecord(groupId, audioBytes, replyMessageId = "") {
   const b64 = Buffer.from(audioBytes || []).toString("base64");
-  return onebotApi("send_group_msg", {
+  return enqueueQqOutboundSend("send_group_msg", {
     group_id: Number(groupId),
     message: qqGroupMessageWithOptionalReply(
       { type: "record", data: { file: `base64://${b64}` } },
@@ -884,7 +926,6 @@ function isBoundGroupId(groupId) {
 async function sendQqPrivateRichReply(userId, reply, options = {}) {
   const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
   const maxReplyTotalChars = Math.max(0, envInt("QQ_MAX_REPLY_TOTAL_CHARS", 0));
-  const sendDelayMs = Math.max(0, envInt("QQ_OUTPUT_SEND_DELAY_MS", 400));
   const shouldSplit = options.split !== false && options.singleMessage !== true;
   const strict = options.strict === true;
   const { cleanText: noVoiceText, voiceText } = extractVoiceTag(reply);
@@ -902,13 +943,11 @@ async function sendQqPrivateRichReply(userId, reply, options = {}) {
       if (strict) throw e;
       break;
     }
-    if (sendDelayMs > 0) await sleep(sendDelayMs);
   }
   if (stickerUrl) {
     try {
       await sendQqImage(userId, stickerUrl);
       sentAny = true;
-      if (sendDelayMs > 0) await sleep(sendDelayMs);
     } catch (e) {
       console.log(`[qq-onebot] 发送表情失败 user=${userId}: ${String(e?.message || e)}`);
       if (strict && !sentAny) throw e;
@@ -1316,7 +1355,6 @@ function buildGroupGatewayTurn(j, previousRows, currentContent) {
 async function sendQqReplyToGroup(groupId, reply, options = {}) {
   const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
   const maxReplyTotalChars = Math.max(0, envInt("QQ_MAX_REPLY_TOTAL_CHARS", 0));
-  const sendDelayMs = Math.max(0, envInt("QQ_OUTPUT_SEND_DELAY_MS", 400));
   const { replyRef, cleanText: markerCleanText } = splitQqGroupReplyMarker(reply);
   const replyTargets = options?.replyTargets instanceof Map ? options.replyTargets : new Map();
   let pendingReplyMessageId = String(replyTargets.get(replyRef) || "").trim();
@@ -1334,12 +1372,10 @@ async function sendQqReplyToGroup(groupId, reply, options = {}) {
   for (const part of chunks) {
     await sendQqGroupText(groupId, part, takeReplyMessageId());
     sentAny = true;
-    if (sendDelayMs > 0) await sleep(sendDelayMs);
   }
   if (stickerUrl) {
     await sendQqGroupImage(groupId, stickerUrl, takeReplyMessageId());
     sentAny = true;
-    if (sendDelayMs > 0) await sleep(sendDelayMs);
   }
   if (voiceText) {
     const audioBytes = await callGatewayTts(voiceText);
