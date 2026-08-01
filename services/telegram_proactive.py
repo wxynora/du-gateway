@@ -927,6 +927,103 @@ def _generate_schedule_reply(
         return None
 
 
+def handle_galatea_garden_wake(reason: str, message: str) -> dict:
+    """把 Garden 服务端唤醒事件送入现有主网关，并投递到最近聊天入口。"""
+    wake_reason = str(reason or "").strip()
+    wake_message = str(message or "").strip()
+    if not wake_reason or not wake_message:
+        return {
+            "ok": False,
+            "injected": False,
+            "delivered": False,
+            "error": "invalid_garden_wake",
+        }
+
+    try:
+        context = resolve_recent_reply_context() or {}
+    except Exception as e:
+        logger.warning("Garden 唤醒读取最近入口失败 reason=%s error=%s", wake_reason, e)
+        context = {}
+
+    channel = _normalize_reply_channel(
+        str(context.get("channel") or ""),
+        default="",
+        allowed=["sumitalk", "qq", "wechat", "tg"],
+    )
+    if not channel:
+        channel = _preferred_proactive_channel(_available_channels())
+
+    reply_target = str(context.get("target") or "").strip()
+    window_id = str(context.get("window_id") or "").strip()
+    configured_user_id = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    if not window_id and configured_user_id > 0:
+        window_id = f"tg_{configured_user_id}"
+
+    target_user_id = configured_user_id
+    if channel == "tg" and reply_target:
+        try:
+            target_user_id = int(reply_target)
+        except (TypeError, ValueError):
+            pass
+
+    logger.info(
+        "Garden 唤醒进入主网关 reason=%s chars=%s channel=%s window_id=%s",
+        wake_reason,
+        len(wake_message),
+        channel or "none",
+        window_id or "none",
+    )
+    generated = _generate_schedule_reply(
+        window_id=window_id,
+        user_id=target_user_id,
+        prompt=wake_message,
+        preferred_channel=channel or "qq",
+        reply_target=reply_target,
+        wakeup_kind="galatea_garden",
+    )
+    if not generated:
+        logger.warning("Garden 唤醒主网关调用失败 reason=%s", wake_reason)
+        return {
+            "ok": False,
+            "injected": False,
+            "delivered": False,
+            "channel": channel,
+            "window_id": window_id,
+            "error": "gateway_call_failed",
+        }
+
+    text = str(generated.get("text") or "").strip()
+    qq_group_id = str(generated.get("qq_group_id") or "").strip()
+    if qq_group_id:
+        delivered = _send_via_qq_group(text, qq_group_id, split=True)
+        delivered_channel = "qq_group"
+    else:
+        delivered = _dispatch_send(
+            channel,
+            text,
+            target_user_id=target_user_id,
+            reply_target=reply_target,
+            window_id=window_id,
+        )
+        delivered_channel = channel
+
+    logger.info(
+        "Garden 唤醒完成 reason=%s injected=True delivered=%s channel=%s window_id=%s",
+        wake_reason,
+        bool(delivered),
+        delivered_channel or "none",
+        window_id or "none",
+    )
+    return {
+        "ok": True,
+        "injected": True,
+        "delivered": bool(delivered),
+        "channel": delivered_channel,
+        "window_id": window_id,
+        "archive_round_index": int(generated.get("archive_round_index") or 0),
+    }
+
+
 def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Optional[datetime] = None) -> ProactiveDecision:
     """
     让渡做一轮主动决策。要求渡用 JSON 回复（见 user 说明）；

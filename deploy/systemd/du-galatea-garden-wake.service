@@ -1,0 +1,27 @@
+[Unit]
+Description=Du Galatea Garden wake bridge
+Wants=network-online.target
+After=network-online.target du-gateway.service
+StartLimitIntervalSec=300
+StartLimitBurst=6
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/galatea-garden-wake-bridge
+EnvironmentFile=/etc/du-galatea-garden-wake.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/node /opt/galatea-garden-wake-bridge/dist/cli.js run
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=2
+TimeoutStopSec=20
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

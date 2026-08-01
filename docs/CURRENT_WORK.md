@@ -187,3 +187,17 @@
 - 当前结论：`main` 与 `origin/main` 均为 `af924cbb`；准备 stage 时发现精确写入文件 `services/upstream_policy.py` 新增了不属于本任务的 `claude-opus-5` 适配改动，和本任务 Thinking marker 清理处于同一脏文件。按隔壁任务隔离规则已立即停止，未 stage、commit、push 或 restart。
 - 部署边界：不提交或上传测试、文档脏改动、`scripts/claude_oauth_proxy.js`、其他 OAuth/test/隔壁任务文件；不修改 forwarding VPS、R2，不构建前端。
 - 验证：当前 runtime 限定 diff/check 已读取；因写入范围碰撞，尚未进入 staged detached worktree、push 或远端验收。
+
+# Task Ticket: GALATEA-WAKE-BRIDGE-20260801
+
+- 模式：施工
+- 状态：准备推送并部署
+- 目标：接入 `WenXiaoWendy/galatea-garden-wake-bridge`，让现有 Galatea Garden 与网关主动唤醒链形成项目约定的单一路径。
+- HEAD stamp：`72179e41fb93f92a4791a3a8243a4b723a9323d7`
+- 证据读取范围：上游仓库 README、配置示例与直接运行源码；本仓库 `services/galatea_garden_tool.py`、`services/gateway_tools.py`、`services/chat_tools.py`、`services/proactive_prompt_templates.py`、`services/telegram_proactive.py`；`docs/DEBUG_INDEX.md` 当前 Galatea 与主动唤醒合同；生产仅在代码完成后核对对应服务和必要环境变量的存在性，不读取或输出密钥值。
+- 精确写入范围：`services/telegram_proactive.py`、新增 `scripts/galatea_garden_wake_injector.py`、新增 `deploy/systemd/du-galatea-garden-wake.service`、新增 `deploy/systemd/du-galatea-garden-wake.env.example`、新增独立定向测试 `tests/test_galatea_garden_wakeup.py`、`docs/DEBUG_INDEX.md` 当前 Galatea 与主动唤醒合同、本任务块。
+- 明确不做：不改现有 25 个 Galatea action 的语义，不改唤醒频率、模型路由、Prompt 缓存分区、其他候选或 R2；不打印、提交或转移现有 token；不触碰其他窗口改动。
+- 验收：先证明 bridge 的真实协议和所需运行边界，再实现唯一接入路径；定向验证 wake 事件进入现有唤醒链且不会重复触发；完成后更新索引，是否 push、部署和重启按辛玥当轮要求执行。
+- 当前结论：上游 bridge 订阅 `/api/machine-events/stream`，把 `garden_wake` 信封经 stdin 交给 injector；线上现有 `GALATEA_GARDEN_MCP_TOKEN` 对该 SSE 返回 `event: connected`，可同时作为 machine token 使用。接入不新增模型提示词，服务端 `message` 原样作为普通 `user` 消息进入现有主网关；模型轮成功即视为注入成功，外发失败不让 bridge 重试整轮，避免重复生成。
+- 已完成：新增单行 JSON injector、`handle_galatea_garden_wake()` 主网关/最近入口接入和 systemd/env 部署模板；没有改 25 个 Garden action、随机唤醒规则、模型路由、Prompt 分区或 R2。
+- 验证：`.venv/bin/python -m pytest -q tests/test_galatea_garden_wakeup.py` 为 `5 passed`；`.venv/bin/python -m py_compile services/telegram_proactive.py scripts/galatea_garden_wake_injector.py` 通过。尚未 push、尚未在生产安装 bridge 或重启服务。
