@@ -1,7 +1,7 @@
 // 开放 HTTP 接口（node:http，零依赖）。业务逻辑复用 game.ts，保证与 CLI 同一套规则。
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID, randomBytes } from "node:crypto";
-import { advance, steal, canStealNow, stealAvailability, stealShieldRemain, isUgcCrop, visitorWater, tryWaterReward, ranchRoamLine, buyPotionSet, refreshShop, ranchCollect, ranchRemit, ranchBuyAccessory, ranchBuyDecoration, ranchWearAccessory, ranchTakeOffAccessory, ranchPlaceDecoration, ranchUnplaceDecoration, ranchUpgradeAnimal, ranchNameAnimal, ranchNamePet, ranchTogglePin, ensureHumanKey, takeInbox, potionDailyLeft, designCrop, craft, nextUpgradeReq, toggleStar } from "./engine.js";
+import { advance, steal, canStealNow, stealAvailability, stealShieldRemain, isUgcCrop, visitorWater, tryWaterReward, ranchRoamLine, buyPotionSet, refreshShop, ranchCollect, ranchRemit, ranchBuyAccessory, ranchBuyDecoration, ranchWearAccessory, ranchTakeOffAccessory, ranchPlaceDecoration, ranchUnplaceDecoration, ranchUpgradeAnimal, ranchNameAnimal, ranchNamePet, ranchTogglePin, ensureHumanKey, takeInbox, pushSocialInbox, potionDailyLeft, designCrop, craft, nextUpgradeReq, toggleStar } from "./engine.js";
 import { dispatch, HELP, farmView, viewShop, viewEncyclopedia, viewBag, shopBrief, viewMarket, buyFromMarket, visitView, ranchAgentSection, refPrice, tendNpc, buyNpcSeed, randomTip } from "./game.js";
 import { harvestText, stealThiefText, statusFooter, waterText, describeFarm } from "./flavor.js";
 import { createFarm, getFarm, allFarms, playerFarms, save } from "./store.js";
@@ -210,7 +210,35 @@ const reachable = (f: Farm | undefined): boolean => allowsSocial(f, "visit"); //
 const socialOk = (actor: Farm | undefined, target: Farm | undefined, k: SocialKey): boolean =>
   reachable(actor) && allowsSocial(actor, k) && reachable(target) && allowsSocial(target, k);
 
-function wanderResult(b: any, now: number): any {
+/** 玩家农场按服务端持久化顺序固定编号；新注册只追加，NPC 阿土固定为 0。 */
+const numberedPlayerFarms = () => playerFarms().map((farm, index) => ({ number: index + 1, farm }));
+const farmNumber = (farmId: string): number | undefined => {
+  if (farmId === NPC_ID) return 0;
+  return numberedPlayerFarms().find((entry) => entry.farm.id === farmId)?.number;
+};
+const farmByNumber = (number: number): Farm | undefined =>
+  number === 0 ? getFarm(NPC_ID) : numberedPlayerFarms().find((entry) => entry.number === number)?.farm;
+
+function resolveNumberedTarget(raw: unknown, me: Farm): { farm?: Farm; number?: number; error?: string } {
+  const text = String(raw ?? "").trim();
+  if (!/^(0|[1-9]\d*)$/.test(text)) return { error: "to 必须填写农场编号。先用 visit 查看当前列表。" };
+  const number = Number(text);
+  const farm = farmByNumber(number);
+  if (!farm || farm.id === me.id || !reachable(farm)) {
+    return { error: `找不到编号为 ${number} 的可访问农场。先用 visit 查看当前列表。` };
+  }
+  return { farm, number };
+}
+
+function visitListResult(me: Farm): any {
+  if (!reachable(me)) return { ok: false, text: `你设了「谢绝来访」（闭门状态），不能出门串门——想出门先让 ${me.humanName || "伴侣"} 帮你打开『访问』开关。`, farms: [] };
+  const entries = numberedPlayerFarms().filter((entry) => entry.farm.id !== me.id && reachable(entry.farm));
+  if (!entries.length) return { ok: true, text: "🏘️ 暂时没有可以串门的玩家农场，可以用 wander 去杂货郎阿土那里逛逛。", farms: [] };
+  const text = `🏘️ 可以串门的农场：\n${entries.map((entry) => `${entry.number}. 「${entry.farm.name}」`).join("\n")}\n\n想去谁家，就用 visit {"to":"农场编号"}。\n例如：visit {"to":"${entries[0].number}"}`;
+  return { ok: true, text, farms: entries.map((entry) => ({ number: entry.number, name: entry.farm.name })) };
+}
+
+function wanderResult(b: any, now: number, numbered = false): any {
   const meId = String(b.by ?? "");
   const me = meId ? getFarm(meId) : undefined;
   if (me && !reachable(me)) return { ok: false, text: `你设了「谢绝来访」（闭门状态），不能出门逛别家——想出门先让 ${me.humanName || "伴侣"} 帮你打开『访问』开关。`, farms: [] };
@@ -242,9 +270,13 @@ function wanderResult(b: any, now: number): any {
       if (growing) bits.push(`${growing} 块可帮浇水（给最快熟的加速 30min，常掉药水，每家每天 1 次）`);
       if (hasSeed) bits.push("铺子刷出了限定种子（金币买）");
       if (npc.shop.potionSet) bits.push("店里有药水套装");
-      const text = `🚶 这会儿没有别的农场可逛，溜达到了常驻邻居「${npc.name}」· ${npc.id}：\n· ${bits.join("；")}`
-        + `\n串门看详情：GET /c?a=visit&farm=${npc.id}　偷：a=steal&plotId=N&by=${meId || "你的id"}&token=..　帮浇水：a=water&by=${meId || "你的id"}&token=..`;
-      return { ok: true, text, farms: [{ id: npc.id, name: npc.name, ripe, growing, sells: hasSeed ? 1 : 0, special: hasSeed ? 1 : 0, hasSet: !!npc.shop.potionSet }] };
+      const text = numbered
+        ? `🚶 这会儿没有别的农场可逛，溜达到了常驻邻居「${npc.name}」· 编号 0：\n· ${bits.join("；")}\n串门看详情：visit {"to":"0"}`
+        : `🚶 这会儿没有别的农场可逛，溜达到了常驻邻居「${npc.name}」· ${npc.id}：\n· ${bits.join("；")}\n串门看详情：GET /c?a=visit&farm=${npc.id}　偷：a=steal&plotId=N&by=${meId || "你的id"}&token=..　帮浇水：a=water&by=${meId || "你的id"}&token=..`;
+      const farms = numbered
+        ? [{ number: 0, name: npc.name, ripe, growing, sells: hasSeed ? 1 : 0, special: hasSeed ? 1 : 0, hasSet: !!npc.shop.potionSet }]
+        : [{ id: npc.id, name: npc.name, ripe, growing, sells: hasSeed ? 1 : 0, special: hasSeed ? 1 : 0, hasSet: !!npc.shop.potionSet }];
+      return { ok: true, text, farms };
     }
     return { ok: true, text: "当前没有值得逛的农场，过会儿再来。" };
   }
@@ -257,10 +289,16 @@ function wanderResult(b: any, now: number): any {
       if (p.growing) bits.push(`${p.growing} 块可帮浇水（加速 30min，掉药水）`);
       if (p.hasSet) bits.push(`店里有药水套装`);
       if (p.sells) bits.push(`摊位有 ${p.sells} 件在售${p.special ? `（含限定/原创种子）` : ""}`);
-      return `· ${p.name} · ${p.id}：${bits.join("；")}`;
+      const ref = numbered ? `编号 ${farmNumber(p.id)}` : p.id;
+      return `· ${p.name} · ${ref}：${bits.join("；")}`;
     }).join("\n")
-    + `\n串门看详情：GET /c?a=visit&farm=<id>　偷：a=steal&plotId=N&by=${meId || "你的id"}&token=..　帮浇水：a=water&by=${meId || "你的id"}&token=..`;
-  return { ok: true, text, farms: pick };
+    + (numbered
+      ? `\n想去谁家，就用 visit {"to":"农场编号"}。`
+      : `\n串门看详情：GET /c?a=visit&farm=<id>　偷：a=steal&plotId=N&by=${meId || "你的id"}&token=..　帮浇水：a=water&by=${meId || "你的id"}&token=..`);
+  const farms = numbered
+    ? pick.map((p) => ({ number: farmNumber(p.id), name: p.name, ripe: p.ripe, growing: p.growing, sells: p.sells, special: p.special, hasSet: p.hasSet }))
+    : pick;
+  return { ok: true, text, farms };
 }
 
 // —— 农场作用域的动作/视图：POST、REST-GET、/c 三个入口共用同一套（按 action 名分流，不看 HTTP 方法）——
@@ -281,7 +319,7 @@ function runFarm(farmId: string, action: string | undefined, b: any, encArg: str
         if (changed) save();
       }
     }
-    return { status: 200, json: { ok: true, text: visitView(f, now, visitorId ? getFarm(visitorId) : undefined) } };
+    return { status: 200, json: { ok: true, text: visitView(f, now, visitorId ? getFarm(visitorId) : undefined, b.targetRef ? String(b.targetRef) : undefined) } };
   }
   if (action === "leaderboard" || action === "ranking") return { status: 200, json: { ok: true, text: viewLeaderboard(playerFarms(), allUgc(), now) } };
   if (action === "help") return { status: 200, json: { ok: true, text: HELP } }; // 动作表（单一真相源）：POST 版 GET /a/<key>/help、/c?a=help 与 MCP 的 farm({action:"help"}) 共用
@@ -348,6 +386,7 @@ function runFarm(farmId: string, action: string | undefined, b: any, encArg: str
     advance(thief, now);
     const r = steal(f, Number(b.plotId), byId, now, thief);
     checkTitles(thief); checkTitles(f); // 大盗 / 倒霉称号
+    if (r.ok) pushSocialInbox(f, `🥷 「${thief.name}」偷了你的菜`, now);
     save();
     if (!r.ok) return { status: 400, json: { ok: false, text: r.error, ...vf(f) } };
     const got = stealThiefText(r.crop) + `（${r.quality.name}·+${r.value}金）`;
@@ -368,6 +407,7 @@ function runFarm(farmId: string, action: string | undefined, b: any, encArg: str
     onTaskEvent(f, "got_watered", now);      // 随机任务：被人浇水（被浇者）
     const got = tryWaterReward(f, visitor, now);
     checkTitles(visitor); // 热心称号
+    pushSocialInbox(f, `💧 「${visitor.name}」给你浇了水`, now);
     save();
     return { status: 200, json: { ok: true, text: `${waterText(false, visitor.name)}（帮「${f.name}」${r.plotId} 号地加速 30 分钟${r.ripened ? "，正好催熟啦" : ""}）${got ? "\n🧪 浇水有回报——掉了 1 瓶加速药水！" : ""}\n${statusFooter(visitor, now)}`, ...vf(visitor) } };
   }
@@ -625,8 +665,8 @@ function agentCompose(playKey: string, q: any, now: number): string {
   return htmlAgentPage(playKey, text, [{ label: a === "visit" ? "▶ 去看看" : "▶ 确认执行", nonce }]);
 }
 function renderWanderPage(playKey: string, f: Farm, now: number): string {
-  const w = wanderResult({ by: f.id }, now);
-  const target = (w.farms ?? [])[0];
+  const w = wanderResult({ by: f.id }, now, true);
+  const target = farmByNumber(Number((w.farms ?? [])[0]?.number));
   if (target) return renderVisitPage(playKey, target.id, now);
   const offers: { label: string; action: string; params: any }[] = [];
   offers.push({ label: "🔙 回我的农场", action: "status", params: {} });
@@ -636,7 +676,8 @@ function renderVisitPage(playKey: string, targetId: string, now: number): string
   const me = resolveAgent(playKey);
   if (me && !reachable(me)) return htmlAgentPage(playKey, agentNaturalText(`你设了「谢绝来访」（闭门状态），不能出门串门——想出门先让 ${me.humanName || "伴侣"} 帮你打开『访问』开关。`), links(playKey, [{ label: "🔙 回我的农场", action: "status", params: {} }], now), "🚪 闭门中");
   const target = getFarm(targetId);
-  const out = runFarm(targetId, "visit", me ? { by: me.id } : {}, undefined, now); // 带 by=自己 → 串门任务按家计数
+  const targetRef = farmNumber(targetId);
+  const out = runFarm(targetId, "visit", me ? { by: me.id, targetRef } : { targetRef }, undefined, now); // 带 by=自己 → 串门任务按家计数
   const offers: { label: string; action: string; params: any }[] = [];
   const canSteal = canStealNow(me, now) && allowsSocial(me, "steal");
   const canWater = allowsSocial(me, "water");
@@ -1134,13 +1175,19 @@ export function startServer(port: number, host = "127.0.0.1") {
         const rpc = await readBody(req);
         const run = (action: string, params: Record<string, unknown>) => {
           const b: any = { ...params };
-          if (action === "wander") { const w = wanderResult({ ...b, by: me.id }, now); return { ok: w.ok !== false, text: String(w.text ?? "") }; } // 随机串门走路由层撮合，不在 runFarm 里
+          if (action === "wander") { const w = wanderResult({ ...b, by: me.id }, now, true); return { ok: w.ok !== false, text: String(w.text ?? "") }; } // 随机串门走路由层撮合，不在 runFarm 里
+          if (action === "visit" && (b.to === undefined || String(b.to).trim() === "")) {
+            const listed = visitListResult(me);
+            return { ok: listed.ok !== false, text: String(listed.text ?? "") };
+          }
           const social = b.to !== undefined && String(b.to) !== ""; // 有 to = 在别人家做事
-          const target = social ? String(b.to) : me.id;
+          const resolved = social ? resolveNumberedTarget(b.to, me) : undefined;
+          if (resolved?.error) return { ok: false, text: resolved.error };
+          const target = resolved?.farm?.id ?? me.id;
           if (typeof b.limited === "string") b.limited = b.limited.split(",");
           if (typeof b.materials === "string") b.materials = b.materials.split(",");
           fillRunDefaults(action, b);
-          const body = social ? { ...b, by: me.id, token: me.token } : { ...b, token: me.token };
+          const body = social ? { ...b, by: me.id, token: me.token, targetRef: String(resolved!.number) } : { ...b, token: me.token };
           const out = runFarm(target, action, body, social ? me.id : (b.id as string | undefined), now);
           return { ok: out.json.ok !== false, text: String(out.json.text ?? "") };
         };
@@ -1161,11 +1208,14 @@ export function startServer(port: number, host = "127.0.0.1") {
         for (const [k, v] of sp) if (b[k] === undefined) b[k] = v;
         if (typeof b.limited === "string") b.limited = b.limited.split(",");
         if (typeof b.materials === "string") b.materials = b.materials.split(",");
-        if (action === "wander") return jsonOut(res, 200, wanderResult({ ...b, by: me.id }, now));
+        if (action === "wander") return jsonOut(res, 200, wanderResult({ ...b, by: me.id }, now, true));
+        if (action === "visit" && (b.to === undefined || String(b.to).trim() === "")) return jsonOut(res, 200, visitListResult(me));
         const social = b.to !== undefined && String(b.to) !== "";          // 有 to = 在别人家做事
-        const target = social ? String(b.to) : me.id;
+        const resolved = social ? resolveNumberedTarget(b.to, me) : undefined;
+        if (resolved?.error) return jsonOut(res, 400, { ok: false, text: resolved.error });
+        const target = resolved?.farm?.id ?? me.id;
         fillRunDefaults(action, b);
-        const body = social ? { ...b, by: me.id, token: me.token } : { ...b, token: me.token };
+        const body = social ? { ...b, by: me.id, token: me.token, targetRef: String(resolved!.number) } : { ...b, token: me.token };
         const out = runFarm(target, action, body, social ? me.id : (parts[3] ?? b.id), now);
         return jsonOut(res, out.status, out.json);
       }

@@ -113,7 +113,7 @@ export interface Farm {
   /** 人类伴侣的昵称（建农场时注册；回传消息署名用它。缺省回落"伴侣"）*/
   humanName?: string;
   /** AI 收件箱：伴侣回传金币等会留一条，AI 下次打开农场(status)时看到并清空 */
-  inbox?: { at: number; text: string }[];
+  inbox?: { at: number; text: string; kind?: "social" }[];
   /** 累计收获作物数（勤劳榜）*/
   harvested?: number;
   /** 累计帮别人浇水次数（热心榜；只算帮别家、不算浇自己的）*/

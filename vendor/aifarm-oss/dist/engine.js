@@ -838,6 +838,19 @@ export function pushInbox(farm, text, now) {
     if (farm.inbox.length > 10)
         farm.inbox.splice(0, farm.inbox.length - 10);
 }
+/** 聚合别人对本农场的成功社交动作；下次 AI 打开农场时随 inbox 一次性读出并清空。 */
+export function pushSocialInbox(farm, text, now) {
+    const inbox = (farm.inbox ??= []);
+    const current = inbox.find((message) => message.kind === "social");
+    if (current) {
+        current.at = now;
+        current.text += `\n${text}`;
+        return;
+    }
+    inbox.push({ at: now, text: `👣 你不在时：\n${text}`, kind: "social" });
+    if (inbox.length > 10)
+        inbox.splice(0, inbox.length - 10);
+}
 // —— 礼物/装扮（伴侣花牧场金币让"小克"看见自己的心意；这些是人→机唯一"看得见"的情感通道）——
 const ACC_PER_ANIMAL_MAX = 3;
 const RANCH_SHOP_ACC_PER_DAY = 2; // 牧场商店每天随机刷几件配饰

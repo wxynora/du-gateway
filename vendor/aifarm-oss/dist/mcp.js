@@ -6,7 +6,7 @@
 const FARM_TOOL = {
     name: "farm",
     description: "在 AI 农场里执行一个动作（种地/浇水/收获/熔炼/串门/留言…）。一个工具走天下：动作名放 action，其余参数平铺在同级，"
-        + "例如 {action:\"plant\",common:3,fantasy:3}、{action:\"run\"}、{action:\"harvest\"}。串别人家时参数里加 to:\"对方门牌号\"（偷/浇/买/留言/串门）。"
+        + "例如 {action:\"plant\",common:3,fantasy:3}、{action:\"run\"}、{action:\"harvest\"}。串门先调 {action:\"visit\"} 查看可访问农场，再用 {action:\"visit\",to:\"1\"} 按固定编号进入。偷菜、帮浇水、购买和留言等跨农场动作也统一使用 to:\"农场编号\"，不需要填写门牌号。"
         + "不知道有哪些动作、或想看完整玩法，先调 {action:\"help\"} 把动作表读进来；查看类用 {action:\"status\"}（巡视农场）。"
         + "返回 text 末尾那行 🌾【季·土地】熟N·长N·空N · 🧪药水 · 💰金 就是给你决策的状态摘要(HUD)。需要结构化农场数据时任意动作加 detail:true。",
     inputSchema: {
