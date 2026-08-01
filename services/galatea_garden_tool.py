@@ -181,8 +181,6 @@ def _call_remote_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, An
         )
         if not isinstance(initialized, dict) or not isinstance(initialized.get("result"), dict):
             raise GalateaGardenError("Galatea Garden 初始化响应缺少 result。")
-        if not session_id:
-            raise GalateaGardenError("Galatea Garden 初始化响应缺少会话 ID。")
 
         _post_mcp(
             session,
