@@ -191,13 +191,13 @@
 # Task Ticket: GALATEA-WAKE-BRIDGE-20260801
 
 - 模式：施工
-- 状态：准备推送并部署
+- 状态：已完成
 - 目标：接入 `WenXiaoWendy/galatea-garden-wake-bridge`，让现有 Galatea Garden 与网关主动唤醒链形成项目约定的单一路径。
-- HEAD stamp：`72179e41fb93f92a4791a3a8243a4b723a9323d7`
+- HEAD stamp：`19a2b9c29108725341f62b368cf677a27a998f0d`
 - 证据读取范围：上游仓库 README、配置示例与直接运行源码；本仓库 `services/galatea_garden_tool.py`、`services/gateway_tools.py`、`services/chat_tools.py`、`services/proactive_prompt_templates.py`、`services/telegram_proactive.py`；`docs/DEBUG_INDEX.md` 当前 Galatea 与主动唤醒合同；生产仅在代码完成后核对对应服务和必要环境变量的存在性，不读取或输出密钥值。
 - 精确写入范围：`services/telegram_proactive.py`、新增 `scripts/galatea_garden_wake_injector.py`、新增 `deploy/systemd/du-galatea-garden-wake.service`、新增 `deploy/systemd/du-galatea-garden-wake.env.example`、新增独立定向测试 `tests/test_galatea_garden_wakeup.py`、`docs/DEBUG_INDEX.md` 当前 Galatea 与主动唤醒合同、本任务块。
 - 明确不做：不改现有 25 个 Galatea action 的语义，不改唤醒频率、模型路由、Prompt 缓存分区、其他候选或 R2；不打印、提交或转移现有 token；不触碰其他窗口改动。
 - 验收：先证明 bridge 的真实协议和所需运行边界，再实现唯一接入路径；定向验证 wake 事件进入现有唤醒链且不会重复触发；完成后更新索引，是否 push、部署和重启按辛玥当轮要求执行。
 - 当前结论：上游 bridge 订阅 `/api/machine-events/stream`，把 `garden_wake` 信封经 stdin 交给 injector；线上现有 `GALATEA_GARDEN_MCP_TOKEN` 对该 SSE 返回 `event: connected`，可同时作为 machine token 使用。接入不新增模型提示词，服务端 `message` 原样作为普通 `user` 消息进入现有主网关；模型轮成功即视为注入成功，外发失败不让 bridge 重试整轮，避免重复生成。
 - 已完成：新增单行 JSON injector、`handle_galatea_garden_wake()` 主网关/最近入口接入和 systemd/env 部署模板；没有改 25 个 Garden action、随机唤醒规则、模型路由、Prompt 分区或 R2。
-- 验证：`.venv/bin/python -m pytest -q tests/test_galatea_garden_wakeup.py` 为 `5 passed`；`.venv/bin/python -m py_compile services/telegram_proactive.py scripts/galatea_garden_wake_injector.py` 通过。尚未 push、尚未在生产安装 bridge 或重启服务。
+- 验证：本地与 staged snapshot 定向测试均为 `5 passed`，目标 `py_compile` 通过；提交 `19a2b9c2` 已 push 到 `origin/main`。生产 `/root/du-gateway` 已拉到该提交，上游 bridge 固定在 `55a5ea2f3c295f8451d3e84fdfdaf54d681d5fbd`；`du-galatea-garden-wake.service` 已启用并保持 `active`、`NRestarts=0`，日志确认 Garden SSE `protocolVersion=1` 已连接；`du-telegram-proactive.service` 为 `active`，网关 `/health` 返回 `{"status":"ok"}`。生产 env 权限为 `0600 root:root`，仅核对键名，未输出 token。
