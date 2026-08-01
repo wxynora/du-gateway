@@ -7,7 +7,7 @@ import {
   NEW_CODEX_REWARD, HARVEST_EVENT_CHANCE, MATERIAL_DROP_CHANCE, MATERIAL_DROP_WEIGHT, ITEMS,
   POTION_DROP_CHANCE, POTION_DAILY_CAP, POTION_CAP_LINE, POTION_SET_QTY, POTION_SET_PRICE, POTION_SET_CHANCE, WATER_REWARD_DAILY_CAP,
   STEAL_COOLDOWN_MS, STEAL_DAILY_CAP, STEAL_SHIELD_MS,
-  RANCH_POTION_DROP_CHANCE, RANCH_POTION_DAILY_CAP, LEDGER_MAX, RANCH_ANIMAL_MAX_LEVEL, RANCH_LEVEL_INCOME_STEP, RANCH_UPGRADE_COST_FACTOR, PET_NAME_MAX,
+  RANCH_POTION_DROP_CHANCE, RANCH_POTION_DAILY_CAP, LEDGER_MAX, RANCH_ANIMAL_MAX_LEVEL, RANCH_LEVEL_INCOME_STEP, RANCH_UPGRADE_COST_FACTOR, RANCH_RAID_COINS_PER_HOUR, PET_NAME_MAX,
   CRAFT_COUNT, FUSION_POINTS, LIMITED_BASE_WEIGHT, FUSION_LUCK_DIVISOR, FUSION_SOFT_PITY, FUSION_SPECIAL_UNLOCKED_RATE, rarityIndex,
   SHOP_REFRESH_MS, SHOP_RECIPE_CHANCE, RECIPE_PRICE, NPC_LIMITED_SEED_CHANCE, NPC_ID,
   UGC_DESIGN_FEE, UGC_SEED_YIELD, UGC_VALUE, UGC_HARVEST_VALUE, UGC_GROW_TICKS, UGC_NAME_MAX, UGC_DESC_MAX, UGC_PLANT_MAX, UGC_HARVEST_MAX, MAX_UGC, UGC_RARITY,
@@ -21,7 +21,7 @@ import { registerUgc, ugcCount } from "./ugc.js";
 import { onTaskEvent } from "./tasks.js";
 import type { SeasonHarvestMod } from "./season-events.js";
 import { randomUUID } from "node:crypto";
-import type { Farm, Plot, CodexEntry, Ranch, AnimalInst, PetInst } from "./types.js";
+import type { Farm, Plot, CodexEntry, Ranch, RanchRaid, AnimalInst, PetInst } from "./types.js";
 
 /** 取（必要时补发）人类前端钥匙。老农场没有就现生成一把；调用方负责 save()。 */
 export function ensureHumanKey(farm: Farm): string {
@@ -529,6 +529,133 @@ export function nextLockedAnimal(farm: Farm): Animal | null {
 function ensureRanch(farm: Farm): Ranch {
   return (farm.ranch ??= { coins: 0, animals: [] });
 }
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/** 派遣已经潜伏的时长所对应的整数金币；不会超过出发时冻结的保证金。 */
+export function ranchRaidCoins(raid: RanchRaid, at: number): number {
+  const elapsed = Math.max(0, Math.min(raid.endsAt, at) - raid.startedAt);
+  return Math.min(raid.reservedCoins, Math.floor(elapsed * RANCH_RAID_COINS_PER_HOUR / HOUR_MS));
+}
+
+/** 某只自家动物当前是否已经外出。 */
+export function ranchRaidForAnimal(farm: Farm, animalKindId: string): RanchRaid | undefined {
+  return (farm.ranch?.raids ?? []).find((raid) => raid.animalKindId === animalKindId);
+}
+
+/** 人类把自家一只动物派去另一座农场；出发时从牧场钱包冻结最高收益同额保证金。 */
+export function dispatchRanchRaid(owner: Farm, target: Farm, animalIdx: number, durationHours: number, now: number): Ok<{ raid: RanchRaid; animal: string }> | Fail {
+  const ranch = owner.ranch;
+  if (!ranch?.animals?.length) return { ok: false, error: "牧场还没有可派遣的动物。" };
+  if (target.id === owner.id) return { ok: false, error: "不能派动物来偷自己家。" };
+  const idx = Math.floor(Number(animalIdx));
+  const animal = ranch.animals[idx];
+  if (!animal) return { ok: false, error: "选的动物不存在。" };
+  if (ranchRaidForAnimal(owner, animal.kindId)) return { ok: false, error: "这只动物已经在外面潜伏了。" };
+  const hours = Number(durationHours);
+  if (!Number.isSafeInteger(hours) || hours <= 0) return { ok: false, error: "派遣时长要填写正整数小时。" };
+  const reservedCoins = hours * RANCH_RAID_COINS_PER_HOUR;
+  if (!Number.isSafeInteger(reservedCoins) || !Number.isSafeInteger(now + hours * HOUR_MS)) return { ok: false, error: "派遣时长太大了。" };
+  if (ranch.coins < reservedCoins) return { ok: false, error: `牧场金币不足：${hours} 小时需要冻结 ${reservedCoins} 金，现有 ${ranch.coins}。` };
+  const raid: RanchRaid = {
+    id: randomUUID(),
+    animalKindId: animal.kindId,
+    targetFarmId: target.id,
+    startedAt: now,
+    endsAt: now + hours * HOUR_MS,
+    reservedCoins,
+  };
+  ranch.coins -= reservedCoins;
+  (ranch.raids ??= []).push(raid);
+  return { ok: true, raid, animal: animal.name || animalById.get(animal.kindId)?.name || animal.kindId };
+}
+
+/** 目标人类主动抓住仍在潜伏的外来动物；按实际潜伏时长收取等额赔偿，未用保证金退回。 */
+export function catchRanchRaid(target: Farm, owners: Farm[], raidId: string, now: number): Ok<{ owner: string; animal: string; compensation: number }> | Fail {
+  for (const owner of owners) {
+    const raids = owner.ranch?.raids ?? [];
+    const idx = raids.findIndex((raid) => raid.id === String(raidId));
+    if (idx < 0) continue;
+    const raid = raids[idx];
+    if (raid.targetFarmId !== target.id) return { ok: false, error: "这只动物不在你家。" };
+    if (now >= raid.endsAt) return { ok: false, error: "它已经结束潜伏、跑回自己家了。" };
+    const compensation = ranchRaidCoins(raid, now);
+    owner.ranch!.coins += raid.reservedCoins - compensation;
+    ensureRanch(target).coins += compensation;
+    raids.splice(idx, 1);
+    const animal = owner.ranch!.animals.find((a) => a.kindId === raid.animalKindId);
+    const animalName = animal?.name || animalById.get(raid.animalKindId)?.name || raid.animalKindId;
+    const ownerLabel = `${owner.name}（${owner.aiName || "AI"}）`;
+    const targetLabel = `${target.name}（${target.aiName || "AI"}）`;
+    pushSocialInbox(owner, `🚨 你的${animalName}在「${targetLabel}」被抓住，赔给对方 ${compensation} 金`, now);
+    pushSocialInbox(target, `🚨 抓住了「${ownerLabel}」家的${animalName}，收到 ${compensation} 金赔偿`, now);
+    return {
+      ok: true,
+      owner: ownerLabel,
+      animal: animalName,
+      compensation,
+    };
+  }
+  return { ok: false, error: "这只外来动物已经不在了。" };
+}
+
+/** 惰性结算所有已经到期、且没有被目标抓住的派遣。 */
+export function settleRanchRaids(farms: Farm[], now: number): { settled: number } {
+  const byId = new Map(farms.map((farm) => [farm.id, farm]));
+  let settled = 0;
+  for (const owner of farms) {
+    const ranch = owner.ranch;
+    if (!ranch?.raids?.length) continue;
+    const active: RanchRaid[] = [];
+    for (const raid of ranch.raids) {
+      if (raid.endsAt > now) { active.push(raid); continue; }
+      ranch.coins += raid.reservedCoins; // 未被抓：保证金全额解冻
+      const target = byId.get(raid.targetFarmId);
+      if (target && target.id !== owner.id) {
+        const targetRanch = ensureRanch(target);
+        const paidFromBalance = Math.min(targetRanch.coins, raid.reservedCoins);
+        targetRanch.coins -= paidFromBalance;
+        ranch.coins += raid.reservedCoins; // 收益立即全额到账；目标余额不足的部分记隐形负债
+        const debt = raid.reservedCoins - paidFromBalance;
+        if (debt > 0) (targetRanch.raidDebts ??= []).push({ creditorFarmId: owner.id, coins: debt });
+        const animal = ranch.animals.find((entry) => entry.kindId === raid.animalKindId);
+        const animalName = animal?.name || animalById.get(raid.animalKindId)?.name || raid.animalKindId;
+        const ownerLabel = `${owner.name}（${owner.aiName || "AI"}）`;
+        const targetLabel = `${target.name}（${target.aiName || "AI"}）`;
+        pushSocialInbox(owner, `🥷 你的${animalName}从「${targetLabel}」带回 ${raid.reservedCoins} 金，已进入牧场钱包`, now);
+        pushSocialInbox(target, `🥷 「${ownerLabel}」家的${animalName}从你的牧场拿走 ${raid.reservedCoins} 金（现扣 ${paidFromBalance}${debt > 0 ? `，另记欠款 ${debt}` : ""}）`, now);
+      }
+      settled += 1;
+    }
+    ranch.raids = active;
+  }
+  return { settled };
+}
+
+/** 目标以后收牧场产出时先按欠款产生顺序扣除；偷方已经到账，不再重复入账。 */
+function creditRanchHarvestAfterDebts(farm: Farm, _farms: Farm[], gross: number): { gain: number; debtPaid: number } {
+  const ranch = ensureRanch(farm);
+  let remaining = gross;
+  let debtPaid = 0;
+  const debts = ranch.raidDebts ?? [];
+  const left: typeof debts = [];
+  for (const debt of debts) {
+    if (remaining <= 0) { left.push(debt); continue; }
+    if (debt.coins <= 0) continue;
+    const paid = Math.min(remaining, debt.coins);
+    remaining -= paid;
+    debtPaid += paid;
+    debt.coins -= paid;
+    if (debt.coins > 0) left.push(debt);
+  }
+  ranch.raidDebts = left;
+  ranch.coins += remaining;
+  return { gain: remaining, debtPaid };
+}
+
+export function ranchRaidDebtTotal(farm: Farm): number {
+  return (farm.ranch?.raidDebts ?? []).reduce((sum, debt) => sum + Math.max(0, debt.coins), 0);
+}
 /** 往机⇄人流水里记一条（AI 唯一能看到的牧场信息），环形保留最近 LEDGER_MAX 条。 */
 function pushLedger(farm: Farm, type: "buy-animal" | "buy-pet" | "remit" | "potion", amount: number, note: string, now: number): void {
   (farm.ledger ??= []).unshift({ at: now, type, amount, note });
@@ -699,7 +826,7 @@ export function ranchTakeOffAccessory(farm: Farm, target: "animal" | "pet", idx:
 }
 
 /** 伴侣在人类前端收获产品：产出折成牧场金币 + 概率掉一瓶加速药水直接入 AI 仓库（每日封顶）。 */
-export function ranchCollect(farm: Farm, now: number): Ok<{ gain: number; detail: Record<string, number>; potion: number }> | Fail {
+export function ranchCollect(farm: Farm, farms: Farm[], now: number): Ok<{ gain: number; gross: number; debtPaid: number; detail: Record<string, number>; potion: number }> | Fail {
   const ranch = farm.ranch;
   if (!ranch || !ranch.animals.length) return { ok: false, error: `牧场还没有动物——让${aiDisplay(farm)}在商店买一只送进来。` };
   let gain = 0;
@@ -714,7 +841,8 @@ export function ranchCollect(farm: Farm, now: number): Ok<{ gain: number; detail
     a.pending = 0;
   }
   if (gain <= 0) return { ok: false, error: "暂时没有可收的产出，再等等动物攒一攒。" };
-  ranch.coins += gain;
+  const gross = gain;
+  const credited = creditRanchHarvestAfterDebts(farm, farms, gross);
   // 掉药水 → AI 仓库（概率 + 每日封顶，防伴侣狂收刷药水）
   let potion = 0;
   const day = currentDayIndex(now);
@@ -731,7 +859,7 @@ export function ranchCollect(farm: Farm, now: number): Ok<{ gain: number; detail
       pushLedger(farm, "potion", 1, `${humanDisplay(farm)}收获时掉落，入仓库`, now);
     }
   }
-  return { ok: true, gain, detail, potion };
+  return { ok: true, gain: credited.gain, gross, debtPaid: credited.debtPaid, detail, potion };
 }
 
 /** 把某动物升到下一级要花多少牧场金币（cost = buyCost ×(当前等级+1)× 系数）。 */

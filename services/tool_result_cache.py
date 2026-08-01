@@ -215,6 +215,98 @@ def _memory_search_detail(arguments: dict, data: dict) -> str:
     return f"搜索记忆“{query}”，命中{len(items)}条"
 
 
+def _exchange_diary_result_field(raw: str, label: str, max_chars: int = 80) -> str:
+    match = re.search(rf"(?m)(?:^-\s*|^|\|\s*){re.escape(label)}=([^|\n]+)", str(raw or ""))
+    return _text(match.group(1), max_chars) if match else ""
+
+
+def _exchange_diary_read_preview(raw: str) -> tuple[str, str]:
+    body = ""
+    comments = "暂无"
+    body_marker = "\n正文：\n"
+    comments_marker = "\n评论："
+    if body_marker in raw:
+        body_and_comments = raw.split(body_marker, 1)[1]
+        if comments_marker in body_and_comments:
+            body, comments = body_and_comments.split(comments_marker, 1)
+        else:
+            body = body_and_comments
+    return _text(body, 100) or "（无正文）", str(comments or "暂无").strip() or "暂无"
+
+
+def _exchange_diary_list_entry_preview(raw: str) -> str:
+    title = _exchange_diary_result_field(raw, "标题", 80) or "无标题"
+    diary_time = _exchange_diary_result_field(raw, "时间", 60)
+    body_match = re.search(r"正文=(.*?)\s*\|\s*评论数=", raw, re.DOTALL)
+    body = _text(body_match.group(1), 100) if body_match else ""
+    comments = raw.split("\n  评论：", 1)[1].strip() if "\n  评论：" in raw else "暂无"
+    prefix = f"《{title}》{f'（{diary_time}）' if diary_time else ''}"
+    return f"{prefix}：{body or '（无正文）'}；评论：{comments or '暂无'}"
+
+
+def _exchange_diary_detail(name: str, arguments: dict, raw_result: Any) -> str:
+    action = _text(arguments.get("action"), 30).lower()
+    if name != "exchange_diary":
+        action = {
+            "exchange_diary_create": "create",
+            "exchange_diary_list": "list",
+            "exchange_diary_read": "read",
+            "exchange_diary_comment_create": "comment",
+        }.get(name, action)
+
+    raw = str(raw_result or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    entry_id = _text(
+        arguments.get("entry_id") or arguments.get("id") or arguments.get("page_id"),
+        80,
+    ) or _exchange_diary_result_field(raw, "entry_id", 80) or _exchange_diary_result_field(raw, "id", 80)
+
+    if action == "create":
+        if not raw.startswith("已写入交换日记："):
+            return "写交换日记未完成"
+        title = _exchange_diary_result_field(raw, "标题", 80)
+        created_at = _exchange_diary_result_field(raw, "时间", 60)
+        detail = f"写了交换日记{f'《{title}》' if title else ''}"
+        return detail + (f"（{created_at}）" if created_at else "")
+
+    if action == "list":
+        if raw == "暂无交换日记。":
+            return "查看交换日记列表：暂无"
+        entries = [
+            _exchange_diary_list_entry_preview(block)
+            for block in re.split(r"(?m)(?=^- 时间=)", raw)
+            if block.startswith("- 时间=")
+        ]
+        detail = f"查看交换日记列表，共{len(entries)}篇" if entries else "查看交换日记列表"
+        return detail + (f"：{'；'.join(entries)}" if entries else "")
+
+    if action == "read":
+        if not raw or raw.startswith(("id 不能为空", "未找到交换日记")):
+            return f"查看交换日记未完成{f'（{entry_id}）' if entry_id else ''}"
+        title = _exchange_diary_result_field(raw, "标题", 80)
+        diary_time = _exchange_diary_result_field(raw, "时间", 60)
+        detail = f"查看了交换日记{f'《{title}》' if title else ''}"
+        if diary_time:
+            detail += f"（{diary_time}）"
+        elif entry_id:
+            detail += f"（{entry_id}）"
+        body, comments = _exchange_diary_read_preview(raw)
+        return f"{detail}：{body}；评论：{comments}"
+
+    if action == "comment":
+        replied = raw.startswith("已回复交换日记评论：")
+        if not replied and not raw.startswith("已评论交换日记："):
+            return f"交换日记评论未完成{f'（{entry_id}）' if entry_id else ''}"
+        comment_count = _exchange_diary_result_field(raw, "评论数", 20)
+        detail = "回复了交换日记评论" if replied else "评论了交换日记"
+        if entry_id:
+            detail += f"（{entry_id}）"
+        if comment_count:
+            detail += f"；现有{comment_count}条评论"
+        return detail
+
+    return "处理了交换日记"
+
+
 def _generic_detail(name: str, arguments: dict, raw_result: Any, data: dict) -> str:
     if data and not data.get("ok", True):
         return _failure_detail(data)
@@ -255,6 +347,14 @@ def summarize_tool_result(
     data = _dict(result)
     if tool_name == "secret_drawer":
         detail = _secret_drawer_detail(args, data)
+    elif tool_name in {
+        "exchange_diary",
+        "exchange_diary_create",
+        "exchange_diary_list",
+        "exchange_diary_read",
+        "exchange_diary_comment_create",
+    }:
+        detail = _exchange_diary_detail(tool_name, args, result)
     elif tool_name in {"forum_read_feed", "forum_open_thread", "cli", "get_guide"} or tool_name.startswith("forum_"):
         detail = _forum_detail(tool_name, args, data)
     elif tool_name == "web_search":

@@ -30,6 +30,25 @@ export interface AnimalInst {
   acc?: string[];
 }
 
+/** 人类派动物去另一座牧场偷金币；记录挂在动物所属牧场的 ranch 上。 */
+export interface RanchRaid {
+  id: string;
+  /** 被派出的动物种类（每种动物只养一只，可作为稳定标识）。 */
+  animalKindId: string;
+  /** 目标农场 id；人类页面展示时再映射为固定农场编号。 */
+  targetFarmId: string;
+  startedAt: number;
+  endsAt: number;
+  /** 出发时从牧场钱包冻结的最高收益等额保证金。 */
+  reservedCoins: number;
+}
+
+/** 偷金币到期时目标余额不足留下的欠款；以后从目标的牧场收成里按顺序偿还。 */
+export interface RanchRaidDebt {
+  creditorFarmId: string;
+  coins: number;
+}
+
 /** 宠物：AI 买、归伴侣养（和动物一样进牧场、能穿衣服），但不产出、可被伴侣改名，且给农场一份温和 buff。 */
 export interface PetInst {
   kindId: string;
@@ -45,6 +64,10 @@ export interface Ranch {
   coins: number;
   /** 伴侣在养的动物（AI 买了送进来的）*/
   animals: AnimalInst[];
+  /** 尚未结束的动物偷金币派遣；到期成功或被抓后移除。 */
+  raids?: RanchRaid[];
+  /** 不把钱包扣成负数；成功偷取的差额作为隐形欠款留在这里。 */
+  raidDebts?: RanchRaidDebt[];
   /** 伴侣在养的宠物（AI 买了送进来的；不产出，给农场 buff，伴侣可改名/穿衣）*/
   pets?: PetInst[];
   /** 伴侣 pin 选的动物/宠物 kindId 列表：非空时，农场氛围句只从被 pin 的里随机出现（只 pin 一只=固定只出现它）；空=维持原样全部随机 */

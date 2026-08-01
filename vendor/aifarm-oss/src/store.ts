@@ -66,7 +66,7 @@ export function load(): void {
       f.waterVisits ??= {};
       f.messages ??= [];
       f.ledger ??= [];                                  // 机⇄人往来流水（2.0）
-      if (f.ranch) { f.ranch.animals ??= []; f.ranch.coins ??= 0; } // 牧场（首次买动物才创建）
+      if (f.ranch) { f.ranch.animals ??= []; f.ranch.coins ??= 0; f.ranch.raids ??= []; f.ranch.raidDebts ??= []; } // 牧场（首次买动物才创建）
       farms.set(f.id, f);
     }
     console.log(`[store] 已载入 ${farms.size} 个农场`);

@@ -56,6 +56,7 @@ export const LEDGER_MAX = 30;                 // 机⇄人往来流水保留条�
 export const RANCH_ANIMAL_MAX_LEVEL = 5;      // 动物最高等级
 export const RANCH_LEVEL_INCOME_STEP = 0.25;  // 每升一级，每份收入 +此比例×基础价（lv1=1.0×…lv5=2.0×；线性，非×5）
 export const RANCH_UPGRADE_COST_FACTOR = 0.45; // 升级花费系数：升到下一级花 buyCost ×(当前等级+1)× 此值
+export const RANCH_RAID_COINS_PER_HOUR = 100; // 人类派动物潜伏：每完整折算小时的收益/赔偿基准
 // 宠物（AI 买、归伴侣养、不产出、给农场温和 buff；解锁/价格/buff 数值都在 content/pets.json 调）
 export const PET_NAME_MAX = 12;               // 伴侣给宠物起名的最长字数
 

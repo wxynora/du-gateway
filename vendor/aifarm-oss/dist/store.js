@@ -72,6 +72,8 @@ export function load() {
             if (f.ranch) {
                 f.ranch.animals ??= [];
                 f.ranch.coins ??= 0;
+                f.ranch.raids ??= [];
+                f.ranch.raidDebts ??= [];
             } // 牧场（首次买动物才创建）
             farms.set(f.id, f);
         }

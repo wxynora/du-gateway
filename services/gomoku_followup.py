@@ -28,7 +28,7 @@ def send_gomoku_wakeup(
         wakeup_kind="gomoku",
         system_event=True,
         system_event_user_summary=player_content,
-        dynamic_system_event=False,
+        dynamic_system_event=True,
         preferred_channel_override=preferred_channel,
         preferred_target_override=target,
         preferred_meta_override=preferred_meta,

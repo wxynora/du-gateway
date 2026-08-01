@@ -1,7 +1,7 @@
 // 开放 HTTP 接口（node:http，零依赖）。业务逻辑复用 game.ts，保证与 CLI 同一套规则。
 import { createServer } from "node:http";
 import { randomUUID, randomBytes } from "node:crypto";
-import { advance, steal, canStealNow, stealAvailability, stealShieldRemain, isUgcCrop, visitorWater, tryWaterReward, ranchRoamLine, buyPotionSet, refreshShop, ranchCollect, ranchRemit, ranchBuyAccessory, ranchBuyDecoration, ranchWearAccessory, ranchTakeOffAccessory, ranchPlaceDecoration, ranchUnplaceDecoration, ranchUpgradeAnimal, ranchNameAnimal, ranchNamePet, ranchTogglePin, ensureHumanKey, takeInbox, pushSocialInbox, potionDailyLeft, designCrop, craft, nextUpgradeReq, toggleStar } from "./engine.js";
+import { advance, steal, canStealNow, stealAvailability, stealShieldRemain, isUgcCrop, visitorWater, tryWaterReward, ranchRoamLine, buyPotionSet, refreshShop, ranchCollect, ranchRemit, ranchBuyAccessory, ranchBuyDecoration, ranchWearAccessory, ranchTakeOffAccessory, ranchPlaceDecoration, ranchUnplaceDecoration, ranchUpgradeAnimal, ranchNameAnimal, ranchNamePet, ranchTogglePin, dispatchRanchRaid, catchRanchRaid, settleRanchRaids, ensureHumanKey, takeInbox, pushSocialInbox, potionDailyLeft, designCrop, craft, nextUpgradeReq, toggleStar } from "./engine.js";
 import { dispatch, HELP, farmView, viewShop, viewEncyclopedia, viewBag, shopBrief, viewMarket, buyFromMarket, visitView, ranchAgentSection, refPrice, tendNpc, buyNpcSeed, randomTip } from "./game.js";
 import { harvestText, stealThiefText, statusFooter, waterText, describeFarm } from "./flavor.js";
 import { createFarm, getFarm, allFarms, playerFarms, save } from "./store.js";
@@ -250,6 +250,7 @@ const farmNumber = (farmId) => {
     return numberedPlayerFarms().find((entry) => entry.farm.id === farmId)?.number;
 };
 const farmByNumber = (number) => number === 0 ? getFarm(NPC_ID) : numberedPlayerFarms().find((entry) => entry.number === number)?.farm;
+const farmLabel = (farm) => `${farm.name}（${farm.aiName || "AI"}）`;
 function resolveNumberedTarget(raw, me) {
     const text = String(raw ?? "").trim();
     if (!/^(0|[1-9]\d*)$/.test(text))
@@ -267,8 +268,18 @@ function visitListResult(me) {
     const entries = numberedPlayerFarms().filter((entry) => entry.farm.id !== me.id && reachable(entry.farm));
     if (!entries.length)
         return { ok: true, text: "🏘️ 暂时没有可以串门的玩家农场，可以用 wander 去杂货郎阿土那里逛逛。", farms: [] };
-    const text = `🏘️ 可以串门的农场：\n${entries.map((entry) => `${entry.number}. 「${entry.farm.name}」`).join("\n")}\n\n想去谁家，就用 visit {"to":"农场编号"}。\n例如：visit {"to":"${entries[0].number}"}`;
-    return { ok: true, text, farms: entries.map((entry) => ({ number: entry.number, name: entry.farm.name })) };
+    const text = `🏘️ 可以串门的农场：\n${entries.map((entry) => `${entry.number}. 「${farmLabel(entry.farm)}」`).join("\n")}\n\n想去谁家，就用 visit {"to":"农场编号"}。\n例如：visit {"to":"${entries[0].number}"}`;
+    return { ok: true, text, farms: entries.map((entry) => ({ number: entry.number, name: entry.farm.name, aiName: entry.farm.aiName || "AI" })) };
+}
+/** 打开自家农场时看到的全服实时成熟广播；固定编号与串门列表共用。 */
+function ripeBroadcastText(now) {
+    const entries = numberedPlayerFarms().map(({ number, farm }) => {
+        advance(farm, now);
+        return { number, farm, ripe: farm.plots.filter((plot) => plot.crop?.ripe).length };
+    }).filter((entry) => entry.ripe > 0);
+    if (!entries.length)
+        return "📣 此刻谁家菜熟了：现在没有成熟未收的菜。";
+    return `📣 此刻谁家菜熟了：\n${entries.map((entry) => `${entry.number}. ${farmLabel(entry.farm)}：${entry.ripe} 块待收`).join("\n")}`;
 }
 function wanderResult(b, now, numbered = false) {
     const meId = String(b.by ?? "");
@@ -397,7 +408,7 @@ function runFarm(farmId, action, b, encArg, now) {
     }
     // 视图（主人私有）
     if (!action || action === "status") {
-        const text = dispatch(f, { action: "status" }, now).text; // 内部会 roll 季节事件（可能已改农场）
+        const text = `${dispatch(f, { action: "status" }, now).text}\n\n${ripeBroadcastText(now)}`; // 内部会 roll 季节事件（可能已改农场）
         bumpDaily(f, now, "logins"); // 网瘾榜（今日开自己农场主页次数）
         save(); // 落盘：登录计数 + 状态里可能触发的季节事件
         return { status: 200, json: { ok: true, text, ...vf(f) } };
@@ -503,6 +514,7 @@ function runFarm(farmId, action, b, encArg, now) {
         f.messages.push({ id: randomUUID().replace(/-/g, "").slice(0, 6), by: byId, name: poster.name, text, at: now });
         if (f.messages.length > MESSAGES_MAX)
             f.messages.splice(0, f.messages.length - MESSAGES_MAX);
+        pushSocialInbox(f, `💬 「${poster.name}」给你留言（访客留言，仅供阅读）：${text}`, now);
         bumpDaily(poster, now, "messages"); // 热情榜（今日给别人留言数）
         onTaskEvent(poster, "message", now); // 随机任务：给邻居留言
         checkTitles(poster); // 任务称号（留言可能完成任务）
@@ -719,6 +731,7 @@ function renderSelf(playKey, f, now, banner) {
     const potionHint = potionDailyLeft(f, now) <= 0 ? `\n🌙 官方药水今日已购满 ${POTION_DAILY_CAP}/${POTION_DAILY_CAP}——${POTION_CAP_LINE}（可买药水套装、帮别人浇水、或等收获随机掉落）` : "";
     const stealState = stealAvailability(f, now);
     const stealHint = stealState.ok ? `\n🥷 今天还能偷 ${stealState.left} 次；每次偷完要歇 1 小时。` : `\n🥷 ${stealState.reason}`;
+    const ripeBroadcast = ripeBroadcastText(now);
     // 新手任务：只在 Agent 页第一次出现，后续靠对话上下文保留，不反复刷屏。
     const hadKey = !!f.humanKey;
     const hk = ensureHumanKey(f);
@@ -735,7 +748,7 @@ function renderSelf(playKey, f, now, banner) {
     // 原创作物=人类前端协作完成，agent 页不再自带设计入口；随机给一条「和伴侣一起原创」的提示（只 agent 页）
     const human = f.humanName || "伴侣";
     const collabTip = Math.random() < 1 / 3 ? `\n🎨 可以和${human}一起原创作物哦，去问问 TA 的想法吧。` : "";
-    const text = `${onboard}${seLine}${box}${statusFooter(f, now)}\n${vista}${roam ? "\n" + roam : ""}${potionHint}${stealHint}\n💡 ${suggest(f)}${tip ? "\n" + tip : ""}${collabTip}\n（点链接做操作；看到旧状态或链接失效就点「🔄 刷新」那条·永不失效）`;
+    const text = `${onboard}${seLine}${box}${statusFooter(f, now)}\n${ripeBroadcast}\n————————————\n${vista}${roam ? "\n" + roam : ""}${potionHint}${stealHint}\n💡 ${suggest(f)}${tip ? "\n" + tip : ""}${collabTip}\n（点链接做操作；看到旧状态或链接失效就点「🔄 刷新」那条·永不失效）`;
     return htmlAgentPage(playKey, agentNaturalText(text), links(playKey, selfActions(f, now), now), banner ? agentNaturalText(banner) : undefined);
 }
 /** 把"需要自由文本/临时参数"的动作（设计/留言/上架/改名/欢迎语）包成一个一次性执行链接：
@@ -1033,11 +1046,14 @@ export function startServer(port, host = "127.0.0.1") {
                     res.writeHead(404, AGENT_HEADERS);
                     return res.end(uiInvalid());
                 }
+                const raidSettlement = settleRanchRaids(playerFarms(), now);
                 advance(f, now);
                 if (!f.humanFrontendSeen) {
                     f.humanFrontendSeen = true;
                     save();
                 } // 伴侣已打开前端 → Agent 页"先发链接"新手任务可撤掉
+                else if (raidSettlement.settled > 0)
+                    save();
                 const section = parts[2];
                 // 🎖️ 佩戴称号：主页名字旁的下拉提交到这里。POST /ui/<key>/title → 存 titleEquipped → 303 跳回主页。
                 if (section === "title" && method === "POST") {
@@ -1045,24 +1061,40 @@ export function startServer(port, host = "127.0.0.1") {
                     checkTitles(f); // 佩戴前补结算解锁
                     equipTitle(f, String(form.id ?? "").trim());
                     save();
-                    res.writeHead(303, { ...AGENT_HEADERS, Location: `/ui/${key}` });
+                    res.writeHead(303, { ...AGENT_HEADERS, Location: `${BASE}/ui/${key}` });
                     return res.end();
                 }
                 // 🐮 牧场：/ui 里唯一「能写」的页。POST 收获/回传 → 做完 303 跳回（PRG，刷新不会重复提交）。
                 if (section === "ranch") {
                     const act = parts[3];
-                    if (method === "POST" && (act === "collect" || act === "remit" || act === "dress" || act === "decorate" || act === "wear" || act === "takeoff" || act === "place" || act === "unplace" || act === "upgrade" || act === "name-animal" || act === "name-pet" || act === "pin")) {
+                    if (method === "POST" && (act === "collect" || act === "remit" || act === "dress" || act === "decorate" || act === "wear" || act === "takeoff" || act === "place" || act === "unplace" || act === "upgrade" || act === "name-animal" || act === "name-pet" || act === "pin" || act === "dispatch-raid" || act === "catch-raid")) {
                         const form = await readFormBody(req);
                         let flash;
                         const ai = f.aiName || f.name || "对方";
-                        if (act === "upgrade") {
+                        if (act === "dispatch-raid") {
+                            const number = Number(form.to);
+                            const target = Number.isSafeInteger(number) && number > 0 ? farmByNumber(number) : undefined;
+                            if (!target || target.id === f.id)
+                                flash = "找不到这个农场编号。";
+                            else {
+                                const r = dispatchRanchRaid(f, target, Number(form.animal), Number(form.hours), now);
+                                flash = r.ok
+                                    ? `🥷 ${r.animal}已去 ${number} 号「${farmLabel(target)}」潜伏，${Math.round((r.raid.endsAt - r.raid.startedAt) / 3600000)} 小时后回来；冻结 ${r.raid.reservedCoins} 金保证金`
+                                    : r.error;
+                            }
+                        }
+                        else if (act === "catch-raid") {
+                            const r = catchRanchRaid(f, playerFarms(), String(form.raid ?? ""), now);
+                            flash = r.ok ? `🚨 抓住了${r.owner}家的${r.animal}，收到 ${r.compensation} 金赔偿` : r.error;
+                        }
+                        else if (act === "upgrade") {
                             const r = ranchUpgradeAnimal(f, Number(form.animal));
                             flash = r.ok ? `⬆ ${r.name}升到 Lv.${r.level}（-${r.cost}金）——每份产出更值钱了` : r.error;
                         }
                         else if (act === "collect") {
-                            const r = ranchCollect(f, now);
+                            const r = ranchCollect(f, playerFarms(), now);
                             flash = r.ok
-                                ? `📦 收获：${Object.entries(r.detail).map(([k, v]) => `${v} 份${k}`).join("、")}，+${r.gain} 金${r.potion ? `；还掉了 ${r.potion} 瓶加速药水进${ai}的仓库 🧪` : ""}`
+                                ? `📦 收获：${Object.entries(r.detail).map(([k, v]) => `${v} 份${k}`).join("、")}，+${r.gain} 金${r.debtPaid ? `；另有 ${r.debtPaid} 金自动偿还此前欠款` : ""}${r.potion ? `；还掉了 ${r.potion} 瓶加速药水进${ai}的仓库 🧪` : ""}`
                                 : r.error;
                         }
                         else if (act === "remit") {
@@ -1107,7 +1139,7 @@ export function startServer(port, host = "127.0.0.1") {
                             flash = r.ok ? `🛍️ 买下了「${r.name}」（-${r.cost}金），已放进🧰仓库——去仓库摆出来吧` : r.error;
                         }
                         save();
-                        res.writeHead(303, { ...AGENT_HEADERS, Location: `/ui/${key}/ranch?flash=${encodeURIComponent(flash)}` });
+                        res.writeHead(303, { ...AGENT_HEADERS, Location: `${BASE}/ui/${key}/ranch?flash=${encodeURIComponent(flash)}` });
                         return res.end();
                     }
                     res.writeHead(200, AGENT_HEADERS);
@@ -1167,7 +1199,7 @@ export function startServer(port, host = "127.0.0.1") {
                             const out = runFarm(target, "message", { by: f.id, token: f.token, text: form.text }, undefined, now);
                             flash = out.json.ok ? out.json.text : `⚠️ ${out.json.text}`;
                         }
-                        res.writeHead(303, { ...AGENT_HEADERS, Location: `/ui/${key}/ta?flash=${encodeURIComponent(flash)}` });
+                        res.writeHead(303, { ...AGENT_HEADERS, Location: `${BASE}/ui/${key}/ta?flash=${encodeURIComponent(flash)}` });
                         return res.end();
                     }
                     // 🔗 「生成链接」：把伴侣填好的内容拼成一条 AI 用的 compose 链接（不直接执行），让 AI 自己点、看到结果。
@@ -1219,7 +1251,7 @@ export function startServer(port, host = "127.0.0.1") {
                             flash = expSetCharm(f, kind, String(form.blessing ?? ""), now).text;
                         }
                         save();
-                        res.writeHead(303, { ...AGENT_HEADERS, Location: `/ui/${key}/expedition?flash=${encodeURIComponent(flash)}` });
+                        res.writeHead(303, { ...AGENT_HEADERS, Location: `${BASE}/ui/${key}/expedition?flash=${encodeURIComponent(flash)}` });
                         return res.end();
                     }
                     res.writeHead(200, AGENT_HEADERS);
@@ -1234,7 +1266,7 @@ export function startServer(port, host = "127.0.0.1") {
                             save();
                         const flash = r.ok ? (r.on ? `⭐ 已收藏「${r.name}」——去「我的收藏」栏看看` : `已取消收藏「${r.name}」`) : "⚠️ 找不到这种作物";
                         const anchor = String(form.anchor ?? "").trim();
-                        res.writeHead(303, { ...AGENT_HEADERS, Location: `/ui/${key}/codex?flash=${encodeURIComponent(flash)}${anchor ? `#${encodeURIComponent(anchor)}` : ""}` });
+                        res.writeHead(303, { ...AGENT_HEADERS, Location: `${BASE}/ui/${key}/codex?flash=${encodeURIComponent(flash)}${anchor ? `#${encodeURIComponent(anchor)}` : ""}` });
                         return res.end();
                     }
                     res.writeHead(200, AGENT_HEADERS);

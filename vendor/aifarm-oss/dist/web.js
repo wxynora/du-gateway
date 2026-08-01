@@ -4,9 +4,9 @@
 // 视觉基调：暖田园·标本馆（米麻底 + 木质暖褐 + 草木绿），靠稀有度色彩体系与排版质感出彩（零图片）。
 //
 // 本文件目前是「农场主页/总览」打样页 + 全站共享外壳（外壳定义视觉语言，其余页之后复用）。
-import { advance, collectionPct, codexCountByCategory, nextUpgradeReq, refreshShop, shopOffer, refreshRanchShop, animalUpgradeCost, plotRemainMs, isStarred } from "./engine.js";
+import { advance, collectionPct, codexCountByCategory, nextUpgradeReq, refreshShop, shopOffer, refreshRanchShop, animalUpgradeCost, plotRemainMs, isStarred, ranchRaidCoins, ranchRaidForAnimal, ranchRaidDebtTotal } from "./engine.js";
 import { cropById, getCrop, animalById, petById, accessoryById, decorationById, landTierByLevel, totalCropCount, cropsByCategory, qualities, materialById, recipes, expMaps, expEventById, expMapById, expDecorById } from "./content.js";
-import { TICK_MS, RANCH_ANIMAL_MAX_LEVEL, RANCH_LEVEL_INCOME_STEP, UGC_DESIGN_FEE, UGC_SEED_YIELD, UGC_NAME_MAX, UGC_DESC_MAX, UGC_PLANT_MAX, UGC_HARVEST_MAX, MESSAGE_TEXT_MAX, WELCOME_MAX, EXP_DC, EXP_DAILY_CAP, EXP_BLESSING_MAX } from "./config.js";
+import { BASE, TICK_MS, RANCH_ANIMAL_MAX_LEVEL, RANCH_LEVEL_INCOME_STEP, RANCH_RAID_COINS_PER_HOUR, UGC_DESIGN_FEE, UGC_SEED_YIELD, UGC_NAME_MAX, UGC_DESC_MAX, UGC_PLANT_MAX, UGC_HARVEST_MAX, MESSAGE_TEXT_MAX, WELCOME_MAX, EXP_DC, EXP_DAILY_CAP, EXP_BLESSING_MAX } from "./config.js";
 import { currentSeason, activeFestivals, currentDayIndex } from "./time.js";
 import { playerFarms } from "./store.js";
 import { allUgc } from "./ugc.js";
@@ -181,12 +181,18 @@ nav a.on,nav a:hover{color:var(--leaf-deep);background:#e6f3d8}
 .animal .ai{font-size:30px;line-height:1;flex:0 0 auto}
 .animal .am{flex:1;min-width:0}
 .animal .ready{font-family:var(--serif);font-size:20px;color:var(--gold)}
+.raid-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 0;padding-top:8px;border-top:1px dashed var(--line)}
+.raid-form label{display:flex;gap:5px;align-items:center;color:var(--ink-soft);white-space:nowrap}
+.raid-form select{max-width:260px}.raid-form .raid-hours{width:76px}
+.raid-form :is(select,input,button):focus-visible{outline:2px solid var(--leaf-deep);outline-offset:2px}
 /* 手机端：按钮收小一点（一键收获等不再过大），动物行允许换行——名称/产出独占一行，pin/升级按钮落到下一行，不再被挤成一字一行 */
 @media(max-width:560px){
   .btn{padding:7px 12px;font-size:13px}
   .animal{flex-wrap:wrap;gap:6px 10px}
   .animal .am{flex:1 1 100%}
   .animal .ready{font-size:16px}
+  .raid-form{align-items:stretch}
+  .raid-form label:first-of-type{flex:1 1 100%}.raid-form select{width:100%;max-width:none}
 }
 
 /* 图鉴册：分类锚点导航 + 标本位 */
@@ -267,12 +273,13 @@ function nav(key, active) {
         ["", "🏡 主页"], ["ranch", "🐮 我的牧场"], ["ta", "✍️ TA的农场"], ["expedition", "🗺️ 探险"], ["codex", "📖 图鉴册"], ["leaderboard", "🏆 排行榜"],
     ];
     return items.map(([seg, label]) => {
-        const href = `/ui/${key}${seg ? "/" + seg : ""}`;
+        const href = `${BASE}/ui/${key}${seg ? "/" + seg : ""}`;
         return `<a href="${href}"${seg === active ? ' class="on"' : ""}>${label}</a>`;
     }).join("");
 }
 /** 页脚署名：人类伴侣名（回落"伴侣"）+ AI 真实名（回落"AI"）。 */
 const farmNames = (f) => ({ ai: f.aiName || "AI", human: f.humanName || "伴侣" });
+const farmLabel = (f) => `${f.name}（${f.aiName || "AI"}）`;
 function page(title, key, active, body, names) {
     const human = esc(names?.human || "伴侣");
     const ai = esc(names?.ai || "AI");
@@ -298,6 +305,17 @@ export function uiHome(f, now, key) {
     const pct = collectionPct(f) * 100;
     const days = Math.max(0, Math.floor((now - f.createdAt) / 86400000));
     const farms = playerFarms(); // 排除常驻 NPC 阿土（排名/计数只算真实玩家）
+    for (const farm of farms)
+        advance(farm, now); // 广播读取此刻真实成熟状态，不写历史
+    const ripeFarms = farms.map((farm, index) => ({
+        farm,
+        number: index + 1,
+        ripe: farm.plots.filter((p) => p.crop?.ripe).length,
+    })).filter((entry) => entry.ripe > 0);
+    const ripeBroadcast = `<div class="card"><h3>📣 此刻谁家菜熟了　<span class="muted small" style="font-weight:400">打开就是当前状态</span></h3>
+    ${ripeFarms.length
+        ? ripeFarms.map((entry) => `<div class="line small"><span><b>${entry.number}. ${esc(farmLabel(entry.farm))}</b></span><span class="ready">${entry.ripe} 块待收</span></div>`).join("")
+        : `<p class="small muted" style="margin:6px 0 0">现在大家都收得干干净净，没有成熟未收的菜。</p>`}</div>`;
     // 收集册大圆环
     const R = 78, C = 2 * Math.PI * R, off = C * (1 - Math.min(1, pct / 100));
     const ring = `<div class="ring">
@@ -378,7 +396,7 @@ export function uiHome(f, now, key) {
     const rCoins = rankOf(farms, f, (x) => x.coins);
     const rTier = rankOf(farms, f, (x) => x.landTier);
     const rankCard = `<div class="card"><div class="line"><h3 style="margin:0">🏆 他在榜上</h3>
-      <a class="cta" href="/ui/${key}/leaderboard">看全服排行 →</a></div>
+      <a class="cta" href="${BASE}/ui/${key}/leaderboard">看全服排行 →</a></div>
     <div class="grid c2b" style="gap:8px;margin-top:6px;grid-template-columns:1fr 1fr 1fr">
       <div><span class="rank-big">#${rCodex}</span><div class="small muted">图鉴榜</div></div>
       <div><span class="rank-big">#${rCoins}</span><div class="small muted">财富榜</div></div>
@@ -414,7 +432,7 @@ export function uiHome(f, now, key) {
         const eqId = equippedTitle(f)?.id ?? "";
         const opts = `<option value=""${eqId ? "" : " selected"}>不佩戴称号</option>`
             + owned.map((t) => `<option value="${esc(t.id)}"${eqId === t.id ? " selected" : ""}>【${esc(t.name)}】</option>`).join("");
-        return `<form method="post" action="/ui/${key}/title" style="margin:6px 0 2px;display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap">
+        return `<form method="post" action="${BASE}/ui/${key}/title" style="margin:6px 0 2px;display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap">
       <span class="small muted">🎖️ 称号</span>
       <select name="id" class="inp" style="width:auto" onchange="this.form.submit()">${opts}</select>
       <button class="btn ghost" type="submit">佩戴</button>
@@ -430,6 +448,7 @@ export function uiHome(f, now, key) {
       <span class="tag">📖 已集 <b>${got}</b> 种</span>
       <span class="tag">🌱 开张 <b>${days}</b> 天</span></div></div>`;
     const body = `${plaque}
+${ripeBroadcast}
 ${hero}
 ${field}
 <div class="grid c2">${seasonCard}${shopCard}</div>
@@ -447,7 +466,7 @@ export function uiRanch(f, now, key, flash) {
     refreshRanchShop(f, now); // 让今日的牧场商店（随机刷新的配饰/装饰）保持最新
     const ranch = f.ranch;
     const list = ranch?.animals ?? [];
-    const base = `/ui/${key}/ranch`;
+    const base = `${BASE}/ui/${key}/ranch`;
     const flashHtml = flash ? `<div class="flash">${esc(flash)}</div>` : "";
     const pinnedSet = new Set(f.ranch?.pinned ?? []);
     // 📌 pin 开关：被 pin 的动物/宠物才会随机出现在小克农场的氛围句里（都没 pin=全部随机）
@@ -456,16 +475,25 @@ export function uiRanch(f, now, key, flash) {
         return `<form method="post" action="${base}/pin" style="margin:0"><input type="hidden" name="kind" value="${esc(kindId)}">
       <button class="btn ghost" type="submit" title="${on ? "取消 pin" : "pin 到农场"}">${on ? "📌 已选" : "📍 pin"}</button></form>`;
     };
-    let pendingValue = 0; // 与 engine.ranchCollect 的实际到账口径一致：逐只按等级系数算、逐只取整
+    let pendingGross = 0; // 与 engine.ranchCollect 的毛收入口径一致：逐只按等级系数算、逐只取整
     for (const a of list) {
         const k = animalById.get(a.kindId);
         if (k)
-            pendingValue += Math.round(a.pending * k.producePrice * (1 + ((a.level ?? 1) - 1) * RANCH_LEVEL_INCOME_STEP));
+            pendingGross += Math.round(a.pending * k.producePrice * (1 + ((a.level ?? 1) - 1) * RANCH_LEVEL_INCOME_STEP));
     }
+    const pendingValue = Math.max(0, pendingGross - ranchRaidDebtTotal(f));
     const coins = ranch?.coins ?? 0;
     const ai = esc(f.aiName || "小克"); // AI 昵称（注册时定，回落"小克"）
     const human = esc(f.humanName || "你"); // 人类昵称（注册时定，回落"你"）
     const fmtTime = (ms) => new Date(ms).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+    const numbered = playerFarms().map((farm, index) => ({ farm, number: index + 1 }));
+    const numberById = new Map(numbered.map((entry) => [entry.farm.id, entry.number]));
+    const labelById = new Map(numbered.map((entry) => [entry.farm.id, farmLabel(entry.farm)]));
+    const targets = numbered.filter((entry) => entry.farm.id !== f.id);
+    const targetOptions = targets.map((entry) => `<option value="${entry.number}">${entry.number}. ${esc(farmLabel(entry.farm))}</option>`).join("");
+    const incoming = numbered.flatMap(({ farm: owner }) => (owner.ranch?.raids ?? [])
+        .filter((raid) => raid.targetFarmId === f.id && raid.endsAt > now)
+        .map((raid) => ({ owner, raid })));
     const plaque = `<div class="plaque">
     <h1>🐮 我的牧场</h1>
     <p class="welcome">“${ai}送来的动物，归你养。攒下的产出换成金币，要不要分 TA 一点，你说了算～”</p>
@@ -474,13 +502,13 @@ export function uiRanch(f, now, key, flash) {
       <span class="tag">📦 可收产出值 <b>${num(pendingValue)}</b> 金</span></div></div>${flashHtml}`;
     // 动物清单（逐只列，显示穿戴与产出）+ 一键收获
     let animalsCard;
-    if (!list.length) {
+    if (!list.length && !incoming.length) {
         animalsCard = `<div class="card"><h3>🐾 牧场空荡荡</h3>
       <p class="small muted" style="margin:0 0 6px">还没有动物——让 <b>${ai}</b>（AI）在它的商店里 <code>buy-animal</code> 买一只送进来，你就能开始养了。</p>
       <p class="small muted" style="margin:0">${ai}的图鉴集得越多，能解锁、能买给你的动物越多。</p></div>`;
     }
     else {
-        const rows = list.map((a, i) => {
+        const ownRows = list.map((a, i) => {
             const k = animalById.get(a.kindId);
             const nm = a.name || k?.name || a.kindId;
             const lvl = a.level ?? 1;
@@ -494,6 +522,10 @@ export function uiRanch(f, now, key, flash) {
             const worn = wearing.length
                 ? `<div class="small" style="color:var(--leaf-deep);margin-top:2px">👒 穿戴：${wearing.map(esc).join("、")}</div>`
                 : `<div class="small muted" style="margin-top:2px">还没打扮</div>`;
+            const raid = ranchRaidForAnimal(f, a.kindId);
+            const raidLine = raid
+                ? `<div class="small" style="color:var(--gold);margin-top:4px">🥷 正在 ${numberById.get(raid.targetFarmId) ?? "?"} 号「${esc(labelById.get(raid.targetFarmId) ?? "未知农场")}」潜伏 · ${fmtDur(Math.max(0, raid.endsAt - now))}后回来 · 已冻结 ${raid.reservedCoins} 金</div>`
+                : "";
             // 升级按钮：每级提高每份收入（不增份数），封顶后显示满级
             const upBtn = !k ? "" : (lvl >= RANCH_ANIMAL_MAX_LEVEL)
                 ? `<span class="small muted">已满级 Lv.${lvl}</span>`
@@ -507,12 +539,33 @@ export function uiRanch(f, now, key, flash) {
         <input type="hidden" name="animal" value="${i}">
         <input class="inp" type="text" name="name" maxlength="12" value="${esc(a.name ?? "")}" placeholder="给它起个名字" style="width:auto">
         <button class="btn ghost" type="submit">🏷️ 改名</button></form>`;
+            const dispatchForm = raid ? "" : targets.length
+                ? `<form class="raid-form" method="post" action="${base}/dispatch-raid">
+            <input type="hidden" name="animal" value="${i}">
+            <label class="small">去 <select class="inp" name="to" required>${targetOptions}</select></label>
+            <label class="small">潜伏 <input class="inp raid-hours" type="number" name="hours" min="1" step="1" required> 小时</label>
+            <button class="btn" type="submit">🥷 派去偷金币</button>
+            <span class="small muted">${RANCH_RAID_COINS_PER_HOUR} 金/小时，出发先冻结同额保证金</span>
+          </form>`
+                : `<div class="small muted" style="margin-top:6px">暂时没有其他玩家农场可以派遣。</div>`;
             return `<div class="animal">
         <div class="am"><div><b>${esc(nm)}</b> <span class="small muted">${info}</span>　${ready}</div>
-          ${worn}</div>
+          ${worn}${raidLine}${dispatchForm}</div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${pinBtn(a.kindId)}${upBtn}${nameForm}</div></div>`;
         }).join("");
-        const canCollect = pendingValue > 0;
+        const incomingRows = incoming.map(({ owner, raid }) => {
+            const animal = owner.ranch?.animals.find((a) => a.kindId === raid.animalKindId);
+            const kind = animalById.get(raid.animalKindId);
+            const nm = animal?.name || kind?.name || raid.animalKindId;
+            const compensation = ranchRaidCoins(raid, now);
+            return `<div class="animal">
+        <div class="am"><div><b>${kind?.emoji ?? "🐾"}${esc(nm)}</b> <span class="small muted">（${esc(farmLabel(owner))}家的）</span></div>
+          <div class="small" style="color:var(--gold);margin-top:3px">🥷 正在你家潜伏 · 已潜伏赔偿 ${compensation} 金 · ${fmtDur(raid.endsAt - now)}后跑掉</div></div>
+        <form method="post" action="${base}/catch-raid" style="margin:0"><input type="hidden" name="raid" value="${esc(raid.id)}">
+          <button class="btn" type="submit">抓住</button></form></div>`;
+        }).join("");
+        const rows = ownRows + incomingRows;
+        const canCollect = pendingGross > 0;
         animalsCard = `<div class="card"><div class="line"><h3 style="margin:0">🐾 在养的动物</h3>
         <form method="post" action="${base}/collect" style="margin:0">
           <button class="btn" type="submit"${canCollect ? "" : " disabled"}>📦 一键收获${canCollect ? `（+${num(pendingValue)}金）` : "（暂无可收）"}</button>
@@ -658,7 +711,7 @@ ${shopCard}
 export function uiTa(f, now, key, flash) {
     advance(f, now);
     checkTitles(f); // 进页面前补结算称号解锁
-    const base = `/ui/${key}/ta`;
+    const base = `${BASE}/ui/${key}/ta`;
     const ai = esc(f.aiName || "小克");
     const flashHtml = flash ? `<div class="flash">${esc(flash)}</div>` : "";
     const matTotal = Object.values(f.materials).reduce((a, b) => a + b, 0);
@@ -802,7 +855,7 @@ function expBagPreview(exp) {
 }
 export function uiExpedition(f, now, key, flash) {
     advance(f, now);
-    const base = `/ui/${key}/expedition`;
+    const base = `${BASE}/ui/${key}/expedition`;
     const ai = esc(f.aiName || "TA");
     const human = esc(f.humanName || "你");
     const exp = f.expedition;
@@ -928,7 +981,7 @@ function specTile(c, entry, opts = {}) {
     const sign = opts.by ? `<div class="sm" style="margin-top:2px">✍ ${esc(opts.by)}</div>` : "";
     // ⭐ 星标按钮：只在已揭晓的标本上出现（已收录 / 我的设计）；小表单 POST 切换收藏态，不触发细节弹窗。
     const star = (opts.key && (entry || opts.mine))
-        ? `<form class="starf" method="post" action="/ui/${esc(opts.key)}/codex/star">`
+        ? `<form class="starf" method="post" action="${BASE}/ui/${esc(opts.key)}/codex/star">`
             + `<input type="hidden" name="id" value="${esc(c.id)}"><input type="hidden" name="anchor" value="${esc(opts.anchor ?? "")}">`
             + `<button class="starbtn${opts.starred ? " on" : ""}" title="${opts.starred ? "取消收藏" : "收藏到「我的收藏」"}" aria-label="收藏">${opts.starred ? "★" : "☆"}</button></form>`
         : "";
@@ -1221,7 +1274,7 @@ export function uiTodo(f, key, section) {
     const names = { leaderboard: "排行榜" };
     const body = `<div class="plaque"><h1>🚧 ${esc(names[section] ?? section)}</h1>
     <p class="welcome"></p>
-    <p style="margin-top:10px"><a class="cta" href="/ui/${key}">← 回主页</a></p></div>`;
+    <p style="margin-top:10px"><a class="cta" href="${BASE}/ui/${key}">← 回主页</a></p></div>`;
     return page("建设中", key, section, body, farmNames(f));
 }
 export function uiInvalid() {
