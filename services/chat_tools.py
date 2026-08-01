@@ -472,6 +472,10 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
         from services.cedareco_tool import execute_cedareco_tool
 
         return execute_cedareco_tool(arguments if isinstance(arguments, dict) else {})
+    if name == "galatea_garden":
+        from services.galatea_garden_tool import execute_galatea_garden_tool
+
+        return execute_galatea_garden_tool(arguments if isinstance(arguments, dict) else {})
     if name in ("get_time_info", "get_weather", "get_almanac"):
         from services.weather_almanac import execute_weather_almanac_tool
         return execute_weather_almanac_tool(name, arguments)

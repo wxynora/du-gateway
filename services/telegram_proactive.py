@@ -320,11 +320,6 @@ def _render_random_proactive_decision_prompt(
     }
     for key, value in replacements.items():
         text = text.replace(key, value)
-    text = text.replace("、逛论坛", "")
-    text = text.replace("逛论坛、", "")
-    text = re.sub(r'\s*\|\s*"forum"', "", text)
-    text = re.sub(r'"forum"\s*\|\s*', "", text)
-    text = text.replace("|forum", "").replace("forum|", "")
     return text.replace("X.X", hours_text).strip()
 
 
@@ -1721,7 +1716,7 @@ def _run_proactive_forum_action(
     user_prompt = (
         "你刚才在随机唤醒里选择了逛论坛。\n"
         f"你刚才选择逛论坛的理由：{str(initial_reason or '').strip() or '（未说明）'}\n"
-        "现在需要调用 forum_read_feed 浏览信息流；如果看到你想继续看的帖子，再调用 forum_open_thread 打开一篇。\n"
+        "现在需要调用 galatea_garden 浏览论坛：先用 action=list_threads；如果看到想继续看的帖子，再用 action=get_thread 打开一篇。\n"
         "看完后用一句很短的话说明你看了什么；如果工具失败，也用一句话说明失败原因。\n"
         f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。"
     )
@@ -2020,7 +2015,7 @@ def _ask_du_after_surf_result(
         "现在需要基于这些素材做最终决定。不要再调用 du_surf，也不要只说“我去冲浪”。\n\n"
         f"{_format_proactive_surf_result_for_du(surf_result)}\n\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
-        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "drawer" | "game" | "other" 之一。不要再填 "surf"。\n'
+        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "forum" | "drawer" | "game" | "other" 之一。不要再填 "surf"。\n'
         '- reason：字符串，简短说明你为什么这么选（必填）。\n'
         '- message：字符串；当 action 为 send_message 时，填要发给她的正文；其它 action 时可为空或填补充说明。\n'
         '- game：字符串；当 action 为 game 时，按下方单机游戏列表填写；其它 action 时留空。\n'

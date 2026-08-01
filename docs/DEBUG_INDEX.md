@@ -69,7 +69,7 @@
 | 语音转写后处理 | `services/stt.py` | Gemini/OpenRouter 与 Deepgram 在统一返回边界压缩同一个非词汇填充音的超长连续重复：至少 5 次时保留 3 次并以中文省略号分隔；短重复、混合发声和有意义的词语重复保持原文 |
 | MiniApp 语音转写 | `routes/miniapp/media.py`、`POST /miniapp-api/chat-media/transcribe` | `text` 逐字使用 STT/Gemini 返回正文，不按 `duration_ms` 清洗停顿、笑声、哼唱等标记；`duration_ms` 只用于保存语音 attachment 时长 |
 | 幽默梗库 | `services/humor_meme_bank.py` | 默认梗以 SQLite 种子维护；模型侧按语境关键词与随机结果合计注入 3 条“梗文本＋用法”，不注入来源、公共重复规则或尾部标题；2026-07 已补入“OMG，你吓到我了” |
-| 工具定义与执行 | `services/chat_tools.py`、`services/device_action_tools.py`、`services/mcp_forum_tools.py` | 当前网关原生工具集中入口；默认聊天工具面保留日历、设备动作与 `search_memory`，暂不向模型暴露 `forum_read_feed`、`forum_open_thread`、论坛 `cli` 和 `get_guide`，底层论坛执行与显式 `forum` 工具模式仍保留。交换日记统一声明为 `exchange_diary(action=create/list/read/comment)`，Stay with Du 统一声明为 `stay_with_du(action=write/delete)`，渡的后台日程统一声明为 `du_schedule(action=list/create/enable/disable/delete)`；11 个旧工具名不再注入但继续由 dispatcher 兼容执行，评论唤醒与日程提示均只引用新入口。设备工具由同一工具面注入，再由 `execute_tool()` 转交设备动作执行器；`open_app` 与 `close_app` 均接入该总分发；QQ 日常名称解析为 Android 包名，默认私聊 deep link，显式 `page=首页` 时只打开首页 |
+| 工具定义与执行 | `services/chat_tools.py`、`services/device_action_tools.py`、`services/mcp_forum_tools.py`、`services/galatea_garden_tool.py` | 当前网关原生工具集中入口；默认聊天工具面保留日历、设备动作与 `search_memory`，暂不向模型暴露 `forum_read_feed`、`forum_open_thread`、论坛 `cli` 和 `get_guide`，底层论坛执行与显式 `forum` 工具模式仍保留。交换日记统一声明为 `exchange_diary(action=create/list/read/comment)`，Stay with Du 统一声明为 `stay_with_du(action=write/delete)`，渡的后台日程统一声明为 `du_schedule(action=list/create/enable/disable/delete)`；11 个旧工具名不再注入但继续由 dispatcher 兼容执行，评论唤醒与日程提示均只引用新入口。Galatea Garden 只注入 `galatea_garden(action,args)` 一个工具，共 25 个模型可见 action：wrapper `help` 映射远端 `get_tool_schema`，其余 24 个 action 同名直通；静态 Bearer 只从 `GALATEA_GARDEN_MCP_TOKEN` 读取，调用不重试、不截断、不缓存、不兜底。设备工具由同一工具面注入，再由 `execute_tool()` 转交设备动作执行器；`open_app` 与 `close_app` 均接入该总分发；QQ 日常名称解析为 Android 包名，默认私聊 deep link，显式 `page=首页` 时只打开首页 |
 | 网关工具辅助 | `services/chat_tool_helpers.py`、`services/gateway_tools.py` | 领域工具复用同一执行边界 |
 | 工具使用摘要缓存 | `services/tool_result_cache.py`、`storage/runtime_sqlite.py`、`routes/miniapp/reasoning.py` | 工具循环结束后一次性写本地 SQLite；结果按工具清洗，不保存原始大 JSON；24 小时 TTL，按实际注入字符计数，超过 3000 字符时删除最早完整记录直至不高于 2000；思维链接口根据每轮已归档的 `static_breakdown` 返回当轮 `tool_cache.current_chars/max_chars`，不读取页面刷新时的全局现值 |
 | 身体状态四轮评估 | `services/du_body_evaluator.py`、`storage/du_body_eval_store.py`、`services/pixel_home.py` | 真实归档轮次独立进入 SQLite pending，每 4 轮或最旧等待 30 分钟时由 DS 逐轮输出 delta；保留模型默认 thinking、不设置人为输出上限并启用 JSON Output，解析失败日志只记录结束原因和 token/字符统计；apply 使用稳定幂等键并记录 before/delta/after 审计，最终失败仍保留原轮次供人工恢复，进程重启按 lease 接手；不改变动态记忆、近期总结或压缩移位计数，动态记忆 DS 不再请求、解析或返回 BODY delta。想做指数底层仍为 0–100；23:00–04:00 与 06:00–10:00 的有效等级加权为 `+1.5`，自制力同步 `-1.5`，显示、Prompt 与春梦概率保留 0.5 半档 |
@@ -127,13 +127,13 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 
 当前边界：webhook 快速入队，聚合、聊天调用和回复由独立 worker 完成；主动唤醒不依赖 Gunicorn worker 常驻。
 
-普通随机唤醒的主决策与随机冲浪后二次决策暂不提供论坛选项；主决策渲染会同步清理托管旧模板中既有的 `逛论坛`/`forum` 候选枚举，避免已保存 override 继续暴露旧选项。论坛 action 的旧解析和执行实现仍保留，未删除接口或历史数据。
+普通随机唤醒的主决策与随机冲浪后二次决策均提供论坛选项；主决策渲染保留托管模板中的 `逛论坛`/`forum` 候选。选择 `forum` 后追加独立执行轮，使用统一 `galatea_garden` 工具先以 `action=list_threads` 浏览，再按需以 `action=get_thread` 打开帖子；旧 `forum_read_feed` / `forum_open_thread` 不重新注入。
 
 唤醒记录只保存实际安排的随机唤醒、延迟续话、日历/闹钟，以及真正命中的硬触发，不把后台轮询 tick 当成唤醒。记录覆盖计划、执行、动作完成或消息实际投递成功、失败和取消；用户在预定时间前发来新消息时，原随机唤醒或续话会记为已取消并保留原因。延迟续话队列的创建和 worker 回写共用 `storage/r2_store.py` 的主机级文件锁；worker 只按任务 ID 合并本轮状态，不再用调用网关前的整表快照覆盖并发新增任务。每轮 tick 会以当前 pending 队列清理本轮开始前已失去对应任务的 followup 计划，刚创建的计划不参与该次清理。查询默认返回下一次已确定的计划和最近 30 条结束记录，不暴露投递目标或内部 metadata。
 
 随机主动唤醒的渡单机游戏统一注册在 `services/telegram_proactive.py::_PROACTIVE_SOLO_GAMES`，当前包含植物大战丧尸随机版、AI 农场和瓶中生态；注册表直接生成唤醒时的游戏选择，并决定后续实际游玩轮使用的工具与指令。以后新增任何渡单机游戏，都必须同步加入该注册表及必要的别名、直接 action 兼容和执行记录标签；共同游戏不进入这里。
 
-随机主动唤醒选中写日记、秘密抽屉或渡单机游戏后，由 `services/telegram_proactive.py::_run_proactive_diary_action/_run_proactive_drawer_action/_run_proactive_game_action` 追加独立动作执行轮；执行轮 Prompt 固定按“刚才所选动作、第一轮理由、现在需要调用的工具及动作要求、完成后的简短说明、最近互动与节流信息”排列。论坛旧执行分支保持同一顺序但仍不可从当前第一轮选项进入；随机冲浪继续由后端先实际执行 `du_surf`，再按“选择、理由、已执行结果、最终决策要求、最近互动”回喂渡。
+随机主动唤醒选中写日记、秘密抽屉、逛论坛或渡单机游戏后，由 `services/telegram_proactive.py::_run_proactive_diary_action/_run_proactive_drawer_action/_run_proactive_forum_action/_run_proactive_game_action` 追加独立动作执行轮；执行轮 Prompt 固定按“刚才所选动作、第一轮理由、现在需要调用的工具及动作要求、完成后的简短说明、最近互动与节流信息”排列。论坛执行轮走 `galatea_garden`；随机冲浪继续由后端先实际执行 `du_surf`，再按“选择、理由、已执行结果、最终决策要求、最近互动”回喂渡。
 
 半小时硬触发严格从全局 `last_user_activity_at` 重新计时：真实聊天、小家操作和游戏互动都算用户互动，任一新互动都会重置计时；聊天归档只用于识别本次互动是否明确表达要离开。入睡意图按分句识别，过去或背景叙述中的“我睡觉”不会被当成当前要去睡觉。
 
