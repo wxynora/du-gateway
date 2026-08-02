@@ -11,7 +11,6 @@ from config import (
     DEEPSEEK_API_KEY,
     DEEPSEEK_API_URL,
     DEEPSEEK_CHAT_MODEL,
-    TELEGRAM_PROACTIVE_TARGET_USER_ID,
     TOOL_RESULT_CACHE_MAX_CHARS,
 )
 from services.chat_tool_helpers import collect_tool_trace_from_messages
@@ -22,21 +21,18 @@ from services.dynamic_memory_recall_debug import (
     normalize_debug_request_id,
 )
 from services.reasoning_utils import dedupe_reasoning_text_parts
-from storage import r2_store, recent_window_store
+from storage import conversation_sqlite_store, r2_store
 from utils.tokens import estimate_tokens
 
 logger = logging.getLogger(__name__)
 
 _REASONING_TRANSLATE_CHUNK_CHARS = 6000
-_REASONING_SCAN_ROUNDS_DEFAULT = 80
-_REASONING_TARGETS_DEFAULT = 6
 _REASONING_TEXT_MAX_CHARS = 60000
 _TOOL_ARGUMENTS_MAX_CHARS = 8000
 _TOOL_RESULT_MAX_CHARS = 12000
 _MEMORY_RECALL_QUERY_MAX_CHARS = 1200
 _MEMORY_RECALL_CONTENT_MAX_CHARS = 1200
 _MEMORY_RECALL_FALLBACK_MAX_SECONDS = 30 * 60
-_SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
 _CLAUDE_PRICE_INPUT_PER_M = 5.0
 _CLAUDE_PRICE_CACHE_CREATE_1H_PER_M = 10.0
 _CLAUDE_PRICE_CACHE_READ_PER_M = 0.5
@@ -52,20 +48,6 @@ def _clip_text(value, max_chars: int) -> str:
         return text
     omitted = len(text) - max_chars
     return f"{text[:max_chars]}\n...（内容过长，已截断 {omitted} 字）"
-
-
-def _resolve_primary_chat_window_id() -> str:
-    recent = recent_window_store.list_recent_windows(limit=200) or []
-    for w in recent:
-        wid = str((w or {}).get("id") or "").strip()
-        if wid.startswith("tg_"):
-            return wid
-    uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
-    if uid > 0:
-        return f"tg_{uid}"
-    if recent:
-        return str((recent[0] or {}).get("id") or "").strip()
-    return ""
 
 
 def _parse_beijing_dt(value: str) -> datetime | None:
@@ -804,129 +786,94 @@ def register_routes(bp) -> None:
     @bp.route("/reasoning/latest", methods=["GET"])
     def miniapp_reasoning_latest():
         """
-        返回最新思维链（默认 10 条）：
-        - 优先最近窗口里最新的 tg_*
-        - 回退最近窗口第一条
-        - 返回 reasoning + 工具调用/结果（用于 MiniApp COT 日志展示）
+        按时间倒序返回 SQLite 中的最新思维链（默认 10 条），
+        并保留思维链、记忆召回、缓存、费用和工具记录。
         """
         limit = request.args.get("limit", type=int, default=10)
         if limit < 1:
             limit = 1
         if limit > 30:
             limit = 30
-        scan_rounds = request.args.get("scan_rounds", type=int, default=_REASONING_SCAN_ROUNDS_DEFAULT)
-        if scan_rounds < 20:
-            scan_rounds = 20
-        if scan_rounds > 200:
-            scan_rounds = 200
-        target_limit = request.args.get("windows", type=int, default=_REASONING_TARGETS_DEFAULT)
-        if target_limit < 1:
-            target_limit = 1
-        if target_limit > 20:
-            target_limit = 20
 
-        recent = recent_window_store.list_recent_windows(limit=200) or []
-        target_candidates: list[str] = []
-        for w in recent:
-            wid = (w.get("id") or "").strip()
-            if not wid:
-                continue
-            if wid.startswith("tg_") or wid.startswith("wechat_") or wid.startswith("wx_") or wid == _SUMITALK_MAIN_WINDOW_ID:
-                if wid not in target_candidates:
-                    target_candidates.append(wid)
-        if not target_candidates and recent:
-            wid0 = (recent[0].get("id") or "").strip()
-            if wid0:
-                target_candidates = [wid0]
-
-        primary_wid = _resolve_primary_chat_window_id()
-        if primary_wid and (primary_wid.startswith("tg_") or primary_wid.startswith("wechat_") or primary_wid.startswith("wx_") or primary_wid == _SUMITALK_MAIN_WINDOW_ID):
-            if primary_wid in target_candidates:
-                target_candidates.remove(primary_wid)
-            target_candidates.insert(0, primary_wid)
-
-        targets = target_candidates[:target_limit]
-
-        if not targets:
+        rounds = conversation_sqlite_store.get_latest_rounds(last_n=limit) or []
+        if not rounds:
             return jsonify({"ok": True, "window_id": "", "items": [], "count": 0})
 
-        memory_recall_index = _load_memory_recall_debug_index(targets)
-        out = []
-        for target in targets:
-            rounds = r2_store.get_conversation_rounds(target, last_n=scan_rounds) or []
-            for r in reversed(rounds):
-                idx = int(r.get("index") or 0)
-                ts = (r.get("timestamp") or "").strip()
-                msgs = r.get("messages") or []
-                reasoning_text = ""
-                reasoning_full_text = ""
-                reasoning_omitted = False
-                selected_assistant_msg: dict | None = None
-                cache_debug_items: list[dict] = []
-                tool_calls_out = _format_reasoning_tool_calls(msgs)
-                for m in reversed(msgs):
-                    role = (m.get("role") or "").strip().lower() if isinstance(m, dict) else ""
-                    if role != "assistant":
-                        continue
-                    if not isinstance(m, dict):
-                        continue
-                    if selected_assistant_msg is None:
-                        selected_assistant_msg = m
-                    if not reasoning_text:
-                        val, omitted = _extract_reasoning_text_from_message(m)
-                        if val:
-                            reasoning_full_text = val
-                            reasoning_text = _clip_text(val, _REASONING_TEXT_MAX_CHARS)
-                        elif omitted:
-                            reasoning_omitted = True
-                            reasoning_text = "（模型已进行 adaptive thinking，但当前上游未返回可展示的思维链正文）"
-                    if not cache_debug_items:
-                        cache_debug_items = _normalize_cache_debug_items(m.get("cache_debug"))
-                    if (reasoning_text or cache_debug_items) and tool_calls_out:
-                        break
-                if selected_assistant_msg is not None:
-                    output_stats = (
-                        _build_output_stats(selected_assistant_msg, reasoning_full_text, cache_debug_items, reasoning_omitted)
-                        if selected_assistant_msg
-                        else {}
-                    )
-                    cost_stats = _build_claude_cost_stats(cache_debug_items)
-                    recall_event, recall_matched_by = _find_memory_recall_for_round(
-                        selected_assistant_msg,
-                        target,
-                        ts,
-                        memory_recall_index,
-                    )
-                    memory_recall = (
-                        _slim_memory_recall_event(recall_event, recall_matched_by)
-                        if recall_event and recall_matched_by
-                        else None
-                    )
-                    out.append(
-                        {
-                            "window_id": target,
-                            "index": idx,
-                            "timestamp": ts,
-                            "channel": str(r.get("channel") or "").strip(),
-                            "reasoning": reasoning_text,
-                            "cache_debug": cache_debug_items,
-                            "tool_cache": _build_tool_cache_stats(cache_debug_items),
-                            "output_stats": output_stats,
-                            "cost": cost_stats,
-                            "tool_calls": tool_calls_out,
-                            "memory_recall": memory_recall,
-                            "memory_recall_status": "attached" if memory_recall else "none",
-                        }
-                    )
+        targets: list[str] = []
+        for round_entry in rounds:
+            wid = str((round_entry or {}).get("window_id") or "").strip()
+            if wid and wid not in targets:
+                targets.append(wid)
 
-        out.sort(
-            key=lambda x: (
-                _parse_beijing_dt(x.get("timestamp") or "") is not None,
-                _parse_beijing_dt(x.get("timestamp") or ""),
-            ),
-            reverse=True,
-        )
-        out = out[:limit]
+        memory_recall_index = _load_memory_recall_debug_index(targets)
+        out: list[dict] = []
+        for r in rounds:
+            target = str(r.get("window_id") or "").strip()
+            idx = int(r.get("index") or 0)
+            ts = (r.get("timestamp") or "").strip()
+            msgs = r.get("messages") or []
+            reasoning_text = ""
+            reasoning_full_text = ""
+            reasoning_omitted = False
+            selected_assistant_msg: dict | None = None
+            cache_debug_items: list[dict] = []
+            tool_calls_out = _format_reasoning_tool_calls(msgs)
+            for m in reversed(msgs):
+                role = (m.get("role") or "").strip().lower() if isinstance(m, dict) else ""
+                if role != "assistant":
+                    continue
+                if not isinstance(m, dict):
+                    continue
+                if selected_assistant_msg is None:
+                    selected_assistant_msg = m
+                if not reasoning_text:
+                    val, omitted = _extract_reasoning_text_from_message(m)
+                    if val:
+                        reasoning_full_text = val
+                        reasoning_text = _clip_text(val, _REASONING_TEXT_MAX_CHARS)
+                    elif omitted:
+                        reasoning_omitted = True
+                        reasoning_text = "（模型已进行 adaptive thinking，但当前上游未返回可展示的思维链正文）"
+                if not cache_debug_items:
+                    cache_debug_items = _normalize_cache_debug_items(m.get("cache_debug"))
+                if (reasoning_text or cache_debug_items) and tool_calls_out:
+                    break
+            if selected_assistant_msg is not None:
+                output_stats = _build_output_stats(
+                    selected_assistant_msg,
+                    reasoning_full_text,
+                    cache_debug_items,
+                    reasoning_omitted,
+                )
+                cost_stats = _build_claude_cost_stats(cache_debug_items)
+                recall_event, recall_matched_by = _find_memory_recall_for_round(
+                    selected_assistant_msg,
+                    target,
+                    ts,
+                    memory_recall_index,
+                )
+                memory_recall = (
+                    _slim_memory_recall_event(recall_event, recall_matched_by)
+                    if recall_event and recall_matched_by
+                    else None
+                )
+                out.append(
+                    {
+                        "window_id": target,
+                        "index": idx,
+                        "timestamp": ts,
+                        "channel": str(r.get("channel") or "").strip(),
+                        "reasoning": reasoning_text,
+                        "cache_debug": cache_debug_items,
+                        "tool_cache": _build_tool_cache_stats(cache_debug_items),
+                        "output_stats": output_stats,
+                        "cost": cost_stats,
+                        "tool_calls": tool_calls_out,
+                        "memory_recall": memory_recall,
+                        "memory_recall_status": "attached" if memory_recall else "none",
+                    }
+                )
+
         resp = jsonify(
             {"ok": True, "window_id": targets[0] if targets else "", "window_ids": targets, "items": out, "count": len(out)}
         )

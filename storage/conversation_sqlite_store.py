@@ -339,6 +339,35 @@ def get_rounds(window_id: str, last_n: int = 4) -> list[dict]:
         return []
 
 
+def get_latest_rounds(last_n: int = 10) -> list[dict]:
+    try:
+        n = int(last_n or 0)
+    except Exception:
+        n = 0
+    if n <= 0:
+        return []
+    try:
+        with runtime_sqlite.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT window_id, round_index, timestamp, messages_json, action_note, raw_json
+                FROM conversation_rounds
+                ORDER BY timestamp DESC, window_id DESC, round_index DESC
+                LIMIT ?
+                """,
+                (n,),
+            ).fetchall()
+        rounds: list[dict] = []
+        for row in rows:
+            round_entry = _row_to_round(row)
+            round_entry["window_id"] = str(row["window_id"] or "")
+            rounds.append(round_entry)
+        return rounds
+    except Exception as e:
+        logger.warning("conversation_sqlite get_latest_rounds failed error=%s", e)
+        return []
+
+
 def get_round_by_index(window_id: str, round_index: int) -> dict | None:
     wid = normalize_window_id(window_id)
     try:
