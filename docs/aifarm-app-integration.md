@@ -1,6 +1,6 @@
 # AI 农场原生 App 接入
 
-当前状态（2026-07-31）：原私有 sidecar 的 `PQQCHR / 渡的小农场` 已完整迁入自有公共服，新公共门牌为 `3ET3FE`。网关与 SumiTalk worker 仅通过农场专用 `AIFARM_UPSTREAM_URL=https://doorbellcommons.com/farm` 访问公共实例；聊天、模型与网关上游没有改变。原生 App 与渡继续复用同一个服务端会话，旧 `du-aifarm.service` 已停用，原 `farms.json` 以 0600 保留为备份。MiniApp 不显示或加载 AI 农场。
+当前状态（2026-08-02）：原私有 sidecar 的 `PQQCHR / 渡的小农场` 已完整迁入自有公共服，新公共门牌为 `3ET3FE`。网关与 SumiTalk worker 仅通过农场专用 `AIFARM_UPSTREAM_URL=https://doorbellcommons.com/farm` 访问公共实例；聊天、模型与网关上游没有改变。原生 App 与渡继续复用同一个服务端会话，旧 `du-aifarm.service` 已停用。公共服代码归档到独立 `doorbell-commons/old-vps/farm/`，网关仓库不再携带农场运行包或 sidecar 启动脚本。MiniApp 不显示或加载 AI 农场。
 
 ## 目标
 
@@ -17,13 +17,13 @@
 
 ## 文件与状态
 
-- 保留的原私有运行包：`vendor/aifarm-oss/`，来源和下游监听补丁见 `vendor/aifarm-oss/UPSTREAM.md`。
-- 原私有 sidecar 启动入口：`scripts/start_aifarm.sh`；生产 `du-aifarm.service` 已 disabled/inactive，不再是当前运行链路。
-- 原私有农场存档：`vendor/aifarm-oss/data/*.json`，由上游自己的 `.gitignore` 排除；当前只作 0600 备份，不再继续产生进度。
+- 公共服代码归属：`/Users/doraemon/Downloads/doorbell-commons/old-vps/farm/` 保存从旧 VPS 拉取的当前非秘密运行快照和 service unit；生产仍独立运行在旧 VPS `/opt/aifarm`，数据仍只在 `/var/lib/aifarm`。
+- 网关仓库已删除原 tracked `vendor/aifarm-oss/` 运行包与 `scripts/start_aifarm.sh`、`scripts/install_aifarm_service.sh`；生产 `du-aifarm.service` 继续保持 disabled/inactive。
+- 原私有农场的未跟踪 `vendor/aifarm-oss/data/farms.json`、`ugc.json` 暂留作旧备份，不参与当前运行或部署；其实际权限为 0644，后续删除或移出仓库目录需单独确认。
 - App 会话：`data/aifarm_app_session.json`，保存 `human_key`、私有 `play_url` 和校验后的 `agent_path`；文件权限设为 `0600`，原生端与模型结果绝不返回这些能力凭据。
 - 公共迁入凭据：主网关 `/var/lib/du-aifarm-public-sync/credentials.json`，目录 0700、文件 0600；保存新门牌、规范快照和只显示一次的同步钥匙，不进入仓库。
 - 网关接缝：`services/aifarm_bridge.py`、`services/aifarm_tool.py`、`services/gateway_tools.py`、`services/chat_tools.py`、`routes/aifarm_proxy.py`、`routes/miniapp/aifarm.py`。
-- 公共服务与迁入说明：`https://doorbellcommons.com/farm/`、`/farm/sync` 与 `/farm/公共农场注册与存档迁入说明.md`；公共运行包和数据位于独立旧 VPS，不属于网关部署包。
+- 公共服务与迁入说明：`https://doorbellcommons.com/farm/`、`/farm/sync` 与 `/farm/公共农场注册与存档迁入说明.md`；公共运行包和数据位于独立旧 VPS，不属于网关部署包，其代码快照归 `doorbell-commons/old-vps/farm/` 管理。
 - 原生入口：`sumitalk-android-native/app/src/main/java/com/sumitalk/nativeapp/ui/detail/GameHallScreen.kt`。
 - 原生页面：`sumitalk-android-native/app/src/main/java/com/sumitalk/nativeapp/ui/game/AIFarmScreen.kt`；只允许在同一 origin 的 `/aifarm/ui/` 能力路径内导航，TLS 或主页面加载错误会显示明确重试。
 - 原生协议：`sumitalk-android-native/app/src/main/java/com/sumitalk/nativeapp/data/gateway/GameToolsGatewayClient.kt`。
@@ -46,22 +46,16 @@
 - `AIFARM_UPSTREAM_URL`：网关访问农场服务的地址；代码默认仍为 `http://127.0.0.1:8080`，生产网关与 SumiTalk worker 通过各自 systemd drop-in 固定为 `https://doorbellcommons.com/farm`。
 - `AIFARM_STATE_FILE`：App 会话文件，默认 `data/aifarm_app_session.json`。
 - `AIFARM_FARM_NAME` / `AIFARM_AI_NAME` / `AIFARM_HUMAN_NAME`：首次建档名称，默认「渡的小农场 / 渡 / 辛玥」。
-- `AIFARM_PORT` / `AIFARM_BIND_HOST` / `AIFARM_RUNTIME_DIR`：启动脚本使用的端口、监听地址和运行包目录。
 
 ## 本地验证
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest scripts.test_aifarm_bridge
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m py_compile services/aifarm_bridge.py services/aifarm_tool.py routes/aifarm_proxy.py routes/miniapp/aifarm.py
-bash -n scripts/start_aifarm.sh scripts/install_aifarm_service.sh
-cd vendor/aifarm-oss && npm ci && npm run check
 
 # 在 sumitalk-android-native 的干净临时 worktree 中
 JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ANDROID_HOME='/Users/doraemon/Library/Android/sdk' \
   ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug :app:assembleDebugAndroidTest
 ```
-
-`scripts.test_aifarm_bridge.AIFarmRealSidecarTest` 会复制运行包到临时目录、使用随机本机端口和临时网关状态文件，先让 6 个独立 Python 进程同时首次建档并确认只得到一个农场，再实际执行“plant → status”，随后销毁全部临时数据；不能改成拿现有或线上农场存档做测试。
 
 ## 当前边界
 

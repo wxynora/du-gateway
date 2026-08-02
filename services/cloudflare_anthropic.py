@@ -2,6 +2,7 @@ import json
 import time
 from copy import deepcopy
 from typing import Iterable
+from urllib.parse import urlparse
 
 from config import (
     CLOUDFLARE_AIG_GATEWAY_ID,
@@ -28,6 +29,25 @@ GATEWAY_DYNAMIC_SYSTEM_HINTS = (
     "老婆当前状态",
     "【当前是在 RikkaHub 和渡聊天】",
 )
+KIRO_ANTHROPIC_HOST = "api2.68886868.xyz"
+
+
+def _is_kiro_anthropic_url(url: str) -> bool:
+    try:
+        return (urlparse(str(url or "")).hostname or "").strip().lower() == KIRO_ANTHROPIC_HOST
+    except Exception:
+        return False
+
+
+def _thinking_blocks_for_outbound_message(raw_msg: dict, url: str) -> list[dict]:
+    blocks = raw_msg.get("thinking_blocks")
+    if not isinstance(blocks, list):
+        return []
+    outbound = [deepcopy(block) for block in blocks if isinstance(block, dict)]
+    if _is_kiro_anthropic_url(url) and raw_msg.get("tool_calls"):
+        for block in outbound:
+            block.pop("signature", None)
+    return outbound
 
 
 def normalize_model_for_cloudflare(model: str, url: str) -> str:
@@ -236,9 +256,9 @@ def openai_to_anthropic_request(body: dict, url: str, cache_ttl: str | None = No
         elif role == "assistant":
             flush_tool_results()
             content = _openai_content_to_anthropic(raw_msg.get("content"))
-            thinking_blocks = raw_msg.get("thinking_blocks")
-            if isinstance(thinking_blocks, list):
-                content = [deepcopy(x) for x in thinking_blocks if isinstance(x, dict)] + content
+            thinking_blocks = _thinking_blocks_for_outbound_message(raw_msg, url)
+            if thinking_blocks:
+                content = thinking_blocks + content
             for call in raw_msg.get("tool_calls") or []:
                 if not isinstance(call, dict) or str(call.get("type") or "") != "function":
                     continue
