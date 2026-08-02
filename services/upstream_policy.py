@@ -513,7 +513,9 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
                     if model.strip().lower() == "gpt-5.6-sol"
                     else "high"
                 )
-            if is_local_claude_oauth_proxy_url(upstream_url) and _is_claude_adaptive_thinking_model(model):
+            if (
+                is_local_claude_oauth_proxy_url(upstream_url) or anthropic_format
+            ) and _is_claude_adaptive_thinking_model(model):
                 body["thinking"] = {"type": "adaptive", "display": "summarized"}
                 output_config = body.get("output_config") if isinstance(body.get("output_config"), dict) else {}
                 output_config = dict(output_config)
@@ -537,12 +539,6 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
                 effective_model = model
                 if effective_model:
                     body["model"] = normalize_model_for_cloudflare(effective_model, upstream_url)
-                if _is_claude_adaptive_thinking_model(effective_model):
-                    body["thinking"] = {"type": "adaptive", "display": "summarized"}
-                    output_config = body.get("output_config") if isinstance(body.get("output_config"), dict) else {}
-                    output_config = dict(output_config)
-                    output_config["effort"] = _normalize_claude_adaptive_effort(effective_model, get_active_claude_thinking_effort())
-                    body["output_config"] = output_config
     except Exception:
         pass
     if not is_local_claude_oauth_proxy_url(upstream_url):

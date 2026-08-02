@@ -206,7 +206,7 @@ class AnthropicFormatSwitchTest(unittest.TestCase):
         self.assertNotIn("max_tokens", captured["body"])
         self.assertEqual("OPENAI", data["choices"][0]["message"]["content"])
 
-    def test_active_policy_reads_the_same_switch_without_inventing_kiro_fields(self) -> None:
+    def test_active_policy_applies_saved_thinking_effort_to_kiro_anthropic_format(self) -> None:
         item = {"url": "https://api2.68886868.xyz/v1/chat/completions"}
         with mock.patch.object(upstream_store, "get_active_item", return_value=item), mock.patch.object(
             upstream_store, "get_active_anthropic_format", return_value=True
@@ -226,8 +226,14 @@ class AnthropicFormatSwitchTest(unittest.TestCase):
             )
 
         self.assertEqual("[Kiro次] claude-opus-4-6-thinking [不补]", body["model"])
-        self.assertNotIn("thinking", body)
-        self.assertNotIn("output_config", body)
+        self.assertEqual(
+            {"type": "adaptive", "display": "summarized"},
+            body["thinking"],
+        )
+        self.assertEqual({"effort": "max"}, body["output_config"])
+        converted = openai_to_anthropic_request(body, item["url"])
+        self.assertEqual(body["thinking"], converted["thinking"])
+        self.assertEqual(body["output_config"], converted["output_config"])
 
     def test_stream_forward_uses_anthropic_sse_adapter(self) -> None:
         captured: dict = {}
