@@ -365,6 +365,79 @@ def register_routes(bp):
 
         return _handle_store_error(_list)
 
+    @bp.route("/watch/viewings/<viewing_id>/reflection", methods=["PUT"])
+    def miniapp_watch_viewing_reflection(viewing_id: str):
+        viewing, error = _owned_viewing(viewing_id)
+        if error is not None:
+            return error
+        body, error = _json_body()
+        if error is not None:
+            return error
+        viewer_review = body.get("viewer_review", viewing.get("viewer_review") or "")
+        favorite = body.get("favorite", bool(viewing.get("favorite")))
+        rating = body.get("rating", viewing.get("rating"))
+        archive_to_stay_with_du = body.get("archive_to_stay_with_du", False)
+        if not isinstance(viewer_review, str):
+            return _json_error("viewer_review 必须是字符串", "watch_review_invalid", 400)
+        if not isinstance(favorite, bool):
+            return _json_error("favorite 必须是布尔值", "watch_favorite_invalid", 400)
+        if isinstance(rating, bool) or (
+            rating is not None and (not isinstance(rating, int) or rating not in {1, 2, 3, 4, 5})
+        ):
+            return _json_error("rating 必须是 1–5 的整数或 null", "watch_rating_invalid", 400)
+        if not isinstance(archive_to_stay_with_du, bool):
+            return _json_error(
+                "archive_to_stay_with_du 必须是布尔值",
+                "watch_reflection_archive_choice_invalid",
+                400,
+            )
+        if not bool(viewing.get("completed")) or not isinstance(viewing.get("ticket"), dict):
+            return _json_error(
+                "只有已看完并生成票根后才能保存观后感",
+                "watch_reflection_requires_ticket",
+                409,
+            )
+        stay_entry = None
+        if archive_to_stay_with_du:
+            archive_ticket = dict(viewing.get("ticket") or {})
+            archive_ticket.update(
+                {
+                    "viewer_review": viewer_review.replace("\x00", "").strip(),
+                    "favorite": favorite,
+                    "rating": rating,
+                }
+            )
+            stay_entry = stay_with_du_store.archive_watch_ticket(archive_ticket)
+            if stay_entry is None:
+                return _json_error(
+                    "观影记录暂时无法同步到一起看过",
+                    "watch_reflection_archive_failed",
+                    502,
+                )
+
+        def _save():
+            saved = watch_viewing_store.update_viewing_reflection(
+                viewing_id,
+                viewer_review=viewer_review,
+                favorite=favorite,
+                rating=rating,
+                now_iso=now_beijing_iso(),
+                stay_with_du_entry=stay_entry,
+            )
+            if saved is None:
+                return _json_error("观看记录不存在", "watch_viewing_not_found", 404)
+            return jsonify(
+                {
+                    "ok": True,
+                    "viewing_summary": saved,
+                    "ticket": saved.get("ticket"),
+                    "archived_to_stay_with_du": archive_to_stay_with_du,
+                    "stay_with_du_entry": stay_entry,
+                }
+            )
+
+        return _handle_store_error(_save)
+
     @bp.route(
         "/watch/viewings/<viewing_id>/ticket-frame-captures",
         methods=["GET", "POST"],
@@ -772,6 +845,17 @@ def register_routes(bp):
         )
         requested_visual_mode = str((_session.get("mode") or {}).get("visual_context_mode") or "text_only")
         visual_available = bool(WATCH_VISUAL_CONTEXT_ENABLED and status["visual_frames"]["count"] >= 2)
+        latest_analysis_job = status["analysis_runtime"].get("latest_job") or {}
+        visual_generation_status = str(status["visual_frames"].get("generation_status") or "pending")
+        visual_generation_error = ""
+        if (
+            visual_generation_status == "pending"
+            and str(latest_analysis_job.get("status") or "") == "failed"
+            and str(latest_analysis_job.get("purpose") or "")
+            in {"identify", "timeline_prepass", "rolling"}
+        ):
+            visual_generation_status = "failed"
+            visual_generation_error = str(latest_analysis_job.get("error") or "")
         status["visual_context"] = {
             "requested_mode": requested_visual_mode,
             "effective_mode": (
@@ -780,13 +864,25 @@ def register_routes(bp):
                 else "text_only"
             ),
             "available": visual_available,
+            "generation_status": visual_generation_status,
+            "generation_ready_at": str(
+                status["visual_frames"].get("generation_ready_at") or ""
+            ),
+            "last_delivered_at": str(
+                status["visual_frames"].get("last_delivered_at") or ""
+            ),
             "degraded_reason": (
                 ""
                 if requested_visual_mode == "text_only" or visual_available
                 else "visual_context_disabled"
                 if not WATCH_VISUAL_CONTEXT_ENABLED
+                else "visual_generation_failed"
+                if visual_generation_status == "failed"
+                else "frames_refresh_pending"
+                if visual_generation_status == "ready"
                 else "frames_not_ready"
             ),
+            "error": visual_generation_error,
         }
         preparation = status.get("preparation") if isinstance(status.get("preparation"), dict) else {}
         card_status = str(preparation.get("knowledge_card_status") or "pending")

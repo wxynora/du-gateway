@@ -90,6 +90,13 @@ def _normalize_stay_media(items: Any) -> list[dict]:
             value = str(item.get(key) or "").strip()
             if value:
                 row[key] = value
+        if "favorite" in item:
+            row["favorite"] = bool(item.get("favorite"))
+        if "rating" in item:
+            rating = item.get("rating")
+            row["rating"] = int(rating) if rating in {1, 2, 3, 4, 5} else None
+        if "viewer_review" in item:
+            row["viewer_review"] = str(item.get("viewer_review") or "").replace("\x00", "").strip()
         ticket = item.get("ticket")
         if isinstance(ticket, dict):
             normalized_ticket = {
@@ -325,6 +332,13 @@ def archive_watch_ticket(ticket: dict) -> Optional[dict]:
                 "work_key": work_key,
                 "watch_session_id": str(ticket.get("last_session_id") or "").strip(),
                 "watched_at": watched_at,
+                "favorite": bool(ticket.get("favorite")),
+                "rating": (
+                    int(ticket["rating"])
+                    if ticket.get("rating") in {1, 2, 3, 4, 5}
+                    else None
+                ),
+                "viewer_review": str(ticket.get("viewer_review") or "").strip(),
                 "ticket": archived_ticket,
             }
             data["moviesTodo"] = [item for item in todo if not same_work(item)]

@@ -28,7 +28,6 @@ from config import (
     PIONEER_CLAUDE_CACHE_TTL,
     is_openrouter_url,
     is_pioneer_url,
-    is_pioneer_anthropic_url,
     is_cloudflare_anthropic_url,
     cloudflare_claude_model_options,
     openrouter_models_response,
@@ -134,9 +133,9 @@ from services.claude_thinking_carryover import (
     inject_previous_claude_thinking_blocks as _inject_previous_claude_thinking_blocks,
 )
 from services.cloudflare_anthropic import (
+    anthropic_headers as _anthropic_headers,
     anthropic_sse_to_openai_sse as _anthropic_sse_to_openai_sse,
     anthropic_to_openai_response as _anthropic_to_openai_response,
-    cloudflare_anthropic_headers as _cloudflare_anthropic_headers,
     openai_to_anthropic_request as _openai_to_anthropic_request,
 )
 from services.chat_prompt_injections import (
@@ -186,7 +185,10 @@ from services.chat_tool_helpers import (
     should_retry_tool_followup as _should_retry_tool_followup,
     sse_delta_chunk_bytes as _sse_delta_chunk_bytes,
 )
-from services.tool_result_cache import record_tool_loop as _record_tool_result_loop
+from services.tool_result_cache import (
+    enqueue_game_tool_loop_summary as _enqueue_game_tool_loop_summary,
+    record_tool_loop as _record_tool_result_loop,
+)
 from services.prompt_cache_debug import (
     StreamCacheDebugCollector as _StreamCacheDebugCollector,
     build_cache_debug_entry as _build_cache_debug_entry,
@@ -204,6 +206,7 @@ from services.reasoning_utils import (
     strip_thinking_from_response_json as _strip_thinking_from_response_json,
 )
 from services.upstream_policy import (
+    anthropic_messages_url as _anthropic_messages_url,
     apply_active_model_request_policy as _apply_active_model_request_policy,
     apply_openrouter_request_policy as _apply_openrouter_request_policy,
     build_upstream_error_hint as _build_upstream_error_hint,
@@ -212,6 +215,7 @@ from services.upstream_policy import (
     get_active_upstream_url as _get_active_upstream_url,
     get_forward_targets as _get_forward_targets,
     is_local_claude_oauth_proxy_url as _is_local_claude_oauth_proxy_url,
+    should_use_anthropic_format as _should_use_anthropic_format,
     strip_internal_prompt_region_markers as _strip_internal_prompt_region_markers,
 )
 from storage.upstream_store import pioneer_claude_model_options as _pioneer_claude_model_options
@@ -1341,23 +1345,22 @@ def _stream_forward_to_ai(
                 h["X-API-Key"] = api_key
         try:
             body_send = _apply_active_model_request_policy(body_send, url)
-            target_url = url
+            anthropic_format = _should_use_anthropic_format(url)
+            target_url = _anthropic_messages_url(url) if anthropic_format else url
             body_send = _apply_openrouter_request_policy(body_send, url)
-            is_cf_anthropic = is_cloudflare_anthropic_url(target_url)
-            is_pioneer_anthropic = is_pioneer_anthropic_url(target_url)
-            if not (is_cf_anthropic or is_pioneer_anthropic):
+            is_pioneer_anthropic = anthropic_format and is_pioneer_url(target_url)
+            if not anthropic_format:
                 stream_options = body_send.get("stream_options")
                 stream_options = dict(stream_options) if isinstance(stream_options, dict) else {}
                 stream_options["include_usage"] = True
                 body_send["stream_options"] = stream_options
-            if is_cf_anthropic or is_pioneer_anthropic:
+            if anthropic_format:
                 body_send = _openai_to_anthropic_request(
                     body_send,
                     target_url,
                     PIONEER_CLAUDE_CACHE_TTL if is_pioneer_anthropic else None,
                 )
-            if is_cf_anthropic:
-                h = _cloudflare_anthropic_headers(h, target_url, api_key)
+                h = _anthropic_headers(h, target_url, api_key)
             _attach_pioneer_session_id_header(h, body_send, headers, target_url)
             # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(target_url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
@@ -1367,7 +1370,7 @@ def _stream_forward_to_ai(
                     target_url,
                     prompt_cache_profile,
                 )
-                if is_cf_anthropic or is_pioneer_anthropic:
+                if anthropic_format:
                     for chunk in _anthropic_sse_to_openai_sse(r.iter_lines(), str(body_send.get("model") or request_model)):
                         cache_debug_collector.feed(chunk)
                         yield chunk
@@ -2218,17 +2221,29 @@ def _stream_with_r2_archive(
         full_reasoning = "".join(reasoning_parts).strip()
         logger.info("本轮流式回复收集长度约 %s 字符", len(full_content))
         if tool_loop_finished and completed_tool_results and visible.strip() and not is_failed_response(visible):
-            inserted = _record_tool_result_loop(
+            game_summary_queued = _enqueue_game_tool_loop_summary(
                 completed_tool_results,
                 window_id=window_id,
                 reply_channel=reply_channel,
             )
-            logger.info(
-                "工具摘要缓存整轮写入 window_id=%s tools=%s inserted=%s",
-                window_id,
-                len(completed_tool_results),
-                inserted,
-            )
+            if game_summary_queued:
+                logger.info(
+                    "游戏工具整轮摘要已入后台队列 window_id=%s tools=%s",
+                    window_id,
+                    len(completed_tool_results),
+                )
+            else:
+                inserted = _record_tool_result_loop(
+                    completed_tool_results,
+                    window_id=window_id,
+                    reply_channel=reply_channel,
+                )
+                logger.info(
+                    "工具摘要缓存整轮写入 window_id=%s tools=%s inserted=%s",
+                    window_id,
+                    len(completed_tool_results),
+                    inserted,
+                )
         if du_daily_maintenance:
             logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
         elif is_failed_response(visible):
@@ -2302,18 +2317,17 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
             body_send.pop(DU_REQUEST_ID_BODY_KEY, None)
             body_send["stream"] = False
             body_send = _apply_active_model_request_policy(body_send, url)
-            target_url = url
+            anthropic_format = _should_use_anthropic_format(url)
+            target_url = _anthropic_messages_url(url) if anthropic_format else url
             body_send = _apply_openrouter_request_policy(body_send, url)
-            is_cf_anthropic = is_cloudflare_anthropic_url(target_url)
-            is_pioneer_anthropic = is_pioneer_anthropic_url(target_url)
-            if is_cf_anthropic or is_pioneer_anthropic:
+            is_pioneer_anthropic = anthropic_format and is_pioneer_url(target_url)
+            if anthropic_format:
                 body_send = _openai_to_anthropic_request(
                     body_send,
                     target_url,
                     PIONEER_CLAUDE_CACHE_TTL if is_pioneer_anthropic else None,
                 )
-            if is_cf_anthropic:
-                req_headers = _cloudflare_anthropic_headers(req_headers, target_url, api_key)
+                req_headers = _anthropic_headers(req_headers, target_url, api_key)
             _attach_pioneer_session_id_header(req_headers, body_send, headers, target_url)
             is_sumitalk_forward = str(headers.get("X-Reply-Channel") or request.headers.get("X-Reply-Channel") or "").strip().lower() == "sumitalk"
             upstream_started = time.time()
@@ -2368,7 +2382,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                 continue
             # 只有 2xx 算成功，其余（4xx/5xx/429 等）直接失败（不再自动 fallback）
             if 200 <= r.status_code < 300:
-                if is_cf_anthropic or is_pioneer_anthropic:
+                if anthropic_format:
                     data = _anthropic_to_openai_response(data or {}, str(body_send.get("model") or request_model))
                 cache_debug = _build_cache_debug_entry(body_send, target_url, prompt_cache_profile, data or {})
                 usage_debug = cache_debug.get("usage") or {}
@@ -2838,7 +2852,8 @@ def chat_completions():
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
     if (
-        _is_local_claude_oauth_proxy_url(active_upstream_url) or is_cloudflare_anthropic_url(active_upstream_url)
+        _is_local_claude_oauth_proxy_url(active_upstream_url)
+        or _should_use_anthropic_format(active_upstream_url)
     ) and not _skip_claude_thinking_carryover_request():
         body = _inject_previous_claude_thinking_blocks(body, window_id)
     body = step_inject_thinking_block_rules(body)
@@ -2858,11 +2873,11 @@ def chat_completions():
             window_id,
             body.get("model") or "",
         )
-    # Claude OAuth / Pioneer / Cloudflare Anthropic 会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
+    # Claude OAuth / Pioneer / 显式 Anthropic 格式上游会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
     preserve_dynamic_marker = (
         _is_local_claude_oauth_proxy_url(active_upstream_url)
         or is_pioneer_url(active_upstream_url)
-        or is_cloudflare_anthropic_url(active_upstream_url)
+        or _should_use_anthropic_format(active_upstream_url)
     )
     for msg in body.get("messages") or []:
         if not preserve_dynamic_marker:
@@ -3280,17 +3295,29 @@ def chat_completions():
         msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
         content_text = get_assistant_content_text(msg)
         if tool_loop_finished and completed_tool_results and content_text.strip() and not is_failed_response(content_text):
-            inserted = _record_tool_result_loop(
+            game_summary_queued = _enqueue_game_tool_loop_summary(
                 completed_tool_results,
                 window_id=window_id,
                 reply_channel=reply_channel,
             )
-            logger.info(
-                "工具摘要缓存整轮写入 window_id=%s tools=%s inserted=%s",
-                window_id,
-                len(completed_tool_results),
-                inserted,
-            )
+            if game_summary_queued:
+                logger.info(
+                    "游戏工具整轮摘要已入后台队列 window_id=%s tools=%s",
+                    window_id,
+                    len(completed_tool_results),
+                )
+            else:
+                inserted = _record_tool_result_loop(
+                    completed_tool_results,
+                    window_id=window_id,
+                    reply_channel=reply_channel,
+                )
+                logger.info(
+                    "工具摘要缓存整轮写入 window_id=%s tools=%s inserted=%s",
+                    window_id,
+                    len(completed_tool_results),
+                    inserted,
+                )
         if is_failed_response(content_text):
             logger.info("R2 未存档：上游回复被判为失败（长度/关键词），跳过")
         elif (

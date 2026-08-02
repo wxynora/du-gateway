@@ -68,6 +68,33 @@ def test_persistent_action_contract() -> None:
     assert_equal(len(actions), 1, "target device should lease one persistent message")
     assert_equal(actions[0]["payload"], payload, "action payload must preserve the full message")
 
+    reported = app_action_store.report_app_actions(
+        [{"id": first["id"], "status": "done", "detail": {"message_id": payload["message_id"]}}],
+        device_id="device_native_001",
+    )
+    assert_equal(reported.get("processed"), 1, "device completion should finish the original action")
+    replay_payload = {
+        **payload,
+        "text": payload["text"] + "\n\n不应被再次追加的终稿。",
+    }
+    replayed, error = app_action_store.append_app_action(
+        "deliver_chat_message",
+        replay_payload,
+        device_id="device_native_001",
+        expires_in_sec=30 * 24 * 60 * 60,
+        source="test",
+        idempotency_key="chat-message:device_native_001:assistant-followup-stable-1",
+    )
+    assert_true(replayed and replayed.get("duplicate") and not error, "completed chat action retry must stay idempotent")
+    assert_equal(replayed["id"], first["id"], "completed retry must retain the original action id")
+    assert_equal(replayed["payload"]["text"], payload["text"], "completed retry must not expand stored text")
+
+    with app_action_store.runtime_sqlite.connect() as conn:
+        action_count = conn.execute(
+            "SELECT COUNT(*) FROM app_actions WHERE type='deliver_chat_message'"
+        ).fetchone()[0]
+    assert_equal(action_count, 1, "completed retry must not create a second device action")
+
 
 def test_followup_producer_uses_one_stable_message_id() -> None:
     from routes.miniapp import sumitalk_history

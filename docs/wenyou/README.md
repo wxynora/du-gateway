@@ -10,6 +10,7 @@
 4. 如果要接完整玩法，再读数值、道具、奖励、副本和怪物系统。
 5. 如果要接入另一个 AI 玩家，再读 [`ai_player_integration.md`](ai_player_integration.md)。
 6. 如果要做开源发布或独立试玩版，再读 [`open_source_distribution.md`](open_source_distribution.md)。
+7. 如果要部署公共服或制作无 GM 固定副本，再读 [`public_server_modes.md`](public_server_modes.md) 和 [`fixed_instance_package.md`](fixed_instance_package.md)。
 
 ## 文档地图
 
@@ -27,7 +28,17 @@
 | [`backend_contracts.md`](backend_contracts.md) | 后端规则函数、状态补丁、内容包和 GM/DS 权限边界 |
 | [`ai_player_integration.md`](ai_player_integration.md) | AI 玩家角色的钱包、背包、上下文、工具和消费流水 |
 | [`open_source_distribution.md`](open_source_distribution.md) | 单 HTML 懒人版、完整开源版、工具桥和 MCP 适配层分工 |
+| [`public_server_modes.md`](public_server_modes.md) | 公共服单机/联机模式、真人与 AI 搭档房间、模型费用和实时同步边界 |
+| [`fixed_instance_package.md`](fixed_instance_package.md) | 无 GM 固定副本的真相、地图、线索、故事节点、自由行动和结局结构 |
 | [`implementation_checklist.md`](implementation_checklist.md) | 功能实现和测试对齐清单 |
+
+## 官方固定副本样板
+
+| 文档 | 内容 |
+| --- | --- |
+| [`instances/shen_manor_strange_illness.md`](instances/shen_manor_strange_illness.md) | 民国宅院副本“沈宅怪病”：支持 1-3 支真人与 AI 搭档，包含完整真相、线索闭环、状态驱动剧情节点、三条 Boss 解法和六种结局 |
+
+固定副本的推荐选项只是快捷行动。玩家始终可以自由输入，系统将文本解析为结构化行动，再由内容包中的节点条件和规则引擎推进剧情。
 
 ## 默认内容包
 
@@ -67,7 +78,9 @@
 
 ## 默认玩家映射
 
+- 以下是当前双角色实现的兼容映射，不是未来公共服联机房间的数据上限。
 - `player1`：玩家一，默认由真实玩家控制。
 - `player2`：玩家二，默认由接入方的 AI 玩家控制。
 - 默认显示名只使用“玩家一 / 玩家二”。首次进入时应让用户依次填写玩家一和玩家二的代号，并保存为 `player_id -> display_name` 映射。
 - 开源规则层不绑定任何私有角色名、外貌或关系设定；接入方可以在自己的项目里覆盖显示名和角色外观。
+- 未来公共服使用 `room_members[] + pair_id` 表示多支“真人玩家 + 绑定 AI 玩家”搭档；联机房间不使用 NPC 任务者补位，详见 [`public_server_modes.md`](public_server_modes.md)。

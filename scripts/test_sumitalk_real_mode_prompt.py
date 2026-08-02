@@ -47,13 +47,13 @@ def test_mode_gate_and_source_order() -> None:
     assert_true(
         contents == [
             "static",
+            SUMITALK_REAL_MODE_PROMPT,
             "stable recent memory",
             "latest recent memory",
-            SUMITALK_REAL_MODE_PROMPT,
             "dynamic",
             "hello",
         ],
-        "Real-mode prompt must follow all recent-memory blocks and precede dynamic context",
+        "Real-mode prompt must remain in its fixed slot before recent-memory blocks",
     )
 
     repeated = step_inject_sumitalk_real_mode(enabled, enabled=True)
@@ -69,12 +69,12 @@ def test_pioneer_final_breakpoint_order() -> None:
     system_blocks = normalized[0]["content"]
     system_texts = [str(block.get("text") or "") for block in system_blocks]
     assert_true(
-        system_texts[-3:] == ["stable recent memory", "latest recent memory", SUMITALK_REAL_MODE_PROMPT],
-        "Pioneer system prefix must keep Real mode after the complete recent memory",
+        system_texts[-3:] == [SUMITALK_REAL_MODE_PROMPT, "stable recent memory", "latest recent memory"],
+        "Pioneer system prefix must keep Real mode before the complete recent memory",
     )
     assert_true(
         system_blocks[-1].get("cache_control") == {"type": "ephemeral", "ttl": "1h"},
-        "the final cache breakpoint must sit after the Real-mode prompt",
+        "the final cache breakpoint must sit after the recent-memory blocks",
     )
     assert_true(
         "__sumitalk_real_mode__" not in system_blocks[-1],

@@ -2522,6 +2522,51 @@ def _rolling_targets(start_ms: int, end_ms: int, *, interval_ms: int, max_frames
     return targets
 
 
+def _subtitle_aligned_targets(session: dict, targets: list[int]) -> list[int]:
+    if len(targets) < 3:
+        return targets
+    from storage import watch_subtitle_store
+
+    asset = watch_subtitle_store.get_asset_for_session(session)
+    raw_cues = asset.get("cues") if isinstance(asset.get("cues"), list) else []
+    cue_midpoints = sorted(
+        {
+            max(
+                targets[0],
+                min(
+                    targets[-1],
+                    int(
+                        round(
+                            (
+                                float(cue.get("start") or 0.0)
+                                + float(cue.get("end") or cue.get("start") or 0.0)
+                            )
+                            * 500.0
+                        )
+                    ),
+                ),
+            )
+            for cue in raw_cues
+            if isinstance(cue, dict) and str(cue.get("text") or "").strip()
+        }
+    )
+    if not cue_midpoints:
+        return targets
+    aligned = [targets[0]]
+    for index in range(1, len(targets) - 1):
+        anchor = targets[index]
+        lower = (targets[index - 1] + anchor) // 2
+        upper = (anchor + targets[index + 1]) // 2
+        candidates = [value for value in cue_midpoints if lower <= value <= upper]
+        aligned.append(
+            min(candidates, key=lambda value: (abs(value - anchor), value))
+            if candidates
+            else anchor
+        )
+    aligned.append(targets[-1])
+    return aligned
+
+
 def _last_frame_timestamp_ms(duration_ms: int) -> int:
     # Bilibili reports rounded durations; seeking at the exact EOF can return no frame.
     return max(0, int(duration_ms) - 1000)
@@ -2741,6 +2786,7 @@ def build_sample_plan(session: dict) -> dict:
         interval_ms=interval,
         max_frames=max_frames,
     )
+    targets = _subtitle_aligned_targets(session, targets)
     return _delivery_plan(session, {
         "purpose": "rolling",
         "reason": "extend_future_coverage",

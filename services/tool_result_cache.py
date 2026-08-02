@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import queue
 import re
+import threading
 import time
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import requests
+
 from config import (
+    CHAT_RESPONSE_TIMEOUT_SECONDS,
+    SILICONFLOW_BASE_HOST,
     TOOL_RESULT_CACHE_MAX_CHARS,
     TOOL_RESULT_CACHE_TRIM_TO_CHARS,
     TOOL_RESULT_CACHE_TTL_SECONDS,
+    resolve_siliconflow_api_key,
 )
 from storage import runtime_sqlite
 from utils.log import get_logger
@@ -31,6 +39,17 @@ _PROMPT_HEADER = (
     "【最近24小时工具使用摘要】\n"
     "以下是你已经完成的工具调用摘要，只用于记住刚才做过什么；需要最新结果时仍可重新调用工具。"
 )
+_GAME_LOOP_SUMMARY_MODEL = "Qwen/Qwen3-8B"
+_GAME_LOOP_SUMMARY_TOOLS = frozenset({"random_imitator_td", "farm", "cedareco"})
+_GAME_LOOP_SUMMARY_SYSTEM_PROMPT = """你负责把同一轮单机游戏中的连续工具调用记录融合成一条准确、自然的中文历史摘要。
+
+严格按照记录顺序整理，只写记录中实际发生的内容。
+保留实际执行的动作、关键状态变化、资源获得或消耗、失败原因和终局结果；相同状态只合并表达一次，不得遗漏会影响后续游戏判断的信息。
+不得编造、推测或评价操作，不要使用第一人称或第二人称。
+只输出一条完整正文，不输出标题、列表、Markdown、JSON、解释或前后缀。"""
+_GAME_LOOP_SUMMARY_QUEUE: queue.Queue = queue.Queue()
+_GAME_LOOP_SUMMARY_THREAD: threading.Thread | None = None
+_GAME_LOOP_SUMMARY_THREAD_LOCK = threading.Lock()
 
 
 def _text(value: Any, max_chars: int = 600) -> str:
@@ -41,6 +60,13 @@ def _text(value: Any, max_chars: int = 600) -> str:
     if len(raw) > max_chars:
         raw = raw[:max_chars].rstrip(" ，,。；;:") + "…"
     return raw
+
+
+def _text_without_limit(value: Any) -> str:
+    raw = str(value or "").replace("\r", " ").replace("\n", " ")
+    raw = _SPACE_RE.sub(" ", raw).strip()
+    raw = _SECRET_RE.sub(lambda m: f"{m.group(1)}***", raw)
+    return _BEARER_RE.sub("Bearer ***", raw)
 
 
 def _dict(value: Any) -> dict:
@@ -375,6 +401,19 @@ def _entry_id(tool_call_id: str, tool_name: str, window_id: str) -> str:
     return f"tool_{digest}"
 
 
+def _stable_tool_call_id(entry: dict) -> str:
+    tool_call_id = str(entry.get("tool_call_id") or "").strip()
+    if tool_call_id:
+        return tool_call_id
+    fallback_raw = json.dumps(
+        [entry.get("name"), entry.get("arguments"), entry.get("result")],
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return f"missing-id:{hashlib.sha256(fallback_raw.encode('utf-8')).hexdigest()}"
+
+
 def _prompt_line_chars(summary: str) -> int:
     return len(f"【00:00 {summary}】")
 
@@ -402,37 +441,12 @@ def _prune(conn, now: float) -> None:
         conn.executemany("DELETE FROM tool_result_cache WHERE id = ?", [(value,) for value in remove_ids])
 
 
-def record_tool_loop(
-    entries: list[dict],
+def _write_prepared(
+    prepared: list[tuple[str, str, str]],
     *,
     window_id: str = "",
     reply_channel: str = "",
 ) -> int:
-    """Write one completed tool loop atomically so its internal rounds keep a stable prompt prefix."""
-    prepared: list[tuple[str, str, str]] = []
-    for entry in entries or []:
-        if not isinstance(entry, dict):
-            continue
-        name = str(entry.get("name") or "")
-        summary = summarize_tool_result(name, entry.get("arguments"), entry.get("result"))
-        if not summary:
-            continue
-        tool_call_id = str(entry.get("tool_call_id") or "").strip()
-        if not tool_call_id:
-            fallback_raw = json.dumps(
-                [name, entry.get("arguments"), entry.get("result")],
-                ensure_ascii=False,
-                sort_keys=True,
-                default=str,
-            )
-            tool_call_id = f"missing-id:{hashlib.sha256(fallback_raw.encode('utf-8')).hexdigest()}"
-        prepared.append(
-            (
-                _entry_id(tool_call_id, name, str(window_id or "")),
-                name,
-                summary,
-            )
-        )
     if not prepared:
         return 0
 
@@ -467,6 +481,192 @@ def record_tool_loop(
     except Exception:
         logger.warning("tool_result_cache loop record failed entries=%s", len(prepared), exc_info=True)
         return 0
+
+
+def _is_game_tool_loop_summary_candidate(entries: list[dict]) -> bool:
+    if not isinstance(entries, list) or len(entries) < 2:
+        return False
+    if not all(isinstance(entry, dict) for entry in entries):
+        return False
+    names = {
+        str(entry.get("name") or "").strip()
+        for entry in entries
+    }
+    return len(names) == 1 and next(iter(names)) in _GAME_LOOP_SUMMARY_TOOLS
+
+
+def _json_record_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return value
+
+
+def _game_loop_summary_user_prompt(tool_name: str, entries: list[dict]) -> str:
+    records = [
+        {
+            "tool_call_id": str(entry.get("tool_call_id") or ""),
+            "arguments": _json_record_value(entry.get("arguments")),
+            "result": _json_record_value(entry.get("result")),
+        }
+        for entry in entries
+    ]
+    records_json = json.dumps(records, ensure_ascii=False, indent=2, default=str)
+    return (
+        f"工具名称：{tool_name}\n\n"
+        f"以下记录已按实际调用顺序排列：\n{records_json}\n\n"
+        "请将以上连续调用融合成一条历史摘要。"
+    )
+
+
+def _request_game_tool_loop_summary(tool_name: str, entries: list[dict]) -> str:
+    api_key = resolve_siliconflow_api_key()
+    if not api_key:
+        raise RuntimeError("SiliconFlow API key 未配置")
+
+    response = requests.post(
+        f"https://{SILICONFLOW_BASE_HOST}/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": _GAME_LOOP_SUMMARY_MODEL,
+            "messages": [
+                {"role": "system", "content": _GAME_LOOP_SUMMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": _game_loop_summary_user_prompt(tool_name, entries)},
+            ],
+            "stream": False,
+            "enable_thinking": False,
+            "temperature": 0.1,
+            "response_format": {"type": "text"},
+        },
+        timeout=CHAT_RESPONSE_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else ""
+    summary = _text_without_limit(content)
+    if not summary:
+        raise ValueError("SiliconFlow 返回空摘要")
+    return summary
+
+
+def _record_game_tool_loop_summary(
+    entries: list[dict],
+    *,
+    window_id: str = "",
+    reply_channel: str = "",
+) -> int:
+    tool_name = str(entries[0].get("name") or "").strip()
+    try:
+        summary = _request_game_tool_loop_summary(tool_name, entries)
+    except Exception:
+        logger.warning(
+            "游戏工具整轮模型摘要失败，回退逐条摘要 tool=%s calls=%s",
+            tool_name,
+            len(entries),
+            exc_info=True,
+        )
+        return record_tool_loop(entries, window_id=window_id, reply_channel=reply_channel)
+
+    ordered_call_ids = [_stable_tool_call_id(entry) for entry in entries]
+    fingerprint = hashlib.sha256(
+        json.dumps(ordered_call_ids, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    merged_call_id = f"game-loop:{fingerprint}"
+    inserted = _write_prepared(
+        [
+            (
+                _entry_id(merged_call_id, tool_name, str(window_id or "")),
+                tool_name,
+                f"使用 {tool_name} 连续结果：{summary}",
+            )
+        ],
+        window_id=window_id,
+        reply_channel=reply_channel,
+    )
+    logger.info(
+        "游戏工具整轮模型摘要写入 tool=%s calls=%s inserted=%s",
+        tool_name,
+        len(entries),
+        inserted,
+    )
+    return inserted
+
+
+def _game_loop_summary_worker() -> None:
+    while True:
+        entries, window_id, reply_channel = _GAME_LOOP_SUMMARY_QUEUE.get()
+        try:
+            _record_game_tool_loop_summary(
+                entries,
+                window_id=window_id,
+                reply_channel=reply_channel,
+            )
+        except Exception:
+            logger.exception("游戏工具整轮摘要后台任务异常")
+        finally:
+            _GAME_LOOP_SUMMARY_QUEUE.task_done()
+
+
+def _ensure_game_loop_summary_worker() -> None:
+    global _GAME_LOOP_SUMMARY_THREAD
+    with _GAME_LOOP_SUMMARY_THREAD_LOCK:
+        if _GAME_LOOP_SUMMARY_THREAD is not None and _GAME_LOOP_SUMMARY_THREAD.is_alive():
+            return
+        _GAME_LOOP_SUMMARY_THREAD = threading.Thread(
+            target=_game_loop_summary_worker,
+            name="game-tool-loop-summary",
+            daemon=True,
+        )
+        _GAME_LOOP_SUMMARY_THREAD.start()
+
+
+def enqueue_game_tool_loop_summary(
+    entries: list[dict],
+    *,
+    window_id: str = "",
+    reply_channel: str = "",
+) -> bool:
+    if not _is_game_tool_loop_summary_candidate(entries):
+        return False
+    snapshot = copy.deepcopy(entries)
+    _ensure_game_loop_summary_worker()
+    _GAME_LOOP_SUMMARY_QUEUE.put((snapshot, str(window_id or ""), str(reply_channel or "")))
+    return True
+
+
+def record_tool_loop(
+    entries: list[dict],
+    *,
+    window_id: str = "",
+    reply_channel: str = "",
+) -> int:
+    """Write one completed tool loop atomically so its internal rounds keep a stable prompt prefix."""
+    prepared: list[tuple[str, str, str]] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "")
+        summary = summarize_tool_result(name, entry.get("arguments"), entry.get("result"))
+        if not summary:
+            continue
+        tool_call_id = _stable_tool_call_id(entry)
+        prepared.append(
+            (
+                _entry_id(tool_call_id, name, str(window_id or "")),
+                name,
+                summary,
+            )
+        )
+    if not prepared:
+        return 0
+    return _write_prepared(prepared, window_id=window_id, reply_channel=reply_channel)
 
 
 def record_tool_result(

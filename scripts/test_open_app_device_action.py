@@ -81,10 +81,34 @@ def test_open_app_is_in_the_daily_tool_surface() -> None:
     assert_true("open_app" in names, "open_app must be available in daily chat")
 
 
+def test_open_app_runs_through_chat_tool_dispatch() -> None:
+    from services import chat_tools, device_action_tools
+
+    captured = []
+    old_get_latest = device_action_tools.r2_store.get_sense_latest
+    old_append = device_action_tools.r2_store.append_app_action
+    try:
+        device_action_tools.r2_store.get_sense_latest = lambda: {
+            "foreground": {"deviceId": "device-native-1"},
+        }
+        device_action_tools.r2_store.append_app_action = lambda action_type, payload, **kwargs: (
+            captured.append((action_type, payload, kwargs)) or ({"id": "open-action-chat-1"}, None)
+        )
+        result = json.loads(chat_tools.execute_tool("open_app", {"app_name": "QQ"}))
+    finally:
+        device_action_tools.r2_store.get_sense_latest = old_get_latest
+        device_action_tools.r2_store.append_app_action = old_append
+
+    assert_true(result.get("ok") and result.get("queued"), "chat dispatcher must route open_app")
+    assert_equal(len(captured), 1, "chat dispatcher must enqueue one open_app action")
+    assert_equal(captured[0][0], "open_app", "chat dispatcher must preserve the action type")
+
+
 def main() -> None:
     test_qq_defaults_to_du_private_chat()
     test_qq_home_explicitly_skips_the_chat_deep_link()
     test_open_app_is_in_the_daily_tool_surface()
+    test_open_app_runs_through_chat_tool_dispatch()
     print("open_app device action tests passed")
 
 

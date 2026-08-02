@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -15,11 +16,17 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 TEMP_DIR = Path(tempfile.mkdtemp(prefix="watch-viewing-ticket-test-"))
 os.environ["RUNTIME_STATE_DB"] = str(TEMP_DIR / "runtime.sqlite3")
+os.environ["WATCH_VISUAL_CACHE_DIR"] = str(TEMP_DIR / "visual-cache")
 
 from flask import Blueprint, Flask  # noqa: E402
 
 from routes.miniapp.watch import register_routes  # noqa: E402
-from storage import runtime_sqlite, watch_runtime_store  # noqa: E402
+from storage import (  # noqa: E402
+    runtime_sqlite,
+    stay_with_du_store,
+    watch_runtime_store,
+    watch_visual_store,
+)
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -49,6 +56,7 @@ def _create_part(client, *, part_index: int, viewing_id: str = "") -> dict:
             "id": f"bili:BV-viewing:p{part_index}",
             "source": "bilibili_embed",
             "title": "跨分 P 测试电影",
+            "cover_url": "https://example.test/watch-cover.jpg",
             "part_title": f"P{part_index}",
             "part_key": f"p{part_index}",
             "part_index": part_index,
@@ -62,7 +70,10 @@ def _create_part(client, *, part_index: int, viewing_id: str = "") -> dict:
     if viewing_id:
         payload["viewing_id"] = viewing_id
     response = client.post("/miniapp-api/watch/sessions", json=payload)
-    _assert(response.status_code == 201, f"创建 P{part_index} 失败: {response.data!r}")
+    _assert(
+        response.status_code in {200, 201},
+        f"创建 P{part_index} 失败: {response.data!r}",
+    )
     return _json(response)
 
 
@@ -113,7 +124,7 @@ def _snapshot(
 def run() -> None:
     runtime_sqlite._SCHEMA_READY = False
     client = _client()
-    base = datetime(2026, 7, 21, tzinfo=timezone.utc)
+    base = datetime.now(timezone.utc).replace(microsecond=0)
 
     first = _create_part(client, part_index=1)
     first_session = first["session"]
@@ -242,27 +253,26 @@ def run() -> None:
         media_id=second_session["media"]["id"],
         at=base + timedelta(seconds=155),
         playhead_ms=100_000,
-        is_playing=False,
+        is_playing=True,
         playback_rate=4.0,
         timeline_epoch=0,
         snapshot_seq=2,
         media_ended=True,
     )
     viewing = final["viewing_summary"]
-    _assert(viewing["completed"], "最终 P 播完没有完成整次观看")
-    _assert(viewing["played_duration_ms"] == 65_000, "跨 P 观看时长合计错误")
-    _assert(viewing["ticket"], "完成整次观看后没有生成票根")
-    ticket_id = viewing["ticket_id"]
     _assert(
-        viewing["ticket"]["played_duration_ms"] == 65_000,
-        "票根没有使用服务端累计时长",
+        not viewing["completed"] and viewing["playback_completed"],
+        "自然播到终点没有保留为待确认的播放完成状态",
     )
+    _assert(viewing["played_duration_ms"] == 65_000, "跨 P 观看时长合计错误")
+    _assert(viewing["ticket"] is None, "正片完成状态提前生成了票根")
+
     after_complete = _snapshot(
         client,
         second_session_id,
         media_id=second_session["media"]["id"],
-        at=base + timedelta(seconds=165),
-        playhead_ms=100_000,
+        at=base + timedelta(seconds=160),
+        playhead_ms=120_000,
         is_playing=False,
         playback_rate=4.0,
         timeline_epoch=0,
@@ -270,18 +280,122 @@ def run() -> None:
         media_ended=True,
     )
     _assert(
-        after_complete["viewing_summary"]["played_duration_ms"] == 65_000
-        and after_complete["viewing_summary"]["ticket_id"] == ticket_id,
-        "完成后的新快照改写了稳定票根",
+        after_complete["viewing_summary"]["played_duration_ms"] == 70_000,
+        "达到正片终点后继续播放的真实时间没有累计",
     )
-
-    second_end = _json(client.delete(f"/miniapp-api/watch/sessions/{second_session_id}"))
-    second_end_again = _json(client.delete(f"/miniapp-api/watch/sessions/{second_session_id}"))
+    plain_second_end = _json(
+        client.delete(f"/miniapp-api/watch/sessions/{second_session_id}")
+    )
+    _assert(
+        not plain_second_end["viewing_summary"]["completed"]
+        and plain_second_end["ticket"] is None,
+        "普通 session 收尾冒充已看完或生成了票根",
+    )
+    second_end = _json(
+        client.delete(
+            f"/miniapp-api/watch/sessions/{second_session_id}?viewing_action=complete"
+        )
+    )
+    second_end_again = _json(
+        client.delete(
+            f"/miniapp-api/watch/sessions/{second_session_id}?viewing_action=complete"
+        )
+    )
     _assert(second_end["analysis_cost"] is not None, "DELETE 丢失原 analysis_cost")
-    _assert(second_end["ticket"]["ticket_id"] == ticket_id, "DELETE 没有返回稳定票根")
+    ticket_id = second_end["ticket"]["ticket_id"]
+    _assert(
+        second_end["ticket"]["played_duration_ms"] == 70_000,
+        "显式结束生成的票根没有使用完整可信累计时长",
+    )
     _assert(
         second_end_again["ticket"]["ticket_id"] == ticket_id,
-        "重复 DELETE 生成了不同票根",
+        "重复显式结束生成了不同票根",
+    )
+    with patch.object(stay_with_du_store, "archive_watch_ticket") as archive_mock:
+        title_only = client.put(
+            f"/miniapp-api/watch/tickets/{ticket_id}",
+            json={"title": "编辑后但不归档的片名"},
+        )
+    _assert(title_only.status_code == 200, f"只保存票根标题失败: {title_only.data!r}")
+    title_only_payload = _json(title_only)
+    _assert(
+        title_only_payload["ticket"]["title"] == "编辑后但不归档的片名",
+        "编辑后的作品名没有保存到服务端票根",
+    )
+    _assert(
+        title_only_payload["archived_to_stay_with_du"] is False
+        and title_only_payload["stay_with_du_entry"] is None,
+        "未选择归档却写入了 Stay with Du",
+    )
+    archive_mock.assert_not_called()
+
+    remote_payload = {
+        "data": {
+            "timeline": [],
+            "moviesTodo": [
+                {
+                    "id": "wanted-movie-1",
+                    "title": "最终确认片名",
+                    "note": "原来的想看备注",
+                }
+            ],
+            "moviesDone": [],
+            "booksTodo": [],
+            "booksDone": [],
+        }
+    }
+
+    def fake_read_json(_client, _key):
+        return deepcopy(remote_payload)
+
+    def fake_write_json(_client, _key, payload):
+        remote_payload.clear()
+        remote_payload.update(deepcopy(payload))
+
+    with (
+        patch.object(stay_with_du_store, "_s3_client", return_value=object()),
+        patch.object(stay_with_du_store, "_read_json", side_effect=fake_read_json),
+        patch.object(stay_with_du_store, "_write_json", side_effect=fake_write_json),
+    ):
+        archived = client.put(
+            f"/miniapp-api/watch/tickets/{ticket_id}",
+            json={
+                "title": "最终确认片名",
+                "archive_to_stay_with_du": True,
+            },
+        )
+        _assert(archived.status_code == 200, f"票根归档失败: {archived.data!r}")
+        archived_payload = _json(archived)
+        _assert(
+            archived_payload["archived_to_stay_with_du"] is True,
+            "后端没有返回明确的归档结果",
+        )
+        _assert(
+            archived_payload["stay_with_du_entry"]["id"] == "wanted-movie-1"
+            and archived_payload["stay_with_du_entry"]["title"] == "最终确认片名",
+            "已有想看记录没有保留 id 并使用编辑后的作品名",
+        )
+        _assert(
+            remote_payload["data"]["moviesTodo"] == []
+            and len(remote_payload["data"]["moviesDone"]) == 1,
+            "想看记录没有原子迁移到已看",
+        )
+        archived_again = client.put(
+            f"/miniapp-api/watch/tickets/{ticket_id}",
+            json={
+                "title": "最终确认片名",
+                "archive_to_stay_with_du": True,
+            },
+        )
+    _assert(archived_again.status_code == 200, "重复保存归档失败")
+    _assert(
+        len(remote_payload["data"]["moviesDone"]) == 1,
+        "重复保存同一张票根生成了重复已看记录",
+    )
+    _assert(
+        _json(archived_again)["ticket"]["stay_with_du"]["entry_id"]
+        == "wanted-movie-1",
+        "票根没有持久化 Stay with Du 关联",
     )
     restored = _json(client.get(f"/miniapp-api/watch/viewings/{viewing_id}"))
     _assert(restored["viewing_summary"]["ticket_id"] == ticket_id, "观看详情无法恢复票根")
@@ -292,12 +406,79 @@ def run() -> None:
     )
 
     unfinished = _create_part(client, part_index=1)
-    unfinished_id = unfinished["session"]["session_id"]
-    unfinished_end = _json(client.delete(f"/miniapp-api/watch/sessions/{unfinished_id}"))
+    unfinished_session = unfinished["session"]
+    unfinished_id = unfinished_session["session_id"]
+    unfinished_viewing_id = unfinished_session["viewing_id"]
+    _unlock(unfinished_id)
+    _snapshot(
+        client,
+        unfinished_id,
+        media_id=unfinished_session["media"]["id"],
+        at=base + timedelta(seconds=200),
+        playhead_ms=201_000,
+        is_playing=False,
+        playback_rate=1.0,
+        timeline_epoch=0,
+        snapshot_seq=1,
+    )
+    frame_path = TEMP_DIR / "ticket-frame.webp"
+    frame_path.write_bytes(b"ticket-frame")
+    frame = watch_visual_store.upsert_frame(
+        frame_id="watch_frame_ticket_test",
+        session_id=unfinished_id,
+        media_id=unfinished_session["media"]["id"],
+        timeline_epoch=0,
+        at_ms=180_000,
+        file_path=str(frame_path),
+        width=768,
+        height=432,
+        sha256="ticket-frame-test",
+        source_sample_id="sample-ticket-test",
+    )
+    selected = client.put(
+        f"/miniapp-api/watch/viewings/{unfinished_viewing_id}/ticket-frame",
+        json={"session_id": unfinished_id, "frame_id": frame["id"]},
+    )
+    _assert(selected.status_code == 200, f"选择票根画面失败: {selected.data!r}")
+    unfinished_end = _json(
+        client.delete(
+            f"/miniapp-api/watch/sessions/{unfinished_id}?viewing_action=save_progress"
+        )
+    )
     _assert(
         not unfinished_end["viewing_summary"]["completed"]
-        and unfinished_end["ticket"] is None,
-        "DELETE 把未播放会话冒充成了看完",
+        and unfinished_end["ticket"] is None
+        and unfinished_end["viewing_summary"]["status_text"] == "已看67%"
+        and unfinished_end["viewing_summary"]["ticket_back_frame"] is not None,
+        "保存进度没有保留百分比、票根画面或错误生成了票根",
+    )
+    recent = _json(client.get("/miniapp-api/watch/viewings?status=recent"))["viewings"]
+    saved_recent = next(
+        item for item in recent if item["viewing_id"] == unfinished_viewing_id
+    )
+    _assert(
+        saved_recent["cover_url"] == "https://example.test/watch-cover.jpg"
+        and saved_recent["can_resume"]
+        and saved_recent["status_text"] == "已看67%",
+        "最近观看没有返回续播封面和百分比",
+    )
+    resumed = _create_part(client, part_index=1, viewing_id=unfinished_viewing_id)
+    _assert(
+        resumed["session"]["session_id"] == unfinished_id
+        and resumed["session"]["resumed_from_progress"]
+        and resumed["session"]["playback"]["playhead_ms"] == 201_000,
+        "最近观看没有恢复同一 viewing 的播放位置和剧情 session",
+    )
+    completed = _json(
+        client.delete(
+            f"/miniapp-api/watch/sessions/{unfinished_id}?viewing_action=complete"
+        )
+    )
+    _assert(
+        completed["viewing_summary"]["completed"]
+        and completed["viewing_summary"]["status_text"] == "已看完"
+        and completed["ticket"]["back_frame"] is not None,
+        "选择已看完没有生成带所选画面的稳定票根",
     )
 
     with runtime_sqlite.connect() as conn:
@@ -312,6 +493,7 @@ def run() -> None:
             "played_duration_ms",
             "completed_at",
             "completion_event_id",
+            "retained_for_resume",
         ):
             conn.execute(f"ALTER TABLE watch_sessions DROP COLUMN {column}")
     runtime_sqlite._SCHEMA_READY = False
@@ -336,6 +518,7 @@ def run() -> None:
             "played_duration_ms",
             "completed_at",
             "completion_event_id",
+            "retained_for_resume",
         }.issubset(migrated_columns),
         "老 watch_sessions 表没有补齐观看聚合字段",
     )

@@ -1809,7 +1809,7 @@ Lean In/
 
 ### 观看完成与票根的当前边界
 
-网关已经实现可信播放累计、跨分 P `viewing_id`、`cleanup/save_progress/complete` 三种退出、最近观看恢复、稳定票根、可选票根剧情帧、服务端票夹恢复，以及保存最终票根标题时可选写入 Stay with Du。保存进度不生成票根；选择已看完才生成或复用票根。原始音频和临时画面不会因续播或票根而长期保留；已看完后的剧情分析默认再保留 24 小时，明确选定的票根帧独立持久化。当前没有实现观后感、收藏或评分的服务端同步。原生现有本地票夹可以继续使用，接入服务端恢复时以上述 viewing/ticket 接口为准。
+网关已经实现可信播放累计、跨分 P `viewing_id`、`cleanup/save_progress/complete` 三种退出、最近观看恢复、稳定票根、可选票根剧情帧、服务端票夹恢复，以及保存最终票根标题时可选写入 Stay with Du。保存进度不生成票根；选择已看完才生成或复用票根。原始音频和临时画面不会因续播或票根而长期保留；已看完后的剧情分析默认再保留 24 小时，明确选定的票根帧独立持久化。`PUT /miniapp-api/watch/viewings/<viewing_id>/reflection` 已支持已出票 viewing 的 `viewer_review`、独立 `favorite` 与可空的 1–5 星整数 `rating`，返回完整 `viewing_summary/ticket`；只有请求显式提交 `archive_to_stay_with_du=true` 时才同步更新“一起看过”，不自动替使用者归档。原生现有本地票夹可以继续使用，接入服务端恢复时以上述 viewing/ticket 接口为准。
 
 ### 后续本地联动：看完归档、观后感与观影票根
 

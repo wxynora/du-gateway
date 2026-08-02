@@ -18,6 +18,7 @@ SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
 ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
+ANTHROPIC_REQUIRED_DEFAULT_MAX_TOKENS = 128000
 GATEWAY_DYNAMIC_SYSTEM_HINTS = (
     "【渡的心事",
     "【渡的日常",
@@ -60,6 +61,18 @@ def cloudflare_anthropic_headers(base_headers: dict, url: str, api_key: str) -> 
             headers["Authorization"] = f"Bearer {key}"
         if CLOUDFLARE_AIG_GATEWAY_ID:
             headers["cf-aig-gateway-id"] = CLOUDFLARE_AIG_GATEWAY_ID
+    return headers
+
+
+def anthropic_headers(base_headers: dict, url: str, api_key: str) -> dict:
+    if is_cloudflare_provider_native_anthropic_url(url) or is_cloudflare_rest_anthropic_url(url):
+        return cloudflare_anthropic_headers(base_headers, url, api_key)
+    headers = dict(base_headers or {})
+    headers["Content-Type"] = "application/json"
+    headers["anthropic-version"] = "2023-06-01"
+    key = str(api_key or "").strip()
+    if key:
+        headers["x-api-key"] = key
     return headers
 
 
@@ -245,9 +258,16 @@ def openai_to_anthropic_request(body: dict, url: str, cache_ttl: str | None = No
                 messages.append({"role": "assistant", "content": content})
     flush_tool_results()
 
+    if src.get("max_tokens") is not None:
+        max_tokens = int(src["max_tokens"])
+    elif src.get("max_completion_tokens") is not None:
+        max_tokens = int(src["max_completion_tokens"])
+    else:
+        max_tokens = ANTHROPIC_REQUIRED_DEFAULT_MAX_TOKENS
+
     out: dict = {
         "model": normalize_model_for_cloudflare(str(src.get("model") or ""), url),
-        "max_tokens": int(src.get("max_tokens") or src.get("max_completion_tokens") or 8192),
+        "max_tokens": max_tokens,
         "messages": messages,
     }
     if system_blocks:

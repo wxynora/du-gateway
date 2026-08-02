@@ -10,7 +10,6 @@ from config import (
     PIONEER_CLAUDE_CACHE_TTL,
     is_openrouter_url,
     is_pioneer_url,
-    is_pioneer_anthropic_url,
     is_cloudflare_anthropic_url,
 )
 from services.cloudflare_anthropic import normalize_model_for_cloudflare
@@ -120,6 +119,38 @@ def get_active_upstream_url() -> str:
         pass
 
     return ""
+
+
+def should_use_anthropic_format(upstream_url: str) -> bool:
+    try:
+        from storage.upstream_store import get_active_anthropic_format, get_active_item
+
+        active = get_active_item() or {}
+        active_url = str(active.get("url") or "").strip()
+        if active_url and active_url == str(upstream_url or "").strip():
+            return get_active_anthropic_format()
+    except Exception:
+        pass
+    return False
+
+
+def anthropic_messages_url(upstream_url: str) -> str:
+    raw = str(upstream_url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+        path = str(parsed.path or "").rstrip("/")
+        lowered = path.lower()
+        if lowered.endswith("/v1/messages"):
+            return raw
+        for suffix in ("/v1/chat/completions", "/chat/completions"):
+            if lowered.endswith(suffix):
+                prefix = path[: -len(suffix)]
+                return parsed._replace(path=prefix + "/v1/messages").geturl()
+    except Exception:
+        return raw
+    return raw
 
 
 def is_local_cliproxyapi_url(url: str) -> bool:
@@ -461,6 +492,7 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
     body = dict(body or {})
     try:
         from storage.upstream_store import (
+            get_active_anthropic_format,
             get_active_claude_thinking_effort,
             get_active_codex_reasoning_effort,
             get_active_item,
@@ -471,6 +503,7 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
         active_url = str(active.get("url") or "").strip()
         if active_url and active_url == str(upstream_url or "").strip():
             model = str(get_cached_active_model(refresh_if_missing=False) or "").strip()
+            anthropic_format = get_active_anthropic_format()
             if model:
                 body["model"] = model
             if is_local_cliproxyapi_url(upstream_url):
@@ -490,17 +523,17 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
                 effective_model = model
                 if _is_claude_proxy_model(effective_model):
                     body["model"] = effective_model
-                    if not is_pioneer_anthropic_url(upstream_url):
+                    if not anthropic_format:
                         body = _apply_pioneer_claude_prompt_cache(body, PIONEER_CLAUDE_CACHE_TTL)
                 else:
                     _strip_gateway_cache_markers(body.get("messages") or [])
                 if _is_claude_adaptive_thinking_model(effective_model):
                     effort = get_active_claude_thinking_effort()
-                    if is_pioneer_anthropic_url(upstream_url):
+                    if anthropic_format:
                         _apply_pioneer_anthropic_thinking(body, effective_model, effort)
                     else:
                         _apply_pioneer_chat_reasoning(body, effective_model, effort)
-            if is_cloudflare_anthropic_url(upstream_url):
+            if anthropic_format and is_cloudflare_anthropic_url(upstream_url):
                 effective_model = model
                 if effective_model:
                     body["model"] = normalize_model_for_cloudflare(effective_model, upstream_url)

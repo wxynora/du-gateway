@@ -86,6 +86,28 @@ def upsert_frame(
             "SELECT * FROM watch_visual_frames WHERE id = ?",
             (_text(frame_id, 160),),
         ).fetchone()
+        conn.execute(
+            """
+            UPDATE watch_sessions
+               SET visual_generation_ready_at = ?, visual_generation_epoch = ?,
+                   updated_at = ?
+             WHERE id = ? AND timeline_epoch = ?
+               AND (
+                    SELECT COUNT(*) FROM watch_visual_frames
+                     WHERE session_id = ? AND timeline_epoch = ? AND expires_at > ?
+               ) >= 2
+            """,
+            (
+                now_iso,
+                max(0, int(timeline_epoch)),
+                now_iso,
+                _text(session_id, 160),
+                max(0, int(timeline_epoch)),
+                _text(session_id, 160),
+                max(0, int(timeline_epoch)),
+                now_iso,
+            ),
+        )
     return dict(row) if row is not None else {}
 
 
@@ -195,10 +217,39 @@ def frame_cache_status(session_id: str, *, timeline_epoch: int) -> dict:
             """,
             (_text(session_id, 160), max(0, int(timeline_epoch)), now_iso),
         ).fetchone()
+        session = conn.execute(
+            """
+            SELECT visual_generation_ready_at, visual_generation_epoch,
+                   visual_last_sent_at, visual_last_timeline_epoch
+              FROM watch_sessions
+             WHERE id = ?
+            """,
+            (_text(session_id, 160),),
+        ).fetchone()
+    generation_ready = bool(
+        session is not None
+        and int(session["visual_generation_epoch"]) == int(timeline_epoch)
+        and str(session["visual_generation_ready_at"] or "").strip()
+    )
+    delivery_ready = bool(
+        session is not None
+        and int(session["visual_last_timeline_epoch"]) == int(timeline_epoch)
+        and str(session["visual_last_sent_at"] or "").strip()
+    )
     return {
         "count": int(row["n"] or 0),
         "covered_from_ms": int(row["min_ms"] or 0),
         "covered_until_ms": int(row["max_ms"] or 0),
+        "generation_status": "ready" if generation_ready else "pending",
+        "generation_ready_at": (
+            str(session["visual_generation_ready_at"] or "")
+            if generation_ready
+            else ""
+        ),
+        "delivery_status": "delivered" if delivery_ready else "pending",
+        "last_delivered_at": (
+            str(session["visual_last_sent_at"] or "") if delivery_ready else ""
+        ),
     }
 
 

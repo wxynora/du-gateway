@@ -12,8 +12,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from routes import chat as chat_route
+from services import conversation_followup
 from services import proactive_trigger_engine
+from services import sumitalk_block_mode
 from services import telegram_proactive
+from storage import upstream_store
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -243,6 +246,52 @@ def test_user_only_round_restarts_half_hour_trigger_clock() -> None:
     )
 
 
+def test_sumitalk_proactive_wakeup_appends_block_notice_after_delivery() -> None:
+    class FakeResponse:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json() -> dict:
+            return {"choices": [{"message": {"content": "主动唤醒回复"}}]}
+
+    original_model = upstream_store.get_cached_active_model
+    original_post = conversation_followup.requests.post
+    original_preference = conversation_followup._choice_dialog_delivery_preference
+    original_dispatch = conversation_followup._dispatch_choice_dialog_reply
+    original_block_reply = sumitalk_block_mode.maybe_auto_reply_after_sumitalk_assistant
+    block_calls: list[dict] = []
+
+    upstream_store.get_cached_active_model = lambda refresh_if_missing=False: "test-model"
+    conversation_followup.requests.post = lambda *_args, **_kwargs: FakeResponse()
+    conversation_followup._choice_dialog_delivery_preference = lambda target: (
+        "sumitalk",
+        target,
+        {"at": "2026-07-21T10:17:01+08:00"},
+    )
+    conversation_followup._dispatch_choice_dialog_reply = lambda *_args, **_kwargs: True
+    sumitalk_block_mode.maybe_auto_reply_after_sumitalk_assistant = (
+        lambda **kwargs: block_calls.append(dict(kwargs)) or {"sent": True}
+    )
+    try:
+        result = conversation_followup.send_proactive_trigger_wakeup(
+            window_id="tg_test",
+            target="android_test",
+            event_text="半小时主动硬触发",
+            created_at="2026-07-21T10:17:01+08:00",
+        )
+    finally:
+        upstream_store.get_cached_active_model = original_model
+        conversation_followup.requests.post = original_post
+        conversation_followup._choice_dialog_delivery_preference = original_preference
+        conversation_followup._dispatch_choice_dialog_reply = original_dispatch
+        sumitalk_block_mode.maybe_auto_reply_after_sumitalk_assistant = original_block_reply
+
+    _assert(result.get("ok") is True, f"proactive wakeup should be delivered: {result}")
+    _assert(result.get("channel") == "sumitalk", f"unexpected delivery channel: {result}")
+    _assert(len(block_calls) == 1, f"successful SumiTalk wakeup must append one block notice: {block_calls}")
+
+
 if __name__ == "__main__":
     test_internal_wakeup_does_not_record_user_interaction()
     test_used_forum_tool_skips_appended_execution_round()
@@ -252,4 +301,5 @@ if __name__ == "__main__":
     test_sleep_narrative_still_restarts_half_hour_trigger()
     test_non_chat_activity_restarts_half_hour_trigger_clock()
     test_user_only_round_restarts_half_hour_trigger_clock()
+    test_sumitalk_proactive_wakeup_appends_block_notice_after_delivery()
     print("proactive wakeup boundary tests ok")

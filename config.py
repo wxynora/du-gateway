@@ -863,6 +863,15 @@ CLOUDFLARE_API_HOST = os.environ.get("CLOUDFLARE_API_HOST", "api.cloudflare.com"
 CLOUDFLARE_CLAUDE_CACHE_TTL = os.environ.get("CLOUDFLARE_CLAUDE_CACHE_TTL", "1h").strip() or "1h"
 CLOUDFLARE_ANTHROPIC_API_KEY = os.environ.get("CLOUDFLARE_ANTHROPIC_API_KEY", "").strip()
 CLOUDFLARE_AIG_GATEWAY_ID = os.environ.get("CLOUDFLARE_AIG_GATEWAY_ID", "").strip()
+_ANTHROPIC_FORMAT_DEFAULT_HOSTS_STR = os.environ.get(
+    "ANTHROPIC_FORMAT_DEFAULT_HOSTS",
+    "api2.68886868.xyz",
+).strip()
+ANTHROPIC_FORMAT_DEFAULT_HOSTS = frozenset(
+    host.strip().lower()
+    for host in _ANTHROPIC_FORMAT_DEFAULT_HOSTS_STR.split(",")
+    if host.strip()
+)
 CLOUDFLARE_ANTHROPIC_BETA = os.environ.get(
     "CLOUDFLARE_ANTHROPIC_BETA",
     "interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05,context-management-2025-06-27",
@@ -902,6 +911,16 @@ def is_cloudflare_rest_anthropic_url(url: str) -> bool:
 
 def is_cloudflare_anthropic_url(url: str) -> bool:
     return is_cloudflare_provider_native_anthropic_url(url) or is_cloudflare_rest_anthropic_url(url)
+
+
+def is_default_anthropic_format_url(url: str) -> bool:
+    if is_pioneer_url(url) or is_cloudflare_anthropic_url(url):
+        return True
+    try:
+        host = (urlparse(str(url or "")).hostname or "").strip().lower()
+    except Exception:
+        return False
+    return bool(host and host in ANTHROPIC_FORMAT_DEFAULT_HOSTS)
 
 
 def cloudflare_claude_model_options(url: str = "") -> list[str]:

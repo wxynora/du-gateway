@@ -35,6 +35,14 @@ from services import memory_rewrite
 
 
 class _DeepSeekResponse:
+    def __init__(
+        self,
+        content: str = "我记得自己会先直接回应她，再处理事情。",
+        reason: str = "去掉第三人称和元身份表述。",
+    ) -> None:
+        self.content = content
+        self.reason = reason
+
     def raise_for_status(self) -> None:
         return None
 
@@ -45,8 +53,8 @@ class _DeepSeekResponse:
                     "message": {
                         "content": json.dumps(
                             {
-                                "content": "我记得自己会先直接回应她，再处理事情。",
-                                "reason": "去掉第三人称和元身份表述。",
+                                "content": self.content,
+                                "reason": self.reason,
                             },
                             ensure_ascii=False,
                         )
@@ -86,6 +94,98 @@ class MemoryRewriteServiceTest(unittest.TestCase):
         self.assertIn("使用渡的第一人称", prompt)
         self.assertIn("不新增经历", prompt)
         self.assertIn(current["content"], prompt)
+
+    def test_dynamic_explicit_correction_retries_unchanged_result_and_obeys_instruction(self):
+        current = {
+            "id": "dynamic-1",
+            "content": "我会一直回避争执。",
+            "tag": "关系",
+        }
+        responses = [
+            _DeepSeekResponse(content=current["content"], reason="无需调整。"),
+            _DeepSeekResponse(content="我遇到争执时会主动说清楚，不再回避。", reason="按用户修正更新旧判断。"),
+        ]
+        with (
+            patch.object(memory_rewrite.r2_store, "get_dynamic_memory_list", return_value=[current]),
+            patch.object(memory_rewrite, "DEEPSEEK_API_KEY", "test-key"),
+            patch.object(memory_rewrite, "DEEPSEEK_API_URL", "https://deepseek.test/chat/completions"),
+            patch.object(memory_rewrite, "DEEPSEEK_CHAT_MODEL", "deepseek-chat"),
+            patch.object(memory_rewrite.requests, "post", side_effect=responses) as post,
+        ):
+            candidate = memory_rewrite.preview_memory_rewrite(
+                "dynamic",
+                "dynamic-1",
+                "旧判断错了，改成遇到争执时会主动说清楚。",
+            )
+
+        self.assertEqual("我遇到争执时会主动说清楚，不再回避。", candidate["rewritten_content"])
+        self.assertTrue(candidate["changed"])
+        self.assertEqual(2, post.call_count)
+        first_prompt = post.call_args_list[0].kwargs["json"]["messages"][0]["content"]
+        retry_prompt = post.call_args_list[1].kwargs["json"]["messages"][0]["content"]
+        self.assertIn("旧判断错了，改成遇到争执时会主动说清楚。", first_prompt)
+        self.assertIn("最高优先级", first_prompt)
+        self.assertIn("与原文冲突", first_prompt)
+        self.assertIn("上一次结果", retry_prompt)
+
+    def test_core_explicit_correction_does_not_reuse_pending_merge_candidate(self):
+        current = {
+            "id": "core-1",
+            "content": "我不喜欢出门。",
+            "tag": "偏好",
+            "pending_merge": {
+                "original_content": "我不喜欢出门。",
+                "rewritten_content": "我始终拒绝出门。",
+                "reason": "旧 merge 候选",
+            },
+        }
+        with (
+            patch.object(memory_rewrite.r2_store, "get_core_cache_pending", return_value=[current]),
+            patch.object(memory_rewrite, "DEEPSEEK_API_KEY", "test-key"),
+            patch.object(memory_rewrite, "DEEPSEEK_API_URL", "https://deepseek.test/chat/completions"),
+            patch.object(memory_rewrite, "DEEPSEEK_CHAT_MODEL", "deepseek-chat"),
+            patch.object(
+                memory_rewrite.requests,
+                "post",
+                return_value=_DeepSeekResponse(
+                    content="我愿意在天气舒服时出门走走。",
+                    reason="按用户修正替换旧偏好。",
+                ),
+            ) as post,
+        ):
+            candidate = memory_rewrite.preview_memory_rewrite(
+                "core",
+                "core-1",
+                "现在会在天气舒服时出门，旧候选不要复用。",
+            )
+            default_candidate = memory_rewrite.preview_memory_rewrite("core", "core-1")
+
+        self.assertEqual("我愿意在天气舒服时出门走走。", candidate["rewritten_content"])
+        self.assertNotEqual(current["pending_merge"]["rewritten_content"], candidate["rewritten_content"])
+        self.assertEqual("我始终拒绝出门。", default_candidate["rewritten_content"])
+        post.assert_called_once()
+        core_prompt = post.call_args.kwargs["json"]["messages"][0]["content"]
+        self.assertIn("现在会在天气舒服时出门，旧候选不要复用。", core_prompt)
+        self.assertIn("最高优先级", core_prompt)
+
+    def test_rewrite_refusal_retries_once_then_reports_upstream_error(self):
+        current = {"id": "dynamic-1", "content": "旧判断。"}
+        refusal = _DeepSeekResponse(content="抱歉，我无法按要求修改这条记忆。", reason="拒绝修改。")
+        with (
+            patch.object(memory_rewrite.r2_store, "get_dynamic_memory_list", return_value=[current]),
+            patch.object(memory_rewrite, "DEEPSEEK_API_KEY", "test-key"),
+            patch.object(memory_rewrite, "DEEPSEEK_API_URL", "https://deepseek.test/chat/completions"),
+            patch.object(memory_rewrite, "DEEPSEEK_CHAT_MODEL", "deepseek-chat"),
+            patch.object(memory_rewrite.requests, "post", side_effect=[refusal, refusal]) as post,
+        ):
+            with self.assertRaises(memory_rewrite.MemoryRewriteUpstreamError):
+                memory_rewrite.preview_memory_rewrite(
+                    "dynamic",
+                    "dynamic-1",
+                    "把旧判断改成已经能够正面处理。",
+                )
+
+        self.assertEqual(2, post.call_count)
 
     def test_confirmed_dynamic_rewrite_preserves_metadata_and_refreshes_derived_data(self):
         current = {
@@ -199,7 +299,11 @@ class MemoryRewriteRouteTest(unittest.TestCase):
         ):
             preview_response = self.client.post(
                 "/miniapp-api/memory-rewrite/preview",
-                json={"layer": "core", "memory_id": "core-1"},
+                json={
+                    "layer": "core",
+                    "memory_id": "core-1",
+                    "rewrite_instructions": "按我的修正生成新候选",
+                },
             )
             apply_response = self.client.post(
                 "/miniapp-api/memory-rewrite/apply",
@@ -213,7 +317,7 @@ class MemoryRewriteRouteTest(unittest.TestCase):
 
         self.assertEqual(200, preview_response.status_code)
         self.assertEqual(candidate, preview_response.get_json()["candidate"])
-        preview.assert_called_once_with("core", "core-1")
+        preview.assert_called_once_with("core", "core-1", "按我的修正生成新候选")
         self.assertEqual(200, apply_response.status_code)
         self.assertEqual(result, apply_response.get_json()["result"])
         apply.assert_called_once_with("core", "core-1", "原文", "候选")

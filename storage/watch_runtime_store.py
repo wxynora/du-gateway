@@ -2115,32 +2115,40 @@ def record_client_reply_displayed(
 def get_reply_latency_profile(session_id: str) -> dict:
     clean_session_id = _text(session_id, 160)
     with runtime_sqlite.connect() as conn:
-        aggregate = conn.execute(
-            """
-            SELECT COUNT(*) AS sample_count, AVG(latency_ms) AS average_latency_ms
-              FROM watch_reply_latency_samples
-             WHERE session_id = ?
-            """,
-            (clean_session_id,),
-        ).fetchone()
-        latest = conn.execute(
+        rows = conn.execute(
             """
             SELECT latency_ms, source, updated_at
               FROM watch_reply_latency_samples
              WHERE session_id = ?
-             ORDER BY updated_at DESC, rowid DESC
-             LIMIT 1
+             ORDER BY updated_at, rowid
             """,
             (clean_session_id,),
-        ).fetchone()
+        ).fetchall()
+    parsed_updates = [_parse_iso(row["updated_at"]) for row in rows]
+    newest_update = max(
+        (value for value in parsed_updates if value is not None),
+        default=_now(),
+    )
+    weighted_total = 0.0
+    total_weight = 0.0
+    for row, updated_at in zip(rows, parsed_updates):
+        age_seconds = (
+            max(0.0, (newest_update - updated_at).total_seconds())
+            if updated_at
+            else 0.0
+        )
+        recency_weight = 0.5 ** (age_seconds / 1800.0)
+        source_weight = 2.0 if str(row["source"] or "") == "client_displayed" else 1.0
+        weight = recency_weight * source_weight
+        weighted_total += max(0, int(row["latency_ms"] or 0)) * weight
+        total_weight += weight
+    latest = rows[-1] if rows else None
     return {
-        "sample_count": int((aggregate or {})["sample_count"] or 0) if aggregate else 0,
-        "average_latency_ms": max(
-            0,
-            int(round(float((aggregate or {})["average_latency_ms"] or 0.0)))
-            if aggregate
-            else 0,
+        "sample_count": len(rows),
+        "average_latency_ms": (
+            max(0, int(round(weighted_total / total_weight))) if total_weight else 0
         ),
+        "calibration_method": "time_decay_client_displayed_weighted",
         "latest_latency_ms": int(latest["latency_ms"] or 0) if latest else 0,
         "latest_source": str(latest["source"] or "") if latest else "",
         "updated_at": str(latest["updated_at"] or "") if latest else "",

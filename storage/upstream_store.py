@@ -8,6 +8,7 @@ import requests
 from config import DATA_DIR, TARGET_AI_URL, TARGET_AI_API_KEY, TARGET_AI_URLS, TARGET_AI_API_KEYS
 from config import (
     is_siliconflow_url,
+    is_default_anthropic_format_url,
     is_openrouter_url,
     is_pioneer_url,
     is_cloudflare_anthropic_url,
@@ -233,6 +234,70 @@ def _active_model_entry_from_payload(payload: dict, active: int, item: dict, url
     return {}
 
 
+def _entry_anthropic_format(entry: dict, url: str) -> bool:
+    if isinstance(entry, dict) and isinstance(entry.get("anthropic_format"), bool):
+        return bool(entry["anthropic_format"])
+    return is_default_anthropic_format_url(url)
+
+
+def get_anthropic_format_for_item(item: dict, index: int | None = None) -> bool:
+    item = item or {}
+    url = str(item.get("url") or "").strip()
+    if not url:
+        return False
+    payload = _load_active_model_payload()
+    key = _upstream_stable_key(item, index)
+    entry = _active_model_entry_from_payload(payload, int(index or 0), item, url, key)
+    return _entry_anthropic_format(entry, url)
+
+
+def get_active_anthropic_format() -> bool:
+    payload = _load_active_model_payload()
+    active, item, url, key = _current_active_context()
+    if not url:
+        return False
+    entry = _active_model_entry_from_payload(payload, active, item, url, key)
+    return _entry_anthropic_format(entry, url)
+
+
+def set_active_anthropic_format(enabled: bool) -> bool:
+    if not isinstance(enabled, bool):
+        return False
+    active, item, url, key = _current_active_context()
+    if not url:
+        return False
+    payload = _load_active_model_payload()
+    models_by_upstream = dict(payload.get("models_by_upstream") or {}) if isinstance(payload.get("models_by_upstream"), dict) else {}
+    entry = dict(_active_model_entry_from_payload(payload, active, item, url, key) or {})
+    entry.update(
+        {
+            "active": active,
+            "url": url,
+            "upstream_key": key,
+            "model": str(entry.get("model") or "").strip(),
+            "claude_thinking_effort": normalize_claude_thinking_effort(entry.get("claude_thinking_effort")),
+            "codex_reasoning_effort": normalize_codex_reasoning_effort(entry.get("codex_reasoning_effort")),
+            "anthropic_format": enabled,
+            "checked_at": time.time(),
+        }
+    )
+    if key:
+        models_by_upstream[key] = entry
+    return _save_active_model_payload(
+        {
+            "active": active,
+            "url": url,
+            "upstream_key": key,
+            "model": entry["model"],
+            "claude_thinking_effort": entry["claude_thinking_effort"],
+            "codex_reasoning_effort": entry["codex_reasoning_effort"],
+            "anthropic_format": enabled,
+            "checked_at": time.time(),
+            "models_by_upstream": models_by_upstream,
+        }
+    )
+
+
 def get_active_claude_thinking_effort() -> str:
     payload = _load_active_model_payload()
     active, item, url, key = _current_active_context()
@@ -257,6 +322,7 @@ def set_active_claude_thinking_effort(effort: str) -> bool:
             "model": str(entry.get("model") or "").strip(),
             "claude_thinking_effort": normalize_claude_thinking_effort(effort),
             "codex_reasoning_effort": normalize_codex_reasoning_effort(entry.get("codex_reasoning_effort")),
+            "anthropic_format": _entry_anthropic_format(entry, url),
             "checked_at": time.time(),
         }
     )
@@ -270,6 +336,7 @@ def set_active_claude_thinking_effort(effort: str) -> bool:
             "model": str(entry.get("model") or "").strip(),
             "claude_thinking_effort": entry["claude_thinking_effort"],
             "codex_reasoning_effort": entry["codex_reasoning_effort"],
+            "anthropic_format": entry["anthropic_format"],
             "checked_at": time.time(),
             "models_by_upstream": models_by_upstream,
         }
@@ -300,6 +367,7 @@ def set_active_codex_reasoning_effort(effort: str) -> bool:
             "model": str(entry.get("model") or "").strip(),
             "claude_thinking_effort": normalize_claude_thinking_effort(entry.get("claude_thinking_effort")),
             "codex_reasoning_effort": normalize_codex_reasoning_effort(effort),
+            "anthropic_format": _entry_anthropic_format(entry, url),
             "checked_at": time.time(),
         }
     )
@@ -313,6 +381,7 @@ def set_active_codex_reasoning_effort(effort: str) -> bool:
             "model": str(entry.get("model") or "").strip(),
             "claude_thinking_effort": entry["claude_thinking_effort"],
             "codex_reasoning_effort": entry["codex_reasoning_effort"],
+            "anthropic_format": entry["anthropic_format"],
             "checked_at": time.time(),
             "models_by_upstream": models_by_upstream,
         }
@@ -441,6 +510,8 @@ def set_active_model(model: str) -> bool:
     codex_effort = get_active_codex_reasoning_effort()
     payload = _load_active_model_payload()
     models_by_upstream = dict(payload.get("models_by_upstream") or {}) if isinstance(payload.get("models_by_upstream"), dict) else {}
+    existing_entry = dict(_active_model_entry_from_payload(payload, active, item, url, key) or {})
+    anthropic_format = _entry_anthropic_format(existing_entry, url)
     entry = {
         "active": active,
         "url": url,
@@ -448,6 +519,7 @@ def set_active_model(model: str) -> bool:
         "model": model,
         "claude_thinking_effort": effort,
         "codex_reasoning_effort": codex_effort,
+        "anthropic_format": anthropic_format,
         "checked_at": time.time(),
     }
     if key:
@@ -460,6 +532,7 @@ def set_active_model(model: str) -> bool:
             "model": model,
             "claude_thinking_effort": effort,
             "codex_reasoning_effort": codex_effort,
+            "anthropic_format": anthropic_format,
             "checked_at": time.time(),
             "models_by_upstream": models_by_upstream,
         }

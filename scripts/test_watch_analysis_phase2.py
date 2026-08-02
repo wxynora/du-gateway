@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import datetime
@@ -59,9 +60,10 @@ from services.watch_analysis_source import (  # noqa: E402
     BILIBILI_PLAYURL_API,
     BILIBILI_VIEW_API,
     BilibiliApiAnalysisSource,
+    WatchAnalysisSourceError,
     canonical_bilibili_url,
 )
-from services.watch_subtitles import SubtitleLookupError  # noqa: E402
+from services.watch_subtitles import SubtitleLookupError, fetch_subdl_subtitle  # noqa: E402
 from services.watch_context import build_watch_context  # noqa: E402
 from storage import (  # noqa: E402
     runtime_sqlite,
@@ -1465,6 +1467,63 @@ def _test_backend_source_adapter() -> None:
     _assert(samples[2]["subtitle"] == "", "无关字幕被错误附加")
 
 
+def _test_backend_source_failure_diagnostics() -> None:
+    log_output = StringIO()
+    handler = logging.StreamHandler(log_output)
+    source_logger = logging.getLogger("services.watch_analysis_source")
+    previous_level = source_logger.level
+    source_logger.addHandler(handler)
+    source_logger.setLevel(logging.WARNING)
+
+    calls = 0
+
+    def _run(command: list[str], **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return SimpleNamespace(
+                returncode=1,
+                stdout=b"",
+                stderr=(
+                    b"HTTP 403 for https://media.example/video.m4s?token=secret-token\n"
+                    b"Cookie: SESSDATA=secret-cookie"
+                ),
+            )
+        raise subprocess.TimeoutExpired(command, 90)
+
+    source = BilibiliApiAnalysisSource(
+        command_runner=_run,
+        ffmpeg_bin="/test/ffmpeg",
+        max_workers=1,
+    )
+    try:
+        source._extract_frame(
+            {
+                "stream_urls": [
+                    "https://media.example/video.m4s?token=secret-token",
+                    "https://backup.example/video.m4s?token=backup-secret",
+                ]
+            },
+            919_999,
+        )
+    except WatchAnalysisSourceError as exc:
+        _assert(str(exc) == "视频关键帧提取失败", "取帧失败的公开错误发生变化")
+    else:
+        raise AssertionError("全部候选流失败后没有抛出取帧错误")
+    finally:
+        source_logger.removeHandler(handler)
+        source_logger.setLevel(previous_level)
+
+    diagnostics = log_output.getvalue()
+    _assert("at_ms=919999" in diagnostics, "诊断日志缺少失败时间点")
+    _assert("returncode=1" in diagnostics, "诊断日志缺少 ffmpeg 返回码")
+    _assert("ffmpeg 超时" in diagnostics, "诊断日志缺少超时类型")
+    _assert("<url>" in diagnostics, "诊断日志没有脱敏 ffmpeg URL")
+    _assert("Cookie: <redacted>" in diagnostics, "诊断日志没有脱敏敏感请求头")
+    _assert("secret-token" not in diagnostics, "诊断日志泄露了流签名")
+    _assert("secret-cookie" not in diagnostics, "诊断日志泄露了 Cookie")
+
+
 def _test_authenticated_api_fallback() -> None:
     session = {
         "media": {
@@ -1630,6 +1689,209 @@ def _test_optional_subdl_subtitles() -> None:
     _assert(samples[1]["subtitle"] == "Di theo toi", "外部字幕窗口与媒体时间没有对齐")
 
 
+def _test_subdl_multilingual_fallback_and_manual_tmdb_retry() -> None:
+    original_title = "映画ドラえもん 新・のび太の大魔境"
+    chinese_title = "哆啦A梦 新大雄的大魔境"
+    english_title = "Doraemon New Nobita's Great Demon"
+    titles = [original_title, chinese_title, english_title]
+    base_session = {
+        "media": {
+            "id": "bili:BV1xx411c7mD:p1",
+            "source": "bilibili_embed",
+            "title": chinese_title,
+            "duration_ms": 180_000,
+            "subtitle_titles": titles,
+            "subtitle_media_type": "movie",
+        },
+        "preparation": {"subtitle_lookup": {"search_strategy": "subdl_titles"}},
+    }
+
+    def subtitle_payload(path: str) -> dict:
+        return {
+            "status": True,
+            "subtitles": [
+                {
+                    "release_name": "Doraemon.2014",
+                    "unpack_files": [
+                        {
+                            "name": "Doraemon.2014.srt",
+                            "format": "srt",
+                            "language": "JA",
+                            "url": path,
+                        }
+                    ],
+                }
+            ],
+        }
+
+    initial_queries: list[str] = []
+    initial_tmdb_calls: list[dict] = []
+
+    def initial_subdl_get(url: str, **kwargs):
+        if url == "https://api.subdl.com/api/v1/subtitles":
+            title = str((kwargs.get("params") or {}).get("film_name") or "")
+            initial_queries.append(title)
+            if title == original_title:
+                return _FakeHttpResponse({"status": False, "error": "can't find movie or tv"})
+            if title == chinese_title:
+                return _FakeHttpResponse(
+                    {"status": False, "error": "Film name contains potentially unsafe characters"},
+                    status_code=400,
+                )
+            _assert(title == english_title, "SubDL 没有按原名、中文名、英文名依次查询")
+            return _FakeHttpResponse(subtitle_payload("/subtitle/doraemon/file"))
+        if url == "https://dl.subdl.com/subtitle/doraemon/file":
+            return _FakeRawHttpResponse(b"1\n00:00:00,000 --> 00:00:02,000\nTest line\n\n")
+        raise AssertionError(f"出现未预期的 SubDL 请求: {url}")
+
+    def unexpected_tmdb_get(url: str, **kwargs):
+        initial_tmdb_calls.append({"url": url, **kwargs})
+        raise AssertionError("首轮字幕准备不应调用 TMDB")
+
+    initial_source = BilibiliApiAnalysisSource(
+        http_get=_FakeCookieFallbackHttp(play_requires_auth=False),
+        subdl_api_key="test-subdl-key",
+        subdl_get=initial_subdl_get,
+        tmdb_read_access_token="test-tmdb-token",
+        tmdb_get=unexpected_tmdb_get,
+    )
+    initial_result = initial_source.prepare_subtitles(
+        base_session,
+        original_title=original_title,
+        year=2014,
+    )
+    _assert(initial_result["status"] == "found", "多语言片名回退没有找到后续候选字幕")
+    _assert(initial_result["query_title"] == english_title, "字幕结果没有保留实际命中的片名")
+    _assert(initial_queries == titles, "SubDL 多语言片名顺序不正确或被提前终止")
+    _assert(not initial_tmdb_calls, "首轮字幕准备调用了只应在手动重试使用的 TMDB")
+
+    fallback_queries: list[dict] = []
+
+    def retry_without_tmdb_get(url: str, **kwargs):
+        if url == "https://api.subdl.com/api/v1/subtitles":
+            fallback_queries.append(kwargs.get("params") or {})
+            return _FakeHttpResponse(subtitle_payload("/subtitle/retry-without-tmdb/file"))
+        if url == "https://dl.subdl.com/subtitle/retry-without-tmdb/file":
+            return _FakeRawHttpResponse(b"1\n00:00:00,000 --> 00:00:02,000\nFallback line\n\n")
+        raise AssertionError(f"出现未预期的 SubDL 请求: {url}")
+
+    retry_without_tmdb = BilibiliApiAnalysisSource(
+        http_get=_FakeCookieFallbackHttp(play_requires_auth=False),
+        subdl_api_key="test-subdl-key",
+        subdl_get=retry_without_tmdb_get,
+        tmdb_read_access_token="",
+        tmdb_get=unexpected_tmdb_get,
+    )
+    fallback_result = retry_without_tmdb.prepare_subtitles(
+        {
+            **base_session,
+            "preparation": {"subtitle_lookup": {"search_strategy": "tmdb_then_subdl"}},
+        },
+        original_title=original_title,
+        year=2014,
+    )
+    _assert(fallback_result["status"] == "found", "未配置 TMDB 时手动重试没有继续查询 SubDL")
+    _assert(
+        fallback_queries and fallback_queries[0].get("film_name") == original_title,
+        "未配置 TMDB 时手动重试没有复用多标题 SubDL 查询",
+    )
+
+    tmdb_calls: list[dict] = []
+    tmdb_subdl_queries: list[dict] = []
+
+    def tmdb_get(url: str, **kwargs):
+        tmdb_calls.append({"url": url, **kwargs})
+        _assert(url.endswith("/search/movie"), "TMDB 没有使用已确认的电影类型")
+        params = kwargs.get("params") or {}
+        _assert(params.get("primary_release_year") == 2014, "TMDB 没有使用已知年份消歧")
+        _assert(params.get("query") == original_title, "TMDB 没有优先使用作品原名")
+        _assert(
+            str((kwargs.get("headers") or {}).get("Authorization") or "").startswith("Bearer "),
+            "TMDB 没有使用 Read Access Token",
+        )
+        return _FakeHttpResponse(
+            {
+                "page": 1,
+                "total_results": 1,
+                "results": [
+                    {
+                        "id": 285812,
+                        "title": "哆啦A梦：新·大雄的大魔境",
+                        "original_title": original_title,
+                        "release_date": "2014-03-08",
+                    }
+                ],
+            }
+        )
+
+    def tmdb_subdl_get(url: str, **kwargs):
+        if url == "https://api.subdl.com/api/v1/subtitles":
+            params = kwargs.get("params") or {}
+            tmdb_subdl_queries.append(params)
+            _assert(params.get("tmdb_id") == 285812, "手动重试没有用 TMDB ID 查询 SubDL")
+            _assert(params.get("type") == "movie", "SubDL 的 TMDB ID 查询缺少媒体类型")
+            _assert("film_name" not in params, "取得 TMDB ID 后仍退回了片名查询")
+            return _FakeHttpResponse(subtitle_payload("/subtitle/tmdb-id/file"))
+        if url == "https://dl.subdl.com/subtitle/tmdb-id/file":
+            return _FakeRawHttpResponse(b"1\n00:00:00,000 --> 00:00:02,000\nTMDB line\n\n")
+        raise AssertionError(f"出现未预期的 SubDL 请求: {url}")
+
+    retry_source = BilibiliApiAnalysisSource(
+        http_get=_FakeCookieFallbackHttp(play_requires_auth=False),
+        subdl_api_key="test-subdl-key",
+        subdl_get=tmdb_subdl_get,
+        tmdb_read_access_token="test-tmdb-token",
+        tmdb_get=tmdb_get,
+    )
+    retry_result = retry_source.prepare_subtitles(
+        {
+            **base_session,
+            "preparation": {"subtitle_lookup": {"search_strategy": "tmdb_then_subdl"}},
+        },
+        original_title=original_title,
+        year=2014,
+    )
+    _assert(retry_result["status"] == "found", "手动重试没有完成 TMDB ID 到 SubDL 的查询")
+    _assert(len(tmdb_calls) == 1 and len(tmdb_subdl_queries) == 1, "手动增强查询出现重复 provider 调用")
+
+    no_match_subdl_calls: list[dict] = []
+    no_match_source = BilibiliApiAnalysisSource(
+        http_get=_FakeCookieFallbackHttp(play_requires_auth=False),
+        subdl_api_key="test-subdl-key",
+        subdl_get=lambda url, **kwargs: no_match_subdl_calls.append({"url": url, **kwargs}),
+        tmdb_read_access_token="test-tmdb-token",
+        tmdb_get=lambda _url, **_kwargs: _FakeHttpResponse({"page": 1, "total_results": 0, "results": []}),
+    )
+    no_match = no_match_source.prepare_subtitles(
+        {
+            **base_session,
+            "preparation": {"subtitle_lookup": {"search_strategy": "tmdb_then_subdl"}},
+        },
+        original_title=original_title,
+        year=2014,
+    )
+    _assert(no_match["status"] == "not_found" and no_match["provider"] == "tmdb", "TMDB 无唯一结果没有真实降级")
+    _assert(not no_match_subdl_calls, "TMDB 未确认作品时仍用不可靠片名调用了 SubDL")
+
+    auth_calls: list[dict] = []
+
+    def auth_failure_get(url: str, **kwargs):
+        auth_calls.append({"url": url, **kwargs})
+        return _FakeHttpResponse({"status": False, "error": "invalid api key"}, status_code=401)
+
+    try:
+        fetch_subdl_subtitle(
+            {"subtitle_titles": titles, "subtitle_year": 2014},
+            api_key="invalid-key",
+            http_get=auth_failure_get,
+        )
+    except SubtitleLookupError as exc:
+        _assert("鉴权" in str(exc), "SubDL 真实鉴权失败没有保留可见原因")
+    else:
+        raise AssertionError("SubDL 鉴权失败被错误当成片名未命中")
+    _assert(len(auth_calls) == 1, "SubDL 鉴权失败后仍继续尝试其他片名")
+
+
 def _test_subtitle_provider_failure_is_visible_without_automatic_retry() -> None:
     session = watch_runtime_store.create_session(
         device_id="test-device-subtitle-failure",
@@ -1657,6 +1919,11 @@ def _test_subtitle_provider_failure_is_visible_without_automatic_retry() -> None
     schedule_knowledge_jobs(limit=1)
     scheduled = schedule_subtitle_jobs(limit=1)
     _assert(scheduled["jobs_created"] == 1, "认识作品后没有建立字幕任务")
+    searching = watch_runtime_store.get_session(session_id)
+    _assert(
+        searching["preparation"]["subtitle_lookup"]["search_strategy"] == "subdl_titles",
+        "首轮字幕任务错误启用了 TMDB 手动重试策略",
+    )
     with runtime_sqlite.connect() as conn:
         row = conn.execute(
             "SELECT max_attempts FROM watch_analysis_jobs WHERE session_id = ? AND purpose = 'subtitle_lookup'",
@@ -1712,7 +1979,8 @@ def _test_knowledge_card_subtitle_identity() -> None:
                             "title": "中文片名",
                             "original_title": "Original Title",
                             "year": 2025,
-                            "aliases": ["Alias Title", "中文片名"],
+                            "work_type": "movie",
+                            "aliases": ["English Alias", "中文别名", "中文片名"],
                         }
                     },
                     ensure_ascii=False,
@@ -1729,6 +1997,13 @@ def _test_knowledge_card_subtitle_identity() -> None:
     original_title, year = watch_subtitle_store.identity_for_session(current)
     _assert(original_title == "Original Title", "字幕准备没有使用知识卡原名")
     _assert(year == 2025, "字幕准备没有使用知识卡年份")
+    search_identity = watch_subtitle_store.search_identity_for_session(current)
+    _assert(
+        search_identity["title_candidates"]
+        == ["Original Title", "中文片名", "中文别名", "English Alias"],
+        "字幕准备没有按原名、中文名、英文名整理查询候选",
+    )
+    _assert(search_identity["media_type"] == "movie", "字幕准备没有继承知识卡媒体类型")
     enriched = _session_with_prepared_subtitles(current)
     _assert(enriched["media"]["prepared_subtitle_cues"] == [], "未准备字幕时伪造了字幕资产")
     watch_runtime_store.end_session(session["session_id"])
@@ -2024,8 +2299,10 @@ def run() -> None:
     _test_session_job_count_does_not_stop_long_media()
     _test_rolling_prefetch_uses_full_batches_to_thirty_minutes()
     _test_backend_source_adapter()
+    _test_backend_source_failure_diagnostics()
     _test_authenticated_api_fallback()
     _test_optional_subdl_subtitles()
+    _test_subdl_multilingual_fallback_and_manual_tmdb_retry()
     _test_subtitle_provider_failure_is_visible_without_automatic_retry()
     _test_knowledge_card_subtitle_identity()
     _test_knowledge_source_and_timeline_gates()

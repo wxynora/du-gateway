@@ -12,6 +12,7 @@ from services.dynamic_layer_ds import (  # noqa: E402
     _decision_structural_issue,
     _extract_json_array_from_ds_response,
     _extract_json_from_ds_response,
+    _normalize_merge_reason,
     _normalize_single_decision,
     _resolve_fused_with_id,
 )
@@ -157,6 +158,71 @@ def test_fused_ref_mapping() -> None:
     _assert(_resolve_fused_with_id("not-a-real-id", ref_to_id, valid_ids) is None, "unknown id should not resolve")
 
 
+def test_merge_reason_options_are_parsed_and_required() -> None:
+    raw = """ACTION: merge
+IMPORTANCE: 3
+TAG: 书房
+EMOTION: neutral
+SCENE: problem_solving
+TARGET: our_project
+FUSED_WITH_ID: M01
+MERGE_REASON: correction
+CONTENT: 老婆明确纠正了旧判断，我把这件事按她现在说的事实重新记准。"""
+    obj = _extract_json_from_ds_response(raw)
+    _assert(isinstance(obj, dict), "merge tagged output should parse")
+    _assert(obj.get("merge_reason") == "correction", "MERGE_REASON should map to merge_reason")
+    _assert(not _decision_structural_issue(obj), "valid merge reason should pass structural gate")
+
+    missing = dict(obj)
+    missing.pop("merge_reason", None)
+    _assert(
+        _decision_structural_issue(missing) == "merge_missing_or_invalid_reason",
+        "merge without reason should be retried",
+    )
+    invalid = dict(obj, merge_reason="guess")
+    _assert(
+        _decision_structural_issue(invalid) == "merge_missing_or_invalid_reason",
+        "merge with unknown reason should be retried",
+    )
+    _assert(_normalize_merge_reason("temporal-update") == "temporal_update", "hyphenated reason should normalize")
+    _assert(
+        _normalize_single_decision({**obj, "action": "new"}).get("merge_reason") == "",
+        "new decisions must not retain merge reason",
+    )
+
+
+def test_core_merge_candidate_keeps_merge_reason() -> None:
+    from storage import r2_store
+
+    pending = [{"id": "core-1", "content": "旧判断", "mention_count": 2}]
+    saved: list[list[dict]] = []
+    old_get = r2_store.get_core_cache_pending
+    old_save = r2_store.save_core_cache_pending
+    try:
+        r2_store.get_core_cache_pending = lambda: pending
+        r2_store.save_core_cache_pending = lambda items: saved.append(items) is None or True
+        ok = r2_store.stage_core_memory_merge(
+            "core-1",
+            original_content="旧判断",
+            rewritten_content="老婆明确纠正后的当前判断",
+            proposed_at="2026-07-21T16:00:00+08:00",
+            window_id="tg_test",
+            round_index=12,
+            field_updates={"mention_count": 3},
+            merge_reason="correction",
+        )
+    finally:
+        r2_store.get_core_cache_pending = old_get
+        r2_store.save_core_cache_pending = old_save
+
+    _assert(ok, "core merge candidate should be staged")
+    _assert(saved, "core merge candidate should be saved")
+    _assert(
+        saved[-1][0].get("pending_merge", {}).get("merge_reason") == "correction",
+        "core pending merge should keep merge reason",
+    )
+
+
 def test_single_call_retries_until_content_complete() -> None:
     class FakeResponse:
         def __init__(self, content: str) -> None:
@@ -232,5 +298,7 @@ if __name__ == "__main__":
     test_batch_tagged_blocks()
     test_batch_parser_ignores_legacy_body_delta_lines()
     test_fused_ref_mapping()
+    test_merge_reason_options_are_parsed_and_required()
+    test_core_merge_candidate_keeps_merge_reason()
     test_single_call_retries_until_content_complete()
     print("dynamic_layer_ds parser checks passed")

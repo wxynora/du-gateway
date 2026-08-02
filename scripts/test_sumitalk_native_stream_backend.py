@@ -843,6 +843,7 @@ def test_no_tool_reasoning_stream_events() -> None:
 
     app = Flask("sumitalk-no-tool-stream-contract")
     events = []
+    raw_stream_order = []
     originals = {
         "_stream_forward_to_ai": chat_route._stream_forward_to_ai,
         "_extract_and_store_hidden_sidecars": chat_route._extract_and_store_hidden_sidecars,
@@ -859,6 +860,11 @@ def test_no_tool_reasoning_stream_events() -> None:
             {"choices": [{"delta": {"content": " 好"}, "finish_reason": "stop"}]},
         ]
         for packet in packets:
+            delta = (((packet.get("choices") or [{}])[0] or {}).get("delta") or {})
+            if delta.get("reasoning_content"):
+                raw_stream_order.append(("reasoning", delta.get("reasoning_content")))
+            if delta.get("content"):
+                raw_stream_order.append(("content", delta.get("content")))
             yield ("data: " + json.dumps(packet, ensure_ascii=False) + "\n\n").encode("utf-8")
         yield b"data: [DONE]\n\n"
 
@@ -876,6 +882,7 @@ def test_no_tool_reasoning_stream_events() -> None:
                     {
                         "model": "test-model",
                         "stream": True,
+                        "reasoning": {"effort": "medium"},
                         "messages": [{"role": "user", "content": "你好"}],
                     },
                     {},
@@ -886,14 +893,32 @@ def test_no_tool_reasoning_stream_events() -> None:
             ).decode("utf-8")
         kinds = [event["kind"] for event in events]
         assert_eq(
+            raw_stream_order,
+            [
+                ("reasoning", "先想"),
+                ("content", "你\n"),
+                ("content", "[du:ho"),
+                ("content", "me desire=30]"),
+                ("reasoning", "再想"),
+                ("content", " 好"),
+            ],
+            "fixture must keep the upstream transport order interleaved",
+        )
+        assert_eq(
             [kind for kind in kinds if kind.startswith("reasoning_")],
-            ["reasoning_started", "reasoning_delta", "reasoning_delta", "reasoning_finished"],
-            "no-tool reasoning must expose a complete streaming lifecycle",
+            ["reasoning_started", "reasoning_delta", "reasoning_finished", "reasoning_delta"],
+            "rich events should reserve one reasoning part and allow late updates without reopening it",
         )
         assert_eq(
             "".join(event.get("text") or "" for event in events if event.get("kind") == "assistant_delta"),
             "你\n 好",
             "no-tool assistant events must preserve the exact visible stream",
+        )
+        reasoning_events = [event for event in events if event.get("kind").startswith("reasoning_")]
+        assert_eq(
+            {event.get("part_id") for event in reasoning_events},
+            {"reasoning-1"},
+            "late reasoning must update the same reserved part",
         )
         assert_eq(
             [
@@ -907,7 +932,15 @@ def test_no_tool_reasoning_stream_events() -> None:
                 ("reasoning_delta", "再想"),
                 ("assistant_delta", "\n 好"),
             ],
-            "reasoning and assistant deltas must keep the upstream packet order",
+            "transport deltas may still arrive interleaved while rich display uses stable part ids",
+        )
+        first_reasoning_started = kinds.index("reasoning_started")
+        first_reasoning_finished = kinds.index("reasoning_finished")
+        first_assistant_started = kinds.index("assistant_text_started")
+        first_assistant_delta = kinds.index("assistant_delta")
+        assert_true(
+            first_reasoning_started < first_reasoning_finished < first_assistant_started < first_assistant_delta,
+            "first assistant text must not wait for late reasoning, and reasoning must close before text starts",
         )
         visible_parts = []
         for line in output.splitlines():

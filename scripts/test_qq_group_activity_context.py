@@ -21,7 +21,7 @@ def _assert(condition: bool, message: str) -> None:
 def _row(index: int, *, owner: bool = False) -> dict:
     return {
         "timestamp": 1_750_000_000 + index,
-        "group_id": "123",
+        "group_id": "515831305",
         "user_id": "1" if owner else str(index + 10),
         "sender_name": "辛玥" if owner else f"群友{index}",
         "is_owner": owner,
@@ -48,6 +48,7 @@ def test_wakeup_wording_allows_natural_group_context_use() -> None:
             {
                 "latest_owner_at": "2026-07-16T20:10:00+08:00",
                 "recorded_at": "2026-07-16T20:10:00+08:00",
+                "group_id": "515831305",
                 "context": [activity._row_from_payload(_row(1)), activity._row_from_payload(_row(2, owner=True))],
             }
         ]
@@ -68,6 +69,46 @@ def test_wakeup_wording_allows_natural_group_context_use() -> None:
     _assert(expected in prompt, "wakeup context does not use the requested wording")
     for forbidden in ("为什么没回", "旁路上下文", "注意力在哪里", "不要逐条复述", "可以自然承接"):
         _assert(forbidden not in prompt, f"old restrictive wording remains: {forbidden}")
+
+
+def test_only_bound_group_is_recorded_and_reused() -> None:
+    saved: list[dict] = []
+    original_load = activity._load_state
+    original_save = activity._save_state
+    original_last_contact = r2_store.get_last_proactive_contact_at
+    original_now = activity.now_beijing_iso
+    activity._load_state = lambda: {
+        "items": [
+            {
+                "latest_owner_at": "2026-07-16T20:20:00+08:00",
+                "recorded_at": "2026-07-16T20:20:00+08:00",
+                "group_id": "999999999",
+                "context": [activity._row_from_payload({**_row(3, owner=True), "group_id": "999999999"})],
+            },
+            {
+                "latest_owner_at": "2026-07-16T20:10:00+08:00",
+                "recorded_at": "2026-07-16T20:10:00+08:00",
+                "group_id": "515831305",
+                "context": [activity._row_from_payload(_row(2, owner=True))],
+            },
+        ]
+    }
+    activity._save_state = lambda state: saved.append(state) or True
+    r2_store.get_last_proactive_contact_at = lambda: "2026-07-16T19:00:00+08:00"
+    activity.now_beijing_iso = lambda: "2026-07-16T20:30:00+08:00"
+    try:
+        rejected = activity.record_group_activity({**_row(4, owner=True), "group_id": "999999999"})
+        delivery = activity.build_group_activity_delivery_for_wakeup()
+    finally:
+        activity._load_state = original_load
+        activity._save_state = original_save
+        r2_store.get_last_proactive_contact_at = original_last_contact
+        activity.now_beijing_iso = original_now
+
+    _assert(rejected is False, "unbound group activity must be rejected")
+    _assert(not saved, "rejecting an unbound group must not write activity state")
+    _assert(delivery.get("group_id") == "515831305", f"old group leaked into wakeup delivery: {delivery}")
+    _assert("消息3" not in str(delivery.get("content") or ""), "old group content leaked into wakeup context")
 
 
 def test_group_images_are_compressed_without_description_work() -> None:
@@ -115,5 +156,6 @@ def test_group_images_are_compressed_without_description_work() -> None:
 if __name__ == "__main__":
     test_latest_twenty_rows_are_kept()
     test_wakeup_wording_allows_natural_group_context_use()
+    test_only_bound_group_is_recorded_and_reused()
     test_group_images_are_compressed_without_description_work()
     print("qq group activity context tests passed")

@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from services import secret_drawer
 from storage import secret_drawer_store
+from pipeline.pipeline import step_inject_secret_drawer, step_inject_tool_result_cache
 
 
 class SecretDrawerContractTests(unittest.TestCase):
@@ -33,16 +34,56 @@ class SecretDrawerContractTests(unittest.TestCase):
             self.assertFalse(secret_drawer_store._write_json("test/key.json", {}))
 
     def test_prompt_and_tool_schema_expose_exact_categories(self) -> None:
-        with (
-            patch.object(secret_drawer.secret_drawer_store, "stats", return_value={"total": 0}),
-            patch.object(secret_drawer.secret_drawer_store, "get_config", return_value={}),
-        ):
-            prompt = secret_drawer.format_inject_block()
+        prompt = secret_drawer.format_rule_block()
         self.assertIn("图片是 photo，不是 image", prompt)
         self.assertIn("对话是 message，不是 dialog", prompt)
         tool = secret_drawer.get_secret_drawer_tools_for_inject()[0]
         type_schema = tool["function"]["parameters"]["properties"]["payload"]["properties"]["type"]
         self.assertEqual(type_schema["enum"], ["message", "photo", "dream", "note", "surf", "misc"])
+
+    def test_prompt_places_rules_in_static_and_only_current_state_in_dynamic(self) -> None:
+        stats = {
+            "total": 3,
+            "by_type": {"message": 1, "photo": 1, "note": 1},
+            "pinned": 1,
+            "sealed": 1,
+            "needs整理": 2,
+        }
+        body = {
+            "messages": [
+                {"role": "system", "content": "CORE"},
+                {"role": "user", "content": "看看抽屉"},
+            ]
+        }
+        with (
+            patch.object(secret_drawer.secret_drawer_store, "stats", return_value=stats),
+            patch.object(secret_drawer.secret_drawer_store, "get_config") as get_config,
+            patch("services.tool_result_cache.prompt_system_contents", return_value=[]),
+        ):
+            result = step_inject_tool_result_cache(step_inject_secret_drawer(body, "tg_test"))
+
+        static_text = "\n".join(
+            str(msg.get("content") or "")
+            for msg in result["messages"]
+            if msg.get("role") == "system" and not msg.get("__dynamic__")
+        )
+        dynamic_text = "\n".join(
+            str(msg.get("content") or "")
+            for msg in result["messages"]
+            if msg.get("role") == "system"
+            and msg.get("__dynamic__")
+            and not msg.get("__temporary_dynamic__")
+            and not msg.get("__last4__")
+        )
+
+        self.assertIn("你有自己的秘密抽屉", static_text)
+        self.assertIn("整理/查看用工具 secret_drawer", static_text)
+        self.assertNotIn("当前抽屉：", static_text)
+        self.assertIn("###当前秘密抽屉", dynamic_text)
+        self.assertIn("当前抽屉：共 3 条。", dynamic_text)
+        self.assertNotIn("你有自己的秘密抽屉", dynamic_text)
+        self.assertNotIn("PIN 未设置", static_text + dynamic_text)
+        get_config.assert_not_called()
 
     def test_update_rejects_image_instead_of_silently_using_misc(self) -> None:
         result = json.loads(

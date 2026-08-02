@@ -79,6 +79,7 @@ def test_pipeline_visible_stream() -> None:
                 "听得到吗",
                 window_id="tg_1",
                 audio_observations="语速平稳",
+                app_mode="real",
             )
         )
     finally:
@@ -94,6 +95,20 @@ def test_pipeline_visible_stream() -> None:
     assert_true(kwargs["json"]["stream"] is True, "voice model request must be true streaming")
     assert_eq(kwargs["headers"]["X-Window-Id"], "tg_1", "voice stream must keep the same window")
     assert_eq(kwargs["headers"]["X-Voice-Call-Slim"], "1", "voice stream must use the slim injection channel")
+    assert_eq(
+        kwargs["headers"]["X-DU-SUMITALK-PROMPT-ASSEMBLY"],
+        "1",
+        "voice stream must reuse SumiTalk prompt assembly",
+    )
+    assert_eq(kwargs["json"]["app_mode"], "real", "voice stream must preserve the active app mode")
+    systems = [msg for msg in kwargs["json"]["messages"] if msg.get("role") == "system"]
+    assert_eq(systems[0]["content"], "你和小玥正在语音通话。", "voice status must be the only call-specific prompt")
+    assert_true(systems[0].get("__dynamic__"), "voice status must stay dynamic")
+    assert_true(systems[0].get("__temporary_dynamic__"), "voice status must stay temporary")
+    assert_true(
+        all("【语音通话台词规范】" not in str(msg.get("content") or "") for msg in systems),
+        "voice stream must not duplicate SumiTalk voice-line rules",
+    )
 
 
 def parse_named_sse(text: str) -> list[tuple[str, dict]]:
@@ -129,13 +144,15 @@ def test_routes_without_external_writes() -> None:
     old_stream = voice_call_pipeline.stream_voice_chat_pipeline
     old_tts = minimax_tts.tts_to_audio_bytes
     old_cache_dir = voice_call_tts_cache._CACHE_DIR
+    stream_calls = []
     media._append_call_record_turns = lambda **kwargs: appended.append(kwargs) or True
-    voice_call_pipeline.stream_voice_chat_pipeline = lambda *args, **kwargs: iter(
-        [
+    voice_call_pipeline.stream_voice_chat_pipeline = lambda *args, **kwargs: (
+        stream_calls.append((args, kwargs))
+        or iter([
             {"kind": "assistant_delta", "delta": "先说第一句。"},
             {"kind": "assistant_delta", "delta": "再说第二句。"},
             {"kind": "assistant_done", "reply_text": "先说第一句。再说第二句。"},
-        ]
+        ])
     )
     minimax_tts.tts_to_audio_bytes = lambda text, audio_format="mp3": f"audio:{audio_format}:{text}".encode()
     try:
@@ -151,6 +168,7 @@ def test_routes_without_external_writes() -> None:
                     "call_started_at": "2026-07-14T00:00:00+08:00",
                     "window_id": "tg_1",
                     "duration_ms": "1200",
+                    "app_mode": "real",
                 },
                 content_type="multipart/form-data",
             )
@@ -166,6 +184,7 @@ def test_routes_without_external_writes() -> None:
             )
             assert_eq(events[1][1]["text"], "这是用户说的话", "transcript event")
             assert_eq(events[-1][1]["call_id"], "call-test", "done event call id")
+            assert_eq(stream_calls[0][1]["app_mode"], "real", "stream route must preserve the active app mode")
             assert_eq(len(appended), 1, "a completed stream must append exactly one call turn pair")
             assert_eq(len(appended[0]["turns"]), 2, "call record must contain user and assistant once")
 

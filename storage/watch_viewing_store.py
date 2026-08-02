@@ -490,6 +490,11 @@ def complete_viewing_for_session(
                     "back_frame": _public_ticket_frame(
                         row["ticket_frame_json"], viewing_id=viewing_id
                     ),
+                    "viewer_review": _clean_text(row["viewer_review"]),
+                    "favorite": bool(row["favorite"]),
+                    "rating": (
+                        int(row["rating"]) if row["rating"] is not None else None
+                    ),
                 }
             )
             conn.execute(
@@ -579,6 +584,9 @@ def _row_to_viewing(row: Any) -> dict:
         "last_session_id": _clean_text(row["last_session_id"]),
         "ticket_id": _clean_text(row["ticket_id"]),
         "ticket": ticket,
+        "viewer_review": _clean_text(row["viewer_review"]),
+        "favorite": bool(row["favorite"]),
+        "rating": int(row["rating"]) if row["rating"] is not None else None,
         "created_at": _clean_text(row["created_at"]),
         "updated_at": _clean_text(row["updated_at"]),
         "recent_at": (
@@ -974,6 +982,67 @@ def update_ticket_title(
             "SELECT * FROM watch_viewings WHERE id = ?",
             (_clean_text(row["id"]),),
         ).fetchone()
+    return _row_to_viewing(saved) if saved is not None else None
+
+
+def update_viewing_reflection(
+    viewing_id: str,
+    *,
+    viewer_review: str,
+    favorite: bool,
+    rating: int | None,
+    now_iso: str,
+    stay_with_du_entry: dict | None = None,
+) -> dict | None:
+    clean_viewing_id = _clean_text(viewing_id)
+    if rating is not None and rating not in {1, 2, 3, 4, 5}:
+        raise ValueError("rating 必须是 1–5 的整数或 null")
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT * FROM watch_viewings WHERE id = ?",
+                (clean_viewing_id,),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+            ticket = runtime_sqlite.json_loads(row["ticket_json"], {})
+            if _clean_text(row["status"]) != "completed" or not isinstance(ticket, dict) or not ticket:
+                raise ValueError("只有已看完并生成票根后才能保存观后感")
+            ticket = dict(ticket)
+            ticket["viewer_review"] = _clean_text(viewer_review)
+            ticket["favorite"] = bool(favorite)
+            ticket["rating"] = rating
+            if isinstance(stay_with_du_entry, dict):
+                ticket["stay_with_du"] = {
+                    "entry_id": _clean_text(stay_with_du_entry.get("id")),
+                    "archived_at": _clean_text(now_iso),
+                }
+            conn.execute(
+                """
+                UPDATE watch_viewings
+                   SET viewer_review = ?, favorite = ?, rating = ?,
+                       ticket_json = ?, updated_at = ?
+                 WHERE id = ?
+                """,
+                (
+                    _clean_text(viewer_review),
+                    int(bool(favorite)),
+                    rating,
+                    runtime_sqlite.json_dumps(ticket),
+                    _clean_text(now_iso),
+                    clean_viewing_id,
+                ),
+            )
+            saved = conn.execute(
+                "SELECT * FROM watch_viewings WHERE id = ?",
+                (clean_viewing_id,),
+            ).fetchone()
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     return _row_to_viewing(saved) if saved is not None else None
 
 

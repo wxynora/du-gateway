@@ -348,6 +348,10 @@ def run() -> None:
     retry_state = watch_runtime_store.get_session(retry_session_id)
     _assert(retry_state["preparation"]["subtitle_lookup"]["status"] == "searching", "字幕重试没有进入搜索态")
     _assert(
+        retry_state["preparation"]["subtitle_lookup"]["search_strategy"] == "tmdb_then_subdl",
+        "手动字幕重试没有启用可选 TMDB ID 增强策略",
+    )
+    _assert(
         retry_state["preparation"]["subtitle_lookup"]["lookup_id"] != old_lookup_id,
         "字幕重试没有生成新的确认版本",
     )

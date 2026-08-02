@@ -244,6 +244,8 @@ def ensure_schema() -> None:
                     visual_last_sent_at TEXT NOT NULL DEFAULT '',
                     visual_last_timeline_epoch INTEGER NOT NULL DEFAULT -1,
                     visual_last_sheet_hash TEXT NOT NULL DEFAULT '',
+                    visual_generation_ready_at TEXT NOT NULL DEFAULT '',
+                    visual_generation_epoch INTEGER NOT NULL DEFAULT -1,
                     recall_anchor_json TEXT NOT NULL DEFAULT '{}',
                     status TEXT NOT NULL DEFAULT 'paused',
                     playhead_ms INTEGER NOT NULL DEFAULT 0,
@@ -311,6 +313,9 @@ def ensure_schema() -> None:
                     saved_at TEXT NOT NULL DEFAULT '',
                     analysis_cache_expires_at TEXT NOT NULL DEFAULT '',
                     ticket_frame_json TEXT NOT NULL DEFAULT '{}',
+                    viewer_review TEXT NOT NULL DEFAULT '',
+                    favorite INTEGER NOT NULL DEFAULT 0,
+                    rating INTEGER,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -870,6 +875,8 @@ def ensure_schema() -> None:
                 "visual_last_sent_at": "TEXT NOT NULL DEFAULT ''",
                 "visual_last_timeline_epoch": "INTEGER NOT NULL DEFAULT -1",
                 "visual_last_sheet_hash": "TEXT NOT NULL DEFAULT ''",
+                "visual_generation_ready_at": "TEXT NOT NULL DEFAULT ''",
+                "visual_generation_epoch": "INTEGER NOT NULL DEFAULT -1",
                 "recall_anchor_json": "TEXT NOT NULL DEFAULT '{}'",
                 "playback_observed_at": "TEXT NOT NULL DEFAULT ''",
                 "played_duration_ms": "INTEGER NOT NULL DEFAULT 0",
@@ -905,6 +912,9 @@ def ensure_schema() -> None:
                 "saved_at": "TEXT NOT NULL DEFAULT ''",
                 "analysis_cache_expires_at": "TEXT NOT NULL DEFAULT ''",
                 "ticket_frame_json": "TEXT NOT NULL DEFAULT '{}'",
+                "viewer_review": "TEXT NOT NULL DEFAULT ''",
+                "favorite": "INTEGER NOT NULL DEFAULT 0",
+                "rating": "INTEGER",
             }
             for column_name, column_sql in viewing_column_migrations.items():
                 if column_name not in viewing_columns:

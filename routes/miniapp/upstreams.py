@@ -14,6 +14,8 @@ from config import (
     openrouter_model_options,
     siliconflow_model_options,
 )
+from services.cloudflare_anthropic import anthropic_headers, openai_to_anthropic_request
+from services.upstream_policy import anthropic_messages_url
 from storage import upstream_store
 
 
@@ -174,8 +176,9 @@ def _oauth_status_for_item(it: dict, label: str) -> tuple[dict | None, str]:
         return None, "request_failed"
 
 
-def _public_upstream_item(it: dict) -> dict:
+def _public_upstream_item(it: dict, index: int) -> dict:
     item = {"name": it.get("name") or "", "url": it.get("url") or ""}
+    item["anthropic_format"] = upstream_store.get_anthropic_format_for_item(it, index)
     if _is_local_oauth_url(item["url"]):
         label = _oauth_label_for_item(it)
         status, status_error = _oauth_status_for_item(it, label)
@@ -201,7 +204,7 @@ def _chat_url_to_models_url(chat_url: str) -> str:
     return base.rstrip("/") + "/v1/models"
 
 
-def _probe_upstream_item(it: dict) -> dict:
+def _probe_upstream_item(it: dict, index: int) -> dict:
     url = (it.get("url") or "").strip()
     name = (it.get("name") or "").strip()
     api_key = (it.get("api_key") or "").strip()
@@ -216,6 +219,7 @@ def _probe_upstream_item(it: dict) -> dict:
         "error": "",
         "note": "",
         "status": "fail",
+        "anthropic_format": upstream_store.get_anthropic_format_for_item(it, index),
     }
     if not url:
         out["error"] = "URL 为空"
@@ -292,6 +296,10 @@ def _probe_upstream_item(it: dict) -> dict:
             if OPENROUTER_CACHE_CONTROL_TYPE:
                 body["cache_control"] = {"type": OPENROUTER_CACHE_CONTROL_TYPE}
         chat_url = url
+        if out["anthropic_format"]:
+            chat_url = anthropic_messages_url(chat_url)
+            body = openai_to_anthropic_request(body, chat_url)
+            headers = anthropic_headers(headers, chat_url, api_key)
         rc = requests.post(chat_url, headers=headers, json=body, timeout=20)
         out["chat_status"] = int(rc.status_code or 0)
         if rc.status_code >= 400:
@@ -330,7 +338,11 @@ def register_routes(bp) -> None:
         model = upstream_store.get_cached_active_model(refresh_if_missing=False)
         claude_thinking_effort = upstream_store.get_active_claude_thinking_effort()
         codex_reasoning_effort = upstream_store.get_active_codex_reasoning_effort()
-        items = [_public_upstream_item(it) for it in (data.get("items") or []) if isinstance(it, dict)]
+        items = [
+            _public_upstream_item(it, index)
+            for index, it in enumerate(data.get("items") or [])
+            if isinstance(it, dict)
+        ]
         return jsonify(
             {
                 "active": int(data.get("active") or 0),
@@ -339,6 +351,7 @@ def register_routes(bp) -> None:
                 "claude_thinking_efforts": list(upstream_store.CLAUDE_THINKING_EFFORTS),
                 "codex_reasoning_effort": codex_reasoning_effort,
                 "codex_reasoning_efforts": list(upstream_store.CODEX_REASONING_EFFORTS),
+                "anthropic_format": upstream_store.get_active_anthropic_format(),
                 "items": items,
             }
         )
@@ -357,6 +370,7 @@ def register_routes(bp) -> None:
                 "model": model,
                 "claude_thinking_effort": upstream_store.get_active_claude_thinking_effort(),
                 "codex_reasoning_effort": upstream_store.get_active_codex_reasoning_effort(),
+                "anthropic_format": upstream_store.get_active_anthropic_format(),
             }
         )
 
@@ -374,6 +388,24 @@ def register_routes(bp) -> None:
                 "model": model,
                 "claude_thinking_effort": upstream_store.get_active_claude_thinking_effort(),
                 "codex_reasoning_effort": upstream_store.get_active_codex_reasoning_effort(),
+                "anthropic_format": upstream_store.get_active_anthropic_format(),
+            }
+        )
+
+    @bp.route("/upstreams/anthropic-format", methods=["PUT"])
+    def miniapp_set_anthropic_format():
+        data = request.get_json(silent=True) or {}
+        enabled = data.get("enabled")
+        if not isinstance(enabled, bool):
+            return jsonify({"ok": False, "error": "enabled 必须是布尔值"}), 400
+        ok = upstream_store.set_active_anthropic_format(enabled)
+        saved = upstream_store.load_upstreams()
+        return jsonify(
+            {
+                "ok": ok,
+                "active": int(saved.get("active") or 0),
+                "anthropic_format": upstream_store.get_active_anthropic_format(),
+                "error": "" if ok else "active upstream 无效",
             }
         )
 
@@ -420,6 +452,7 @@ def register_routes(bp) -> None:
                 "model": saved_model,
                 "claude_thinking_effort": upstream_store.get_active_claude_thinking_effort(),
                 "codex_reasoning_effort": upstream_store.get_active_codex_reasoning_effort(),
+                "anthropic_format": upstream_store.get_active_anthropic_format(),
                 "error": "" if ok else "model 无效",
             }
         )
@@ -435,6 +468,7 @@ def register_routes(bp) -> None:
                 "ok": ok,
                 "active": int(saved.get("active") or 0),
                 "effort": upstream_store.get_active_claude_thinking_effort(),
+                "anthropic_format": upstream_store.get_active_anthropic_format(),
                 "error": "" if ok else "active upstream 无效",
             }
         )
@@ -453,6 +487,7 @@ def register_routes(bp) -> None:
                 "ok": ok,
                 "active": int(saved.get("active") or 0),
                 "effort": upstream_store.get_active_codex_reasoning_effort(),
+                "anthropic_format": upstream_store.get_active_anthropic_format(),
                 "error": "" if ok else "active upstream 无效",
             }
         )
@@ -480,7 +515,7 @@ def register_routes(bp) -> None:
 
         results = []
         for i, it in targets:
-            r = _probe_upstream_item(it)
+            r = _probe_upstream_item(it, i)
             r["index"] = i
             r["isActive"] = i == active
             results.append(r)

@@ -1763,7 +1763,7 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
     forbidden_dynamic_tokens = ("category=", "training_contents", "action=", "intensity=", "contents=", "pending", "day_plan_choice", "【🕹️ menu】")
     _assert(not any(token in planning_sync for token in forbidden_dynamic_tokens), "dynamic system must not expose English backend fields or duplicate common catalogs")
     _assert("道具不是独立行动" not in planning_sync and "低(light)" not in planning_sync, "common action catalogs should live only in the read-only reference tool")
-    from services.captivity_simulator_reference import get_reference, get_reference_tool_schema
+    from services.captivity_simulator_reference import REFERENCE_CATEGORIES, get_reference, get_reference_tool_schema
 
     action_reference = get_reference("白天安排")
     training_reference = get_reference("调教")
@@ -1772,7 +1772,15 @@ def test_captivity_simulator_sync_text_and_command_parser() -> None:
     _assert("振动棒" in action_reference and "夹具调教" in action_reference and "安眠" in action_reference, "the actions reference should bundle Chinese tools, training and feeding choices")
     schema = get_reference_tool_schema()["function"]
     _assert("白天安排”一次即可" in schema["description"], "the tool description should advertise the combined actions catalog")
-    _assert("分类" in schema["parameters"]["properties"] and "category" not in schema["parameters"]["properties"], "the visible reference argument should be Chinese")
+    _assert(
+        list(schema["parameters"]["properties"]) == ["category"]
+        and schema["parameters"]["required"] == ["category"],
+        "the reference schema should use the provider-compatible category key",
+    )
+    _assert(
+        schema["parameters"]["properties"]["category"]["enum"] == list(REFERENCE_CATEGORIES),
+        "the provider-compatible key must retain Chinese category values",
+    )
     _assert("振动棒" in tool_reference and "拉珠" in tool_reference, "tool reference should retain the expanded tools as Chinese labels")
     _assert("服从调教" in action_reference and "夹具调教" in training_reference, "on-demand references should use Chinese labels")
     _assert("推荐关系不是硬性限制" in tool_reference, "tool reference should keep compatibility advisory")
@@ -2499,8 +2507,24 @@ def test_captivity_simulator_wakeup_separates_dynamic_system_and_game_channel_us
             "player speech should enter the normal user role with a game-channel prefix",
         )
         tools = ((captured.get("json") or {}).get("tools") or [])
-        tool_names = [str(((item or {}).get("function") or {}).get("name") or "") for item in tools]
-        _assert(tool_names == ["captivity_simulator_reference"], "simulator wakeup should expose only its read-only reference tool before gateway injection")
+        _assert(not tools, "simulator wakeup should rely on the unified tool pipeline instead of prepending a temporary tool")
+        from pipeline.pipeline import step_inject_chat_tools
+
+        ordinary_injected = step_inject_chat_tools({"messages": []})
+        wakeup_injected = step_inject_chat_tools(captured.get("json") or {})
+        ordinary_tool_names = [
+            str(((item or {}).get("function") or {}).get("name") or "")
+            for item in (ordinary_injected.get("tools") or [])
+        ]
+        wakeup_tool_names = [
+            str(((item or {}).get("function") or {}).get("name") or "")
+            for item in (wakeup_injected.get("tools") or [])
+        ]
+        _assert(
+            ordinary_tool_names == wakeup_tool_names
+            and ordinary_tool_names.count("captivity_simulator_reference") == 1,
+            "ordinary and simulator requests should receive one identical permanent chat-tool list",
+        )
         result_without_text = cf.send_captivity_simulator_wakeup(
             window_id="tg_123",
             target="123",
