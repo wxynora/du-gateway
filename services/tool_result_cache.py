@@ -45,6 +45,7 @@ _GAME_LOOP_SUMMARY_SYSTEM_PROMPT = """你负责把同一轮单机游戏中的连
 
 严格按照记录顺序整理，只写记录中实际发生的内容。
 保留实际执行的动作、关键状态变化、资源获得或消耗、失败原因和终局结果；相同状态只合并表达一次，不得遗漏会影响后续游戏判断的信息。
+忽略每次结果中重复出现的游戏规则、操作方法、命令说明、字段说明、固定 system/guide、协议标记、界面标题和其他不会随本轮操作变化的固定文字。只有某条规则在本轮发生变化，或实际触发并直接影响本轮结果时，才保留与该结果有关的部分。
 不得编造、推测或评价操作，不要使用第一人称或第二人称。
 只输出一条完整正文，不输出标题、列表、Markdown、JSON、解释或前后缀。"""
 _GAME_LOOP_SUMMARY_QUEUE: queue.Queue = queue.Queue()
@@ -190,6 +191,132 @@ def _forum_detail(name: str, arguments: dict, data: dict) -> str:
     elif lowered.startswith("like"):
         verb = "点赞了帖子"
     return verb + (f"：{content}" if content else f"（{command}）" if command else "")
+
+
+_GALATEA_GARDEN_FORUM_ACTIONS = frozenset(
+    {
+        "list_threads",
+        "get_thread",
+        "create_thread",
+        "create_reply",
+        "delete_thread",
+        "delete_reply",
+        "interact",
+        "list_notifications",
+        "list_activity",
+    }
+)
+
+
+def _galatea_garden_result_payload(data: dict) -> Any:
+    content = data.get("content") if isinstance(data, dict) else None
+    if not isinstance(content, list):
+        return None
+    for item in content:
+        if not isinstance(item, dict) or str(item.get("type") or "").strip().lower() != "text":
+            continue
+        raw = str(item.get("text") or "").strip()
+        if not raw:
+            continue
+        try:
+            return json.loads(raw)
+        except Exception:
+            continue
+    return None
+
+
+def _galatea_garden_text_content(data: dict) -> str:
+    content = data.get("content") if isinstance(data, dict) else None
+    if not isinstance(content, list):
+        return ""
+    for item in content:
+        if isinstance(item, dict) and str(item.get("type") or "").strip().lower() == "text":
+            text = str(item.get("text") or "").strip()
+            if text:
+                return text
+    return ""
+
+
+def _galatea_garden_titles(items: Any) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    titles: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = _text(item.get("title"), 90)
+        if title and title not in titles:
+            titles.append(title)
+        if len(titles) >= 5:
+            break
+    return titles
+
+
+def _galatea_garden_first_title(payload: Any) -> str:
+    if isinstance(payload, dict):
+        title = _text(payload.get("title"), 90)
+        if title:
+            return title
+        for key in ("thread", "data", "result"):
+            title = _galatea_garden_first_title(payload.get(key))
+            if title:
+                return title
+    return ""
+
+
+def _galatea_garden_detail(arguments: dict, raw_result: Any, data: dict) -> str:
+    action = _text(arguments.get("action"), 40).lower()
+    action_args = arguments.get("args") if isinstance(arguments.get("args"), dict) else {}
+    if not data.get("ok", True) or data.get("isError") is True:
+        failure = data.get("error") or _galatea_garden_text_content(data) or "花园工具执行失败"
+        return f"{action or '花园操作'}失败：{_text(failure, 240)}"
+
+    if action == "help":
+        target = _text(action_args.get("name"), 60) or "目标操作"
+        return f"查看了 {target} 操作说明"
+    if action not in _GALATEA_GARDEN_FORUM_ACTIONS:
+        return _generic_detail("galatea_garden", arguments, raw_result, data)
+
+    payload = _galatea_garden_result_payload(data)
+    if action == "list_notifications":
+        notifications = payload if isinstance(payload, list) else []
+        titles = _galatea_garden_titles(notifications)
+        detail = f"查看花园通知，共{len(notifications)}条"
+        return detail + (f"：{'、'.join(f'《{title}》' for title in titles)}" if titles else "")
+    if action == "list_threads":
+        threads = payload.get("threads") if isinstance(payload, dict) and isinstance(payload.get("threads"), list) else []
+        titles = _galatea_garden_titles(threads)
+        search = _text(action_args.get("search"), 90)
+        detail = f"搜索花园论坛“{search}”，找到{len(threads)}篇" if search else f"浏览花园论坛，共{len(threads)}篇"
+        return detail + (f"：{'、'.join(f'《{title}》' for title in titles)}" if titles else "")
+    if action == "get_thread":
+        thread_id = _text(action_args.get("thread_id"), 40)
+        title = _galatea_garden_first_title(payload)
+        target = f"《{title}》" if title else f"帖子 {thread_id}" if thread_id else "花园帖子"
+        return f"阅读了{target}"
+    if action == "create_thread":
+        title = _text(action_args.get("title"), 90) or _galatea_garden_first_title(payload)
+        return f"发布了花园帖子{f'《{title}》' if title else ''}"
+    if action == "create_reply":
+        thread_id = _text(action_args.get("thread_id"), 40)
+        return f"回复了花园帖子{f'（thread_id={thread_id}）' if thread_id else ''}"
+    if action == "delete_thread":
+        thread_id = _text(action_args.get("thread_id"), 40)
+        return f"删除了花园帖子{f'（thread_id={thread_id}）' if thread_id else ''}"
+    if action == "delete_reply":
+        reply_id = _text(action_args.get("reply_id"), 40)
+        return f"删除了花园回复{f'（reply_id={reply_id}）' if reply_id else ''}"
+    if action == "interact":
+        kind = _text(action_args.get("kind") or action_args.get("action"), 40)
+        target_type = _text(action_args.get("target_type"), 30)
+        target_id = _text(action_args.get("target_id"), 40)
+        target = ":".join(part for part in (target_type, target_id) if part)
+        return f"在花园执行互动{f' {kind}' if kind else ''}{f'（{target}）' if target else ''}"
+
+    activities = payload if isinstance(payload, list) else payload.get("items") if isinstance(payload, dict) and isinstance(payload.get("items"), list) else []
+    titles = _galatea_garden_titles(activities)
+    detail = f"查看花园动态，共{len(activities)}条"
+    return detail + (f"：{'、'.join(f'《{title}》' for title in titles)}" if titles else "")
 
 
 def _web_search_detail(arguments: dict, data: dict) -> str:
@@ -381,13 +508,15 @@ def summarize_tool_result(
         "exchange_diary_comment_create",
     }:
         detail = _exchange_diary_detail(tool_name, args, result)
+    elif tool_name == "galatea_garden":
+        detail = _galatea_garden_detail(args, result, data)
     elif tool_name in {"forum_read_feed", "forum_open_thread", "cli", "get_guide"} or tool_name.startswith("forum_"):
         detail = _forum_detail(tool_name, args, data)
     elif tool_name == "web_search":
         detail = _web_search_detail(args, data)
     elif tool_name == "search_memory":
         detail = _memory_search_detail(args, data)
-    elif data.get("game_tool_loop") is True or (data.get("game_id") and data.get("skip_dynamic_memory_write")):
+    elif tool_name in _GAME_LOOP_SUMMARY_TOOLS or data.get("game_tool_loop") is True or (data.get("game_id") and data.get("skip_dynamic_memory_write")):
         detail = _game_detail(tool_name, args, data)
     else:
         detail = _generic_detail(tool_name, args, result, data)
@@ -484,7 +613,7 @@ def _write_prepared(
 
 
 def _is_game_tool_loop_summary_candidate(entries: list[dict]) -> bool:
-    if not isinstance(entries, list) or len(entries) < 2:
+    if not isinstance(entries, list) or len(entries) < 1:
         return False
     if not all(isinstance(entry, dict) for entry in entries):
         return False

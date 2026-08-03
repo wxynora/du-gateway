@@ -828,13 +828,27 @@ def _captivity_simulator_channel_player_text(user_msg: dict | None) -> str:
     return _clip_archive_text(content, 220)
 
 
+def _compact_gomoku_event_text(_text: str, *, player_text: str = "") -> str:
+    message = str(player_text or "").strip()
+    if message:
+        return f"小玥在五子棋中同步了当前棋局，并在局内说：{message}"
+    return "小玥在五子棋中同步了当前棋局。"
+
+
+def _gomoku_channel_player_text(user_msg: dict | None) -> str:
+    text = _plain_message_text(user_msg)
+    if not text or text == "小玥没有回复内容":
+        return ""
+    return text
+
+
 def _wakeup_kind_for_archive() -> str:
     return str(request.headers.get("X-DU-WAKEUP-KIND") or "").strip().lower()
 
 
 def _gateway_event_source_for_archive(messages: list | None, *, wakeup_kind: str = "") -> Optional[dict]:
     kind = str(wakeup_kind or "").strip().lower()
-    if kind not in {"private_board", "captivity_simulator"}:
+    if kind not in {"private_board", "captivity_simulator", "gomoku"}:
         return None
     for msg in messages or []:
         if not isinstance(msg, dict):
@@ -846,10 +860,17 @@ def _gateway_event_source_for_archive(messages: list | None, *, wakeup_kind: str
             return msg
         if kind == "captivity_simulator" and "囚禁模拟器" in text:
             return msg
+        if kind == "gomoku" and "小玥正在和你玩「五子棋」" in text:
+            return msg
     return None
 
 
-def _compact_gateway_event_for_archive(user_msg: dict, *, wakeup_kind: str = "") -> dict:
+def _compact_gateway_event_for_archive(
+    user_msg: dict,
+    *,
+    wakeup_kind: str = "",
+    gomoku_player_text: str = "",
+) -> dict:
     kind = str(wakeup_kind or "").strip().lower()
     text = _plain_message_text(user_msg)
     if kind in {"system_alarm", "alarm", "schedule_alarm"}:
@@ -873,6 +894,9 @@ def _compact_gateway_event_for_archive(user_msg: dict, *, wakeup_kind: str = "")
     elif kind == "captivity_simulator":
         label = "囚禁模拟器"
         content = _compact_captivity_simulator_event_text(text)
+    elif kind == "gomoku":
+        label = "五子棋"
+        content = _compact_gomoku_event_text(text, player_text=gomoku_player_text)
     elif kind in {"exchange_diary_comment", "diary_comment"}:
         label = "交换日记评论"
         content = _compact_exchange_diary_comment_event_text(text)
@@ -988,7 +1012,12 @@ def _build_round_cleaned_for_archive(
         wakeup_kind = _wakeup_kind_for_archive()
         if wakeup_kind:
             event_msg = _gateway_event_source_for_archive(request_messages, wakeup_kind=wakeup_kind)
-            archive_user = _compact_gateway_event_for_archive(event_msg or archive_user or user_msg, wakeup_kind=wakeup_kind)
+            gomoku_player_text = _gomoku_channel_player_text(user_msg) if wakeup_kind == "gomoku" else ""
+            archive_user = _compact_gateway_event_for_archive(
+                event_msg or archive_user or user_msg,
+                wakeup_kind=wakeup_kind,
+                gomoku_player_text=gomoku_player_text,
+            )
             if wakeup_kind == "captivity_simulator":
                 game_summary = str(archive_user.get("content") or "").strip()
                 player_text = _captivity_simulator_channel_player_text(user_msg)
