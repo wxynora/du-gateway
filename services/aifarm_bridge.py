@@ -30,18 +30,7 @@ AIFARM_HUMAN_NAME = os.environ.get("AIFARM_HUMAN_NAME", "辛玥").strip() or "�
 
 _HUMAN_KEY_RE = re.compile(r"^[a-fA-F0-9]{32}$")
 _AGENT_KEY_RE = re.compile(r"^[A-Za-z0-9]{8,32}$")
-_ACTION_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
-_READ_ONLY_AGENT_ACTIONS = frozenset({
-    "status",
-    "shop",
-    "bag",
-    "encyclopedia",
-    "market",
-    "leaderboard",
-    "expedition",
-    "ledger",
-    "help",
-})
+_MCP_TOOLS_STATE_KEY = "mcp_tools"
 _STATE_LOCK = threading.RLock()
 
 
@@ -123,6 +112,11 @@ def _agent_path_from_state(state: dict[str, Any]) -> str:
     return _agent_path_from_url(value)
 
 
+def _mcp_path_from_state(state: dict[str, Any]) -> str:
+    agent_path = _agent_path_from_state(state)
+    return f"/mcp/{agent_path.rsplit('/', 1)[-1]}"
+
+
 def _is_running() -> bool:
     try:
         response = requests.get(f"{AIFARM_UPSTREAM_URL}/", timeout=0.8)
@@ -197,44 +191,109 @@ def ensure_session() -> dict[str, Any]:
         return state
 
 
-def run_agent_action(arguments: dict[str, Any] | None) -> dict[str, Any]:
-    args = dict(arguments) if isinstance(arguments, dict) else {}
-    action = str(args.pop("action", "")).strip().lower()
-    if not _ACTION_RE.fullmatch(action):
-        raise AIFarmBridgeError("AI 农场动作无效；不知道怎么做时先用 action=help。")
-    if action == "new-token":
-        raise AIFarmBridgeError("聊天工具不允许轮换或回传农场主密钥。")
-
-    state = _read_state()
-    if state is None:
-        state = ensure_session()
-    agent_path = _agent_path_from_state(state)
-    method = "GET" if action in _READ_ONLY_AGENT_ACTIONS else "POST"
-    request_data = {"params": args} if method == "GET" else {"json": args}
+def _mcp_request(
+    state: dict[str, Any],
+    method: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
     try:
-        response = requests.request(
-            method=method,
-            url=f"{AIFARM_UPSTREAM_URL}{agent_path}/{action}",
+        response = requests.post(
+            f"{AIFARM_UPSTREAM_URL}{_mcp_path_from_state(state)}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": method,
+                "params": params,
+            },
             timeout=15,
-            **request_data,
         )
     except requests.RequestException as exc:
         raise AIFarmBridgeError("AI 农场服务还没启动。") from exc
 
+    if response.status_code >= 500:
+        raise AIFarmBridgeError("AI 农场服务还没启动。")
     try:
         payload = response.json()
     except ValueError as exc:
-        raise AIFarmBridgeError("AI 农场返回了无法识别的动作结果。") from exc
+        raise AIFarmBridgeError("AI 农场返回了无法识别的响应。") from exc
     if not isinstance(payload, dict):
-        raise AIFarmBridgeError("AI 农场返回了无法识别的动作结果。")
-
-    text = str(payload.get("text") or payload.get("error") or "AI 农场动作没有返回说明。").strip()
-    result: dict[str, Any] = {
-        "ok": response.status_code < 400 and payload.get("ok") is not False,
-        "text": text,
-    }
-    # 上游 detail=true 的 farm/farms 视图不含 token、humanKey 或 agentKey，可供渡精确决策。
-    for key in ("farm", "farms"):
-        if key in payload:
-            result[key] = payload[key]
+        raise AIFarmBridgeError("AI 农场返回了无法识别的响应。")
+    error = payload.get("error")
+    if isinstance(error, dict):
+        message = str(error.get("message") or "AI 农场返回了无法识别的响应。").strip()
+        raise AIFarmBridgeError(message)
+    if response.status_code >= 400:
+        message = str(payload.get("text") or "AI 农场返回了无法识别的响应。").strip()
+        raise AIFarmBridgeError(message)
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise AIFarmBridgeError("AI 农场返回了无法识别的响应。")
     return result
+
+
+def _validated_mcp_tools(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise AIFarmBridgeError("AI 农场返回了无法识别的响应。")
+    farm_tools: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict) or item.get("name") != "farm":
+            continue
+        if not isinstance(item.get("description"), str) or not isinstance(item.get("inputSchema"), dict):
+            raise AIFarmBridgeError("AI 农场返回了无法识别的响应。")
+        farm_tools.append(dict(item))
+    if len(farm_tools) != 1:
+        raise AIFarmBridgeError("AI 农场返回了无法识别的响应。")
+    return farm_tools
+
+
+def _cached_mcp_tools(state: dict[str, Any]) -> list[dict[str, Any]] | None:
+    try:
+        return _validated_mcp_tools(state.get(_MCP_TOOLS_STATE_KEY))
+    except AIFarmBridgeError:
+        return None
+
+
+def _store_mcp_tools(state: dict[str, Any], tools: list[dict[str, Any]]) -> None:
+    if state.get(_MCP_TOOLS_STATE_KEY) == tools:
+        return
+    expected_path = _mcp_path_from_state(state)
+    with _session_lock():
+        current = _read_state()
+        if current is None or _mcp_path_from_state(current) != expected_path:
+            return
+        if current.get(_MCP_TOOLS_STATE_KEY) != tools:
+            current[_MCP_TOOLS_STATE_KEY] = tools
+            _write_state(current)
+
+
+def get_agent_mcp_tools() -> list[dict[str, Any]]:
+    state = _read_state()
+    if state is None:
+        return []
+    cached = _cached_mcp_tools(state)
+    try:
+        result = _mcp_request(state, "tools/list", {})
+        tools = _validated_mcp_tools(result.get("tools"))
+    except AIFarmBridgeError:
+        if cached is not None:
+            return cached
+        raise
+    _store_mcp_tools(state, tools)
+    return tools
+
+
+def run_agent_action(arguments: dict[str, Any] | None) -> dict[str, Any]:
+    args = dict(arguments) if isinstance(arguments, dict) else {}
+    if str(args.get("action") or "").strip().lower() == "new-token":
+        raise AIFarmBridgeError("聊天工具不允许轮换或回传农场主密钥。")
+    state = _read_state()
+    if state is None:
+        state = ensure_session()
+    return _mcp_request(
+        state,
+        "tools/call",
+        {
+            "name": "farm",
+            "arguments": args,
+        },
+    )

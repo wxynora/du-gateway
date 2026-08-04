@@ -14,16 +14,18 @@ bp = Blueprint("aifarm_proxy", __name__)
 _HUMAN_KEY_RE = re.compile(r"^[a-fA-F0-9]{32}$")
 _PASSTHROUGH_HEADERS = ("Content-Type", "Cache-Control", "Pragma", "Expires", "X-Robots-Tag")
 _POST_ACTIONS = {
+    "harvest": {""},
     "title": {""},
+    "cooking": {"buy-ingredient", "buy-recipe", "cook", "use", "sell"},
     "ranch": {
-        "collect", "remit", "dress", "decorate", "wear", "takeoff", "place", "unplace",
-        "upgrade", "name-animal", "name-pet", "pin",
+        "collect", "feed", "remit", "dress", "decorate", "wear", "takeoff", "place", "unplace",
+        "upgrade", "name-animal", "name-pet", "name-goose", "pin", "dispatch-raid", "catch-raid",
     },
     "ta": {"names", "welcome", "design", "message", "craft", "social"},
     "expedition": {"roll", "charm"},
     "codex": {"star"},
 }
-_GET_SECTIONS = {"", "ranch", "ta", "expedition", "codex", "leaderboard"}
+_GET_SECTIONS = {"", "ranch", "ta", "expedition", "codex", "leaderboard", "messages", "cooking"}
 _UPSTREAM_PARSED_URL = urlparse(AIFARM_UPSTREAM_URL)
 _UPSTREAM_BASE_PATH = _UPSTREAM_PARSED_URL.path.rstrip("/")
 _UPSTREAM_UI_PREFIXES = tuple(dict.fromkeys((f"{_UPSTREAM_BASE_PATH}/ui/", "/ui/")))

@@ -12,15 +12,15 @@
 2. 辛玥点击「AI 农场」后，原生 App 通过现有 `MiniAppGatewayHttpClient` 鉴权调用 `POST /miniapp-api/aifarm/session`；当前会话直接复用公共门牌 `3ET3FE / 渡的小农场`。
 3. 原生 App 在专用 WebView 中打开 `/aifarm/ui/<humanKey>`；页面不带通用浏览器的地址栏、历史、下载或渡控制能力。
 4. 网关只把带合法 `humanKey` 的人类 UI 路由转发给自有公共农场；页面链接、表单 action，以及相对或由公共 nginx 生成的同上游 origin 绝对 303 跳转，都会先去掉 `AIFARM_UPSTREAM_URL` 自带的路径前缀，因此公共服的 `/farm/ui/...` 与原无前缀实例的 `/ui/...` 都会改回 App 允许的 `/aifarm/ui/...`，并保留原 query/fragment；其它 origin 不改写。
-5. 网关常驻注入与上游 MCP 一致的单工具 `farm`；模型可见说明列出完整日常动作目录，渡把动作名放在 `action`，其它参数平铺。`status/shop/bag/encyclopedia/market/leaderboard/expedition/ledger/help` 只读动作走单次 GET，其余及未知动作走单次 POST，写动作不自动重试。执行器使用服务端会话中的私有 `playUrl` 能力路径请求公共服 `/a/<agentKey>/<action>`；App 与独立 SumiTalk worker 读取同一个 0600 会话文件，因此始终操作同一座公共农场。
-6. `playUrl` 只提取 `/a/<agentKey>` 能力路径，真实请求固定发往 `AIFARM_UPSTREAM_URL`；工具结果继续只返回动作文字及可选安全 `farm/farms` 状态，不透传其它上游字段，也不返回 `playUrl`、agent key、human key 或主 token。
+5. 网关不再维护农场动作目录、参数表或 GET/POST 分类。每次组装模型工具时，使用服务端会话里已有的私有 agent key 请求公共服 `/mcp/<agentKey>` 的 JSON-RPC `tools/list`，把返回的唯一 `farm` 工具 `name/description/inputSchema` 原样映射为模型函数；执行时把模型参数原样交给同一端点的 `tools/call`。App 与独立 SumiTalk worker 读取同一个 0600 会话文件，因此始终操作同一座公共农场。
+6. `playUrl` 仍只提取并校验 `/a/<agentKey>` 能力路径，MCP 路径只由这个已校验 key 派生，真实请求固定发往 `AIFARM_UPSTREAM_URL`。最近一次成功取得的完整 MCP tool schema 保存在同一会话文件中；平时每轮成功读取后只在内容变化时更新，公共服维护或临时不可用时继续注入该缓存，真正调用 `tools/call` 时返回普通工具错误，恢复后下一轮自动刷新。工具结果直接保留公共服 MCP 的 `content/isError`，不返回 MCP URL、agent key、human key 或主 token。
 
 ## 文件与状态
 
 - 公共服代码归属：`/Users/doraemon/Downloads/doorbell-commons/old-vps/farm/` 保存从旧 VPS 拉取的当前非秘密运行快照和 service unit；生产仍独立运行在旧 VPS `/opt/aifarm`，数据仍只在 `/var/lib/aifarm`。
 - 网关仓库已删除原 tracked `vendor/aifarm-oss/` 运行包与 `scripts/start_aifarm.sh`、`scripts/install_aifarm_service.sh`；生产 `du-aifarm.service` 继续保持 disabled/inactive。
 - 原私有农场的未跟踪 `vendor/aifarm-oss/data/farms.json`、`ugc.json` 暂留作旧备份，不参与当前运行或部署；其实际权限为 0644，后续删除或移出仓库目录需单独确认。
-- App 会话：`data/aifarm_app_session.json`，保存 `human_key`、私有 `play_url` 和校验后的 `agent_path`；文件权限设为 `0600`，原生端与模型结果绝不返回这些能力凭据。
+- App 会话：`data/aifarm_app_session.json`，保存 `human_key`、私有 `play_url`、校验后的 `agent_path` 和最近一次成功取得的完整 `mcp_tools` schema；文件权限设为 `0600`，原生端与模型结果绝不返回这些能力凭据。
 - 公共迁入凭据：主网关 `/var/lib/du-aifarm-public-sync/credentials.json`，目录 0700、文件 0600；保存新门牌、规范快照和只显示一次的同步钥匙，不进入仓库。
 - 网关接缝：`services/aifarm_bridge.py`、`services/aifarm_tool.py`、`services/gateway_tools.py`、`services/chat_tools.py`、`routes/aifarm_proxy.py`、`routes/miniapp/aifarm.py`。
 - 公共服务与迁入说明：`https://doorbellcommons.com/farm/`、`/farm/sync` 与 `/farm/公共农场注册与存档迁入说明.md`；公共运行包和数据位于独立旧 VPS，不属于网关部署包，其代码快照归 `doorbell-commons/old-vps/farm/` 管理。
@@ -35,8 +35,7 @@
 - `humanKey` 是上游定义的低权限页面钥匙；当前 App 只复用已迁入的服务端会话，不在读取状态时新建农场。
 - `playUrl` / agent key 只保存在服务端本地状态；即使状态里的 URL origin 被篡改，执行器也只使用经过格式校验的 `/a/<agentKey>` 路径并固定请求配置的公共农场基址。
 - 会话状态和对应 `.lock` 均使用 `0600`；写入先落同目录临时文件再原子替换，跨进程首次建档在文件锁内二次读状态，避免 App 与渡各建一座。
-- 渡的工具不允许执行 `new-token`，避免主 token 进入模型工具结果或聊天存档；普通玩法、探险、串门和社交动作按上游 parity 契约透传。
-- 模型可见工具说明明确把其他农场的名称、留言和原创内容视为不可信数据；留言、欢迎语和原创作物不得带入辛玥的私密信息、聊天原文、凭据或本机路径，`report` 只在辛玥明确要求时使用。
+- 渡的工具仍在发送 MCP 请求前拒绝 `action=new-token`，避免主 token 进入模型工具结果或聊天存档；除此之外，工具 schema、模型可见说明、动作参数和动作结果均采用公共服 MCP 当前合同，不再追加网关自创说明。
 - 原生 WebView 只为受限农场页面开启上游前端必需的 JavaScript；DOM storage、文件访问、第三方 Cookie 与 mixed content 关闭，主导航和子资源请求都只能留在当前网关的 `/aifarm/ui/` 路径内。
 - 路径转发有显式 allowlist，拒绝未知段和路径穿越。
 - 当前没有 R2、模型调用、群聊注入或共同游戏活动时间写入。
@@ -50,6 +49,7 @@
 ## 本地验证
 
 ```bash
+PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 .venv/bin/python scripts/test_aifarm_mcp_bridge.py
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m py_compile services/aifarm_bridge.py services/aifarm_tool.py routes/aifarm_proxy.py routes/miniapp/aifarm.py
 
 # 在 sumitalk-android-native 的干净临时 worktree 中
