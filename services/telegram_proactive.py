@@ -165,10 +165,7 @@ _PROACTIVE_SOLO_GAMES = {
     "farm": {
         "title": "AI 农场",
         "tool": "farm",
-        "instruction": (
-            "先调用 farm，action 填 status、detail 填 true，看看农场当前状态；"
-            "再根据工具结果调用同一个工具做至少一件实际的农场操作。"
-        ),
+        "instruction": "",
     },
     "cedareco": {
         "title": "瓶中生态",
