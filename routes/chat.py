@@ -727,16 +727,43 @@ def _compact_screen_check_event_text(text: str) -> str:
 
 
 def _compact_exchange_diary_comment_event_text(text: str) -> str:
-    title = _regex_group(r"日记标题[:：]([^\n]{1,120})", text)
-    comment = _regex_group(r"评论内容[:：]([\s\S]{1,800})", text)
-    if "\n\n" in comment:
-        comment = comment.split("\n\n", 1)[0]
-    comment = _compact_archive_line(comment, 160)
-    if title and comment:
-        return f"小玥评论了交换日记「{_compact_archive_line(title, 80)}」：{comment}。"
+    prefix = "小玥评论了你的日记："
+    comment = text[len(prefix) :] if text.startswith(prefix) else ""
+    if not comment:
+        comment = _regex_group(r"评论内容[:：]([\s\S]+)", text)
     if comment:
-        return f"小玥评论了交换日记：{comment}。"
-    return "小玥刚刚评论了你的交换日记。"
+        return f"小玥评论我的日记：{comment}"
+    return "小玥评论我的日记。"
+
+
+def _exchange_diary_reply_content_from_tool_calls(tool_calls: list | None) -> str:
+    for item in reversed(tool_calls or []):
+        if not isinstance(item, dict):
+            continue
+        function = item.get("function") if isinstance(item.get("function"), dict) else {}
+        name = str(function.get("name") or item.get("name") or "").strip()
+        raw_arguments = function.get("arguments") if function else item.get("arguments")
+        if isinstance(raw_arguments, dict):
+            arguments = raw_arguments
+        else:
+            try:
+                parsed = json.loads(str(raw_arguments or "{}"))
+                arguments = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                arguments = {}
+        if name == "exchange_diary":
+            if str(arguments.get("action") or "").strip().lower() != "comment":
+                continue
+        elif name != "exchange_diary_comment_create":
+            continue
+        if not str(arguments.get("reply_to_comment_id") or "").strip():
+            continue
+        if not str(item.get("result") or "").strip().startswith("已回复交换日记评论："):
+            continue
+        content = str(arguments.get("content") or arguments.get("comment") or "")
+        if content.strip():
+            return content.strip()
+    return ""
 
 
 def _compact_private_board_event_text(text: str) -> str:
@@ -898,7 +925,7 @@ def _compact_gateway_event_for_archive(
         label = "五子棋"
         content = _compact_gomoku_event_text(text, player_text=gomoku_player_text)
     elif kind in {"exchange_diary_comment", "diary_comment"}:
-        label = "交换日记评论"
+        label = "日记评论互动"
         content = _compact_exchange_diary_comment_event_text(text)
     elif kind in {"proactive_diary", "random_diary"}:
         label = "随机唤醒执行"
@@ -1018,6 +1045,12 @@ def _build_round_cleaned_for_archive(
                 wakeup_kind=wakeup_kind,
                 gomoku_player_text=gomoku_player_text,
             )
+            if wakeup_kind in {"exchange_diary_comment", "diary_comment"}:
+                diary_reply = _exchange_diary_reply_content_from_tool_calls(assistant_msg.get("tool_calls"))
+                if diary_reply:
+                    archive_assistant = dict(assistant_msg)
+                    archive_assistant["archive_label"] = "日记评论互动"
+                    archive_assistant["content"] = f"我回复她：{diary_reply}"
             if wakeup_kind == "captivity_simulator":
                 game_summary = str(archive_user.get("content") or "").strip()
                 player_text = _captivity_simulator_channel_player_text(user_msg)

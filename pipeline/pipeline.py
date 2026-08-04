@@ -1154,6 +1154,8 @@ def _format_recent_context_message_line(
     src_tag: str = "",
 ) -> str:
     content = _message_content_text_for_recent_context(msg)
+    if str((msg or {}).get("archive_label") or "").strip() == "日记评论互动":
+        return f"【日记评论互动】{content}"
     if is_last_message:
         time_label = _recent_context_round_time_label(round_obj)
         if time_label:
@@ -1283,6 +1285,18 @@ def _build_action_note_from_tool_calls(tool_calls: list) -> str:
     if has_success:
         return f"上一轮工具结果：{'、'.join(parts)}；这些结果已经拿到，除非参数变化或用户明确要求刷新，否则不要重复调用相同工具。"
     return f"上一轮工具记录：{'、'.join(parts)}；若还是同一目标，先基于上面结果继续，不要立刻原样重调。"
+
+
+def _build_round_action_note(assistant_message: dict, round_messages: list[dict]) -> str:
+    has_diary_reply = any(
+        isinstance(message, dict)
+        and str(message.get("role") or "").strip().lower() == "assistant"
+        and str(message.get("archive_label") or "").strip() == "日记评论互动"
+        for message in (round_messages or [])
+    )
+    if has_diary_reply:
+        return ""
+    return _build_action_note_from_tool_calls((assistant_message or {}).get("tool_calls"))
 
 
 _PROACTIVE_DECISION_PROMPT_PREFIX = "这是一次随机唤醒，你现在要不要做点什么"
@@ -3986,7 +4000,7 @@ def step_archive_round(
         if round_cleaned_for_r2
         else build_round_cleaned_for_r2(last_user, assistant_message)
     )
-    action_note = _build_action_note_from_tool_calls((assistant_message or {}).get("tool_calls"))
+    action_note = _build_round_action_note(assistant_message, round_messages)
     from utils.time_aware import now_beijing_iso
     from services.reply_channel_context import normalize_reply_channel
 
