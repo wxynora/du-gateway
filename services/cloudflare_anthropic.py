@@ -21,13 +21,13 @@ ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 ANTHROPIC_REQUIRED_DEFAULT_MAX_TOKENS = 128000
 GATEWAY_DYNAMIC_SYSTEM_HINTS = (
-    "【渡的心事",
-    "【渡的日常",
+    "【你的心事",
+    "【你的日常",
     "今日：",
     "听了老婆的话，我想起来",
     "【指代提醒】",
     "老婆当前状态",
-    "【当前是在 RikkaHub 和渡聊天】",
+    "【你当前正在 RikkaHub 和小玥聊天】",
 )
 KIRO_ANTHROPIC_HOST = "api2.68886868.xyz"
 

@@ -931,20 +931,20 @@ def _private_board_du_followup_message(payload: dict | None) -> str:
     state = (payload or {}).get("state") if isinstance((payload or {}).get("state"), dict) else {}
     pending = state.get("pending_event") if isinstance(state.get("pending_event"), dict) else None
     if not pending:
-        return "现在轮到渡行动。"
+        return "现在轮到你行动。"
     pending_type = str(pending.get("type") or "").strip()
     if pending_type == "duel":
-        return "现在轮到渡完成剪刀石头布对抗。"
+        return "现在轮到你完成剪刀石头布对抗。"
     if pending_type == "choice":
-        return "渡刚触发了需要自己选择的惩罚。"
+        return "你刚触发了需要自己选择的惩罚。"
     if pending_type == "review":
         phase = str(pending.get("phase") or "").strip()
         if phase == "questioning":
-            return "现在需要渡给出真心话题目。"
+            return "现在需要你给出真心话题目。"
         if phase == "submitted":
-            return "现在需要渡验收小玥提交的惩罚任务。"
-        return "现在需要渡提交惩罚任务。"
-    return "现在轮到渡处理棋局。"
+            return "现在需要你验收小玥提交的惩罚任务。"
+        return "现在需要你提交惩罚任务。"
+    return "现在轮到你处理棋局。"
 
 
 def _private_board_sync_text(
@@ -1895,37 +1895,37 @@ def _captivity_simulator_du_followup_message(payload: dict | None) -> str:
     if pending:
         pending_type = str(pending.get("type") or "").strip()
         if pending_type == "day_plan_choice":
-            return "当前仍需要渡一次性安排今天三个白天行动。"
+            return "当前仍需要你一次性安排今天三个白天行动。"
         if pending_type == "day_batch_response":
-            return "当前仍需要渡在同一轮一次写完今天三个白天行动的回应。"
+            return "当前仍需要你在同一轮一次写完今天三个白天行动的回应。"
         if pending_type == "action_response":
-            return "当前仍需要渡选择对这次行动的反应和心情。"
+            return "当前仍需要你选择对这次行动的反应和心情。"
         if pending_type == "process_write":
-            return "当前仍需要渡填写这次事件的过程。"
+            return "当前仍需要你填写这次事件的过程。"
         if pending_type == "process_reaction_write":
-            return "当前仍需要渡一次提交这次行动的反应、过程和心情。"
+            return "当前仍需要你一次提交这次行动的反应、过程和心情。"
         if pending_type == "reaction_choice":
-            return "当前仍需要渡选择过程后的心情。"
+            return "当前仍需要你选择过程后的心情。"
         if pending_type == "night_action_choice":
-            return "当前仍需要渡选择夜间自由行动。"
+            return "当前仍需要你选择夜间自由行动。"
         if pending_type == "bell_voice_reveal":
-            return "语音铃正在播放本次预设台词，当前仍需要渡确认已经听清。"
+            return "语音铃正在播放本次预设台词，当前仍需要你确认已经听清。"
         if pending_type == "bell_response_choice":
-            return "小玥按响了语音铃，当前仍需要渡决定是否过去。"
+            return "小玥按响了语音铃，当前仍需要你决定是否过去。"
         if pending_type == "item_secret_reveal":
-            return "物品里的一条使用痕迹出现了，当前仍需要渡确认已经看完。"
+            return "物品里的一条使用痕迹出现了，当前仍需要你确认已经看完。"
         if pending_type == "monitor_gate":
-            return "当前仍需要渡决定是否打开封存的夜间监控。"
+            return "当前仍需要你决定是否打开封存的夜间监控。"
         if pending_type == "monitor_handle":
-            return "当前仍需要渡选择看完夜间监控后的处理方式。"
+            return "当前仍需要你选择看完夜间监控后的处理方式。"
         if pending_type == "escape_choice":
-            return "当前仍需要渡选择尝试逃跑或老实待着。"
+            return "当前仍需要你选择尝试逃跑或老实待着。"
         if pending_type == "return_action_choice":
-            return "当前仍需要渡选择回来后想进行的一个行为。"
+            return "当前仍需要你选择回来后想进行的一个行为。"
         if pending_type == "recapture_rules_choice":
-            return "当前仍需要渡为抓回后的囚禁重新立 1 至 3 条规矩。"
+            return "当前仍需要你为抓回后的囚禁重新立 1 至 3 条规矩。"
         if pending_type == "recapture_followup_choice":
-            return "当前仍需要渡选择抓回后的后续处理。"
+            return "当前仍需要你选择抓回后的后续处理。"
     return "当前同步囚禁模拟器状态。"
 
 

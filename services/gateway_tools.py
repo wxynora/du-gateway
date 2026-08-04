@@ -35,7 +35,7 @@ def get_gateway_xiaoai_tools() -> List[dict]:
             "function": {
                 "name": "xiaoai_speak",
                 "description": (
-                    "让卧室小爱音箱外放一段渡的声音，像手机弹窗/强提醒一样把话送到房间里。"
+                    "让卧室小爱音箱外放一段你的声音，像手机弹窗/强提醒一样把话送到房间里。"
                     "适合用户没看手机、长时间不理你、需要及时提醒或你需要主动出现时调用。"
                     "只播短句，不要播隐私、敏感、会让旁人尴尬的内容；普通聊天不要每句都调用。"
                 ),
@@ -109,7 +109,7 @@ def get_gateway_xiaoai_tools() -> List[dict]:
                 "name": "mijia_lamp_set",
                 "description": (
                     "结构化控制台灯，支持开关、亮度和冷暖色温。"
-                    "调亮度/色温时优先用这个工具，不要让渡自己拼 mijiaAPI set 命令。"
+                    "调亮度/色温时优先用这个工具，不要自己拼 mijiaAPI set 命令。"
                     "brightness 范围 1-100；color_temperature 范围 2700-5100，数值越低越暖。"
                 ),
                 "parameters": {
@@ -135,7 +135,7 @@ def get_gateway_voice_call_tools() -> List[dict]:
             "function": {
                 "name": "start_voice_call",
                 "description": (
-                    "向 SumiTalk 手机端发起一通由渡主动打来的语音电话邀请。"
+                    "向 SumiTalk 手机端发起一通由你主动打来的语音电话邀请。"
                     "适合你明确想听她声音、需要比普通消息更靠近一点地叫她、或她允许你主动打语音时调用。"
                     "这不是普通语音消息；调用后手机端会显示“渡来电”，她接听后才进入语音通话。"
                     "不要连续轰炸；不要在她明显忙、睡觉或不适合出声的场景频繁调用。"

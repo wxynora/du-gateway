@@ -819,14 +819,14 @@ def _compact_captivity_simulator_assistant_for_archive(assistant_msg: dict) -> d
             parsed = str(match.group(1) or "").strip()
     if parsed:
         content = (
-            f"渡在囚禁模拟器中回复了「{_compact_archive_line(parsed, 40)}」指令；"
+            f"我在囚禁模拟器中回复了「{_compact_archive_line(parsed, 40)}」指令；"
             "完整行动正文只保留在游戏存档，思维链按原字段归档。"
         )
     elif raw.strip():
-        content = "渡在囚禁模拟器局内回复了一段普通聊天；完整正文不写入聊天归档。"
+        content = "我在囚禁模拟器局内回复了一段普通聊天；完整正文不写入聊天归档。"
     else:
-        content = "渡在囚禁模拟器局内回复为空。"
-    compacted = {"role": "assistant", "archive_label": "渡", "content": content}
+        content = "我在囚禁模拟器局内回复为空。"
+    compacted = {"role": "assistant", "archive_label": "我", "content": content}
     for key in (
         "reasoning",
         "reasoning_content",
@@ -946,13 +946,13 @@ def _compact_gateway_event_for_archive(
         content = _compact_exchange_diary_comment_event_text(text)
     elif kind in {"proactive_diary", "random_diary"}:
         label = "随机唤醒执行"
-        content = "你刚才选择了写日记，现在去写。"
+        content = "我刚才选择了写日记，现在去写。"
     elif kind in {"proactive_forum", "random_forum"}:
         label = "随机唤醒执行"
-        content = "你刚才选择了逛论坛，现在去逛。"
+        content = "我刚才选择了逛论坛，现在去逛。"
     elif kind in {"proactive_drawer", "random_drawer"}:
         label = "随机唤醒执行"
-        content = "你刚才选择了整理秘密抽屉，现在去整理/翻旧条目。"
+        content = "我刚才选择了整理秘密抽屉，现在去整理/翻旧条目。"
     elif kind in {"spring_dream", "random_spring_dream"}:
         label = "随机唤醒"
         content = "睡眠期随机唤醒触发了一次春梦。"
@@ -1017,7 +1017,7 @@ def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:
 
     if len(lines) == 1 and raw:
         lines.append(_clip_archive_text(raw, 220))
-    compacted = {"role": "assistant", "archive_label": "渡", "content": "\n".join(lines)}
+    compacted = {"role": "assistant", "archive_label": "我", "content": "\n".join(lines)}
     for key in (
         "cache_debug",
         "reasoning",

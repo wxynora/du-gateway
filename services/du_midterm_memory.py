@@ -381,6 +381,7 @@ def _call_ds(prompt: str) -> Optional[dict]:
         "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
+        "max_tokens": 8192,
     }
     resp = requests.post(
         DEEPSEEK_API_URL,

@@ -11,9 +11,9 @@ logger = get_logger(__name__)
 
 def _normalize_note_write_content(raw: str) -> str:
     """
-    规整 note_write 内容，避免把「渡的记事本」整段历史再次写成新条目。
+    规整 note_write 内容，避免把「你的记事本」整段历史再次写成新条目。
     规则：
-    1) 去掉标题/包裹标记（如【渡的记事本】）。
+    1) 去掉标题/包裹标记（如【你的记事本】）。
     2) 按行拆分后优先取“新增且非重复”的短句。
     3) 若无法判定，回退原文本（不做激进改写）。
     """
@@ -28,7 +28,7 @@ def _normalize_note_write_content(raw: str) -> str:
     for ln in lines:
         if ln.startswith("【") and ln.endswith("】"):
             continue
-        if ln in ("渡的记事本", "以上为固定记事本"):
+        if ln in ("你的记事本", "以上为固定记事本"):
             continue
         if ln.startswith("- "):
             ln = ln[2:].strip()
@@ -322,7 +322,7 @@ def get_chat_tools_for_inject() -> List[dict]:
         "type": "function",
         "function": {
             "name": "note_write",
-            "description": "写入渡的记事本（MiniApp 的“渡的记事本”会显示）。参数：content。",
+            "description": "写入你的记事本（MiniApp 中显示为“渡的记事本”）。参数：content。",
             "parameters": {
                 "type": "object",
                 "properties": {

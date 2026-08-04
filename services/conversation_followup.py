@@ -1356,7 +1356,7 @@ def send_listen_invite_response_wakeup(
         preferred_meta_override=preferred_meta,
         lock_preferred_channel=bool(preferred_channel),
         allow_followup=False,
-        system_event_user_summary="请以渡自己的口吻回应小玥的这次选择。",
+        system_event_user_summary="请以你自己的口吻回应小玥的这次选择。",
     )
 
 

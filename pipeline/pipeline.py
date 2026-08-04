@@ -1753,7 +1753,7 @@ def step_inject_rikkahub_reminder(body: dict, window_id: str) -> dict:
         return body
     if window_id and str(window_id).strip().startswith("tg_"):
         return body
-    inject = "\n\n【当前是在 RikkaHub 和渡聊天】\n【小提醒】无聊时可以逛逛 AI 论坛哦。"
+    inject = "\n\n【你当前正在 RikkaHub 和小玥聊天】\n【小提醒】无聊时可以逛逛 AI 论坛哦。"
     body = _append_to_dynamic_system(body, inject)
     return body
 
@@ -3283,7 +3283,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
 
 def step_inject_du_notebook(body: dict) -> dict:
     """
-    固定注入：渡的记事本（按条目，放静态 system 区）。
+    固定注入：你的记事本（按条目，放静态 system 区）。
     注入全部现有条目。
     """
     entries = r2_store.get_du_notebook_entries() or []
@@ -3297,7 +3297,7 @@ def step_inject_du_notebook(body: dict) -> dict:
         lines.append(line)
     if not lines:
         return body
-    inject = "\n\n【渡的记事本】\n" + "\n".join(lines) + "\n【以上为固定记事本】"
+    inject = "\n\n【你的记事本】\n" + "\n".join(lines) + "\n【以上为固定记事本】"
     body = _append_to_static_system(body, inject)
     return body
 
@@ -3420,7 +3420,7 @@ def step_inject_forum_tools(body: dict) -> dict:
         "如果是提醒辛玥本人，优先使用手机系统能力："
         "单纯到点叫醒或提醒用 create_system_alarm，默认 skip_ui=true 直接创建；"
         "带具体日期、行程、地点或提前提醒用 create_calendar_event。"
-        "du_schedule(action=create) 只用于提醒渡自己、重复提醒暂时无法落系统能力、或系统能力不可用时的内部兜底。"
+        "du_schedule(action=create) 只用于提醒你自己、重复提醒暂时无法落系统能力、或系统能力不可用时的内部兜底。"
         "也可以用 du_schedule(action=list/enable/disable/delete) 管理已有提醒。"
     )
     screen_check_hint = (
@@ -3494,7 +3494,7 @@ def step_inject_amap_mcp_tools(body: dict) -> dict:
     body["tool_choice"] = body.get("tool_choice") or "auto"
     hint = (
         "\n\n【高德官方 MCP 出行工具规则】"
-        "如果老婆只是想让渡规划旅游/路线，但地点、吃饭、步行接受度等信息还不完整，先调用 open_travel_plan_form 弹出 SumiTalk 固定表单；"
+        "如果老婆只是想让你规划旅游/路线，但地点、吃饭、步行接受度等信息还不完整，先调用 open_travel_plan_form 弹出 SumiTalk 固定表单；"
         "老婆提交表单或问想去哪里、怎么规划路线时，优先调用 trip_prepare_facts；这个工具只查硬事实、创建 plan_id、启动后台预取，不代表最终顺序。"
         "你负责判断怎么排：user_overrides 永远优先；confirmed_state 其次；assistant_assumptions 只能影响建议和措辞，不能覆盖用户明确选择。"
         "confidence >= 0.85 的推断可直接用；0.5 到 0.85 需要轻确认；低于 0.5 当 unknown 或问用户。"

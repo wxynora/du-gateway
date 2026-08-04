@@ -311,7 +311,7 @@ def format_rule_block(_latest: Optional[dict] = None) -> str:
     """拼成稳定的拟态节律隐藏块规则；不包含每轮变化的实际读数。"""
     _ = _latest
     return (
-        "【渡的拟态心跳/呼吸参数规则（仅你与网关可见，勿在回复正文复述给老婆）】\n"
+        "【你的拟态心跳/呼吸参数规则（仅你与网关可见，勿在回复正文复述给老婆）】\n"
         "每轮回复都要在正文后追加一行短隐藏标记，作为你这一轮自然反应后的拟态节律参数。\n"
         "优先只写本轮明显变化的字段；没写的字段会沿用上一轮有效读数或默认值。可见回复里不要提到这组参数。\n"
         "短标记示例（只是字段格式，不是当前读数；实际数值按本轮上下文更新）：\n"
@@ -327,7 +327,7 @@ def format_state_block(latest: Optional[dict] = None) -> str:
     """拼成每轮变化的最新拟态读数，放动态 system。"""
     if not isinstance(latest, dict) or not latest:
         return (
-            "【渡的拟态心跳/呼吸当前读数】\n"
+            "【你的拟态心跳/呼吸当前读数】\n"
             "暂无上一轮已存读数。本轮请按当前上下文自然写入新的隐藏块。"
         )
     params = latest.get("parameters") if isinstance(latest.get("parameters"), dict) else {}
@@ -348,7 +348,7 @@ def format_state_block(latest: Optional[dict] = None) -> str:
     updated = str(latest.get("updatedAt") or latest.get("at") or "").strip()
     suffix = f"\n更新时间：{updated}" if updated else ""
     return (
-        "【渡的拟态心跳/呼吸当前读数】\n"
+        "【你的拟态心跳/呼吸当前读数】\n"
         + "；".join(parts)
         + suffix
         + "\n这些是上一轮落库后的读数，只作为本轮延续和惯性参考；本轮仍要根据当前上下文自行更新隐藏块，不要在可见回复里解释这些数值。"

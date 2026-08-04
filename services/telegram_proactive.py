@@ -814,11 +814,24 @@ def _format_proactive_decision_memory_for_system() -> str:
             at = at[:19]
         act = str(it.get("action") or "").strip().lower()
         act_cn = _ACTION_LABEL_CN.get(act, act or "—")
-        rs = str(it.get("reason") or "").strip() or "—"
+        rs = _proactive_decision_reason_for_du_system(it.get("reason")) or "—"
         pv = str(it.get("message_preview") or "").strip()
         tail = f"｜摘要：{pv}" if pv else ""
         lines.append(f"{i}. {at} → {act_cn}｜原因：{rs}{tail}")
     return "\n".join(lines)
+
+
+def _proactive_decision_reason_for_du_system(value: object) -> str:
+    """把给辛玥展示的主动决策原因转换成渡收到的 system 视角。"""
+    text = str(value or "").strip()
+    for display_text, du_text in (
+        ("回喂给渡", "回喂给你"),
+        ("提醒渡去逛论坛", "提醒你去逛论坛"),
+        ("提醒渡去写", "提醒你去写"),
+        ("提醒渡去整理/翻旧条目", "提醒你去整理/翻旧条目"),
+    ):
+        text = text.replace(display_text, du_text)
+    return text
 
 
 def _available_channels() -> list[str]:
@@ -1254,6 +1267,14 @@ def _schedule_event_source_key(it: dict) -> str:
     return f"schedule:{str(it.get('title') or '').strip()}:{str(it.get('datetime') or '').strip()}"
 
 
+def _schedule_note_for_du_prompt(value: object) -> str:
+    """保留内部存储备注，只在直接提示渡时改成第二人称。"""
+    text = str(value or "").strip()
+    if text.startswith("由渡创建系统闹钟") or text.startswith("由渡创建系统行程"):
+        return "由你" + text[len("由渡") :]
+    return text
+
+
 def _sync_schedule_event_plans(items: list[dict], fired: set[str], now_dt: datetime) -> None:
     grace = _schedule_due_grace_seconds()
     expired_before = (now_dt - timedelta(seconds=grace)).strftime("%Y-%m-%dT%H:%M:%S+08:00")
@@ -1384,10 +1405,11 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             owner_prefix = "你给老婆定的"
         else:
             owner_prefix = "老婆之前设的"
+        prompt_note = _schedule_note_for_du_prompt(note)
         reminder_prompt = (
             f"{owner_prefix}「{title}」{reminder_name}，现在到点了。"
             f"类型：{rep_label}；时间：{now_dt.strftime('%Y-%m-%d %H:%M')}。"
-            f"{('备注：' + note + '。') if note else ''}"
+            f"{('备注：' + prompt_note + '。') if prompt_note else ''}"
             "请像平时聊天那样自然回复；如果有多句，请用换行分段。"
         )
         schedule_event = wakeup_event_log.start_event(

@@ -438,7 +438,7 @@ def build_chat_trigger(window_id: str, body: dict, headers: Optional[dict] = Non
         return {
             "kind": "conflict",
             "hard": True,
-            "reason": "对话出现争执或关系拉扯，应写进渡的日常",
+            "reason": "对话出现争执或关系拉扯，应写进你的日常",
             "facts": facts,
             "topic_key": "conflict",
         }
@@ -492,7 +492,7 @@ def format_inject_block(state: dict, trigger: Optional[dict] = None, maintenance
         current_text = "昨天：\n\n今天："
 
     lines = [
-        "【渡的日常（仅你与网关可见，勿在回复正文复述给老婆）】",
+        "【你的日常（仅你与网关可见，勿在回复正文复述给老婆）】",
         "这块只保留“昨天缩略 + 今天总结/少量硬触发素材”。",
         "普通聊天不要写 DU_DAILY；白天细节和氛围由近期记忆兜底。",
     ]
@@ -642,7 +642,7 @@ def build_background_prompt(trigger: dict) -> str:
     facts = trigger.get("facts") or []
     lines = [
         "这是一次内部维护，不发给老婆。",
-        "你现在只需要更新“渡的日常”这块隐藏滚动记忆，不要写任何可见正文。",
+        "你现在只需要更新“你的日常”这块隐藏滚动记忆，不要写任何可见正文。",
     ]
     hm = _current_hm()
     if hm:

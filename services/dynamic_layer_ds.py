@@ -757,6 +757,7 @@ def call_dynamic_layer_ds(
         "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
+        "max_tokens": 2048,
     }
     attempts: list[dict] = []
     try:
@@ -1087,6 +1088,7 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
     payload: dict[str, Any] = {
         "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 2048,
     }
     attempts: list[dict] = []
     try:
@@ -1236,6 +1238,7 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
     payload: dict[str, Any] = {
         "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 2048,
     }
     last_err: Exception | None = None
     attempts: list[dict] = []

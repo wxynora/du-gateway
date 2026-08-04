@@ -130,6 +130,8 @@ def _call_ds(rows: list[dict], current_state: dict) -> tuple[dict[int, dict], in
             {"role": "user", "content": user_content},
         ],
         "temperature": 0,
+        "thinking": {"type": "disabled"},
+        "max_tokens": 2048,
         "response_format": {"type": "json_object"},
     }
     started = time.monotonic()

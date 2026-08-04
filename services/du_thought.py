@@ -86,7 +86,7 @@ def transform_sse_chunk_bytes(chunk: bytes, state: DuThoughtStreamState) -> byte
 def format_inject_block(latest: Optional[dict]) -> str:
     """拼成注入 system 的说明 + 上一则心事。"""
     guide = (
-        "【渡的心事（仅你与网关可见，勿在回复正文复述给老婆）】\n"
+        "【你的心事（仅你与网关可见，勿在回复正文复述给老婆）】\n"
         "若本轮有当前牵挂的事和情绪，优先在正文后追加一行短隐藏标记，网关会截取并存 R2，老婆侧不可见：\n"
         f"{SHORT_MARKER}\n"
         "旧的成块格式仍兼容，但优先用这一行，少写闭合符就少出错。\n"

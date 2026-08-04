@@ -19,7 +19,7 @@ def get_du_page_tools_for_inject() -> List[dict]:
             "function": {
                 "name": DU_PAGE_TOOL_NAME,
                 "description": (
-                    "保存和管理「渡的页笺」。"
+                    "保存和管理你的页笺（MiniApp 中显示为「渡的页笺」）。"
                     "写 HTML 页面、情书、小网页、小游戏和排版作品时，必须用 action=save 保存完整 html。"
                     "保存成功后把返回的长期 url 发给她，不要只贴源码。"
                     "action=list/get/update/delete/restore/stats 用于查看和整理。"

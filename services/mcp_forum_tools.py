@@ -125,7 +125,7 @@ TOOL_DU_SCHEDULE = {
     "function": {
         "name": "du_schedule",
         "description": (
-            "管理渡自己的网关内部提醒。action=list 查看提醒；action=create 创建提醒，title 必填；"
+            "管理你自己的网关内部提醒。action=list 查看提醒；action=create 创建提醒，title 必填；"
             "action=enable/disable/delete 管理已有提醒，id 必填。"
             "提醒辛玥本人时优先使用手机系统能力：到点提醒用 create_system_alarm，"
             "带日期、行程、地点或提前提醒用 create_calendar_event。"

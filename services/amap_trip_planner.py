@@ -43,7 +43,7 @@ _TRIP_BASE_PROPERTIES = {
     "travel_time": {"type": "string", "description": "计划出行时间，可为空。"},
     "optimize_order": {
         "type": "boolean",
-        "description": "是否给出基于距离的候选顺序，默认 true。最终顺序仍由渡判断。",
+        "description": "是否给出基于距离的候选顺序，默认 true。最终顺序仍由你判断。",
     },
     "prefetch": {"type": "boolean", "description": "是否启动后台交通/吃喝预取，默认 true。"},
 }
@@ -55,7 +55,7 @@ TOOL_TRIP_PREPARE_FACTS = {
         "name": TOOL_TRIP_PREPARE_FACTS_NAME,
         "description": (
             "出行规划首轮事实准备工具。只负责查准地点、基础事实和候选摘要，创建 plan_id，"
-            "并在后台预取交通/吃喝细节；最终怎么排、赶不赶、要不要调整由渡判断。"
+            "并在后台预取交通/吃喝细节；最终怎么排、赶不赶、要不要调整由你判断。"
         ),
         "parameters": {
             "type": "object",
@@ -119,7 +119,7 @@ TOOL_TRIP_UPDATE_PLAN_STATE = {
     "function": {
         "name": TOOL_TRIP_UPDATE_PLAN_STATE_NAME,
         "description": (
-            "写回出行计划状态，不查地图。用于保存用户明确偏好、已确认状态、渡的推断，"
+            "写回出行计划状态，不查地图。用于保存用户明确偏好、已确认状态、你的推断，"
             "避免多轮对话里丢失上下文。"
         ),
         "parameters": {
@@ -131,7 +131,7 @@ TOOL_TRIP_UPDATE_PLAN_STATE = {
                 "assistant_assumptions": {
                     "type": "array",
                     "items": {"type": "object"},
-                    "description": "渡的推断，必须带 confidence；>=0.85 可直接用，0.5-0.85 轻确认，<0.5 当 unknown。",
+                    "description": "你的推断，必须带 confidence；>=0.85 可直接用，0.5-0.85 轻确认，<0.5 当 unknown。",
                 },
             },
             "required": ["plan_id"],

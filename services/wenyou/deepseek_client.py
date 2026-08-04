@@ -48,6 +48,7 @@ def call_wenyou_deepseek(
         "messages": ([{"role": "system", "content": system}] if system else []) + messages,
         "stream": False,
         "temperature": temperature,
+        "max_tokens": 8192,
     }
     try:
         r = requests.post(

@@ -34,7 +34,7 @@ TOOL_OPEN_TRAVEL_PLAN_FORM = {
         "name": TOOL_OPEN_TRAVEL_PLAN_FORM_NAME,
         "description": (
             "在 SumiTalk 聊天界面弹出固定的出行规划表单，让老婆填写想去的地方、想吃的东西、"
-            "步行接受度、交通偏好等信息。用户只是表达想让渡规划旅游/路线但信息还不完整时，优先调用这个。"
+            "步行接受度、交通偏好等信息。用户只是表达想让你规划旅游/路线但信息还不完整时，优先调用这个。"
         ),
         "parameters": {
             "type": "object",

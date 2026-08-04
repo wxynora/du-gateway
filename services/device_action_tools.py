@@ -113,7 +113,7 @@ TOOL_OPEN_APP = {
         "description": (
             "在老婆手机上打开指定 App 或该 App 支持的具体页面。"
             "只需要使用日常应用名称，不要填写 Android 包名。"
-            "打开 QQ 时默认直接进入与渡的私聊；只有明确要求 QQ 首页时才传 page=首页。"
+            "打开 QQ 时默认直接进入与你的私聊；只有明确要求 QQ 首页时才传 page=首页。"
             "如果已有具体内容链接，可通过 url 交给目标 App 打开。"
             "调用结果为异步入队，不要在手机回执前声称已经打开成功。"
         ),
@@ -208,7 +208,7 @@ TOOL_RECALL_MESSAGE = {
                 },
                 "replyText": {
                     "type": "string",
-                    "description": "可选：撤回完成后在聊天界面显示的渡的回应；多条气泡未传 replyTexts 时共用这一句，最多约 500 字。",
+                    "description": "可选：撤回完成后在聊天界面显示的你的回应；多条气泡未传 replyTexts 时共用这一句，最多约 500 字。",
                 },
                 "replyTexts": {
                     "type": "array",
@@ -273,7 +273,7 @@ TOOL_NETEASE_LISTEN_CONTROL = {
             "想看她有哪些歌单时用 list_playlists；想看某个歌单歌曲时用 playlist_tracks。"
             "想在当前一起听里切歌时用 next/previous。"
             "想按歌名和歌手搜索并直接播放时用 search_play，同时提交 title 和 artist。"
-            "想把当前正在一起听的网易云歌曲收藏到渡专用歌单时用 favorite_current，默认歌单名「渡的歌」。"
+            "想把当前正在一起听的网易云歌曲收藏到你的专用歌单时用 favorite_current，默认歌单名「渡的歌」。"
             "搜索播放、切歌和收藏是异步手机动作；不要在 App 回执前声称已经执行成功。"
         ),
         "parameters": {
