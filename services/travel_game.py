@@ -220,6 +220,62 @@ def _together_current_view(state: dict[str, Any], spots: dict[str, Any]) -> dict
     }
 
 
+def _route_days(
+    state: dict[str, Any],
+    spots: dict[str, Any],
+    current_view: dict[str, Any],
+) -> list[dict[str, Any]]:
+    current_spot = current_view.get("spot") if isinstance(current_view.get("spot"), dict) else {}
+    current_id = str(current_spot.get("spot_id") or "").strip()
+    current_day = int(current_view.get("day") or state.get("day") or 0)
+    party = str(state.get("party") or "").strip()
+    done = bool(state.get("done"))
+    explicitly_visited = {
+        str(item or "").strip()
+        for item in state.get("visited") or []
+        if str(item or "").strip()
+    }
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for item in spots.get("spots") or []:
+        if not isinstance(item, dict):
+            continue
+        day = int(item.get("day") or 0)
+        spot_id = str(item.get("spot_id") or "").strip()
+        is_current = bool(not done and current_id and spot_id == current_id)
+        is_visited = done or spot_id in explicitly_visited
+        if party == "solo" and not done:
+            is_visited = day < current_day
+            if day == current_day and current_id:
+                day_items = [
+                    candidate
+                    for candidate in spots.get("spots") or []
+                    if isinstance(candidate, dict) and int(candidate.get("day") or 0) == day
+                ]
+                current_index = next(
+                    (
+                        index
+                        for index, candidate in enumerate(day_items)
+                        if str(candidate.get("spot_id") or "").strip() == current_id
+                    ),
+                    -1,
+                )
+                item_index = next((index for index, candidate in enumerate(day_items) if candidate is item), -1)
+                is_visited = 0 <= item_index < current_index
+        grouped.setdefault(day, []).append(
+            {
+                "spot_id": spot_id,
+                "name_zh": str(item.get("name_zh") or spot_id),
+                "visited": is_visited,
+                "current": is_current,
+            }
+        )
+    return [
+        {"day": day, "spots": grouped[day]}
+        for day in sorted(grouped)
+        if day > 0
+    ]
+
+
 def get_travel_public_status() -> dict[str, Any]:
     state = read_travel_state()
     dest_id = str(state.get("dest") or "").strip()
@@ -257,6 +313,7 @@ def get_travel_public_status() -> dict[str, Any]:
         "days_total": int(current_view.get("days_total") or spots.get("days") or 0),
         "destination": destination,
         "current_view": current_view,
+        "route": _route_days(state, spots, current_view),
         "wallet": wallet if isinstance(wallet, dict) else {},
         "souvenirs": collections["souvenirs"],
         "postcards": collections["postcards"],

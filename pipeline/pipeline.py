@@ -66,9 +66,9 @@ _SYSTEM_PROMPT_REGION_ORDER = (
     "tool_result_cache",
     "entry_style",
     "sumitalk_mode",
-    "du_daily",
     "summary_cache",
     "summary_recent",
+    "du_daily",
     "dynamic",
     "temporary_dynamic",
     "thinking_rules",
@@ -79,9 +79,9 @@ _SYSTEM_PROMPT_CACHE_GROUPS = (
     ("tool_result_cache",),
     ("entry_style",),
     ("sumitalk_mode",),
-    ("du_daily",),
     ("summary_cache",),
     ("summary_recent",),
+    ("du_daily",),
     ("dynamic",),
     ("temporary_dynamic",),
     ("thinking_rules",),
@@ -587,7 +587,7 @@ def step_inject_tool_result_cache(body: dict) -> dict:
         "tool_result_cache": _TOOL_RESULT_CACHE_SYSTEM_MARKER,
         "entry_style": _ENTRY_STYLE_SYSTEM_MARKER,
         "sumitalk_mode": _SUMITALK_REAL_MODE_SYSTEM_MARKER,
-        "du_daily": None,
+        "du_daily": _DYNAMIC_SYSTEM_MARKER,
         "summary_cache": _SUMMARY_CACHE_SYSTEM_MARKER,
         "summary_recent": _SUMMARY_RECENT_SYSTEM_MARKER,
         "dynamic": _DYNAMIC_SYSTEM_MARKER,
@@ -1637,8 +1637,8 @@ def step_inject_du_daily(
     maintenance_mode: bool = False,
 ) -> dict:
     """
-    全局注入：把「渡的日常」作为独立静态 system 槽位注入。
-    位置固定在 SumiTalk Real/App 互斥专属槽位之后、两个近期记忆块之前。
+    全局注入：把「你的日常」作为独立常驻动态 system 槽位注入。
+    最终位置固定在两个近期记忆块之后、其他常驻动态之前。
     网关判定命中更新时，渡只写本次新增隐藏块，网关截取后追加进 R2，老婆侧不可见。
     """
     _ = window_id
@@ -1677,6 +1677,7 @@ def step_inject_du_daily(
             "role": "system",
             "content": inject,
             _DU_DAILY_SYSTEM_MARKER: True,
+            _DYNAMIC_SYSTEM_MARKER: True,
         },
     )
     body["messages"] = messages
