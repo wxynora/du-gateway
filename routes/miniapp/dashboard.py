@@ -299,7 +299,11 @@ def _build_du_day_events(today: str) -> list[dict]:
                 "timestamp": dt.isoformat(),
                 "time": dt.strftime("%H:%M"),
                 "title": "Active Reach",
-                "decision_label": f"渡选择了 {action}",
+                "decision_label": (
+                    "渡在随机唤醒中选择了旅行。"
+                    if action.startswith("game:travel->")
+                    else f"渡选择了 {action}"
+                ),
                 "reason": reason,
             }
         )

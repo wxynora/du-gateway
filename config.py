@@ -403,6 +403,13 @@ AMAP_MCP_URL = os.environ.get("AMAP_MCP_URL", "").strip()
 AMAP_MCP_TIMEOUT_SECONDS = int(os.environ.get("AMAP_MCP_TIMEOUT_SECONDS", "30"))
 AMAP_MCP_TOOLS_CACHE_SECONDS = int(os.environ.get("AMAP_MCP_TOOLS_CACHE_SECONDS", "300"))
 
+# 旅行游戏 MCP：上游仓库独立安装，网关通过本机 stdio 调用；状态仍由上游写入本地 TRAVEL_HOME。
+_TRAVEL_MCP_SCRIPT_RAW = os.environ.get("TRAVEL_MCP_SCRIPT", "").strip()
+TRAVEL_MCP_SCRIPT = Path(_TRAVEL_MCP_SCRIPT_RAW).expanduser() if _TRAVEL_MCP_SCRIPT_RAW else None
+TRAVEL_MCP_HOME = Path(
+    os.environ.get("TRAVEL_MCP_HOME", str(DATA_DIR / "travel_mcp"))
+).expanduser()
+
 # R2（S3 兼容）
 R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID", "")
 R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID", "")

@@ -5,7 +5,7 @@ import re
 import shlex
 from copy import deepcopy
 
-from flask import jsonify, request
+from flask import jsonify, request, send_from_directory
 
 from services.game_tool_runtime import (
     GAME_ID_CAPTIVITY_SIMULATOR,
@@ -610,6 +610,21 @@ def _mark_gomoku_sync_activity(synced_at: str, *, detail: dict | None = None) ->
         source="gomoku_sync_du",
         detail=detail,
     )
+
+
+def _mark_travel_sync_activity(synced_at: str, *, detail: dict | None = None) -> None:
+    activity_time = str(synced_at or "").strip() or now_beijing_iso()
+    try:
+        from services.user_activity_context import mark_shared_game_user_activity
+
+        mark_shared_game_user_activity(
+            game_id="travel",
+            occurred_at=activity_time,
+            source="travel_sync_du",
+            detail=detail or {},
+        )
+    except Exception:
+        return
 
 
 def _gomoku_color_label(value: str) -> str:
@@ -2451,6 +2466,133 @@ def register_routes(bp) -> None:
     @bp.route("/game-tools/random_imitator_td/view", methods=["GET"])
     def miniapp_random_imitator_td_view():
         return jsonify(get_random_imitator_td_spectator_view()), 200
+
+    @bp.route("/game-tools/travel/status", methods=["GET"])
+    def miniapp_travel_status():
+        from services.travel_game import get_travel_public_status
+
+        return jsonify(get_travel_public_status()), 200
+
+    @bp.route("/game-tools/travel/assets/<path:asset_path>", methods=["GET"])
+    def miniapp_travel_asset(asset_path: str):
+        from services.travel_game import travel_assets_root
+
+        root = travel_assets_root()
+        if root is None:
+            return jsonify({"ok": False, "error": "TRAVEL_ASSET_UNAVAILABLE"}), 404
+        return send_from_directory(root, asset_path)
+
+    @bp.route("/game-tools/travel/sync-du", methods=["POST"])
+    def miniapp_travel_sync_du():
+        body = request.get_json(silent=True) or {}
+        user_content = str(body.get("message") or "")
+        if not user_content.strip():
+            return jsonify({"ok": False, "error": "旅行消息不能为空。"}), 400
+
+        from services.travel_game import (
+            append_travel_chat_exchange,
+            get_travel_public_status,
+            read_travel_state,
+            travel_progress_signature,
+        )
+        from services.travel_tool import execute_travel_tool
+
+        current_status = get_travel_public_status()
+        if not current_status.get("available"):
+            return jsonify({**current_status, "ok": False, "error": "TRAVEL_MCP_UNAVAILABLE"}), 503
+
+        panel_target = str(body.get("reply_target") or _get_panel_device_id()).strip()
+        try:
+            from services.reply_channel_context import resolve_recent_reply_context
+
+            context = resolve_recent_reply_context(default_target=panel_target)
+        except Exception:
+            context = {}
+        channel = str(context.get("channel") or "").strip().lower()
+        window_id = str(context.get("window_id") or "").strip()
+        target = str(context.get("target") or "").strip() or panel_target
+        meta = context.get("meta") if isinstance(context.get("meta"), dict) else {}
+        if not window_id:
+            return jsonify({**current_status, "ok": False, "error": "缺少最近聊天窗口"}), 400
+
+        before_signature = travel_progress_signature()
+        engine_state = execute_travel_tool(
+            {"action": "here"},
+            context={"wakeup_kind": "travel"},
+        )
+        try:
+            engine_payload = json.loads(engine_state)
+        except Exception:
+            engine_payload = {}
+        engine_error = str(engine_payload.get("error") or "") if isinstance(engine_payload, dict) else ""
+        if engine_error.startswith("TRAVEL_MCP_"):
+            return jsonify({**current_status, "ok": False, "error": engine_error}), 503
+
+        synced_at = now_beijing_iso()
+        _mark_travel_sync_activity(
+            synced_at,
+            detail={
+                "game_id": "travel",
+                "window_id": window_id,
+                "target": target,
+                "phase": "game_sync",
+            },
+        )
+
+        from services.travel_followup import send_travel_wakeup
+
+        wakeup = send_travel_wakeup(
+            window_id=window_id,
+            target=target,
+            engine_state=engine_state,
+            user_content=user_content,
+            preferred_channel=channel,
+            preferred_meta=meta,
+        )
+        if not bool((wakeup or {}).get("ok")):
+            return jsonify(
+                {
+                    **get_travel_public_status(),
+                    "ok": False,
+                    "error": str((wakeup or {}).get("error") or "渡这次没有成功回应。"),
+                    "synced_at": synced_at,
+                }
+            ), 502
+
+        reply_text = str((wakeup or {}).get("reply_text") or (wakeup or {}).get("reply_preview") or "")
+        state = read_travel_state()
+        try:
+            append_travel_chat_exchange(
+                state=state,
+                user_text=user_content,
+                reply_text=reply_text,
+            )
+        except Exception:
+            return jsonify(
+                {
+                    **get_travel_public_status(),
+                    "ok": False,
+                    "error": "TRAVEL_CHAT_SAVE_FAILED",
+                    "reply_text": reply_text,
+                    "synced_at": synced_at,
+                }
+            ), 500
+        executed_tools = [
+            str(name or "").strip()
+            for name in (wakeup or {}).get("executed_tools") or []
+            if str(name or "").strip()
+        ]
+        return jsonify(
+            {
+                **get_travel_public_status(),
+                "reply_text": reply_text,
+                "travel_tool_called": "travel" in executed_tools,
+                "state_changed": before_signature != travel_progress_signature(),
+                "executed_tools": executed_tools,
+                "channel": str((wakeup or {}).get("channel") or ""),
+                "synced_at": synced_at,
+            }
+        ), 200
 
     @bp.route("/game-tools/gomoku/sync-du", methods=["POST"])
     def miniapp_gomoku_sync_du():

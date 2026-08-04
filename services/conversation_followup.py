@@ -964,6 +964,11 @@ def _send_wakeup_event(
             logger.warning("后端事件唤醒调用网关失败 status=%s body=%s", r.status_code, (r.text or "")[:300])
             return {"ok": False, "error": f"gateway_http_{r.status_code}"}
         data = r.json() if r.content else {}
+        executed_tools = [
+            str(name or "").strip()
+            for name in (data or {}).get("du_gateway_executed_tools") or []
+            if str(name or "").strip()
+        ]
         try:
             gateway_archive_round_index = int((data or {}).get("du_gateway_archive_round_index") or 0)
         except Exception:
@@ -980,6 +985,7 @@ def _send_wakeup_event(
                 "tool_only": True,
                 "archive_ok": bool(not archive or archive_after_delivery or gateway_archive_round_index > 0),
                 "reply_preview": str(msg.get("content") or "")[:120],
+                "executed_tools": executed_tools,
                 "error": "",
             }
         reasoning_text, _reasoning_details, _reasoning_omitted = extract_reasoning_text_and_details(msg)
@@ -1068,6 +1074,7 @@ def _send_wakeup_event(
                 "dispatched": False,
                 "reply_text": outbound,
                 "reply_preview": outbound[:120],
+                "executed_tools": executed_tools,
                 "error": "",
             }
         attempted_channels: list[str] = []

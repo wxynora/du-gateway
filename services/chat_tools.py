@@ -472,6 +472,13 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
         from services.cedareco_tool import execute_cedareco_tool
 
         return execute_cedareco_tool(arguments if isinstance(arguments, dict) else {})
+    if name == "travel":
+        from services.travel_tool import execute_travel_tool
+
+        return execute_travel_tool(
+            arguments if isinstance(arguments, dict) else {},
+            context=context,
+        )
     if name == "galatea_garden":
         from services.galatea_garden_tool import execute_galatea_garden_tool
 

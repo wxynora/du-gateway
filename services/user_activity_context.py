@@ -21,6 +21,7 @@ SHARED_GAME_ACTIVITY_NAMES = {
     "private_board": "涩涩走格棋",
     "captivity_simulator": "囚禁模拟器",
     "gomoku": "五子棋",
+    "travel": "旅行",
 }
 
 _activity_file_lock = threading.Lock()

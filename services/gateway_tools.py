@@ -292,6 +292,7 @@ def get_gateway_tools_for_inject() -> List[dict]:
     from services.du_pages import get_du_page_tools_for_inject
     from services.galatea_garden_tool import get_galatea_garden_tools_for_inject
     from services.secret_drawer import get_secret_drawer_tools_for_inject
+    from services.travel_tool import get_travel_tools_for_inject
 
     return [
         *get_gateway_xiaoai_tools(),
@@ -302,6 +303,7 @@ def get_gateway_tools_for_inject() -> List[dict]:
         *get_du_page_tools_for_inject(),
         *get_aifarm_tools_for_inject(),
         *get_cedareco_tools_for_inject(),
+        *get_travel_tools_for_inject(),
         *get_galatea_garden_tools_for_inject(),
     ]
 

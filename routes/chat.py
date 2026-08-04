@@ -869,13 +869,17 @@ def _gomoku_channel_player_text(user_msg: dict | None) -> str:
     return text
 
 
+def _travel_channel_player_text(user_msg: dict | None) -> str:
+    return _plain_message_text(user_msg)
+
+
 def _wakeup_kind_for_archive() -> str:
     return str(request.headers.get("X-DU-WAKEUP-KIND") or "").strip().lower()
 
 
 def _gateway_event_source_for_archive(messages: list | None, *, wakeup_kind: str = "") -> Optional[dict]:
     kind = str(wakeup_kind or "").strip().lower()
-    if kind not in {"private_board", "captivity_simulator", "gomoku"}:
+    if kind not in {"private_board", "captivity_simulator", "gomoku", "travel", "proactive_game"}:
         return None
     for msg in messages or []:
         if not isinstance(msg, dict):
@@ -889,6 +893,10 @@ def _gateway_event_source_for_archive(messages: list | None, *, wakeup_kind: str
             return msg
         if kind == "gomoku" and "小玥正在和你玩「五子棋」" in text:
             return msg
+        if kind == "travel" and "【共同旅行当前状态】" in text:
+            return msg
+        if kind == "proactive_game" and text == "你在随机唤醒中选择了旅行。":
+            return msg
     return None
 
 
@@ -897,6 +905,7 @@ def _compact_gateway_event_for_archive(
     *,
     wakeup_kind: str = "",
     gomoku_player_text: str = "",
+    travel_player_text: str = "",
 ) -> dict:
     kind = str(wakeup_kind or "").strip().lower()
     text = _plain_message_text(user_msg)
@@ -924,6 +933,14 @@ def _compact_gateway_event_for_archive(
     elif kind == "gomoku":
         label = "五子棋"
         content = _compact_gomoku_event_text(text, player_text=gomoku_player_text)
+    elif kind == "travel":
+        label = "旅行"
+        content = "我正在和小玥一起赛博旅游。"
+        if str(travel_player_text or ""):
+            content += f"\n小玥：{travel_player_text}"
+    elif kind == "proactive_game" and text == "你在随机唤醒中选择了旅行。":
+        label = "旅行"
+        content = "我在随机唤醒中选择了旅行。"
     elif kind in {"exchange_diary_comment", "diary_comment"}:
         label = "日记评论互动"
         content = _compact_exchange_diary_comment_event_text(text)
@@ -1040,10 +1057,12 @@ def _build_round_cleaned_for_archive(
         if wakeup_kind:
             event_msg = _gateway_event_source_for_archive(request_messages, wakeup_kind=wakeup_kind)
             gomoku_player_text = _gomoku_channel_player_text(user_msg) if wakeup_kind == "gomoku" else ""
+            travel_player_text = _travel_channel_player_text(user_msg) if wakeup_kind == "travel" else ""
             archive_user = _compact_gateway_event_for_archive(
                 event_msg or archive_user or user_msg,
                 wakeup_kind=wakeup_kind,
                 gomoku_player_text=gomoku_player_text,
+                travel_player_text=travel_player_text,
             )
             if wakeup_kind in {"exchange_diary_comment", "diary_comment"}:
                 diary_reply = _exchange_diary_reply_content_from_tool_calls(assistant_msg.get("tool_calls"))
@@ -2710,6 +2729,7 @@ def chat_completions():
                 "reply_channel": reply_channel,
                 "window_id": window_id,
                 "client_request_id": sumitalk_client_request_id,
+                "wakeup_kind": str(request.headers.get("X-DU-WAKEUP-KIND") or "").strip().lower(),
             },
         )
 

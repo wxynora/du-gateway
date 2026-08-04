@@ -178,6 +178,17 @@ _PROACTIVE_SOLO_GAMES = {
             "再根据工具结果调用同一个工具做至少一步实际的生态操作。"
         ),
     },
+    "travel": {
+        "title": "旅行",
+        "tool": "travel",
+        "instruction": (
+            "先调用 travel，action 填 here，读取当前旅程；"
+            "如果有独自旅行在途，就按返回状态和 solo_nudge 完成当前该做的事；"
+            "如果没有进行中的旅程，先用 action=plan、party=solo 看可去地点，"
+            "再自行选择并用 action=start、party=solo 出发。"
+            "这次至少让旅行状态发生一次真实变化，只查看不算完成。"
+        ),
+    },
 }
 
 _PROACTIVE_SOLO_GAME_ALIASES = {
@@ -194,6 +205,8 @@ _PROACTIVE_SOLO_GAME_ALIASES = {
     "cedar_eco": "cedareco",
     "cedar-eco": "cedareco",
     "瓶中生态": "cedareco",
+    "赛博旅行": "travel",
+    "旅行": "travel",
 }
 
 
@@ -207,8 +220,13 @@ def _normalize_proactive_solo_game(value: str) -> str:
 
 
 def _proactive_solo_game_options_prompt() -> str:
-    lines = ["如果选择玩游戏，action 填 game，并从下面仅限渡单机玩的游戏中选一个："]
+    lines = ["如果选择玩游戏，action 填 game，并从下面仅限你单机玩的游戏中选一个："]
     for game_id, spec in _PROACTIVE_SOLO_GAMES.items():
+        if game_id == "travel":
+            from services.travel_mcp_client import travel_mcp_enabled
+
+            if not travel_mcp_enabled():
+                continue
         lines.append(
             f'- {spec["title"]}：game 填 "{game_id}"；选中后会追加执行轮，实际游玩必须调用 {spec["tool"]} 工具。'
         )
@@ -382,6 +400,7 @@ _SELF_ACTION_TOOL_LABELS = {
     "random_imitator_td": "玩了植物大战丧尸随机版",
     "farm": "玩了 AI 农场",
     "cedareco": "玩了瓶中生态",
+    "travel": "旅行了",
     "note_write": "写了便签",
 }
 
@@ -679,8 +698,9 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
         "random_imitator_td": "game",
         "farm": "game",
         "cedareco": "game",
+        "travel": "game",
     }
-    if action in {"random_imitator_td", "farm", "cedareco"} and not requested_game:
+    if action in {"random_imitator_td", "farm", "cedareco", "travel"} and not requested_game:
         requested_game = action
     action = alias.get(action, action)
     none_like = {"no_contact", "none", "silent", "skip"}
@@ -1982,12 +2002,27 @@ def _run_proactive_game_action(
             "reply_preview": "",
         }
 
+    travel_before = ""
+    if normalized_game == "travel":
+        from services.travel_game import travel_progress_signature
+        from services.travel_mcp_client import travel_mcp_enabled
+
+        if not travel_mcp_enabled():
+            return {
+                "ok": False,
+                "game_id": normalized_game,
+                "title": spec["title"],
+                "tool": spec["tool"],
+                "error": "travel_mcp_unavailable",
+                "reply_preview": "",
+            }
+        travel_before = travel_progress_signature()
+
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     channels = _available_channels()
     default_channel = _preferred_proactive_channel(channels)
     now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso()) or datetime.now()
     user_prompt = (
-        f"你刚才在随机唤醒里选择了玩《{spec['title']}》。\n"
         f"你刚才选择玩游戏的理由：{str(initial_reason or '').strip() or '（未说明）'}\n"
         f"现在需要调用 {spec['tool']} 工具实际玩一会。\n"
         f"这次只能使用 {spec['tool']} 工具来玩，不要改用其它游戏工具，也不要只用文字假装已经玩过。\n"
@@ -1995,9 +2030,29 @@ def _run_proactive_game_action(
         "完成这次游玩后，用一句很短的话记录刚才做了什么；如果工具失败，也如实说明失败原因。\n"
         f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次真实互动大约 {hours_since_last:.1f} 小时。"
     )
+    if normalized_game == "travel":
+        messages = [
+            {
+                "role": "system",
+                "content": "你在随机唤醒中选择了旅行。",
+                "__dynamic__": True,
+                "__temporary_dynamic__": True,
+            },
+            {"role": "user", "content": user_prompt},
+        ]
+    else:
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    f"你刚才在随机唤醒里选择了玩《{spec['title']}》。\n"
+                    + user_prompt
+                ),
+            }
+        ]
     body = {
         "model": _get_chat_model(),
-        "messages": [{"role": "user", "content": user_prompt}],
+        "messages": messages,
         "stream": False,
     }
     headers = {
@@ -2046,13 +2101,20 @@ def _run_proactive_game_action(
         text = (content or "").strip() if isinstance(content, str) else str(content or "").strip()
         executed_tools = _gateway_executed_tool_names(data)
         used_selected_tool = spec["tool"] in executed_tools
-        if not used_selected_tool:
+        travel_state_changed = True
+        if normalized_game == "travel":
+            from services.travel_game import travel_progress_signature
+
+            travel_state_changed = travel_before != travel_progress_signature()
+        execution_ok = used_selected_tool and travel_state_changed
+        if not execution_ok:
             logger.warning(
-                "主动玩游戏执行轮未调用所选工具 window_id=%s game_id=%s required=%s executed=%s",
+                "主动玩游戏执行轮未完成 window_id=%s game_id=%s required=%s executed=%s state_changed=%s",
                 window_id,
                 normalized_game,
                 spec["tool"],
                 ",".join(executed_tools) or "none",
+                travel_state_changed,
             )
         else:
             logger.info(
@@ -2063,13 +2125,20 @@ def _run_proactive_game_action(
                 text[:120],
             )
         return {
-            "ok": used_selected_tool,
+            "ok": execution_ok,
             "game_id": normalized_game,
             "title": spec["title"],
             "tool": spec["tool"],
             "executed_tools": list(executed_tools),
+            "state_changed": travel_state_changed,
             "reply_preview": text[:240],
-            "error": "" if used_selected_tool else "required_tool_not_called",
+            "error": (
+                ""
+                if execution_ok
+                else "required_tool_not_called"
+                if not used_selected_tool
+                else "travel_state_not_changed"
+            ),
         }
     except Exception as e:
         logger.warning("主动玩游戏执行轮异常 game_id=%s error=%s", normalized_game, e)

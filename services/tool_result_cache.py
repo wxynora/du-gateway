@@ -40,7 +40,7 @@ _PROMPT_HEADER = (
     "以下是你已经完成的工具调用摘要，只用于记住刚才做过什么；需要最新结果时仍可重新调用工具。"
 )
 _GAME_LOOP_SUMMARY_MODEL = "Qwen/Qwen3-8B"
-_GAME_LOOP_SUMMARY_TOOLS = frozenset({"random_imitator_td", "farm", "cedareco"})
+_GAME_LOOP_SUMMARY_TOOLS = frozenset({"random_imitator_td", "farm", "cedareco", "travel"})
 _GAME_LOOP_SUMMARY_SYSTEM_PROMPT = """你负责把同一轮单机游戏中的连续工具调用记录融合成一条准确、自然的中文历史摘要。
 
 严格按照记录顺序整理，只写记录中实际发生的内容。
