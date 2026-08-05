@@ -928,6 +928,10 @@ const maxConsecutiveGroupMentionReplies = Math.max(
   1,
   envInt("QQ_GROUP_MAX_CONSECUTIVE_MENTION_REPLIES", 10)
 );
+const groupMentionContinuityGapMs = Math.max(
+  1,
+  envInt("QQ_GROUP_MENTION_CONTINUITY_GAP_MS", 5 * 60 * 1000)
+);
 const configuredBotUserId = Number(envStr("QQ_BOT_USER_ID", "3877162412") || 0);
 let resolvedBotUserId = configuredBotUserId;
 const configuredGroupId = Number(envStr("QQ_GROUP_ID", "515831305") || 0);
@@ -1179,14 +1183,21 @@ function rememberGroupMessage(j, content) {
   return row;
 }
 
-function resetConsecutiveGroupMentions(groupId) {
-  consecutiveGroupMentions.delete(String(groupId || ""));
-}
-
 function consumeConsecutiveGroupMentionReply(groupId) {
   const key = String(groupId || "");
-  const count = Number(consecutiveGroupMentions.get(key) || 0) + 1;
-  consecutiveGroupMentions.set(key, Math.min(count, maxConsecutiveGroupMentionReplies + 1));
+  const now = Date.now();
+  const previous = consecutiveGroupMentions.get(key);
+  const previousCount = Number(previous?.count || 0);
+  const previousTriggeredAt = Number(previous?.lastTriggeredAt || 0);
+  const elapsed = now - previousTriggeredAt;
+  const isContinuous = previousTriggeredAt > 0
+    && elapsed >= 0
+    && elapsed <= groupMentionContinuityGapMs;
+  const count = (isContinuous ? previousCount : 0) + 1;
+  consecutiveGroupMentions.set(key, {
+    count: Math.min(count, maxConsecutiveGroupMentionReplies + 1),
+    lastTriggeredAt: now,
+  });
   if (consecutiveGroupMentions.size > dedupeMax) consecutiveGroupMentions.clear();
   return {
     allowed: count <= maxConsecutiveGroupMentionReplies,
@@ -1454,7 +1465,6 @@ async function handleGroupEvent(j) {
     return;
   }
   const targetsSelf = mentionsSelf || quotesSelf;
-  if (!targetsSelf) resetConsecutiveGroupMentions(groupId);
   const baseContent = mentionsSelf
     ? await contentWithoutSelfAt(j)
     : extractUserContentFromMessage(j?.message || j?.raw_message || "");
