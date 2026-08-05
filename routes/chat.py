@@ -2901,6 +2901,7 @@ def chat_completions():
         body,
         enabled=sumitalk_real_mode,
         app_request=sumitalk_prompt_assembly,
+        wakeup_kind=_wakeup_kind_for_archive(),
     )
     body = step_inject_play_note(body)
     body = step_inject_summary(body, window_id, is_user_input=tg_user_input)

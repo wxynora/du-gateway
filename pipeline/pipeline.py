@@ -55,6 +55,11 @@ _TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
 _THINKING_RULES_SYSTEM_MARKER = "__thinking_rules__"
 _ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
+_SUMITALK_MODE_PROMPT_EXCLUDED_WAKEUP_KINDS = frozenset({
+    "spring_dream",
+    "random_spring_dream",
+    "post_spring_dream",
+})
 _DU_DAILY_SYSTEM_MARKER = "__du_daily__"
 _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 _PLAY_NOTE_PENDING_BODY_KEY = "__play_note_pending__"
@@ -620,6 +625,7 @@ def step_inject_sumitalk_real_mode(
     enabled: bool = False,
     *,
     app_request: bool = False,
+    wakeup_kind: str = "",
 ) -> dict:
     """在较稳定/最近记忆之前互斥插入 SumiTalk Real 或 App 默认提示。"""
     body = copy.deepcopy(body)
@@ -628,7 +634,10 @@ def step_inject_sumitalk_real_mode(
         if not (isinstance(msg, dict) and msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER))
     ]
     body["messages"] = messages
-    if enabled:
+    normalized_wakeup_kind = str(wakeup_kind or "").strip().lower()
+    if normalized_wakeup_kind in _SUMITALK_MODE_PROMPT_EXCLUDED_WAKEUP_KINDS:
+        prompt = ""
+    elif enabled:
         prompt = _load_managed_static_prompt(
             "sumitalk_real_mode_prompt",
             SUMITALK_REAL_MODE_PROMPT,
