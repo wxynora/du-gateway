@@ -926,7 +926,7 @@ const groupHistoryContextLimit = Math.max(1, envInt("QQ_GROUP_CONTEXT_MESSAGES",
 const groupHistoryKeepLimit = 50;
 const maxConsecutiveGroupMentionReplies = Math.max(
   1,
-  envInt("QQ_GROUP_MAX_CONSECUTIVE_MENTION_REPLIES", 5)
+  envInt("QQ_GROUP_MAX_CONSECUTIVE_MENTION_REPLIES", 10)
 );
 const configuredBotUserId = Number(envStr("QQ_BOT_USER_ID", "3877162412") || 0);
 let resolvedBotUserId = configuredBotUserId;
@@ -1486,7 +1486,7 @@ async function handleGroupEvent(j) {
   const mentionReplySlot = consumeConsecutiveGroupMentionReply(groupId);
   if (!mentionReplySlot.allowed) {
     console.log(
-      `[qq-onebot] 群聊连续 @ 回复已达上限 group=${groupId} count=${mentionReplySlot.count} limit=${mentionReplySlot.limit}`
+      `[qq-onebot] 群聊连续 @/引用回复已达上限 group=${groupId} count=${mentionReplySlot.count} limit=${mentionReplySlot.limit}`
     );
     return;
   }
