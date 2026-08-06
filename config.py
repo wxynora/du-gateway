@@ -637,6 +637,38 @@ SUMITALK_CHAT_WORKER_IDLE_SECONDS = float(os.environ.get("SUMITALK_CHAT_WORKER_I
 SUMITALK_CHAT_QUEUE_STALE_SECONDS = float(os.environ.get("SUMITALK_CHAT_QUEUE_STALE_SECONDS", str(max(120, STREAM_TIMEOUT_SECONDS + 180))) or str(max(120, STREAM_TIMEOUT_SECONDS + 180)))
 # 原生 Android 任务走真实 SSE；旧 MiniApp job 继续沿用非流式响应。
 SUMITALK_CHAT_NATIVE_STREAM_ENABLED = os.environ.get("SUMITALK_CHAT_NATIVE_STREAM_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+# SumiTalk / Telegram Webhook 事件运行时。关闭时完全保留旧 SQLite polling worker。
+EVENT_RUNTIME_ENABLED = os.environ.get("EVENT_RUNTIME_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0").strip()
+EVENT_STREAM_INTERACTIVE = os.environ.get("EVENT_STREAM_INTERACTIVE", "du:interactive").strip() or "du:interactive"
+EVENT_CONSUMER_GROUP_INTERACTIVE = (
+    os.environ.get("EVENT_CONSUMER_GROUP_INTERACTIVE", "du:interactive-workers").strip()
+    or "du:interactive-workers"
+)
+EVENT_CONSUMER_NAME = os.environ.get("EVENT_CONSUMER_NAME", "").strip()
+EVENT_BLOCK_MS = max(1, int(float(os.environ.get("EVENT_BLOCK_MS", "5000") or "5000")))
+EVENT_CLAIM_IDLE_MS = max(1, int(float(os.environ.get("EVENT_CLAIM_IDLE_MS", "600000") or "600000")))
+EVENT_MAX_DELIVERY_ATTEMPTS = max(
+    1,
+    int(float(os.environ.get("EVENT_MAX_DELIVERY_ATTEMPTS", "8") or "8")),
+)
+EVENT_OUTBOX_FALLBACK_SCAN_SECONDS = max(
+    30.0,
+    float(os.environ.get("EVENT_OUTBOX_FALLBACK_SCAN_SECONDS", "30") or "30"),
+)
+EVENT_OUTBOX_BATCH_SIZE = max(1, int(float(os.environ.get("EVENT_OUTBOX_BATCH_SIZE", "100") or "100")))
+EVENT_OUTBOX_MAX_RETRY_SECONDS = max(
+    1.0,
+    float(os.environ.get("EVENT_OUTBOX_MAX_RETRY_SECONDS", "60") or "60"),
+)
+EVENT_INTERACTIVE_MAX_WORKERS = max(
+    1,
+    int(float(os.environ.get("EVENT_INTERACTIVE_MAX_WORKERS", "4") or "4")),
+)
+EVENT_REDIS_CONNECT_TIMEOUT_SECONDS = max(
+    0.1,
+    float(os.environ.get("EVENT_REDIS_CONNECT_TIMEOUT_SECONDS", "2") or "2"),
+)
 # Bot 调网关的 base URL（如 http://127.0.0.1:5000 或公网网关地址）
 TELEGRAM_GATEWAY_URL = os.environ.get("TELEGRAM_GATEWAY_URL", "http://127.0.0.1:5000").strip().rstrip("/")
 # Telegram MiniApp（WebApp）对外入口：仅用于 ReplyKeyboard 的 web_app 按钮（Telegram 强制要求 HTTPS）

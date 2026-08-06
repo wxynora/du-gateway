@@ -9,8 +9,9 @@ Webhook 入口仍挂在网关 /telegram/webhook，但 web worker 只写 SQLite �
     python scripts/run_telegram_webhook_worker.py
 """
 import os
+import signal
 import sys
-import time
+import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -23,11 +24,13 @@ load_dotenv(ROOT / ".env", override=False)
 
 from config import (  # noqa: E402
     DATA_DIR,
+    EVENT_RUNTIME_ENABLED,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_WEBHOOK_QUEUE_MAX_ATTEMPTS,
     TELEGRAM_WEBHOOK_QUEUE_STALE_SECONDS,
     TELEGRAM_WEBHOOK_WORKER_IDLE_SECONDS,
 )
+from runtime.process_guard import RuntimeProcessGuard  # noqa: E402
 from utils.log import get_logger, setup_logging  # noqa: E402
 
 setup_logging()
@@ -49,7 +52,7 @@ def _resolve_bot_token(bot_kind: str) -> str:
     return (TELEGRAM_BOT_TOKEN or "").strip()
 
 
-def run_worker_loop() -> None:
+def _run_worker_loop(stop_event: threading.Event) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     init_telegram_bot_runtime()
     idle = max(float(TELEGRAM_WEBHOOK_WORKER_IDLE_SECONDS or 0.5), 0.1)
@@ -63,13 +66,13 @@ def run_worker_loop() -> None:
         queue_stats(),
     )
 
-    while True:
+    while not stop_event.is_set():
         item = claim_next_update(
             stale_after_seconds=stale_after,
             max_attempts=max_attempts,
         )
         if item is None:
-            time.sleep(idle)
+            stop_event.wait(idle)
             continue
 
         if item.bot_kind != "main":
@@ -92,7 +95,7 @@ def run_worker_loop() -> None:
                 item.update_key,
             )
             fail_update(item.id, f"missing {item.bot_kind} bot token", max_attempts=max_attempts)
-            time.sleep(min(idle * 2, 5.0))
+            stop_event.wait(min(idle * 2, 5.0))
             continue
 
         try:
@@ -118,5 +121,27 @@ def run_worker_loop() -> None:
             fail_update(item.id, str(e), max_attempts=max_attempts)
 
 
+def run_worker_loop(stop_event: threading.Event | None = None) -> None:
+    if EVENT_RUNTIME_ENABLED:
+        raise RuntimeError(
+            "legacy Telegram polling worker refuses to start when EVENT_RUNTIME_ENABLED=1"
+        )
+    stop = stop_event or threading.Event()
+    with RuntimeProcessGuard("telegram-consumer"):
+        _run_worker_loop(stop)
+
+
+def main() -> None:
+    stop_event = threading.Event()
+
+    def _stop(signum, _frame) -> None:
+        logger.info("Telegram webhook queue worker stopping signal=%s", signum)
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    run_worker_loop(stop_event)
+
+
 if __name__ == "__main__":
-    run_worker_loop()
+    main()

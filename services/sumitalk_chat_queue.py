@@ -19,11 +19,14 @@ except Exception:  # pragma: no cover - non-POSIX fallback for local tooling onl
 
 from config import (
     DATA_DIR,
+    EVENT_RUNTIME_ENABLED,
     STREAM_TIMEOUT_SECONDS,
     SUMITALK_CHAT_NATIVE_STREAM_ENABLED,
     SUMITALK_CHAT_QUEUE_DB,
     SUMITALK_CHAT_QUEUE_STALE_SECONDS,
 )
+from runtime.events import EventEnvelope, SUMITALK_CHAT_JOB_CREATED
+from runtime.outbox import ensure_outbox_schema, insert_outbox_event, notify_outbox_dispatcher
 from storage import upstream_store
 from services.game_tool_runtime import normalize_game_id
 from services.sumitalk_voice_sidecar import (
@@ -1359,29 +1362,32 @@ def enqueue_sumitalk_chat_job(job_id: str, request_key: str, payload: dict) -> E
         raise ValueError("invalid job id")
     now = time.time()
     clean_request_key = str(request_key or "").strip() or None
-    payload_json = json.dumps(payload if isinstance(payload, dict) else {}, ensure_ascii=False, separators=(",", ":"))
+    clean_payload = payload if isinstance(payload, dict) else {}
+    payload_json = json.dumps(clean_payload, ensure_ascii=False, separators=(",", ":"))
+    chat_body = clean_payload.get("chat_body") if isinstance(clean_payload.get("chat_body"), dict) else {}
+    partition_key = str(chat_body.get("window_id") or clean_payload.get("reply_target") or job_id).strip()
+    event = (
+        EventEnvelope.create(
+            SUMITALK_CHAT_JOB_CREATED,
+            job_id=job_id,
+            partition_key=partition_key,
+            payload={
+                "request_key": clean_request_key or "",
+                "window_id": str(chat_body.get("window_id") or ""),
+            },
+        )
+        if EVENT_RUNTIME_ENABLED
+        else None
+    )
+    result: EnqueueChatJobResult
     with _connect() as conn:
+        if event is not None:
+            ensure_outbox_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute(
-                """
-                INSERT INTO sumitalk_chat_jobs
-                    (job_id, request_key, payload_json, status, attempts, locked_at, lease_token, created_at, updated_at, last_error)
-                VALUES (?, ?, ?, 'pending', 0, NULL, NULL, ?, ?, NULL)
-                """,
-                (job_id, clean_request_key, payload_json, now, now),
-            )
-            return EnqueueChatJobResult(enqueued=True, duplicate=False, job_id=job_id, request_key=clean_request_key or "")
-        except sqlite3.IntegrityError:
-            existing = find_queued_sumitalk_chat_job_id(request_key=clean_request_key or "", job_id=job_id)
-            if not existing:
-                conn.execute(
-                    """
-                    DELETE FROM sumitalk_chat_jobs
-                    WHERE (job_id=? OR request_key=?)
-                      AND status NOT IN ('pending', 'processing')
-                    """,
-                    (job_id, clean_request_key),
-                )
+            inserted = True
+            existing = ""
+            try:
                 conn.execute(
                     """
                     INSERT INTO sumitalk_chat_jobs
@@ -1390,13 +1396,52 @@ def enqueue_sumitalk_chat_job(job_id: str, request_key: str, payload: dict) -> E
                     """,
                     (job_id, clean_request_key, payload_json, now, now),
                 )
-                return EnqueueChatJobResult(enqueued=True, duplicate=False, job_id=job_id, request_key=clean_request_key or "")
-            return EnqueueChatJobResult(
-                enqueued=False,
-                duplicate=True,
-                job_id=existing or job_id,
+            except sqlite3.IntegrityError:
+                existing_row = conn.execute(
+                    """
+                    SELECT job_id
+                    FROM sumitalk_chat_jobs
+                    WHERE (job_id=? OR (? IS NOT NULL AND request_key=?))
+                      AND status IN ('pending', 'processing')
+                    ORDER BY id ASC
+                    LIMIT 1
+                    """,
+                    (job_id, clean_request_key, clean_request_key),
+                ).fetchone()
+                existing = str(existing_row["job_id"] or "") if existing_row else ""
+                inserted = not bool(existing)
+                if inserted:
+                    conn.execute(
+                        """
+                        DELETE FROM sumitalk_chat_jobs
+                        WHERE (job_id=? OR request_key=?)
+                          AND status NOT IN ('pending', 'processing')
+                        """,
+                        (job_id, clean_request_key),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO sumitalk_chat_jobs
+                            (job_id, request_key, payload_json, status, attempts, locked_at, lease_token, created_at, updated_at, last_error)
+                        VALUES (?, ?, ?, 'pending', 0, NULL, NULL, ?, ?, NULL)
+                        """,
+                        (job_id, clean_request_key, payload_json, now, now),
+                    )
+            if inserted and event is not None:
+                insert_outbox_event(conn, event, aggregate_type="sumitalk_chat_job")
+            conn.execute("COMMIT")
+            result = EnqueueChatJobResult(
+                enqueued=inserted,
+                duplicate=not inserted,
+                job_id=job_id if inserted else (existing or job_id),
                 request_key=clean_request_key or "",
             )
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    if result.enqueued and event is not None:
+        notify_outbox_dispatcher("sumitalk")
+    return result
 
 
 def claim_next_sumitalk_chat_job(
@@ -1442,6 +1487,84 @@ def claim_next_sumitalk_chat_job(
     except json.JSONDecodeError:
         sumitalk_logger.exception("[SumiTalk] chat_queue JSON 损坏 id=%s job_id=%s", row["id"], row["job_id"])
         fail_sumitalk_chat_queue_item(int(row["id"]), "invalid payload_json", lease_token=lease_token)
+        return None
+    if not isinstance(payload, dict):
+        payload = {}
+    return QueuedSumiTalkChatJob(
+        id=int(row["id"]),
+        job_id=str(row["job_id"] or ""),
+        request_key=str(row["request_key"] or ""),
+        payload=payload,
+        attempts=attempts,
+        lease_token=lease_token,
+    )
+
+
+def claim_sumitalk_chat_job(
+    job_id: str,
+    *,
+    stale_after_seconds: float | None = None,
+) -> QueuedSumiTalkChatJob | None:
+    _ensure_schema()
+    if not valid_sumitalk_chat_job_id(job_id):
+        return None
+    now = time.time()
+    stale_after = max(
+        float(stale_after_seconds or SUMITALK_CHAT_QUEUE_STALE_SECONDS or 300.0),
+        30.0,
+    )
+    stale_before = now - stale_after
+    lease_token = uuid4().hex
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                """
+                SELECT id, job_id, request_key, payload_json, attempts
+                FROM sumitalk_chat_jobs
+                WHERE job_id=?
+                  AND (
+                    status='pending'
+                    OR (
+                        status='processing'
+                        AND (locked_at IS NULL OR locked_at<?)
+                    )
+                  )
+                LIMIT 1
+                """,
+                (job_id, stale_before),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+            attempts = int(row["attempts"] or 0) + 1
+            conn.execute(
+                """
+                UPDATE sumitalk_chat_jobs
+                SET status='processing', attempts=?, locked_at=?, lease_token=?,
+                    updated_at=?, last_error=NULL
+                WHERE id=?
+                """,
+                (attempts, now, lease_token, now, int(row["id"])),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+    try:
+        payload = json.loads(row["payload_json"] or "{}")
+    except json.JSONDecodeError:
+        sumitalk_logger.exception(
+            "[SumiTalk] chat_queue JSON 损坏 id=%s job_id=%s",
+            row["id"],
+            row["job_id"],
+        )
+        fail_sumitalk_chat_queue_item(
+            int(row["id"]),
+            "invalid payload_json",
+            lease_token=lease_token,
+        )
         return None
     if not isinstance(payload, dict):
         payload = {}
@@ -1503,6 +1626,43 @@ def sumitalk_chat_queue_lease_active(queue_id: int, *, lease_token: str) -> bool
             (int(queue_id), lease),
         ).fetchone()
     return row is not None
+
+
+def release_sumitalk_chat_queue_item(
+    queue_id: int,
+    error: str,
+    *,
+    lease_token: str,
+) -> bool:
+    _ensure_schema()
+    lease = str(lease_token or "").strip()
+    if not lease:
+        return False
+    err = str(error or "").replace("\r", " ").replace("\n", " ").strip()
+    now = time.time()
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE sumitalk_chat_jobs
+            SET status='pending', locked_at=NULL, lease_token=NULL,
+                updated_at=?, last_error=?
+            WHERE id=? AND lease_token=? AND status='processing'
+            """,
+            (now, err, int(queue_id), lease),
+        )
+    return int(cur.rowcount or 0) > 0
+
+
+def dead_letter_sumitalk_chat_job(job_id: str, error: str) -> bool:
+    _ensure_schema()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM sumitalk_chat_jobs WHERE job_id=? LIMIT 1",
+            (str(job_id or ""),),
+        ).fetchone()
+    if row is None:
+        return False
+    return fail_sumitalk_chat_queue_item(int(row["id"]), error)
 
 
 def fail_sumitalk_chat_queue_item(

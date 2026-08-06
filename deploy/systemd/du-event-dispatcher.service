@@ -1,0 +1,17 @@
+[Unit]
+Description=Du Gateway transactional outbox dispatcher
+After=network-online.target du-gateway.service
+Wants=network-online.target du-gateway.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/du-gateway
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/du-gateway/.venv/bin/python /root/du-gateway/scripts/run_event_dispatcher.py
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

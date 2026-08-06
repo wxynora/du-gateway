@@ -52,6 +52,8 @@ _RUNTIME_TABLES = (
     "watch_subtitle_assets",
     "watch_visual_frames",
     "watch_ticket_frame_captures",
+    "event_runtime_heartbeats",
+    "dead_letter_events",
 )
 
 
@@ -811,8 +813,41 @@ def ensure_schema() -> None:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_diary_notion_page
                     ON exchange_diary_entries(source_notion_page_id)
                     WHERE source_notion_page_id != '';
+
+                CREATE TABLE IF NOT EXISTS event_runtime_heartbeats (
+                    component TEXT PRIMARY KEY,
+                    consumer_name TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    details_json TEXT NOT NULL DEFAULT '{}'
+                );
+
+                CREATE TABLE IF NOT EXISTS dead_letter_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL,
+                    stream_message_id TEXT NOT NULL DEFAULT '',
+                    event_type TEXT NOT NULL DEFAULT '',
+                    job_id TEXT NOT NULL DEFAULT '',
+                    partition_key TEXT NOT NULL DEFAULT '',
+                    trace_id TEXT NOT NULL DEFAULT '',
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    consumer TEXT NOT NULL DEFAULT '',
+                    delivery_count INTEGER NOT NULL DEFAULT 0,
+                    error TEXT NOT NULL DEFAULT '',
+                    failed_at TEXT NOT NULL DEFAULT '',
+                    UNIQUE(event_id, stream_message_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_dead_letter_events_failed_at
+                    ON dead_letter_events(failed_at DESC);
                 """
             )
+            dead_letter_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(dead_letter_events)").fetchall()
+            }
+            if "consumer" not in dead_letter_columns:
+                conn.execute(
+                    "ALTER TABLE dead_letter_events ADD COLUMN consumer TEXT NOT NULL DEFAULT ''"
+                )
             job_columns = {
                 str(row["name"])
                 for row in conn.execute("PRAGMA table_info(watch_analysis_jobs)").fetchall()

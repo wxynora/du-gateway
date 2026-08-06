@@ -120,7 +120,24 @@ def index():
 
 @app.route("/health")
 def health():
-    return {"status": "ok"}
+    try:
+        from runtime.health import event_runtime_health
+
+        event_health = event_runtime_health()
+    except Exception as exc:
+        logger.exception("event runtime health check failed")
+        event_health = {
+            "enabled": True,
+            "live": True,
+            "ready": False,
+            "errors": [f"health: {type(exc).__name__}: {exc}"],
+        }
+    return {
+        "status": "ok",
+        "live": True,
+        "ready": bool(event_health.get("ready", True)),
+        "event_runtime": event_health,
+    }
 
 
 if __name__ == "__main__":

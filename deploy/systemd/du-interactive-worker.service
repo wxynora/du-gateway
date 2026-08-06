@@ -1,0 +1,17 @@
+[Unit]
+Description=Du Gateway Redis Streams interactive worker
+After=network-online.target du-gateway.service du-event-dispatcher.service
+Wants=network-online.target du-gateway.service du-event-dispatcher.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/du-gateway
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/du-gateway/.venv/bin/python /root/du-gateway/scripts/run_interactive_worker.py
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

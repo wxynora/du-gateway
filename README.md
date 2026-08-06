@@ -7,8 +7,8 @@
 ## 技术栈
 
 - Python 3 + Flask / Gunicorn
-- Cloudflare R2 + 本地 SQLite
-- 独立队列 worker：SumiTalk 长回复、Telegram webhook、主动唤醒
+- Cloudflare R2 + 本地 SQLite；事件模式额外使用 Redis / Valkey Streams
+- 独立 worker：事件 Outbox dispatcher、SumiTalk/TG interactive worker、主动唤醒
 - 可切换的 OpenAI 兼容上游与 Claude OAuth / CPA 适配链
 - DeepSeek、向量检索、BM25/rerank 等记忆辅助能力
 
@@ -53,11 +53,53 @@ python3 -m venv .venv
 
 ## 运行边界
 
-- SumiTalk 消息先进入持久队列，由 `scripts/run_sumitalk_chat_worker.py` 独立消费；后端不自动重试失败 job。
-- Telegram webhook 只负责快速入队，聚合与回复由 `scripts/run_telegram_webhook_worker.py` 消费。
+- `EVENT_RUNTIME_ENABLED=0` 时，SumiTalk 与 Telegram webhook 继续由原 `scripts/run_sumitalk_chat_worker.py`、`scripts/run_telegram_webhook_worker.py` 消费，不要求 Redis。
+- `EVENT_RUNTIME_ENABLED=1` 时，两个入口仍先把完整 job 写入原 SQLite；同一事务额外写 `outbox_events`，再由 `scripts/run_event_dispatcher.py` 投递 `du:interactive`，`scripts/run_interactive_worker.py` 阻塞消费。旧 polling worker 会拒绝启动。
 - 主动唤醒、日历和延迟续话由独立调度进程负责，避免 Gunicorn worker 回收时丢状态。
 - Notion 运行链已经移除。交换日记、记事本、动态记忆和其他现行数据使用 R2 / SQLite，不再依赖 Notion API。
 - 最近窗口仅用于上下文选择和诊断，保存在 `data/recent_windows.json`。
+
+## 事件运行时 Phase 1
+
+本阶段只替换 SumiTalk 与 Telegram webhook 的 SQLite `0.5s` polling worker，不迁移业务数据，也不复制聊天正文到 Redis。统一事件为 `sumitalk.chat_job.created` 和 `telegram.webhook_job.created`，信封版本为 `1`；SQLite job 始终是业务事实源，Redis Stream 只负责即时通知、consumer group、pending 与重新 claim。
+
+- job 与 outbox 同事务提交；Redis 不可用不影响入口可靠落库。
+- dispatcher 接收 `du:outbox:wakeup` 即时信号，并每 30 秒兜底扫描；发布失败保留 outbox、记录次数/错误并退避，恢复后自动补发。
+- `partition_key` 对 SumiTalk 使用 `window_id`，对 Telegram 使用 chat，保证同会话 FIFO；不同 partition 由线程池并行。
+- consumer 先精确 claim SQLite job，业务成功并提交 SQLite ack 后才 `XACK`。重复 Stream 事件在 job 已终态或已删除时成为 no-op，不创建第二个 job。
+- stale pending 使用 `XAUTOCLAIM`；超过投递上限写 `dead_letter_events`，低频 reconciler 补旧 pending job 的 outbox、恢复过期 lease，并对长期 pending 安排幂等重投。
+- `/health` 始终以 HTTP 存活为主，`live=true`；事件模式的 Redis、心跳、outbox、pending 与 dead letter 通过 `event_runtime` 单独汇总，故障时 `ready=false` 而不是把网关判死。
+
+运行入口与服务模板：
+
+- `runtime/`：事件信封、Outbox、Redis Streams、dispatcher、consumer、reconciler、health 与进程锁。
+- `deploy/systemd/du-event-dispatcher.service`
+- `deploy/systemd/du-interactive-worker.service`
+- 定向验证：`EVENT_RUNTIME_TEST_REDIS_URL=redis://127.0.0.1:16379/0 .venv/bin/python scripts/test_event_runtime_phase1.py`
+
+### 正式切换
+
+以下步骤必须在同一维护窗口执行；不要让部署前已经运行、尚未加载新进程锁的旧 worker 与新 worker 重叠：
+
+1. 保持 `EVENT_RUNTIME_ENABLED=0` 部署代码并执行 `.venv/bin/pip install -r requirements.txt`；准备 Redis / Valkey。
+2. 安装两个新 systemd unit 并执行 `systemctl daemon-reload`，暂不启动。
+3. 停止并 disable `du-sumitalk-chat-worker.service`、`du-telegram-webhook-worker.service`。
+4. 在 `.env` 设置 `EVENT_RUNTIME_ENABLED=1` 与正确的 `REDIS_URL`。
+5. restart `du-gateway.service`，enable/start `du-event-dispatcher.service`、`du-interactive-worker.service`。
+6. 检查 `/health` 的 `event_runtime.ready`、outbox 最老年龄、Redis pending、dead letter 和两个服务日志；旧 pending job 会由 reconciler 补事件。
+
+### 回滚
+
+1. 停止并 disable 两个新事件服务。
+2. 将 `.env` 的 `EVENT_RUNTIME_ENABLED` 改回 `0`，restart `du-gateway.service`。
+3. enable/start 两个旧 polling worker，并检查原 SQLite 队列。
+4. 不删除 outbox 或 Redis Stream；它们不是业务事实源，保留可供再次启用时幂等恢复。
+
+### QQ 边界与后续风险
+
+QQ OneBot 主入口已经由 NapCat HTTP 回调触发，不是本阶段要消除的 SQLite polling worker。本阶段没有修改 QQ，也没有把它改成轮询；现有 15 秒私聊合并、群聊上下文、引用、@、图片、语音和全局出站串行发送全部保留。
+
+当前仍有明确的非持久化风险：OneBot webhook 在实际处理完成前返回 200；私聊 pending、去重、群历史、连续回复限制和出站队列都是进程内状态，进程退出可能丢失。后续阶段应使用持久化 QQ inbox、Transactional Outbox 和 Timer Runtime 迁移，不能拿本阶段的 SumiTalk/TG consumer 直接套成 QQ polling。
 
 ## 存储
 

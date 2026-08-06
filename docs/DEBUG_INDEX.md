@@ -100,16 +100,26 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 
 ## 4. 对话入口与异步 worker
 
+### 4.0 事件运行时 Phase 1
+
+- 总开关：`config.py::EVENT_RUNTIME_ENABLED`；默认关闭。关闭时 SumiTalk/TG 原 polling worker 保持原行为且不要求 Redis；开启时旧 worker 明确拒绝启动，新旧入口另由 `runtime/process_guard.py` 的同名 consumer 文件锁防双跑。
+- 事件与持久事实：`runtime/events.py` 定义 version `1` 的 `sumitalk.chat_job.created`、`telegram.webhook_job.created` 信封并兼容未知字段；业务事实仍分别位于原 SumiTalk/TG queue SQLite，`services/sumitalk_chat_queue.py`、`services/telegram_update_queue.py` 只在开启时把 job 与同库 `outbox_events` 放进同一事务。Redis 事件不携带完整聊天正文。
+- 投递：`runtime/outbox.py`、`runtime/dispatcher.py`、`runtime/redis_streams.py`；事务提交后 best-effort publish `du:outbox:wakeup`，dispatcher 阻塞等唤醒并按 `EVENT_OUTBOX_FALLBACK_SCAN_SECONDS`（默认 30 秒）兜底扫描。Redis 故障只增加 outbox 失败次数、错误与退避时间，不回滚已接收 job；恢复后补发。
+- 消费：`runtime/consumers.py`、`scripts/run_interactive_worker.py`；consumer group 默认 `du:interactive-workers`，先精确 claim SQLite job，业务 ack 成功后才 `XACK`。SumiTalk `window_id` 与 Telegram chat 作为 `partition_key`，同 key FIFO、不同 key 并行；重复事件遇到终态/已删除 job 为 no-op。stale PEL 使用 `XAUTOCLAIM`，超限写 `storage/runtime_sqlite.py::dead_letter_events`。
+- 修复与观测：`runtime/reconciler.py` 每 30～60 秒等级的低频周期补缺失 outbox、恢复过期 processing lease、安排长期 pending 重投；`runtime/health.py` 记录 dispatcher/worker heartbeat，并让 `/health` 在 Redis 故障时仍保持 `live=true`/HTTP 200、单列 `ready=false`、outbox/pending/dead-letter 诊断。
+- 服务与验证：`scripts/run_event_dispatcher.py`、`deploy/systemd/du-event-dispatcher.service`、`deploy/systemd/du-interactive-worker.service`；切换与回滚顺序见 `README.md`。隔离回归为 `EVENT_RUNTIME_TEST_REDIS_URL=redis://127.0.0.1:16379/0 .venv/bin/python scripts/test_event_runtime_phase1.py`，只使用临时 SQLite、显式本机测试 Redis 和假业务 handler。
+
 ### 4.1 SumiTalk
 
 - 原生聊天 job 路由：`routes/miniapp/sumitalk_chat_jobs.py`
 - 持久队列：`services/sumitalk_chat_queue.py`
-- 独立 worker：`scripts/run_sumitalk_chat_worker.py`
+- 事件 worker：`runtime/consumers.py`、`scripts/run_interactive_worker.py`
+- 关闭事件开关时的旧 worker：`scripts/run_sumitalk_chat_worker.py`
 - realtime 事件：`services/realtime_app.py`、`services/realtime_publish.py`、`services/sumitalk_live_event_broker.py`
 - 流式语音 sidecar：`services/sumitalk_voice_sidecar.py`
 - 历史接口：`routes/miniapp/sumitalk_history.py`
 
-当前边界：消息由前端创建 job，独立 worker 消费；后端不自行重试失败 job，是否重试由前端明确动作决定。
+当前边界：消息仍由前端创建原持久 job。事件开关关闭时旧 worker 消费且保留原失败语义；开启时同事务 outbox 唤醒 interactive worker，可重试消费由 Stream delivery/lease 管理，超过上限才进入 dead letter。聊天 pipeline、rich SSE、取消、终态和前端显式重试接口不改。
 
 - 原生普通聊天使用 rich SSE；旧 MiniApp、其他平台和共同游戏豁免继续走现有非流路径，共用同一提示词、工具、记忆与通道注入。启用 reasoning 的流式请求会在流开始时预留稳定 `reasoning-*` part；正文 token 到达时立即结束当前 reasoning 阶段并继续即时发送正文，后到 reasoning 仍用同一个 part 更新，不新建正文后的 reasoning part。
 - Worker 事件先经 `realtime_publish -> realtime_app -> SumiTalkRunEventBroker` 到活跃 SSE；独立 FIFO 落库队列随后写 `sumitalk_chat_run_events`。SQLite 只用于首次连接、断线重连、sequence 缺口和 realtime 不可用时的 40ms 兜底。
@@ -123,7 +133,8 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 
 - Webhook：`routes/telegram_webhook.py`
 - 更新持久队列：`services/telegram_update_queue.py`
-- Webhook worker：`scripts/run_telegram_webhook_worker.py`
+- 事件 worker：`runtime/consumers.py`、`scripts/run_interactive_worker.py`
+- 关闭事件开关时的旧 Webhook worker：`scripts/run_telegram_webhook_worker.py`
 - 主动唤醒：`services/telegram_proactive.py`
 - 主动唤醒进程：`scripts/run_telegram_proactive.py`
 - 唤醒记录生命周期：`services/wakeup_event_log.py`
@@ -131,7 +142,7 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 - 春梦状态与归档：`services/spring_dream.py`
 - Telegram 发送与展示：`services/telegram_bot.py`
 
-当前边界：webhook 快速入队，聚合、聊天调用和回复由独立 worker 完成；主动唤醒不依赖 Gunicorn worker 常驻。
+当前边界：webhook 响应格式与快速入队保持不变。事件开关开启时由原 queue SQLite + 同事务 outbox 唤醒 interactive worker，继续调用 `services/telegram_bot.py::handle_telegram_update()` 持有原聚合、聊天和回复逻辑；关闭时仍由旧 worker 消费。主动唤醒不依赖 Gunicorn worker 常驻。
 
 普通随机唤醒的主决策与随机冲浪后二次决策均提供论坛选项；主决策渲染保留托管模板中的 `逛论坛`/`forum` 候选。选择 `forum` 后追加独立执行轮，使用统一 `galatea_garden` 工具先以 `action=list_threads` 浏览，再按需以 `action=get_thread` 打开帖子；旧 `forum_read_feed` / `forum_open_thread` 不重新注入。
 
@@ -153,6 +164,8 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 - QQ 群近期上下文：`services/qq_activity_context.py`
 - QQ 入口 watchdog：`scripts/run_qq_entry_watchdog.py`
 - 微信 iLink 直连说明：`docs/wechat_ilink_direct.md`
+
+QQ OneBot 主入口已经由 NapCat HTTP callback 触发，不属于 Phase 1 的 SQLite polling worker；本阶段未改 connector，也未改变 15 秒私聊合并、群聊上下文、引用、@、图片、语音或全局出站串行队列。当前风险是 OneBot webhook 在实际处理完成前返回 200，且私聊 pending、去重、群历史、连续回复限制、出站队列均为进程内状态；后续应独立迁移到持久化 QQ inbox、Transactional Outbox 与 Timer Runtime，不能把 QQ 改造成 polling。
 
 QQ 群通过 `QQ_GROUP_ID` 绑定唯一群，当前为 `515831305`：OneBot connector 在解析正文、记录历史或调用网关前忽略其他群，`/push/group` 同样拒绝非绑定目标；网关只记录并读取该群的活动，旧 R2 群活动保留但不会进入上下文。绑定群上下文按发言人区分，不把群友内容当成小玥说的；入口消息仍进入统一聊天主链路。群聊上下文只允许后端随机主动决策、半小时硬触发、日历事件和系统闹钟使用；小家/身体/道具、延迟续话、屏幕检查、日记、游戏等其他后端事件与普通聊天均不注入。群聊上下文最多携带最近 5 张图片：OneBot 入口把 QQ 临时图片 URL 转成 base64，网关继续复用统一图片压缩；每张图片保留原群消息的发送者与时间，并在 `user` 多模态内容中紧邻图片前标注，避免把群友图片误认为小玥发送；不为这类上下文图生成图片描述；单张图片获取或压缩失败时只把该图回退为 `【图片】`，不影响其他图片和本轮唤醒。上下文存在时会同时告知渡可在回复正文开头使用 `[QQ_GROUP]`；随机主动决策的 JSON 把标记写在 `message` 字段开头。网关只从该上下文保存的来源群号生成后端投递元数据，模型不能选择群号；标记在归档和投递前剥离，经 OneBot connector `/push/group` 发回绑定群，失败则回退原唤醒渠道。
 

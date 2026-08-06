@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from config import TELEGRAM_WEBHOOK_QUEUE_DB
+from config import EVENT_RUNTIME_ENABLED, TELEGRAM_WEBHOOK_QUEUE_DB
+from runtime.events import EventEnvelope, TELEGRAM_WEBHOOK_JOB_CREATED
+from runtime.outbox import ensure_outbox_schema, insert_outbox_event, notify_outbox_dispatcher
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -30,6 +32,7 @@ class QueuedTelegramUpdate:
     update_key: str
     update: dict
     attempts: int
+    lease_token: str = ""
 
 
 def _db_path() -> Path:
@@ -64,6 +67,7 @@ def _ensure_schema() -> None:
                     status TEXT NOT NULL DEFAULT 'pending',
                     attempts INTEGER NOT NULL DEFAULT 0,
                     locked_at REAL,
+                    lease_token TEXT,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL,
                     last_error TEXT
@@ -74,6 +78,12 @@ def _ensure_schema() -> None:
                     ON telegram_webhook_updates(status, locked_at);
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(telegram_webhook_updates)").fetchall()
+            }
+            if "lease_token" not in columns:
+                conn.execute("ALTER TABLE telegram_webhook_updates ADD COLUMN lease_token TEXT")
         _SCHEMA_READY = True
 
 
@@ -109,6 +119,29 @@ def summarize_update(update: dict) -> str:
     )
 
 
+def telegram_update_partition_key(update: dict, bot_kind: str) -> str:
+    clean_update = update if isinstance(update, dict) else {}
+    message = (
+        clean_update.get("message")
+        or clean_update.get("edited_message")
+        or clean_update.get("channel_post")
+        or clean_update.get("edited_channel_post")
+        or {}
+    )
+    callback = clean_update.get("callback_query") or {}
+    callback_message = callback.get("message") if isinstance(callback, dict) else {}
+    chat = (
+        message.get("chat") if isinstance(message, dict) else {}
+    ) or (
+        callback_message.get("chat") if isinstance(callback_message, dict) else {}
+    ) or {}
+    chat_id = chat.get("id") if isinstance(chat, dict) else None
+    if chat_id is None and isinstance(callback, dict):
+        from_user = callback.get("from") or {}
+        chat_id = from_user.get("id") if isinstance(from_user, dict) else None
+    return f"telegram:{bot_kind}:chat:{chat_id}" if chat_id is not None else f"telegram:{bot_kind}:global"
+
+
 def enqueue_update(update: dict, bot_kind: str) -> EnqueueResult:
     _ensure_schema()
     kind = _normalize_bot_kind(bot_kind)
@@ -116,19 +149,49 @@ def enqueue_update(update: dict, bot_kind: str) -> EnqueueResult:
     update_key = make_update_key(clean_update, kind)
     now = time.time()
     payload = json.dumps(clean_update, ensure_ascii=False, separators=(",", ":"))
+    event = (
+        EventEnvelope.create(
+            TELEGRAM_WEBHOOK_JOB_CREATED,
+            job_id=update_key,
+            partition_key=telegram_update_partition_key(clean_update, kind),
+            payload={"bot_kind": kind, "update_key": update_key},
+        )
+        if EVENT_RUNTIME_ENABLED
+        else None
+    )
+    result: EnqueueResult
     with _connect() as conn:
+        if event is not None:
+            ensure_outbox_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute(
-                """
-                INSERT INTO telegram_webhook_updates
-                    (update_key, bot_kind, update_json, status, attempts, locked_at, created_at, updated_at, last_error)
-                VALUES (?, ?, ?, 'pending', 0, NULL, ?, ?, NULL)
-                """,
-                (update_key, kind, payload, now, now),
+            inserted = True
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO telegram_webhook_updates
+                        (update_key, bot_kind, update_json, status, attempts, locked_at,
+                         lease_token, created_at, updated_at, last_error)
+                    VALUES (?, ?, ?, 'pending', 0, NULL, NULL, ?, ?, NULL)
+                    """,
+                    (update_key, kind, payload, now, now),
+                )
+            except sqlite3.IntegrityError:
+                inserted = False
+            if inserted and event is not None:
+                insert_outbox_event(conn, event, aggregate_type="telegram_webhook_update")
+            conn.execute("COMMIT")
+            result = EnqueueResult(
+                enqueued=inserted,
+                duplicate=not inserted,
+                update_key=update_key,
             )
-            return EnqueueResult(enqueued=True, duplicate=False, update_key=update_key)
-        except sqlite3.IntegrityError:
-            return EnqueueResult(enqueued=False, duplicate=True, update_key=update_key)
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    if result.enqueued and event is not None:
+        notify_outbox_dispatcher("telegram")
+    return result
 
 
 def claim_next_update(
@@ -140,6 +203,7 @@ def claim_next_update(
     now = time.time()
     stale_before = now - max(float(stale_after_seconds or 300.0), 30.0)
     max_attempts = max(int(max_attempts or 1), 1)
+    lease_token = uuid4().hex
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -164,10 +228,11 @@ def claim_next_update(
             conn.execute(
                 """
                 UPDATE telegram_webhook_updates
-                SET status='processing', attempts=?, locked_at=?, updated_at=?, last_error=NULL
+                SET status='processing', attempts=?, locked_at=?, lease_token=?,
+                    updated_at=?, last_error=NULL
                 WHERE id=?
                 """,
-                (attempts, now, now, int(row["id"])),
+                (attempts, now, lease_token, now, int(row["id"])),
             )
             conn.execute("COMMIT")
         except Exception:
@@ -188,38 +253,172 @@ def claim_next_update(
         update_key=str(row["update_key"] or ""),
         update=update,
         attempts=attempts,
+        lease_token=lease_token,
     )
 
 
-def ack_update(update_id: int) -> None:
+def claim_update_by_key(
+    update_key: str,
+    *,
+    stale_after_seconds: float = 300.0,
+    max_attempts: int = 8,
+) -> QueuedTelegramUpdate | None:
     _ensure_schema()
+    key = str(update_key or "").strip()
+    if not key:
+        return None
+    now = time.time()
+    stale_before = now - max(float(stale_after_seconds or 300.0), 30.0)
+    max_attempts = max(int(max_attempts or 1), 1)
+    lease_token = uuid4().hex
     with _connect() as conn:
-        conn.execute("DELETE FROM telegram_webhook_updates WHERE id=?", (int(update_id),))
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                """
+                SELECT id, update_key, bot_kind, update_json, attempts
+                FROM telegram_webhook_updates
+                WHERE update_key=?
+                  AND attempts < ?
+                  AND (
+                    status='pending'
+                    OR (
+                        status='processing'
+                        AND (locked_at IS NULL OR locked_at<?)
+                    )
+                  )
+                LIMIT 1
+                """,
+                (key, max_attempts, stale_before),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+            attempts = int(row["attempts"] or 0) + 1
+            conn.execute(
+                """
+                UPDATE telegram_webhook_updates
+                SET status='processing', attempts=?, locked_at=?, lease_token=?,
+                    updated_at=?, last_error=NULL
+                WHERE id=?
+                """,
+                (attempts, now, lease_token, now, int(row["id"])),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+    try:
+        update = json.loads(row["update_json"] or "{}")
+    except json.JSONDecodeError:
+        logger.exception("Telegram webhook 队列 JSON 损坏 id=%s key=%s", row["id"], row["update_key"])
+        fail_update(
+            int(row["id"]),
+            "invalid update_json",
+            max_attempts=max_attempts,
+            lease_token=lease_token,
+        )
+        return None
+    if not isinstance(update, dict):
+        update = {}
+    return QueuedTelegramUpdate(
+        id=int(row["id"]),
+        bot_kind=str(row["bot_kind"] or ""),
+        update_key=str(row["update_key"] or ""),
+        update=update,
+        attempts=attempts,
+        lease_token=lease_token,
+    )
 
 
-def fail_update(update_id: int, error: str, *, max_attempts: int = 8) -> None:
+def ack_update(update_id: int, *, lease_token: str = "") -> bool:
+    _ensure_schema()
+    lease = str(lease_token or "").strip()
+    with _connect() as conn:
+        if lease:
+            cur = conn.execute(
+                "DELETE FROM telegram_webhook_updates WHERE id=? AND lease_token=?",
+                (int(update_id), lease),
+            )
+        else:
+            cur = conn.execute(
+                "DELETE FROM telegram_webhook_updates WHERE id=?",
+                (int(update_id),),
+            )
+    return int(cur.rowcount or 0) > 0
+
+
+def fail_update(
+    update_id: int,
+    error: str,
+    *,
+    max_attempts: int = 8,
+    lease_token: str = "",
+) -> bool:
     _ensure_schema()
     err = (error or "").strip()
     if len(err) > 1000:
         err = err[:1000]
     now = time.time()
+    lease = str(lease_token or "").strip()
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT attempts FROM telegram_webhook_updates WHERE id=?",
-            (int(update_id),),
-        ).fetchone()
+        if lease:
+            row = conn.execute(
+                "SELECT attempts FROM telegram_webhook_updates WHERE id=? AND lease_token=?",
+                (int(update_id), lease),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT attempts FROM telegram_webhook_updates WHERE id=?",
+                (int(update_id),),
+            ).fetchone()
         if row is None:
-            return
+            return False
         attempts = int(row["attempts"] or 0)
         status = "dead" if attempts >= max(int(max_attempts or 1), 1) else "pending"
-        conn.execute(
+        where = "id=?"
+        params: list = [status, now, err, int(update_id)]
+        if lease:
+            where += " AND lease_token=?"
+            params.append(lease)
+        cur = conn.execute(
+            f"""
+            UPDATE telegram_webhook_updates
+            SET status=?, locked_at=NULL, lease_token=NULL, updated_at=?, last_error=?
+            WHERE {where}
+            """,
+            params,
+        )
+    return int(cur.rowcount or 0) > 0
+
+
+def dead_letter_update(update_key: str, error: str) -> bool:
+    _ensure_schema()
+    err = str(error or "").replace("\r", " ").replace("\n", " ").strip()
+    with _connect() as conn:
+        cur = conn.execute(
             """
             UPDATE telegram_webhook_updates
-            SET status=?, locked_at=NULL, updated_at=?, last_error=?
-            WHERE id=?
+            SET status='dead', locked_at=NULL, lease_token=NULL,
+                updated_at=?, last_error=?
+            WHERE update_key=? AND status!='dead'
             """,
-            (status, now, err, int(update_id)),
+            (time.time(), err, str(update_key or "")),
         )
+    return int(cur.rowcount or 0) > 0
+
+
+def get_update_status(update_key: str) -> tuple[str, int] | None:
+    _ensure_schema()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT status, attempts FROM telegram_webhook_updates WHERE update_key=? LIMIT 1",
+            (str(update_key or ""),),
+        ).fetchone()
+    if row is None:
+        return None
+    return str(row["status"] or ""), int(row["attempts"] or 0)
 
 
 def queue_stats() -> dict[str, int]:
