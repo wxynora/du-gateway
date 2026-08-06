@@ -280,12 +280,15 @@ def _set_cache_control_on_last_tool(body: dict, ttl: str) -> None:
             return
 
 
-def strip_internal_prompt_region_markers(messages: list[dict]) -> None:
+def strip_internal_prompt_region_markers(
+    messages: list[dict], *, preserve_thinking_rules: bool = False
+) -> None:
     """Remove markers used only to order prompt regions inside the gateway."""
     for msg in messages:
         if not isinstance(msg, dict):
             continue
-        msg.pop(_THINKING_RULES_SYSTEM_MARKER, None)
+        if not preserve_thinking_rules:
+            msg.pop(_THINKING_RULES_SYSTEM_MARKER, None)
         msg.pop(_TEMPORARY_DYNAMIC_SYSTEM_MARKER, None)
         msg.pop(_LAST4_SYSTEM_MARKER, None)
 

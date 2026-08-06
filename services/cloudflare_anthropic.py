@@ -19,6 +19,7 @@ SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
 ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
+THINKING_RULES_SYSTEM_MARKER = "__thinking_rules__"
 ANTHROPIC_REQUIRED_DEFAULT_MAX_TOKENS = 128000
 GATEWAY_DYNAMIC_SYSTEM_HINTS = (
     "【你的心事",
@@ -30,6 +31,12 @@ GATEWAY_DYNAMIC_SYSTEM_HINTS = (
     "【你当前正在 RikkaHub 和小玥聊天】",
 )
 KIRO_ANTHROPIC_HOST = "api2.68886868.xyz"
+MID_CONVERSATION_SYSTEM_MODEL_PREFIXES = (
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-4-8",
+    "claude-opus-5",
+)
 
 
 def _is_kiro_anthropic_url(url: str) -> bool:
@@ -57,6 +64,25 @@ def normalize_model_for_cloudflare(model: str, url: str) -> str:
     if is_cloudflare_rest_anthropic_url(url):
         return value if value.startswith("anthropic/") else f"anthropic/{value}"
     return value.replace("anthropic/", "", 1) if value.startswith("anthropic/") else value
+
+
+def supports_mid_conversation_system(model: str) -> bool:
+    normalized = str(model or "").strip().lower().replace("_", "-").replace(".", "-")
+    normalized = normalized.rsplit("/", 1)[-1]
+    return any(
+        normalized == prefix or normalized.startswith(prefix + "-")
+        for prefix in MID_CONVERSATION_SYSTEM_MODEL_PREFIXES
+    )
+
+
+def _insert_system_after_last_user(messages: list[dict], content: list[dict]) -> bool:
+    if not content:
+        return False
+    for index in range(len(messages) - 1, -1, -1):
+        if str((messages[index] or {}).get("role") or "").strip().lower() == "user":
+            messages.insert(index + 1, {"role": "system", "content": deepcopy(content)})
+            return True
+    return False
 
 
 def cloudflare_anthropic_headers(base_headers: dict, url: str, api_key: str) -> dict:
@@ -231,8 +257,10 @@ def _convert_tool_choice(choice):
 
 def openai_to_anthropic_request(body: dict, url: str, cache_ttl: str | None = None) -> dict:
     src = dict(body or {})
+    model = normalize_model_for_cloudflare(str(src.get("model") or ""), url)
     messages: list[dict] = []
     system_blocks: list[dict] = []
+    mid_conversation_system_blocks: list[dict] = []
     pending_tool_results: list[dict] = []
 
     def flush_tool_results() -> None:
@@ -246,7 +274,13 @@ def openai_to_anthropic_request(body: dict, url: str, cache_ttl: str | None = No
             continue
         role = str(raw_msg.get("role") or "").strip().lower()
         if role == "system":
-            system_blocks.extend(_system_blocks_from_message(raw_msg))
+            blocks = _system_blocks_from_message(raw_msg)
+            if raw_msg.get(THINKING_RULES_SYSTEM_MARKER) and supports_mid_conversation_system(model):
+                for block in blocks:
+                    block.pop(DYNAMIC_SYSTEM_MARKER, None)
+                mid_conversation_system_blocks.extend(blocks)
+            else:
+                system_blocks.extend(blocks)
         elif role in {"tool", "function"}:
             _add_tool_result(pending_tool_results, raw_msg)
         elif role == "user":
@@ -277,6 +311,10 @@ def openai_to_anthropic_request(body: dict, url: str, cache_ttl: str | None = No
             if content:
                 messages.append({"role": "assistant", "content": content})
     flush_tool_results()
+    if mid_conversation_system_blocks and not _insert_system_after_last_user(
+        messages, mid_conversation_system_blocks
+    ):
+        system_blocks.extend(mid_conversation_system_blocks)
 
     if src.get("max_tokens") is not None:
         max_tokens = int(src["max_tokens"])
@@ -286,7 +324,7 @@ def openai_to_anthropic_request(body: dict, url: str, cache_ttl: str | None = No
         max_tokens = ANTHROPIC_REQUIRED_DEFAULT_MAX_TOKENS
 
     out: dict = {
-        "model": normalize_model_for_cloudflare(str(src.get("model") or ""), url),
+        "model": model,
         "max_tokens": max_tokens,
         "messages": messages,
     }

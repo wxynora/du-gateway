@@ -2946,7 +2946,18 @@ def chat_completions():
     body = step_trim_messages_if_over_limit(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
     prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
-    _strip_internal_prompt_region_markers(body.get("messages") or [])
+    preserve_dynamic_marker = (
+        _is_local_claude_oauth_proxy_url(active_upstream_url)
+        or is_pioneer_url(active_upstream_url)
+        or _should_use_anthropic_format(active_upstream_url)
+    )
+    _strip_internal_prompt_region_markers(
+        body.get("messages") or [],
+        preserve_thinking_rules=(
+            _is_local_claude_oauth_proxy_url(active_upstream_url)
+            or _should_use_anthropic_format(active_upstream_url)
+        ),
+    )
     client_requested_stream = bool(body.get("stream"))
     openrouter_forced_nonstream = client_requested_stream and is_openrouter_url(active_upstream_url)
     if openrouter_forced_nonstream:
@@ -2957,11 +2968,6 @@ def chat_completions():
             body.get("model") or "",
         )
     # Claude OAuth / Pioneer / 显式 Anthropic 格式上游会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
-    preserve_dynamic_marker = (
-        _is_local_claude_oauth_proxy_url(active_upstream_url)
-        or is_pioneer_url(active_upstream_url)
-        or _should_use_anthropic_format(active_upstream_url)
-    )
     for msg in body.get("messages") or []:
         if not preserve_dynamic_marker:
             msg.pop("__dynamic__", None)
