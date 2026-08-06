@@ -9,6 +9,10 @@ bp = Blueprint("memory_api", __name__)
 @bp.route("/summary", methods=["GET"])
 def root_summary():
     """DS 四轮总结（渡的回忆）全文，与 GET /admin/summary 相同。"""
+    from utils.mcp_auth import enforce_mcp_auth
+
+    enforce_mcp_auth()
+
     from storage import r2_store
 
     summary = r2_store.get_summary("")
@@ -24,6 +28,10 @@ def root_summary():
 @bp.route("/dynamic-memory", methods=["GET"])
 def root_dynamic_memory():
     """动态层全文，与 GET /admin/dynamic-memory 相同。"""
+    from utils.mcp_auth import enforce_mcp_auth
+
+    enforce_mcp_auth()
+
     from storage import r2_store
 
     try:
