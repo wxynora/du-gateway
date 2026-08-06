@@ -3165,6 +3165,27 @@ def chat_completions():
                 completed_tool_results=completed_tool_results,
             )
             tool_rounds_used += 1
+            if allow_tool_only_reply:
+                tool_trace_for_tool_only = _collect_tool_trace_from_messages(body.get("messages") or [])
+                if _exchange_diary_reply_content_from_tool_calls(tool_trace_for_tool_only):
+                    choices = resp_json.get("choices") or []
+                    choice = dict(choices[0] or {})
+                    final_msg = dict(msg or {})
+                    final_msg.pop("tool_calls", None)
+                    final_msg["content"] = "（已回复交换日记评论）"
+                    final_msg["tool_only_reply_done"] = True
+                    choice["message"] = final_msg
+                    choice["finish_reason"] = "stop"
+                    choices[0] = choice
+                    resp_json["choices"] = choices
+                    tool_only_reply_done = True
+                    tool_loop_finished = True
+                    logger.info(
+                        "交换日记评论工具成功，tool-only 在首轮执行后直接收口 window_id=%s round=%s",
+                        window_id,
+                        tool_rounds_used,
+                    )
+                    break
             if _game_tool_checkpoint_from_messages(body.get("messages") or []):
                 logger.info("game tool checkpoint 非流式回合转普通收口 window_id=%s round=%s", window_id, tool_rounds_used)
                 game_checkpoint_finalizing = True
@@ -3223,20 +3244,6 @@ def chat_completions():
                 _emit_sumitalk_reasoning_event(msg, tool_rounds_used + 1)
             tool_loop_finished = True
             break
-    if allow_tool_only_reply and resp_json and tool_rounds_used > 0:
-        tool_trace_for_tool_only = _collect_tool_trace_from_messages(body.get("messages") or [])
-        if _tool_trace_has_function(tool_trace_for_tool_only, "exchange_diary_comment_create"):
-            try:
-                choices = resp_json.get("choices") or []
-                if choices:
-                    final_msg = dict((choices[0] or {}).get("message") or {})
-                    final_msg["content"] = "（已回复交换日记评论）"
-                    final_msg["tool_only_reply_done"] = True
-                    choices[0]["message"] = final_msg
-                    resp_json["choices"] = choices
-                    tool_only_reply_done = True
-            except Exception:
-                logger.warning("标记交换日记评论工具-only 回复失败 window_id=%s", window_id, exc_info=True)
     if resp_json and not tool_only_reply_done:
         resp_json = _merge_visible_tool_round_content_into_response(resp_json, accumulated_tool_visible_parts)
     if resp_json and tool_rounds_used > 0:
