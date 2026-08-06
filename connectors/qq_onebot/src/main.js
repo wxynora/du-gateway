@@ -849,28 +849,39 @@ async function sendQqText(userId, text) {
   });
 }
 
-function qqGroupMessageWithOptionalReply(segment, replyMessageId = "", atUserId = "") {
+function qqGroupMessageWithOptionalReply(segment, replyMessageId = "", atUserId = "", atEnd = false) {
   const rawReplyId = String(replyMessageId || "").trim();
   const rawAtUserId = String(atUserId || "").trim();
   const message = [];
   if (rawReplyId) {
     message.push({ type: "reply", data: { id: onebotMessageIdParam(rawReplyId) } });
   }
-  if (rawAtUserId) {
+  if (rawAtUserId && !atEnd) {
     message.push({ type: "at", data: { qq: rawAtUserId } });
   }
   message.push(segment);
+  if (rawAtUserId && atEnd) {
+    message.push({ type: "at", data: { qq: rawAtUserId } });
+  }
   return message;
 }
 
-async function sendQqGroupText(groupId, text, replyMessageId = "", atUserId = "") {
+async function sendQqGroupText(groupId, text, replyMessageId = "", atUserId = "", atEnd = false) {
   const rawReplyId = String(replyMessageId || "").trim();
   const rawAtUserId = String(atUserId || "").trim();
   const message = rawReplyId || rawAtUserId
     ? qqGroupMessageWithOptionalReply(
-        { type: "text", data: { text: `${rawAtUserId ? " " : ""}${String(text || "")}` } },
+        {
+          type: "text",
+          data: {
+            text: atEnd && rawAtUserId
+              ? `${String(text || "")} `
+              : `${rawAtUserId ? " " : ""}${String(text || "")}`,
+          },
+        },
         rawReplyId,
-        rawAtUserId
+        rawAtUserId,
+        atEnd
       )
     : String(text || "");
   return enqueueQqOutboundSend("send_group_msg", { group_id: Number(groupId), message });
@@ -921,9 +932,13 @@ const dedupeMax = 2000;
 const recentInboundByUser = new Map();
 const recentGroupMessages = new Map();
 const consecutiveGroupMentions = new Map();
+const pendingGroupMentionBatches = new Map();
+const groupInboundEventTails = new Map();
+const groupMentionFlushTails = new Map();
 const inboundDedupeWindowMs = Math.max(2000, envInt("QQ_INBOUND_DEDUPE_WINDOW_MS", 12000));
 const groupHistoryContextLimit = Math.max(1, envInt("QQ_GROUP_CONTEXT_MESSAGES", 20));
 const groupHistoryKeepLimit = 50;
+const groupMentionBatchWindowMs = 10 * 1000;
 const maxConsecutiveGroupMentionReplies = Math.max(
   1,
   envInt("QQ_GROUP_MAX_CONSECUTIVE_MENTION_REPLIES", 10)
@@ -1345,9 +1360,8 @@ async function contentWithoutSelfAt(j) {
   return extractUserContentFromMessageWithVoice(clean, j?.raw_message || "");
 }
 
-function buildGroupGatewayTurn(j, previousRows, currentContent) {
-  const groupId = Number(j?.group_id || 0);
-  const { userId, name, isOwner } = senderLabel(j);
+function buildGroupGatewayTurn(batch) {
+  const groupId = Number(batch?.groupId || 0);
   const replyTargets = new Map();
   const atTargets = new Map();
   let nextReplyRef = 1;
@@ -1362,39 +1376,30 @@ function buildGroupGatewayTurn(j, previousRows, currentContent) {
     }
     return `${ref ? `[${ref}] ` : ""}${prefix || fallbackName}：${String(row?.text || "").trim() || "[非文本消息]"}`;
   };
-  const lines = (previousRows || []).slice(-groupHistoryContextLimit).map((row) => lineForRow(row));
-  const currentText = contentTextForGroupContext(currentContent);
-  const currentPrefix = groupSpeakerPrefix(name, userId, isOwner);
-  const currentMessageId = String(j?.message_id || "").trim();
-  const currentReplyRef = currentMessageId ? `Q${nextReplyRef++}` : "";
-  if (currentReplyRef) {
-    replyTargets.set(currentReplyRef, currentMessageId);
-    if (userId) atTargets.set(currentReplyRef, String(userId));
-  }
-  const currentLine = `${currentReplyRef ? `[${currentReplyRef}] ` : ""}${currentPrefix}：${currentText}`;
+  const items = Array.isArray(batch?.items) ? batch.items : [];
+  const contextRows = [
+    ...(batch?.previousRows || []).slice(-groupHistoryContextLimit),
+    ...items.map((item) => item?.row),
+  ];
+  const contextLines = contextRows.map((row) => lineForRow(row));
   const headerText = [
     "【QQ 群聊】",
-    `群号：${groupId}`,
     ownerQqUserId ? "身份标记：带 [当前用户/辛玥] 的发言人是辛玥/当前用户；其他人是群友。" : "",
-    `当前发言人：${currentPrefix}`,
-    "对方引用你发过的消息时，按被 @ 处理并回复。",
-    "你只有在被 @ 时才回复。下面是本次 @ 前的最近群聊消息，用作公开上下文：",
     (
-      "每条可引用消息前有临时编号 [Q1]、[Q2]……。如果你自己想用 QQ 的引用回复，" +
+      "回复人类时，如果你想用 QQ 的引用回复，" +
       "只在回复正文开头写精确标记 [QQ_REPLY:Q编号]，例如 [QQ_REPLY:Q2]；" +
-      "只能选择本段实际出现的编号。不想引用时不要写标记，由你自己决定引用哪条或不引用。"
+      "只能选择本段实际出现的编号。由你自己决定引用哪条或不引用。"
     ),
     (
-      "如果你想单独 @ 某位本轮可见发言人，只在回复正文开头写精确标记 [QQ_AT:Q编号]，" +
-      "例如 [QQ_AT:Q2]；这只会 @ 该编号对应的发言人，不会引用消息。只能选择本段实际出现的编号。"
+      "如果你想回复群里其他机，只在回复正文开头写精确标记 [QQ_AT:Q编号]，" +
+      "例如 [QQ_AT:Q2]；只能选择本段实际出现的编号。"
     ),
-    lines.length ? lines.join("\n") : "（前面没有可用群聊消息）",
-    "",
-    "当前 @ 你的消息：",
-    currentLine,
+    "群聊上下文：",
+    contextLines.join("\n"),
   ].filter(Boolean).join("\n");
-  const parts = normalizeUserContentToParts(currentContent);
-  const imageParts = parts.filter((p) => p?.type === "image_url");
+  const imageParts = items.flatMap((item) => (
+    normalizeUserContentToParts(item?.content).filter((p) => p?.type === "image_url")
+  ));
   const content = imageParts.length
     ? [{ type: "text", text: headerText }, ...imageParts]
     : headerText;
@@ -1409,12 +1414,13 @@ async function sendQqReplyToGroup(groupId, reply, options = {}) {
   const atTargets = options?.atTargets instanceof Map ? options.atTargets : new Map();
   let pendingReplyMessageId = String(replyTargets.get(replyRef) || "").trim();
   let pendingAtUserId = String(atTargets.get(atRef) || "").trim();
-  const takeOutboundControls = () => {
-    const value = {
-      replyMessageId: pendingReplyMessageId,
-      atUserId: pendingAtUserId,
-    };
+  const takeReplyMessageId = () => {
+    const value = pendingReplyMessageId;
     pendingReplyMessageId = "";
+    return value;
+  };
+  const takeAtUserId = () => {
+    const value = pendingAtUserId;
     pendingAtUserId = "";
     return value;
   };
@@ -1424,28 +1430,159 @@ async function sendQqReplyToGroup(groupId, reply, options = {}) {
   const stickerUrl = await resolveStickerUrl(stickerTag);
   const chunks = splitReplyByNewlineAndLen(replyClean, outChunkChars, maxReplyTotalChars);
   let sentAny = false;
-  for (const part of chunks) {
-    const controls = takeOutboundControls();
-    await sendQqGroupText(groupId, part, controls.replyMessageId, controls.atUserId);
+  for (let index = 0; index < chunks.length; index += 1) {
+    const isLastTextChunk = index === chunks.length - 1;
+    await sendQqGroupText(
+      groupId,
+      chunks[index],
+      takeReplyMessageId(),
+      isLastTextChunk ? takeAtUserId() : "",
+      isLastTextChunk
+    );
     sentAny = true;
   }
   if (stickerUrl) {
-    const controls = takeOutboundControls();
-    await sendQqGroupImage(groupId, stickerUrl, controls.replyMessageId, controls.atUserId);
+    await sendQqGroupImage(groupId, stickerUrl, takeReplyMessageId(), takeAtUserId());
     sentAny = true;
   }
   if (voiceText) {
     const audioBytes = await callGatewayTts(voiceText);
     if (audioBytes?.length) {
-      const controls = takeOutboundControls();
-      await sendQqGroupRecord(groupId, audioBytes, controls.replyMessageId, controls.atUserId);
+      await sendQqGroupRecord(groupId, audioBytes, takeReplyMessageId(), takeAtUserId());
       sentAny = true;
     }
   }
   return sentAny;
 }
 
-async function handleGroupEvent(j) {
+function groupMentionBatchItem(row, content) {
+  return { row, content };
+}
+
+function enqueueGroupInboundTask(groupId, task) {
+  const key = String(groupId || "");
+  const previous = groupInboundEventTails.get(key) || Promise.resolve();
+  const current = previous
+    .catch(() => {})
+    .then(task);
+  groupInboundEventTails.set(key, current);
+  const cleanup = () => {
+    if (groupInboundEventTails.get(key) === current) {
+      groupInboundEventTails.delete(key);
+    }
+  };
+  void current.then(cleanup, cleanup);
+  return current;
+}
+
+async function flushGroupMentionBatch(batch) {
+  const groupId = Number(batch?.groupId || 0);
+  if (!groupId || !Array.isArray(batch?.items) || !batch.items.length) return;
+  const mentionReplySlot = consumeConsecutiveGroupMentionReply(groupId);
+  if (!mentionReplySlot.allowed) {
+    console.log(
+      `[qq-onebot] 群聊连续 @/引用回复已达上限 group=${groupId} count=${mentionReplySlot.count} limit=${mentionReplySlot.limit}`
+    );
+    return;
+  }
+
+  const windowId = resolveSharedWindowId();
+  const gatewayTurn = buildGroupGatewayTurn(batch);
+  console.log(
+    `[qq-onebot] flush group=${groupId} window_id=${windowId} messages=${batch.items.length} preview=${userContentPreview(gatewayTurn.content, 80)}`
+  );
+  let reply = "";
+  try {
+    reply = await callGatewayChat(windowId, gatewayTurn.content, {
+      replyChannel: "qq",
+      replyTarget: "qq_group_mention",
+      skipDynamicMemory: true,
+      skipPostArchiveDynamicMemory: true,
+    });
+  } catch (e) {
+    console.log(`[qq-onebot] 群聊调网关失败 group=${groupId}：${String(e?.message || e)}`);
+    return;
+  }
+  try {
+    await sendQqReplyToGroup(groupId, reply, {
+      replyTargets: gatewayTurn.replyTargets,
+      atTargets: gatewayTurn.atTargets,
+    });
+  } catch (e) {
+    console.log(`[qq-onebot] 群聊发送失败 group=${groupId}：${String(e?.message || e)}`);
+  }
+}
+
+function enqueueGroupMentionBatchFlush(batch) {
+  const key = String(batch?.groupId || "");
+  const previous = groupMentionFlushTails.get(key) || Promise.resolve();
+  const current = previous
+    .catch(() => {})
+    .then(() => flushGroupMentionBatch(batch));
+  groupMentionFlushTails.set(key, current);
+  const cleanup = () => {
+    if (groupMentionFlushTails.get(key) === current) {
+      groupMentionFlushTails.delete(key);
+    }
+  };
+  void current.then(cleanup, cleanup);
+  void current.catch((e) => {
+    console.log(`[qq-onebot] 群聊批次处理失败 group=${String(batch?.groupId || "-")}：${String(e?.message || e)}`);
+  });
+}
+
+function closeGroupMentionBatch(batch) {
+  const key = String(batch?.groupId || "");
+  if (!key || pendingGroupMentionBatches.get(key) !== batch) return;
+  pendingGroupMentionBatches.delete(key);
+  if (batch.timer) {
+    clearTimeout(batch.timer);
+    batch.timer = null;
+  }
+  enqueueGroupMentionBatchFlush(batch);
+}
+
+function activeGroupMentionBatch(groupId, now = Date.now()) {
+  const key = String(groupId || "");
+  const batch = pendingGroupMentionBatches.get(key);
+  if (!batch) return null;
+  if (now < Number(batch.expiresAt || 0)) return batch;
+  closeGroupMentionBatch(batch);
+  return null;
+}
+
+function appendGroupMessageToActiveBatch(groupId, row, content, now = Date.now()) {
+  const batch = activeGroupMentionBatch(groupId, now);
+  if (!batch) return false;
+  batch.items.push(groupMentionBatchItem(row, content));
+  return true;
+}
+
+function scheduleGroupMentionBatch(groupId, previousRows, row, content, now = Date.now()) {
+  const existing = activeGroupMentionBatch(groupId, now);
+  if (existing) {
+    existing.items.push(groupMentionBatchItem(row, content));
+    return existing;
+  }
+  const key = String(groupId || "");
+  const batch = {
+    groupId: Number(groupId || 0),
+    startedAt: now,
+    expiresAt: now + groupMentionBatchWindowMs,
+    previousRows: Array.isArray(previousRows) ? previousRows.slice() : [],
+    items: [groupMentionBatchItem(row, content)],
+    timer: null,
+  };
+  const waitMs = Math.max(0, batch.expiresAt - Date.now());
+  batch.timer = setTimeout(() => {
+    void enqueueGroupInboundTask(groupId, () => closeGroupMentionBatch(batch));
+  }, waitMs);
+  pendingGroupMentionBatches.set(key, batch);
+  console.log(`[qq-onebot] 群聊唤醒开始收集 group=${groupId} wait_ms=${groupMentionBatchWindowMs}`);
+  return batch;
+}
+
+async function handleGroupEvent(j, receivedAt = Date.now()) {
   const groupId = Number(j?.group_id || 0);
   if (!groupId) return;
   if (!isBoundGroupId(groupId)) {
@@ -1473,61 +1610,29 @@ async function handleGroupEvent(j) {
     console.log(`[qq-onebot] group event group=${groupId} user=${Number(j?.user_id || 0)} self_id=${eventSelfId(j) || "unknown"} at=${atTargets.join(",") || "-"} content=${userContentPreview(content, 80) || "-"}`);
   }
   const previousRows = getGroupHistory(groupId).slice(-groupHistoryContextLimit);
-  void reportQqGroupActivity(j, previousRows, content || extractUserContentFromMessage(j?.message || j?.raw_message || ""));
-  rememberGroupMessage(j, content || extractUserContentFromMessage(j?.message || j?.raw_message || ""));
+  const effectiveContent = content
+    || extractUserContentFromMessage(j?.message || j?.raw_message || "")
+    || "（没有可读内容）";
+  void reportQqGroupActivity(j, previousRows, effectiveContent);
+  const rememberedRow = rememberGroupMessage(j, effectiveContent);
   if (!targetsSelf) {
     if (atTargets.length) {
       console.log(`[qq-onebot] 群聊 @ 未命中本机器人 group=${groupId} self_id=${eventSelfId(j) || "unknown"} at=${atTargets.join(",")}`);
     }
+    appendGroupMessageToActiveBatch(groupId, rememberedRow, effectiveContent, receivedAt);
     return;
   }
-  const now = Date.now();
   const scopeKey = `g:${groupId}`;
   const fp = `${Number(j?.user_id || 0)}|${userContentPreview(content, 200)}|${String(j?.raw_message || "")}`.slice(0, 800);
   const recent = recentInboundByUser.get(scopeKey);
-  if (recent && recent.fp === fp && now - Number(recent.ts || 0) <= inboundDedupeWindowMs) return;
-  recentInboundByUser.set(scopeKey, { fp, ts: now });
+  if (recent && recent.fp === fp && receivedAt - Number(recent.ts || 0) <= inboundDedupeWindowMs) return;
+  recentInboundByUser.set(scopeKey, { fp, ts: receivedAt });
   if (recentInboundByUser.size > dedupeMax) recentInboundByUser.clear();
   const dedupeKey = `${scopeKey}:${String(j?.message_id || "")}:${userContentPreview(content, 200)}`;
   if (dedupe.has(dedupeKey)) return;
   dedupe.add(dedupeKey);
   if (dedupe.size > dedupeMax) dedupe.clear();
-
-  const mentionReplySlot = consumeConsecutiveGroupMentionReply(groupId);
-  if (!mentionReplySlot.allowed) {
-    console.log(
-      `[qq-onebot] 群聊连续 @/引用回复已达上限 group=${groupId} count=${mentionReplySlot.count} limit=${mentionReplySlot.limit}`
-    );
-    return;
-  }
-
-  const windowId = resolveSharedWindowId();
-  const gatewayTurn = buildGroupGatewayTurn(
-    j,
-    previousRows,
-    content || "（只 @ 了你，没有附加文字）"
-  );
-  console.log(`[qq-onebot] inbound group=${groupId} window_id=${windowId} content=${userContentPreview(content, 80)}`);
-  let reply = "";
-  try {
-    reply = await callGatewayChat(windowId, gatewayTurn.content, {
-      replyChannel: "qq",
-      replyTarget: "qq_group_mention",
-      skipDynamicMemory: true,
-      skipPostArchiveDynamicMemory: true,
-    });
-  } catch (e) {
-    console.log(`[qq-onebot] 群聊调网关失败 group=${groupId}：${String(e?.message || e)}`);
-    return;
-  }
-  try {
-    await sendQqReplyToGroup(groupId, reply, {
-      replyTargets: gatewayTurn.replyTargets,
-      atTargets: gatewayTurn.atTargets,
-    });
-  } catch (e) {
-    console.log(`[qq-onebot] 群聊发送失败 group=${groupId}：${String(e?.message || e)}`);
-  }
+  scheduleGroupMentionBatch(groupId, previousRows, rememberedRow, effectiveContent, receivedAt);
 }
 
 async function handleEvent(j) {
@@ -1537,7 +1642,8 @@ async function handleEvent(j) {
     return;
   }
   if (isGroupMessageEvent(j)) {
-    await handleGroupEvent(j);
+    const receivedAt = Date.now();
+    await enqueueGroupInboundTask(j?.group_id, () => handleGroupEvent(j, receivedAt));
     return;
   }
   if (!isPrivateMessageEvent(j)) {
