@@ -83,7 +83,6 @@ const TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__";
 const ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__";
 const SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__";
 const PLAY_NOTE_SYSTEM_MARKER = "__play_note__";
-const THINKING_RULES_SYSTEM_MARKER = "__thinking_rules__";
 const GATEWAY_DYNAMIC_SYSTEM_HINTS = [
   "【你的心事",
   "【你的日常",
@@ -101,12 +100,6 @@ const MODEL_MAP = {
   "gpt-4": "claude-sonnet-4-6",
   "gpt-3.5-turbo": "claude-haiku-4-5-20251001",
 };
-const MID_CONVERSATION_SYSTEM_MODEL_PREFIXES = [
-  "claude-fable-5",
-  "claude-mythos-5",
-  "claude-opus-4-8",
-  "claude-opus-5",
-];
 const IMAGE_DOWNLOAD_MAX_BYTES = parseInt(process.env.CLAUDE_IMAGE_MAX_BYTES || "10485760", 10);
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
@@ -803,29 +796,6 @@ function addToolResult(pending, msg) {
   });
 }
 
-function supportsMidConversationSystem(model) {
-  const normalized = String(model || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[_.]/g, "-")
-    .split("/")
-    .pop();
-  return MID_CONVERSATION_SYSTEM_MODEL_PREFIXES.some(
-    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}-`)
-  );
-}
-
-function insertSystemAfterLastUser(messages, content) {
-  if (!Array.isArray(content) || !content.length) return false;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === "user") {
-      messages.splice(index + 1, 0, { role: "system", content });
-      return true;
-    }
-  }
-  return false;
-}
-
 // ──────────────────────────────────────
 // OpenAI -> Anthropic 格式转换
 // ──────────────────────────────────────
@@ -834,7 +804,6 @@ async function openaiToAnthropic(oai) {
   const model = MODEL_MAP[oai.model] || oai.model;
   const messages = [];
   const systemBlocks = [];
-  const midConversationSystemBlocks = [];
   let pendingToolResults = [];
 
   const flushToolResults = () => {
@@ -855,10 +824,6 @@ async function openaiToAnthropic(oai) {
       }
       const text = contentToText(msg.content);
       if (text) {
-        if (msg[THINKING_RULES_SYSTEM_MARKER] && supportsMidConversationSystem(model)) {
-          midConversationSystemBlocks.push({ type: "text", text });
-          continue;
-        }
         const block = { type: "text", text };
         if (msg[DYNAMIC_SYSTEM_MARKER]) block[DYNAMIC_SYSTEM_MARKER] = true;
         if (msg[SUMMARY_CACHE_SYSTEM_MARKER]) block[SUMMARY_CACHE_SYSTEM_MARKER] = true;
@@ -896,12 +861,6 @@ async function openaiToAnthropic(oai) {
     }
   }
   flushToolResults();
-  if (
-    midConversationSystemBlocks.length &&
-    !insertSystemAfterLastUser(messages, midConversationSystemBlocks)
-  ) {
-    systemBlocks.push(...midConversationSystemBlocks);
-  }
 
   const body = {
     model,
