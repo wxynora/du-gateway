@@ -82,7 +82,7 @@ append_node_dependency_dir() {
   [[ -n "$candidate_dir" && "$candidate_dir" != "." ]] || return
   for service in "${active_services[@]}"; do
     [[ "${service_workdirs[$service]}" == "$repo/$candidate_dir" ]] || continue
-    for existing in "${node_dependency_dirs[@]:-}"; do
+    for existing in "${node_dependency_dirs[@]}"; do
       [[ "$existing" == "$candidate_dir" ]] && return
     done
     node_dependency_dirs+=("$candidate_dir")
@@ -120,7 +120,7 @@ sync_dependencies() {
       fi
     done
   fi
-  for dependency_dir in "${node_dependency_dirs[@]:-}"; do
+  for dependency_dir in "${node_dependency_dirs[@]}"; do
     if [[ -f "$repo/$dependency_dir/package-lock.json" ]]; then
       npm --prefix "$repo/$dependency_dir" ci --omit=dev
     elif [[ -f "$repo/$dependency_dir/package.json" ]]; then
@@ -129,41 +129,68 @@ sync_dependencies() {
   done
 }
 
+wait_for_http_health() {
+  local label="$1" url="$2" require_gateway_ready="${3:-0}"
+  local deadline health_body
+  deadline=$(( $(date +%s) + 30 ))
+  while (( $(date +%s) < deadline )); do
+    if health_body="$(curl -fsS --max-time 1 "$url" 2>/dev/null)"; then
+      if [[ "$require_gateway_ready" == "1" ]]; then
+        if printf '%s' "$health_body" | "$repo/.venv/bin/python" -c \
+          'import json, sys; body = json.load(sys.stdin); assert body.get("live") is True and body.get("ready") is True' 2>/dev/null; then
+          echo "$label health ready"
+          return 0
+        fi
+      else
+        echo "$label health ready"
+        return 0
+      fi
+    fi
+    if (( $(date +%s) < deadline )); then
+      sleep 1
+    fi
+  done
+  echo "$label health did not become ready within 30 seconds" >&2
+  return 1
+}
+
 restart_and_verify_services() {
-  local service restart_count health_body
-  systemctl restart "${active_services[@]}"
+  local service restart_count
+  local failed=0
+  if ! systemctl restart "${active_services[@]}"; then
+    echo "one or more production services failed to restart" >&2
+    failed=1
+  fi
   for service in "${active_services[@]}"; do
-    systemctl is-active --quiet "$service"
-    restart_count="$(systemctl show "$service" -p NRestarts --value)"
-    echo "$service active NRestarts=$restart_count"
+    if systemctl is-active --quiet "$service"; then
+      restart_count="$(systemctl show "$service" -p NRestarts --value)"
+      echo "$service active NRestarts=$restart_count"
+    else
+      echo "$service is not active after restart" >&2
+      failed=1
+    fi
   done
 
   for service in "${active_services[@]}"; do
     case "$service" in
       du-gateway.service)
-        health_body="$(curl -fsS http://127.0.0.1:5000/health)"
-        printf '%s' "$health_body" | "$repo/.venv/bin/python" -c \
-          'import json, sys; body = json.load(sys.stdin); assert body.get("live") is True and body.get("ready") is True'
-        echo "du-gateway health ready"
+        wait_for_http_health "du-gateway" http://127.0.0.1:5000/health 1 || failed=1
         ;;
       du-realtime.service)
-        curl -fsS http://127.0.0.1:5010/health
-        echo
+        wait_for_http_health "du-realtime" http://127.0.0.1:5010/health || failed=1
         ;;
       du-wechat-ilink.service)
-        curl -fsS http://127.0.0.1:8091/health
-        echo
+        wait_for_http_health "du-wechat-ilink" http://127.0.0.1:8091/health || failed=1
         ;;
       qq-connector.service)
-        curl -fsS http://127.0.0.1:8092/health
-        echo
+        wait_for_http_health "qq-connector" http://127.0.0.1:8092/health || failed=1
         ;;
       du-cedareco.service)
-        curl -fsS http://127.0.0.1:8765/api/health
-        echo
+        wait_for_http_health "du-cedareco" http://127.0.0.1:8765/api/health || failed=1
         ;;
     esac
   done
+  [[ $failed -eq 0 ]]
 }
 
 finish() {
