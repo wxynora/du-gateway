@@ -1,18 +1,16 @@
-name: Deploy QQ connector
+name: Deploy main to production
 
 on:
   push:
     branches:
       - main
-    paths:
-      - "connectors/qq_onebot/src/**"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: production-qq-connector
+  group: production-main
   cancel-in-progress: false
 
 jobs:
@@ -46,4 +44,4 @@ jobs:
             -i "$key_path" \
             -p "$DEPLOY_PORT" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "sudo -n /usr/local/sbin/du-deploy-qq '$TARGET_SHA'"
+            "sudo -n /usr/local/sbin/du-deploy-main '$TARGET_SHA'"
