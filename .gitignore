@@ -1,6 +1,7 @@
 # 环境与密钥（勿提交）
 .env
 .env.local
+.mcp.json
 *.pem
 
 # Python
