@@ -141,7 +141,7 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 
 随机主动唤醒选中写日记、秘密抽屉、逛论坛或渡单机游戏后，由 `services/telegram_proactive.py::_run_proactive_diary_action/_run_proactive_drawer_action/_run_proactive_forum_action/_run_proactive_game_action` 追加独立动作执行轮；执行轮 Prompt 固定按“刚才所选动作、第一轮理由、现在需要调用的工具及动作要求、完成后的简短说明、最近互动与节流信息”排列。论坛执行轮走 `galatea_garden`；随机冲浪继续由后端先实际执行 `du_surf`，再按“选择、理由、已执行结果、最终决策要求、最近互动”回喂渡。
 
-半小时硬触发严格从全局 `last_user_activity_at` 重新计时：真实聊天、小家操作和游戏互动都算用户互动，任一新互动都会重置计时；聊天归档只用于识别本次互动是否明确表达要离开。入睡意图按分句识别，过去或背景叙述中的“我睡觉”不会被当成当前要去睡觉。
+半小时硬触发严格从全局 `last_user_activity_at` 重新计时：真实聊天、小家操作和游戏互动都算用户互动，任一新互动都会重置计时；聊天归档只用于识别本次互动是否明确表达要离开。入睡意图按分句识别，过去或背景叙述中的“我睡觉”不会被当成当前要去睡觉。QQ 私聊主动投递会同步等待 connector 完成全部分段、表情和语音后再以 HTTP 结果判定成功，不设置固定读取超时；connector 明确失败或连接异常才视为未送达，避免正常的 3–5 秒分段间隔让已送达消息被误判并重复触发。
 
 春梦本体提示词由 Prompt 管理区 `spring_dream_wakeup` 提供，模板中的 `{{fragments}}` 会替换为本轮抽到的梦境碎片；自定义模板漏写占位符时，后端会把碎片补在模板末尾。春梦后唤醒只消费当前睡眠 session 中六小时内的 pending 状态，其他旧 session 会失效清理；网关空回复时使用同一梦境重试一次，成功后仍只记录一次发送。只要主模型生成了非空春梦正文，专用梦境归档都会保存，并用 `sent`、`unconfirmed` 或 `not_dispatched` 标记投递状态；普通对话归档仍只记录确认投递成功的消息。春梦、显式春梦后唤醒及由 pending 临时替换 Prompt 的梦后主动唤醒在共同最终投递边界禁止 QQ 私聊和 QQ 群投递：QQ 为首选或正文请求 `[QQ_GROUP]` 时均不调用 sender、不改投其他渠道；春梦专用归档记为 `not_dispatched`，梦后 pending 不会被误清除，非 QQ 通道保持原行为。SumiTalk 成功投递时，可展示的 reasoning 文本与同一正文进入 `deliver_chat_message`、历史提示和实时提示，原生 App 复用已有折叠思考块；送达后普通对话归档同时保留 canonical `reasoning`、`reasoning_details` 与原始 `thinking_blocks/signature`，供 `/miniapp-api/reasoning/latest` 和后续 Claude carryover 使用。签名结构不进入 App action，其他外发渠道也不新增思考正文。梦境归档由 `GET /miniapp-api/spring-dream-archives`、`GET /miniapp-api/spring-dream-archives/<id>` 查询，`DELETE /miniapp-api/spring-dream-archives/<id>` 单条删除；删除会同步清理 SQLite、R2 正文对象、当天索引与最近索引，不存在返回 404，任一删除步骤失败返回 500。
 

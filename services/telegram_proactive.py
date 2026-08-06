@@ -1597,7 +1597,7 @@ def _send_via_qq(text: str, split: bool = True) -> bool:
         headers["Authorization"] = f"Bearer {QQ_PROACTIVE_PUSH_TOKEN}"
     try:
         body = json.dumps({"text": str(text or ""), "split": bool(split)}, ensure_ascii=False).encode("utf-8")
-        r = requests.post(url, headers=headers, data=body, timeout=30)
+        r = requests.post(url, headers=headers, data=body)
         if r.status_code == 200 and r.json().get("ok"):
             return True
         logger.warning("QQ /push 失败 status=%s body=%s", r.status_code, (r.text or "")[:200])
