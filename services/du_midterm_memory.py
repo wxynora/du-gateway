@@ -141,7 +141,11 @@ def _sanitize_portrait_summary(text: str) -> str:
     ):
         idx = s.find(marker)
         if idx > 12:
-            s = s[:idx].rstrip("，,；;。 ")
+            prefix = s[:idx].rstrip()
+            boundary = max(prefix.rfind(mark) for mark in ("。", "！", "？", "；", ";"))
+            if boundary < 8:
+                return ""
+            s = prefix[: boundary + 1].strip()
             break
         if idx == 0:
             return ""
@@ -173,42 +177,41 @@ def _collect_recent_daily(end_day: date) -> tuple[list[dict], dict, int, str, st
         d = _parse_day(item.get("day"))
         if not d or not (start_day <= d <= end_day):
             continue
-        days.add(str(d))
         age = (end_day - d).days
         events = item.get("today_events") if isinstance(item.get("today_events"), list) else []
+        events = [e for e in events if isinstance(e, str) and e.strip()]
         max_summary_chars = 520 if age <= 3 else 360 if age <= 7 else 220
+        summary = _sanitize_midterm_source_text(item.get("today_summary"), max_summary_chars)
+        if not summary and not events:
+            continue
+        days.add(str(d))
         recent_archive.append(
             {
                 "day": str(d),
                 "age_days": age,
                 "detail_level": _detail_level(age),
-                "summary": _sanitize_midterm_source_text(
-                    item.get("yesterday_summary") or item.get("content"),
-                    max_summary_chars,
-                ),
-                "events": [e for e in events if isinstance(e, str) and e.strip()],
+                "summary": summary,
+                "events": events,
             }
         )
 
     state_day = _parse_day(state.get("day"))
     today_events = state.get("today_events") if isinstance(state.get("today_events"), list) else []
-    if today_events or str(state.get("today_summary") or "").strip():
-        current_summary = state.get("content") or state.get("today_summary")
-        current_age = (end_day - state_day).days if state_day else 0
-        current_source = "today_state"
-    else:
-        current_summary = state.get("yesterday_summary") or state.get("content")
-        current_age = 1
-        current_source = "yesterday_summary_in_current_state"
-    current_state = {
-        "day": str(state.get("day") or ""),
-        "age_days": current_age,
-        "detail_level": _detail_level(current_age),
-        "source": current_source,
-        "summary": _sanitize_midterm_source_text(current_summary, 520),
-    }
-    if state_day and start_day <= state_day <= end_day and current_state["summary"]:
+    today_events = [e for e in today_events if isinstance(e, str) and e.strip()]
+    today_summary = _sanitize_midterm_source_text(state.get("today_summary"), 520)
+    current_state: dict = {}
+    if state_day and start_day <= state_day <= end_day and (today_summary or today_events):
+        current_age = (end_day - state_day).days
+        recent_archive = [item for item in recent_archive if item.get("day") != str(state_day)]
         days.add(str(state_day))
+        current_state = {
+            "day": str(state_day),
+            "age_days": current_age,
+            "detail_level": _detail_level(current_age),
+            "source": "today_state",
+            "summary": today_summary,
+            "events": today_events,
+        }
 
     # 生成时严格按时间先后给 DS，保证正文从较早内容顺着写到较晚内容。
     recent_archive.sort(key=lambda x: int(x.get("age_days") or 0), reverse=True)
@@ -219,6 +222,8 @@ def _collect_portrait_candidates(start_day: str, end_day: str) -> list[dict]:
     start = _parse_day(start_day) or date.min
     end = _parse_day(end_day) or date.max
     rows: list[dict] = []
+    seen_source_ids: set[tuple[str, str]] = set()
+    seen_exact_day_text: set[tuple[str, str, str]] = set()
     sources = [
         ("xinyue", du_state_store.get_xinyue_portrait_candidates() or []),
         ("du", du_state_store.get_du_portrait_candidates() or []),
@@ -241,6 +246,18 @@ def _collect_portrait_candidates(start_day: str, end_day: str) -> list[dict]:
                 continue
             if bucket != "interaction" and not any(k in text for k in _PORTRAIT_KEYWORDS):
                 continue
+            source_id = str(
+                item.get("id") or item.get("source_memory_id") or item.get("source_message_id") or ""
+            ).strip()
+            source_key = (bucket, source_id)
+            exact_key = (bucket, str(d), re.sub(r"\s+", "", text))
+            if source_id and source_key in seen_source_ids:
+                continue
+            if exact_key in seen_exact_day_text:
+                continue
+            if source_id:
+                seen_source_ids.add(source_key)
+            seen_exact_day_text.add(exact_key)
             rows.append(
                 {
                     "bucket": bucket,
@@ -302,6 +319,7 @@ def _build_prompt(
 - 不要平均铺开，越近越具体，越早越模糊。
 
 画像候选只作补充质感，不要写成长期人格判断，也不要原样搬成“以后要/不要”的规则。稳定事实、工具授权、操作策略不要写进中期记忆。不要出现“记住：”这种给自己下命令的句子。
+同一主题有多条画像候选时，它们不因此更重要；只把它当一份补充，不要重复展开或挤掉日常归档中的其他经历。
 
 长度：content 不超过 1000 个中文字符。
 
@@ -381,7 +399,7 @@ def _call_ds(prompt: str) -> Optional[dict]:
         "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
-        "max_tokens": 8192,
+        "max_tokens": 16384,
     }
     resp = requests.post(
         DEEPSEEK_API_URL,

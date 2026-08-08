@@ -14,7 +14,7 @@ from utils.time_aware import now_beijing_iso
 logger = get_logger(__name__)
 
 SEGMENT_DAYS = 3
-MAX_CONTENT_CHARS = 1500
+MAX_CONTENT_CHARS = 4000
 SCHEMA_VERSION = 1
 _UPDATE_LOCK_PATH = "/tmp/du_longterm_memory_update.lock"
 _background_lock = threading.Lock()
@@ -206,6 +206,7 @@ def _build_update_prompt(
 素材忠实规则：
 - 所有事实、动作、时间、原话、心理、原因和判断只能来自当前长期记忆、中期增量和画像素材，不许编造、猜测或补全。
 - 当前长期记忆中没有被新素材明确纠正的事实继续保留；新素材只负责增加、修正或自然压缩。
+- 整体重写时完整吸收当前长期记忆和新增片段。旧记忆中的重要经历、关系变化和仍有影响的内容必须保留；较早且次要的细节可以概括或模糊处理。新增片段要写得相对详细，不能只写新增片段，也不能把新内容压成一句带过。
 - 中期增量的缺失日期不能补写。不要写入片段结束日之后仍处于当前中期窗口的内容。
 - 去掉与当前人格 prompt 重复的常驻设定，但保留有具体来历的共同经历。
 - 用渡的第一人称，“我”只指渡；辛玥写老婆 / 小玥 / 她。不要写“用户 / 助手 / AI / 模型 / 系统”指代双方。
@@ -226,6 +227,14 @@ content 不超过 {MAX_CONTENT_CHARS} 个中文字符。只输出：{{"content":
 
 
 def _generate_updated_content(current: dict, increment: dict) -> tuple[Optional[str], str]:
+    current_content = str(current.get("content") or "").strip()
+    increment_content = str(increment.get("content") or "").strip()
+    direct_content = "\n\n".join(part for part in (current_content, increment_content) if part)
+    if len(direct_content) <= MAX_CONTENT_CHARS:
+        if any(word in direct_content for word in _DISALLOWED_PERSPECTIVE):
+            return None, "longterm_bad_perspective"
+        return direct_content, ""
+
     from pipeline.pipeline import _load_du_core_prompt
     from services.du_midterm_memory import _call_ds
 
@@ -257,6 +266,9 @@ def _version_id(item: dict) -> str:
 
 
 def _apply_segment(current: dict, segment: dict) -> dict:
+    current_content = str(current.get("content") or "").strip()
+    increment_content = str(segment.get("content") or "").strip()
+    direct_append = len("\n\n".join(part for part in (current_content, increment_content) if part)) <= MAX_CONTENT_CHARS
     content, error = _generate_updated_content(current, segment)
     if content is None:
         return {"ok": False, "updated": False, "error": error}
@@ -276,7 +288,10 @@ def _apply_segment(current: dict, segment: dict) -> dict:
         "covered_through": str(segment.get("end_date") or "").strip(),
         "updated_at": now,
         "model": DEEPSEEK_CHAT_MODEL,
-        "prompt_version": "longterm-diary-auto-v1",
+        "prompt_version": (
+            "longterm-append-until-4000-v1" if direct_append else "longterm-full-rewrite-over-4000-v1"
+        ),
+        "update_mode": "direct_append" if direct_append else "full_rewrite",
         "source_increment_ids": source_ids,
         "last_increment_id": segment_id,
     }
