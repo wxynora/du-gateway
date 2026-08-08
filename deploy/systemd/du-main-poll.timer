@@ -1,0 +1,12 @@
+[Unit]
+Description=Check du-gateway main every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=15s
+Persistent=true
+Unit=du-main-poll.service
+
+[Install]
+WantedBy=timers.target
