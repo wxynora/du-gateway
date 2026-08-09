@@ -80,18 +80,12 @@ const DYNAMIC_SYSTEM_MARKER = "__dynamic__";
 const SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__";
 const SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__";
 const TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__";
+const STATIC_CACHE_ANCHOR_SYSTEM_MARKER = "__static_cache_anchor__";
+const FROZEN_TOOL_SUMMARY_SYSTEM_MARKER = "__frozen_tool_summary__";
+const HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__";
 const ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__";
 const SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__";
 const PLAY_NOTE_SYSTEM_MARKER = "__play_note__";
-const GATEWAY_DYNAMIC_SYSTEM_HINTS = [
-  "【你的心事",
-  "【你的日常",
-  "今日：",
-  "听了老婆的话，我想起来",
-  "【指代提醒】",
-  "老婆当前状态",
-  "【你当前正在 RikkaHub 和小玥聊天】",
-];
 
 const MODEL_MAP = {
   "gpt-4o": "claude-sonnet-4-6",
@@ -829,6 +823,9 @@ async function openaiToAnthropic(oai) {
         if (msg[SUMMARY_CACHE_SYSTEM_MARKER]) block[SUMMARY_CACHE_SYSTEM_MARKER] = true;
         if (msg[SUMMARY_RECENT_SYSTEM_MARKER]) block[SUMMARY_RECENT_SYSTEM_MARKER] = true;
         if (msg[TOOL_RESULT_CACHE_SYSTEM_MARKER]) block[TOOL_RESULT_CACHE_SYSTEM_MARKER] = true;
+        if (msg[STATIC_CACHE_ANCHOR_SYSTEM_MARKER]) block[STATIC_CACHE_ANCHOR_SYSTEM_MARKER] = true;
+        if (msg[FROZEN_TOOL_SUMMARY_SYSTEM_MARKER]) block[FROZEN_TOOL_SUMMARY_SYSTEM_MARKER] = true;
+        if (msg[HOT_TOOL_RESULT_SYSTEM_MARKER]) block[HOT_TOOL_RESULT_SYSTEM_MARKER] = true;
         if (msg[ENTRY_STYLE_SYSTEM_MARKER]) block[ENTRY_STYLE_SYSTEM_MARKER] = true;
         if (msg[SUMITALK_REAL_MODE_SYSTEM_MARKER]) block[SUMITALK_REAL_MODE_SYSTEM_MARKER] = true;
         if (msg[PLAY_NOTE_SYSTEM_MARKER]) block[PLAY_NOTE_SYSTEM_MARKER] = true;
@@ -1281,169 +1278,119 @@ function processAnthropicBody(body) {
 }
 
 function applyPromptCache(body) {
-  const cacheControl = CLAUDE_PROMPT_CACHE_TTL
-    ? { type: "ephemeral", ttl: CLAUDE_PROMPT_CACHE_TTL }
-    : { type: "ephemeral" };
-      const setCacheControl = (item) => {
-    if (item && typeof item === "object") item.cache_control = { ...cacheControl };
+  const oneHourCacheControl = { type: "ephemeral", ttl: "1h" };
+  const hotCacheControl = { type: "ephemeral", ttl: "5m" };
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  const systemBlocks = Array.isArray(body.system) ? body.system : [];
+
+  for (const tool of tools) {
+    if (tool && typeof tool === "object") delete tool.cache_control;
+  }
+  for (const item of systemBlocks) {
+    if (item && typeof item === "object") delete item.cache_control;
+  }
+
+  let bp1Tools = false;
+  let bp2Static = false;
+  let bp3Generation = false;
+  let bp4Hot = false;
+  if (tools.length > 0) {
+    tools[tools.length - 1].cache_control = { ...oneHourCacheControl };
+    bp1Tools = true;
+  }
+
+  const lastMarkerIndex = (marker) => {
+    for (let idx = systemBlocks.length - 1; idx >= 0; idx -= 1) {
+      const item = systemBlocks[idx];
+      if (item && typeof item === "object" && item[marker]) return idx;
+    }
+    return -1;
   };
 
-  if (Array.isArray(body.tools) && body.tools.length > 0) {
-    const lastTool = body.tools[body.tools.length - 1];
-    setCacheControl(lastTool);
+  const bp2Idx = lastMarkerIndex(STATIC_CACHE_ANCHOR_SYSTEM_MARKER);
+  const recentIdx = lastMarkerIndex(SUMMARY_RECENT_SYSTEM_MARKER);
+  const stableIdx = lastMarkerIndex(SUMMARY_CACHE_SYSTEM_MARKER);
+  const frozenIdx = lastMarkerIndex(FROZEN_TOOL_SUMMARY_SYSTEM_MARKER);
+  const legacyToolIdx = lastMarkerIndex(TOOL_RESULT_CACHE_SYSTEM_MARKER);
+  let bp3Idx = recentIdx >= 0 ? recentIdx : stableIdx >= 0 ? stableIdx : frozenIdx;
+  if (bp3Idx < 0) bp3Idx = legacyToolIdx;
+  const bp4Idx = lastMarkerIndex(HOT_TOOL_RESULT_SYSTEM_MARKER);
+
+  if (bp2Idx >= 0) {
+    systemBlocks[bp2Idx].cache_control = { ...oneHourCacheControl };
+    bp2Static = true;
+  }
+  if (bp3Idx >= 0 && bp3Idx !== bp2Idx) {
+    systemBlocks[bp3Idx].cache_control = { ...oneHourCacheControl };
+    bp3Generation = true;
+  }
+  if (bp4Idx >= 0 && bp4Idx !== bp2Idx && bp4Idx !== bp3Idx) {
+    systemBlocks[bp4Idx].cache_control = { ...hotCacheControl };
+    bp4Hot = true;
   }
 
-  if (Array.isArray(body.system) && body.system.length > 0) {
-    splitGatewaySummaryBlocks(body.system);
-
-    const toolCacheIndices = body.system
-      .map((item, idx) => (item?.[TOOL_RESULT_CACHE_SYSTEM_MARKER] ? idx : -1))
-      .filter((idx) => idx >= 0);
-
-    const summaryIdx = body.system.findIndex(
-      (item, idx) => idx > 0 && (item?.[SUMMARY_CACHE_SYSTEM_MARKER] || looksLikeGatewaySummaryCacheBlock(item))
-    );
-
-    if (toolCacheIndices.length > 0) {
-      const firstToolIdx = toolCacheIndices[0];
-      const lastToolIdx = toolCacheIndices[toolCacheIndices.length - 1];
-      setCacheControl(findCacheableSystemBefore(body.system, firstToolIdx));
-      setCacheControl(body.system[lastToolIdx]);
-      setCacheControl(findFinalCacheableSystemAfter(body.system, lastToolIdx));
-    } else if (summaryIdx > 0) {
-      setCacheControl(findCacheableSystemBefore(body.system, summaryIdx));
-      setCacheControl(body.system[summaryIdx]);
-      const recentIdx = body.system.findIndex(
-        (item, idx) =>
-          idx > summaryIdx &&
-          (item?.[SUMMARY_RECENT_SYSTEM_MARKER] || looksLikeGatewayRecentSummaryBlock(item))
-      );
-      const realModeIdx = body.system.findIndex(
-        (item, idx) => idx > summaryIdx && item?.[SUMITALK_REAL_MODE_SYSTEM_MARKER]
-      );
-      const playNoteIdx = body.system.findIndex(
-        (item, idx) => idx > summaryIdx && item?.[PLAY_NOTE_SYSTEM_MARKER]
-      );
-      if (playNoteIdx > summaryIdx) {
-        setCacheControl(body.system[playNoteIdx]);
-      } else if (realModeIdx > summaryIdx) {
-        setCacheControl(body.system[realModeIdx]);
-      } else if (recentIdx > summaryIdx) {
-        setCacheControl(body.system[recentIdx]);
+  const explicitBreakpoints = [];
+  let position = 0;
+  for (const tool of tools) {
+    if (tool && typeof tool === "object" && tool.cache_control) {
+      explicitBreakpoints.push({ position, ttl: String(tool.cache_control.ttl || "5m") });
+    }
+    position += 1;
+  }
+  for (const item of systemBlocks) {
+    if (item && typeof item === "object" && item.cache_control) {
+      explicitBreakpoints.push({ position, ttl: String(item.cache_control.ttl || "5m") });
+    }
+    position += 1;
+  }
+  for (const message of Array.isArray(body.messages) ? body.messages : []) {
+    const contentBlocks = Array.isArray(message?.content) ? message.content : [];
+    for (const item of contentBlocks) {
+      if (item && typeof item === "object" && item.cache_control) {
+        explicitBreakpoints.push({ position, ttl: String(item.cache_control.ttl || "5m") });
       }
-    } else {
-      let staticSystem = null;
-      for (let i = 1; i < body.system.length; i += 1) {
-        const item = body.system[i];
-        if (
-          item?.[DYNAMIC_SYSTEM_MARKER] ||
-          item?.[SUMMARY_RECENT_SYSTEM_MARKER] ||
-          looksLikeGatewayDynamicSystemBlock(item) ||
-          looksLikeGatewayRecentSummaryBlock(item)
-        ) break;
-        if (item && typeof item === "object") staticSystem = item;
-      }
-      setCacheControl(staticSystem);
-    }
-
-    for (const item of body.system) {
-      if (item && typeof item === "object") {
-        delete item[DYNAMIC_SYSTEM_MARKER];
-        delete item[SUMMARY_CACHE_SYSTEM_MARKER];
-        delete item[SUMMARY_RECENT_SYSTEM_MARKER];
-        delete item[TOOL_RESULT_CACHE_SYSTEM_MARKER];
-        delete item[ENTRY_STYLE_SYSTEM_MARKER];
-        delete item[SUMITALK_REAL_MODE_SYSTEM_MARKER];
-        delete item[PLAY_NOTE_SYSTEM_MARKER];
-      }
+      position += 1;
     }
   }
-}
-
-function splitGatewaySummaryBlocks(systemBlocks) {
-  if (!Array.isArray(systemBlocks)) return;
-  for (let i = 1; i < systemBlocks.length; i += 1) {
-    const item = systemBlocks[i];
-    if (!(item?.[SUMMARY_CACHE_SYSTEM_MARKER] || looksLikeGatewaySummaryCacheBlock(item))) continue;
-    if (systemBlocks[i + 1]?.[SUMMARY_RECENT_SYSTEM_MARKER] || looksLikeGatewayRecentSummaryBlock(systemBlocks[i + 1])) return;
-
-    const split = splitGatewaySummaryText(item.text);
-    if (!split.recentText) return;
-    item.text = split.stableText;
-    item[SUMMARY_CACHE_SYSTEM_MARKER] = true;
-    systemBlocks.splice(i + 1, 0, {
-      type: "text",
-      text: split.recentText,
-      [SUMMARY_RECENT_SYSTEM_MARKER]: true,
-    });
-    return;
+  if (explicitBreakpoints.length > 4) {
+    throw new Error(`Anthropic explicit cache breakpoint exceeds 4: ${explicitBreakpoints.length}`);
   }
-}
-
-function splitGatewaySummaryText(value) {
-  let text = String(value || "").trim();
-  if (!text) return { stableText: "", recentText: "" };
-  text = text.replace(/【以上为近期记忆】\s*$/u, "").trim();
-  const recentIdx = text.indexOf("【最近】");
-  if (recentIdx < 0) return { stableText: String(value || ""), recentText: "" };
-
-  const stableRaw = text.slice(0, recentIdx).trim();
-  const recentRaw = text.slice(recentIdx).trim();
-  if (!recentRaw) return { stableText: String(value || ""), recentText: "" };
-  return {
-    stableText: stableRaw
-      ? `${stableRaw}\n【以上为较稳定的近期记忆】`
-      : "",
-    recentText: `\n\n【近期记忆（最近）】\n${recentRaw}\n【以上为最近记忆】`,
-  };
-}
-
-function findCacheableSystemBefore(systemBlocks, endIdx) {
-  for (let i = endIdx - 1; i > 0; i -= 1) {
-    const item = systemBlocks[i];
-    if (
-      item &&
-      typeof item === "object" &&
-      !item?.[DYNAMIC_SYSTEM_MARKER] &&
-      !item?.[SUMMARY_RECENT_SYSTEM_MARKER] &&
-      !looksLikeGatewayRecentSummaryBlock(item)
-    ) {
-      return item;
-    }
+  const oneHourPositions = explicitBreakpoints
+    .filter((item) => item.ttl === "1h")
+    .map((item) => item.position);
+  const hotPositions = explicitBreakpoints
+    .filter((item) => item.ttl === "5m")
+    .map((item) => item.position);
+  if (
+    oneHourPositions.length > 0 &&
+    hotPositions.length > 0 &&
+    Math.max(...oneHourPositions) >= Math.min(...hotPositions)
+  ) {
+    throw new Error("Anthropic 1h cache breakpoints must precede the 5m breakpoint");
   }
-  return null;
-}
 
-function findFinalCacheableSystemAfter(systemBlocks, startIdx) {
-  for (let i = systemBlocks.length - 1; i > startIdx; i -= 1) {
-    const item = systemBlocks[i];
-    if (item && typeof item === "object" && item[SUMMARY_RECENT_SYSTEM_MARKER]) {
-      return item;
-    }
-  }
-  for (let i = systemBlocks.length - 1; i > startIdx; i -= 1) {
-    const item = systemBlocks[i];
+  log(
+    `Prompt cache: count=${explicitBreakpoints.length} ` +
+    `bp1_tools=${Number(bp1Tools)} bp2_static=${Number(bp2Static)} ` +
+    `bp3_generation=${Number(bp3Generation)} bp4_hot=${Number(bp4Hot)}`
+  );
+
+  const markerKeys = [
+    DYNAMIC_SYSTEM_MARKER,
+    SUMMARY_CACHE_SYSTEM_MARKER,
+    SUMMARY_RECENT_SYSTEM_MARKER,
+    TOOL_RESULT_CACHE_SYSTEM_MARKER,
+    STATIC_CACHE_ANCHOR_SYSTEM_MARKER,
+    FROZEN_TOOL_SUMMARY_SYSTEM_MARKER,
+    HOT_TOOL_RESULT_SYSTEM_MARKER,
+    ENTRY_STYLE_SYSTEM_MARKER,
+    SUMITALK_REAL_MODE_SYSTEM_MARKER,
+    PLAY_NOTE_SYSTEM_MARKER,
+  ];
+  for (const item of systemBlocks) {
     if (!item || typeof item !== "object") continue;
-    if (item[DYNAMIC_SYSTEM_MARKER] || looksLikeGatewayDynamicSystemBlock(item)) continue;
-    return item;
+    for (const marker of markerKeys) delete item[marker];
   }
-  return null;
-}
-
-function looksLikeGatewaySummaryCacheBlock(item) {
-  const text = String(item?.text || "").trimStart();
-  return text.startsWith("【近期记忆】");
-}
-
-function looksLikeGatewayRecentSummaryBlock(item) {
-  const text = String(item?.text || "").trimStart();
-  return text.startsWith("【近期记忆（最近）】");
-}
-
-function looksLikeGatewayDynamicSystemBlock(item) {
-  const text = String(item?.text || "").trimStart();
-  if (!text) return false;
-  return GATEWAY_DYNAMIC_SYSTEM_HINTS.some((hint) => text.startsWith(hint));
 }
 
 function sendError(res, status, msg) {
