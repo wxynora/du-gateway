@@ -22,7 +22,6 @@ from config import (
     TOOL_RESULT_CACHE_TRIM_TO_CHARS,
     TOOL_RESULT_CACHE_TTL_SECONDS,
     TOOL_RESULT_HOT_MAX_CHARS,
-    TOOL_RESULT_HOT_MAX_ENTRIES,
     resolve_siliconflow_api_key,
 )
 from storage import runtime_sqlite
@@ -636,15 +635,25 @@ def _write_prepared(
 
 
 def _is_game_tool_loop_summary_candidate(entries: list[dict]) -> bool:
-    if not isinstance(entries, list) or len(entries) < 1:
-        return False
-    if not all(isinstance(entry, dict) for entry in entries):
-        return False
-    names = {
-        str(entry.get("name") or "").strip()
-        for entry in entries
-    }
-    return len(names) == 1 and next(iter(names)) in _GAME_LOOP_SUMMARY_TOOLS
+    return any(
+        isinstance(entry, dict)
+        and str(entry.get("name") or "").strip() in _GAME_LOOP_SUMMARY_TOOLS
+        for entry in entries or []
+    )
+
+
+def _split_game_tool_loop_entries(entries: list[dict]) -> tuple[list[list[dict]], list[dict]]:
+    game_groups_by_name: dict[str, list[dict]] = {}
+    passthrough: list[dict] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        tool_name = str(entry.get("name") or "").strip()
+        if tool_name in _GAME_LOOP_SUMMARY_TOOLS:
+            game_groups_by_name.setdefault(tool_name, []).append(entry)
+        else:
+            passthrough.append(entry)
+    return list(game_groups_by_name.values()), passthrough
 
 
 def _json_record_value(value: Any) -> Any:
@@ -785,11 +794,24 @@ def enqueue_game_tool_loop_summary(
     window_id: str = "",
     reply_channel: str = "",
 ) -> bool:
-    if not _is_game_tool_loop_summary_candidate(entries):
+    game_groups, passthrough = _split_game_tool_loop_entries(entries)
+    if not game_groups:
         return False
-    snapshot = copy.deepcopy(entries)
+    if passthrough:
+        record_tool_loop(
+            passthrough,
+            window_id=window_id,
+            reply_channel=reply_channel,
+        )
     _ensure_game_loop_summary_worker()
-    _GAME_LOOP_SUMMARY_QUEUE.put((snapshot, str(window_id or ""), str(reply_channel or "")))
+    for group in game_groups:
+        _GAME_LOOP_SUMMARY_QUEUE.put(
+            (
+                copy.deepcopy(group),
+                str(window_id or ""),
+                str(reply_channel or ""),
+            )
+        )
     return True
 
 
@@ -872,6 +894,7 @@ def prompt_generation_contents(*, window_id: str, generation_id: int) -> dict:
     normalized_generation_id = int(generation_id or 0)
     now = time.time()
     snapshot_created = False
+    snapshot_reason = ""
     try:
         with runtime_sqlite.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -922,6 +945,7 @@ def prompt_generation_contents(*, window_id: str, generation_id: int) -> dict:
                 )
                 frozen_entries = len(snapshot_lines)
                 snapshot_created = True
+                snapshot_reason = "memory_generation"
             else:
                 frozen_text = str(generation_row["frozen_text"] or "")
                 cutoff_created_at = float(generation_row["cutoff_created_at"])
@@ -933,10 +957,54 @@ def prompt_generation_contents(*, window_id: str, generation_id: int) -> dict:
                 FROM tool_result_cache
                 WHERE created_at > ?
                 ORDER BY created_at DESC, id DESC
-                LIMIT ?
                 """,
-                (cutoff_created_at, TOOL_RESULT_HOT_MAX_ENTRIES),
+                (cutoff_created_at,),
             ).fetchall()
+            hot_lines_asc = [
+                line
+                for row in reversed(hot_rows_desc)
+                if (line := _prompt_line(row))
+            ]
+            complete_hot_chars = (
+                len(_HOT_PROMPT_HEADER) + 2 + sum(len(line) for line in hot_lines_asc)
+                if hot_lines_asc
+                else 0
+            )
+            if not snapshot_created and complete_hot_chars > TOOL_RESULT_HOT_MAX_CHARS:
+                snapshot_rows = conn.execute(
+                    """
+                    SELECT id, summary, created_at
+                    FROM tool_result_cache
+                    ORDER BY created_at ASC, id ASC
+                    """
+                ).fetchall()
+                snapshot_lines = [line for row in snapshot_rows if (line := _prompt_line(row))]
+                frozen_text = _FROZEN_PROMPT_HEADER
+                if snapshot_lines:
+                    frozen_text += "\n\n" + "\n".join(snapshot_lines)
+                cutoff_created_at = (
+                    max(float(row["created_at"]) for row in snapshot_rows)
+                    if snapshot_rows
+                    else now
+                )
+                conn.execute(
+                    """
+                    UPDATE prompt_tool_generation
+                    SET frozen_text = ?, cutoff_created_at = ?, updated_at = ?
+                    WHERE window_id = ? AND generation_id = ?
+                    """,
+                    (
+                        frozen_text,
+                        cutoff_created_at,
+                        now,
+                        normalized_window_id,
+                        normalized_generation_id,
+                    ),
+                )
+                frozen_entries = len(snapshot_lines)
+                snapshot_created = True
+                snapshot_reason = "hot_overflow"
+                hot_rows_desc = []
             conn.execute("COMMIT")
     except Exception:
         logger.warning(
@@ -956,30 +1024,19 @@ def prompt_generation_contents(*, window_id: str, generation_id: int) -> dict:
 
     if snapshot_created:
         logger.info(
-            "tool_generation_snapshot window_id=%s generation_id=%s frozen_entries=%s frozen_chars=%s cutoff_created_at=%s",
+            "tool_generation_snapshot window_id=%s generation_id=%s reason=%s frozen_entries=%s frozen_chars=%s cutoff_created_at=%s",
             normalized_window_id,
             normalized_generation_id,
+            snapshot_reason,
             frozen_entries,
             len(frozen_text),
             cutoff_created_at,
         )
 
-    selected_desc: list[tuple[Any, str]] = []
-    hot_chars = len(_HOT_PROMPT_HEADER)
-    for row in hot_rows_desc:
-        line = _prompt_line(row)
-        if not line:
-            continue
-        added_chars = len(line) + (2 if not selected_desc else 0)
-        if hot_chars + added_chars > TOOL_RESULT_HOT_MAX_CHARS:
-            break
-        selected_desc.append((row, line))
-        hot_chars += added_chars
-
-    selected_asc = list(reversed(selected_desc))
-    hot_blocks = [line for _row, line in selected_asc]
+    hot_blocks = [line for row in reversed(hot_rows_desc) if (line := _prompt_line(row))]
     if hot_blocks:
         hot_blocks[0] = _HOT_PROMPT_HEADER + "\n\n" + hot_blocks[0]
+        hot_chars = sum(len(block) for block in hot_blocks)
     else:
         hot_chars = 0
     return {
