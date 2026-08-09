@@ -7,6 +7,7 @@ from flask import jsonify, request
 from services import prompt_manager
 from services import sumitalk_block_mode
 from storage import (
+    draft_reminder_mode_store,
     million_plan_mode_store,
     random_imitator_td_mode_store,
     r2_store,
@@ -177,6 +178,22 @@ def register_routes(bp) -> None:
         else:
             enabled = bool(raw)
         state = silence_mode_store.set_enabled(enabled, updated_at=now_beijing_iso())
+        return jsonify({"ok": True, **state})
+
+    @bp.route("/draft-reminder-mode", methods=["GET"])
+    def miniapp_get_draft_reminder_mode():
+        state = draft_reminder_mode_store.get_state()
+        return jsonify({"ok": True, **state})
+
+    @bp.route("/draft-reminder-mode", methods=["PUT"])
+    def miniapp_put_draft_reminder_mode():
+        data = request.get_json(silent=True) or {}
+        raw = data.get("enabled")
+        if isinstance(raw, str):
+            enabled = raw.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            enabled = bool(raw)
+        state = draft_reminder_mode_store.set_enabled(enabled, updated_at=now_beijing_iso())
         return jsonify({"ok": True, **state})
 
     @bp.route("/million-plan-mode", methods=["GET"])

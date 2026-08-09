@@ -827,7 +827,10 @@ def step_inject_draft_reminder(
 ) -> dict:
     """Inject the optional draft reminder immediately before Thinking rules."""
     from services.draft_block import DRAFT_REMINDER_PROMPT
+    from storage import draft_reminder_mode_store
 
+    if not draft_reminder_mode_store.is_enabled():
+        return body
     reminder = DRAFT_REMINDER_PROMPT.strip()
     if not reminder:
         return body
