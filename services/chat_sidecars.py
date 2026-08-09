@@ -8,6 +8,7 @@ from services.du_daily import (
 )
 from services.du_thought import split_assistant_for_thought
 from services.du_vitals import normalize_vitals_payload, split_assistant_for_vitals
+from services.draft_block import split_all_assistant_drafts
 from services.dynamic_memory_citation import strip_assistant_memory_citations
 from services.dynamic_memory_recall_debug import normalize_debug_request_id
 from services.interaction_memory import split_assistant_for_interaction
@@ -149,9 +150,13 @@ def extract_and_store_hidden_sidecars(
     source_messages: Optional[list[dict]] = None,
     reply_channel: str = "",
     du_request_id: str = "",
+    draft_sink: Optional[list[str]] = None,
 ) -> str:
     visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_text or "")
-    visible, thought = split_assistant_for_thought(visible_after_pcmd)
+    visible, draft_blocks = split_all_assistant_drafts(visible_after_pcmd)
+    if draft_sink is not None and draft_blocks:
+        draft_sink.extend(draft_blocks)
+    visible, thought = split_assistant_for_thought(visible)
     visible, vitals = split_assistant_for_vitals(visible)
     visible, interaction = split_assistant_for_interaction(visible)
     visible, _listen_invite_actions = split_listen_invite_actions(visible)
@@ -229,6 +234,7 @@ def apply_hidden_sidecars_to_assistant_response(
     source_messages: Optional[list[dict]] = None,
     reply_channel: str = "",
     du_request_id: str = "",
+    draft_sink: Optional[list[str]] = None,
 ) -> dict:
     """
     剥离助手回复中的隐藏块（老婆侧不可见）；若存在闭合块则写入 R2。
@@ -253,6 +259,7 @@ def apply_hidden_sidecars_to_assistant_response(
         source_messages=source_messages or [],
         reply_channel=reply_channel,
         du_request_id=du_request_id,
+        draft_sink=draft_sink,
     )
     if visible != content_text:
         msg["content"] = visible

@@ -39,6 +39,7 @@ from pipeline.pipeline import (
     step_clean_for_forward,
     step_replace_rikka_system,
     step_inject_custom_static_systems,
+    step_inject_draft_reminder,
     step_inject_thinking_block_rules,
     step_inject_core_behavior_rules,
     step_inject_common_knowledge,
@@ -103,6 +104,10 @@ from services.watch_action_flow import (
     watch_action_dedup_key as _watch_action_dedup_key,
 )
 from services.watch_context import inject_watch_context as _inject_watch_context
+from services.draft_block import (
+    join_assistant_drafts as _join_assistant_drafts,
+    strip_and_collect_assistant_drafts as _strip_and_collect_draft_text,
+)
 from services.qq_activity_context import (
     build_group_activity_delivery_for_wakeup as _build_qq_group_activity_delivery_for_wakeup,
     clear_group_activity_context as _clear_qq_group_activity_context,
@@ -310,6 +315,22 @@ def _xiaoai_speaker_from_request() -> str:
 
 def _reply_target() -> str:
     return str(request.headers.get("X-Reply-Target") or "").strip()
+
+
+def _strip_and_collect_assistant_drafts(message: dict, draft_sink: list[str]) -> dict:
+    if not isinstance(message, dict):
+        return message
+    content_text = get_assistant_content_text(message)
+    if not content_text:
+        return message
+    visible = _strip_and_collect_draft_text(content_text, draft_sink)
+    if visible != content_text:
+        message["content"] = visible
+    return message
+
+
+def _joined_assistant_drafts(draft_parts: list[str]) -> str:
+    return _join_assistant_drafts(draft_parts)
 
 
 def _truthy_header(name: str) -> bool:
@@ -835,6 +856,7 @@ def _compact_captivity_simulator_assistant_for_archive(assistant_msg: dict) -> d
         "reasoning_details",
         "thinking_blocks",
         "reasoning_omitted",
+        "draft",
         "cache_debug",
         "du_request_id",
     ):
@@ -1027,6 +1049,7 @@ def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:
         "reasoning_details",
         "reasoning_omitted",
         "thinking_blocks",
+        "draft",
         "tool_calls",
     ):
         if key in assistant_msg:
@@ -1522,6 +1545,7 @@ def _stream_with_r2_archive(
     archive_reasoning_stream = _ReasoningStreamAccumulator()
     reasoning_details_parts: list[dict] = []
     thinking_blocks_parts: list[dict] = []
+    draft_parts: list[str] = []
     cache_debug_entries: list[dict] = []
     reasoning_omitted = False
     reply_channel = str(reply_channel or _reply_channel() or "").strip().lower()
@@ -1972,6 +1996,7 @@ def _stream_with_r2_archive(
                 source_messages=body.get("messages") or [],
                 reply_channel=reply_channel,
                 du_request_id=du_request_id,
+                draft_sink=draft_parts,
             )
             full_reasoning = archive_reasoning_stream.text.strip()
             stream_sec = time.time() - stream_start
@@ -1992,6 +2017,9 @@ def _stream_with_r2_archive(
                     msg["reasoning_omitted"] = True
                 if cache_debug_entries:
                     msg["cache_debug"] = list(cache_debug_entries)
+                joined_draft = _joined_assistant_drafts(draft_parts)
+                if joined_draft:
+                    msg["draft"] = joined_draft
                 round_cleaned = (
                     _build_round_cleaned_for_archive(
                         last_user,
@@ -2104,6 +2132,7 @@ def _stream_with_r2_archive(
                 yield chunks[0]
                 return
             parsed = _parse_stream_to_message(chunks)
+            _strip_and_collect_assistant_drafts(parsed, draft_parts)
             if not round_event_state.get("started"):
                 _emit_reasoning_snapshot(
                     str(parsed.get("reasoning") or ""),
@@ -2290,6 +2319,7 @@ def _stream_with_r2_archive(
             source_messages=body.get("messages") or [],
             reply_channel=reply_channel,
             du_request_id=du_request_id,
+            draft_sink=draft_parts,
         )
         if not _disable_followup_request():
             try:
@@ -2345,6 +2375,9 @@ def _stream_with_r2_archive(
                 msg["reasoning_omitted"] = True
             if cache_debug_entries:
                 msg["cache_debug"] = list(cache_debug_entries)
+            joined_draft = _joined_assistant_drafts(draft_parts)
+            if joined_draft:
+                msg["draft"] = joined_draft
             tc_trace = _collect_tool_trace_from_messages(current_body.get("messages") or [])
             if tc_trace:
                 msg["tool_calls"] = tc_trace
@@ -2947,6 +2980,14 @@ def chat_completions():
         or _should_use_anthropic_format(active_upstream_url)
     ) and not _skip_claude_thinking_carryover_request():
         body = _inject_previous_claude_thinking_blocks(body, window_id)
+    body = step_inject_draft_reminder(
+        body,
+        model=req_model,
+        anthropic_messages=(
+            _is_local_claude_oauth_proxy_url(active_upstream_url)
+            or _should_use_anthropic_format(active_upstream_url)
+        ),
+    )
     body = step_inject_thinking_block_rules(
         body,
         model=req_model,
@@ -2978,6 +3019,10 @@ def chat_completions():
         or _should_use_anthropic_format(active_upstream_url)
     )
     for msg in body.get("messages") or []:
+        msg.pop("__draft_reminder__", None)
+        msg.pop("__mid_draft_component__", None)
+        msg.pop("__mid_thinking_component__", None)
+        msg.pop("__mid_mode_component__", None)
         if not preserve_dynamic_marker:
             msg.pop("__dynamic__", None)
             msg.pop("__summary_cache__", None)
@@ -3062,6 +3107,7 @@ def chat_completions():
     accumulated_reasoning_details_seen: set[str] = set()
     accumulated_reasoning_omitted = False
     accumulated_tool_visible_parts: list[str] = []
+    draft_parts: list[str] = []
 
     def _reasoning_text_fingerprint(text: str) -> str:
         return " ".join(str(text or "").split()).strip()
@@ -3147,6 +3193,8 @@ def chat_completions():
     tool_only_reply_done = False
     while True:
         msg = (resp_json or {}).get("choices") and (resp_json.get("choices") or [{}])[0].get("message")
+        if isinstance(msg, dict):
+            _strip_and_collect_assistant_drafts(msg, draft_parts)
         tool_calls = (msg or {}).get("tool_calls")
         if tool_calls and isinstance(tool_calls, list):
             if game_checkpoint_finalizing:
@@ -3308,6 +3356,7 @@ def chat_completions():
             source_messages=body.get("messages") or [],
             reply_channel=reply_channel,
             du_request_id=du_request_id,
+            draft_sink=draft_parts,
         )
         if is_sumitalk_request:
             resp_json = _merge_sumitalk_card_into_nonstream_response(resp_json, body.get("messages") or [])
@@ -3472,6 +3521,9 @@ def chat_completions():
                 msg_for_r2["reasoning_omitted"] = True
             if cache_debug_entries:
                 msg_for_r2["cache_debug"] = cache_debug_entries
+            joined_draft = _joined_assistant_drafts(draft_parts)
+            if joined_draft:
+                msg_for_r2["draft"] = joined_draft
             tc_trace = _collect_tool_trace_from_messages(body.get("messages") or [])
             if tc_trace and not msg_for_r2.get("tool_calls"):
                 msg_for_r2["tool_calls"] = tc_trace

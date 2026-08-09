@@ -857,22 +857,24 @@ def register_routes(bp) -> None:
                     if recall_event and recall_matched_by
                     else None
                 )
-                out.append(
-                    {
-                        "window_id": target,
-                        "index": idx,
-                        "timestamp": ts,
-                        "channel": str(r.get("channel") or "").strip(),
-                        "reasoning": reasoning_text,
-                        "cache_debug": cache_debug_items,
-                        "tool_cache": _build_tool_cache_stats(cache_debug_items),
-                        "output_stats": output_stats,
-                        "cost": cost_stats,
-                        "tool_calls": tool_calls_out,
-                        "memory_recall": memory_recall,
-                        "memory_recall_status": "attached" if memory_recall else "none",
-                    }
-                )
+                item = {
+                    "window_id": target,
+                    "index": idx,
+                    "timestamp": ts,
+                    "channel": str(r.get("channel") or "").strip(),
+                    "reasoning": reasoning_text,
+                    "cache_debug": cache_debug_items,
+                    "tool_cache": _build_tool_cache_stats(cache_debug_items),
+                    "output_stats": output_stats,
+                    "cost": cost_stats,
+                    "tool_calls": tool_calls_out,
+                    "memory_recall": memory_recall,
+                    "memory_recall_status": "attached" if memory_recall else "none",
+                }
+                draft_text = str(selected_assistant_msg.get("draft") or "").strip()
+                if draft_text:
+                    item["draft"] = draft_text
+                out.append(item)
 
         resp = jsonify(
             {"ok": True, "window_id": targets[0] if targets else "", "window_ids": targets, "items": out, "count": len(out)}

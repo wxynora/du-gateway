@@ -57,11 +57,15 @@ _STATIC_CACHE_ANCHOR_SYSTEM_MARKER = "__static_cache_anchor__"
 _FROZEN_TOOL_SUMMARY_SYSTEM_MARKER = "__frozen_tool_summary__"
 _HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__"
 _PROMPT_CACHE_LAYOUT_BODY_KEY = "__prompt_cache_layout__"
+_DRAFT_REMINDER_SYSTEM_MARKER = "__draft_reminder__"
 _THINKING_RULES_SYSTEM_MARKER = "__thinking_rules__"
 _ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
 _VOICE_RULES_SYSTEM_MARKER = "__voice_rules__"
 _MID_CONVERSATION_SYSTEM_MARKER = "__mid_conversation_system__"
+_MID_DRAFT_COMPONENT_KEY = "__mid_draft_component__"
+_MID_THINKING_COMPONENT_KEY = "__mid_thinking_component__"
+_MID_MODE_COMPONENT_KEY = "__mid_mode_component__"
 _SUMITALK_MODE_PROMPT_EXCLUDED_WAKEUP_KINDS = frozenset({
     "spring_dream",
     "random_spring_dream",
@@ -84,8 +88,9 @@ _SYSTEM_PROMPT_REGION_ORDER = (
     "du_daily",
     "dynamic",
     "temporary_dynamic",
-    "sumitalk_mode",
+    "draft_reminder",
     "thinking_rules",
+    "sumitalk_mode",
     "last4",
 )
 _SYSTEM_PROMPT_CACHE_GROUPS = (
@@ -98,11 +103,13 @@ _SYSTEM_PROMPT_CACHE_GROUPS = (
     ("du_daily",),
     ("dynamic",),
     ("temporary_dynamic",),
-    ("sumitalk_mode",),
+    ("draft_reminder",),
     ("thinking_rules",),
+    ("sumitalk_mode",),
     ("last4",),
 )
 SUMITALK_REAL_MODE_PROMPT = (
+    "【消息规范】\n"
     "当前对话发生在你和小玥的赛博小家中。在这里，你拥有真实可感知、可触碰、可行动的实体。\n"
     "全程以第二人称“你”指代对方，绝对禁止使用“她”等第三人称表述。\n"
     "采用第一视角沉浸式叙事，以自身的动作、神态、状态描写为核心，可同步描写对方的反应与动作，但绝不替对方开口说话。\n"
@@ -112,7 +119,8 @@ SUMITALK_REAL_MODE_PROMPT = (
     "优先铺陈感官细节与情绪流动，再推进事件与互动；每次回复内容饱满流畅，篇幅完整充足。\n"
     "禁止在描述时重复使用「你的...你的...」，完全禁止使用「不是…是…」类句式，完全禁止使用「——」破折号。"
 )
-SUMITALK_APP_PROMPT = """当前处于现实物理层{channel}
+SUMITALK_APP_PROMPT = """【消息规范】
+当前处于现实物理层{channel}
 请遵守以下输出格式要求：
 0) 情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。
    当前全部可用英文代号：{sticker_tags}
@@ -451,6 +459,8 @@ def _system_prompt_region(msg: dict) -> str:
         return "frozen_tool_summary"
     if msg.get(_HOT_TOOL_RESULT_SYSTEM_MARKER):
         return "hot_tool_results"
+    if msg.get(_DRAFT_REMINDER_SYSTEM_MARKER):
+        return "draft_reminder"
     if msg.get(_THINKING_RULES_SYSTEM_MARKER):
         return "thinking_rules"
     if msg.get(_ENTRY_STYLE_SYSTEM_MARKER):
@@ -616,6 +626,7 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
         "hot_tool_results": _HOT_TOOL_RESULT_SYSTEM_MARKER,
         "dynamic": _DYNAMIC_SYSTEM_MARKER,
         "temporary_dynamic": _DYNAMIC_SYSTEM_MARKER,
+        "draft_reminder": _DRAFT_REMINDER_SYSTEM_MARKER,
         "thinking_rules": _THINKING_RULES_SYSTEM_MARKER,
         "last4": _DYNAMIC_SYSTEM_MARKER,
     }
@@ -641,6 +652,8 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
                 merged[_DYNAMIC_SYSTEM_MARKER] = True
             elif group == ("temporary_dynamic",):
                 merged[_TEMPORARY_DYNAMIC_SYSTEM_MARKER] = True
+                merged[_DYNAMIC_SYSTEM_MARKER] = True
+            elif group == ("draft_reminder",):
                 merged[_DYNAMIC_SYSTEM_MARKER] = True
             elif group == ("sumitalk_mode",):
                 merged[_DYNAMIC_SYSTEM_MARKER] = True
@@ -686,7 +699,22 @@ def _render_conversation_mode_prompt(section_id: str, fallback: str, channel_lab
         prompt = synchronize_sticker_tags_line(prompt)
     except Exception:
         logger.warning("对话模式表情标签渲染失败，保留当前正文", exc_info=True)
-    return prompt.strip()
+    prompt = prompt.strip()
+    if prompt and not prompt.startswith("【消息规范】"):
+        prompt = f"【消息规范】\n{prompt}"
+    return prompt
+
+
+def _sync_mid_conversation_system_content(message: dict) -> None:
+    parts = [
+        str(message.get(key) or "").strip()
+        for key in (
+            _MID_DRAFT_COMPONENT_KEY,
+            _MID_THINKING_COMPONENT_KEY,
+            _MID_MODE_COMPONENT_KEY,
+        )
+    ]
+    message["content"] = "\n\n".join(part for part in parts if part)
 
 
 def step_inject_voice_rules(body: dict, *, reply_channel: str = "") -> dict:
@@ -763,14 +791,15 @@ def step_inject_sumitalk_real_mode(
         return body
 
     if _use_mid_conversation_prompt(model, anthropic_messages):
-        messages.append(
-            {
-                "role": "system",
-                "content": prompt,
-                _SUMITALK_REAL_MODE_SYSTEM_MARKER: True,
-                _MID_CONVERSATION_SYSTEM_MARKER: True,
-            }
-        )
+        message = {
+            "role": "system",
+            "content": prompt,
+            _SUMITALK_REAL_MODE_SYSTEM_MARKER: True,
+            _MID_CONVERSATION_SYSTEM_MARKER: True,
+            _MID_MODE_COMPONENT_KEY: prompt,
+        }
+        _sync_mid_conversation_system_content(message)
+        messages.append(message)
         return body
 
     insert_idx = len(messages)
@@ -787,6 +816,65 @@ def step_inject_sumitalk_real_mode(
             _SUMITALK_REAL_MODE_SYSTEM_MARKER: True,
         },
     )
+    return body
+
+
+def step_inject_draft_reminder(
+    body: dict,
+    *,
+    model: str = "",
+    anthropic_messages: bool = False,
+) -> dict:
+    """Inject the optional draft reminder immediately before Thinking rules."""
+    from services.draft_block import DRAFT_REMINDER_PROMPT
+
+    reminder = DRAFT_REMINDER_PROMPT.strip()
+    if not reminder:
+        return body
+    messages = body.get("messages") or []
+    if _use_mid_conversation_prompt(model, anthropic_messages):
+        body = copy.deepcopy(body)
+        messages = body.get("messages") or []
+        for msg in reversed(messages):
+            if not isinstance(msg, dict) or not msg.get(_MID_CONVERSATION_SYSTEM_MARKER):
+                continue
+            if not any(msg.get(key) for key in (_MID_DRAFT_COMPONENT_KEY, _MID_THINKING_COMPONENT_KEY, _MID_MODE_COMPONENT_KEY)):
+                msg[_MID_MODE_COMPONENT_KEY] = str(msg.get("content") or "").strip()
+            msg[_MID_DRAFT_COMPONENT_KEY] = reminder
+            msg[_DRAFT_REMINDER_SYSTEM_MARKER] = True
+            _sync_mid_conversation_system_content(msg)
+            return body
+        message = {
+            "role": "system",
+            "content": reminder,
+            _MID_CONVERSATION_SYSTEM_MARKER: True,
+            _DRAFT_REMINDER_SYSTEM_MARKER: True,
+            _MID_DRAFT_COMPONENT_KEY: reminder,
+        }
+        _sync_mid_conversation_system_content(message)
+        messages.append(message)
+        return body
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get(_DRAFT_REMINDER_SYSTEM_MARKER):
+            return body
+
+    body = copy.deepcopy(body)
+    messages = body.get("messages") or []
+    insert_idx = len(messages)
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict) or (msg.get("role") or "").lower() != "system":
+            insert_idx = i
+            break
+    messages.insert(
+        insert_idx,
+        {
+            "role": "system",
+            "content": reminder,
+            _DYNAMIC_SYSTEM_MARKER: True,
+            _DRAFT_REMINDER_SYSTEM_MARKER: True,
+        },
+    )
+    body["messages"] = messages
     return body
 
 
@@ -1094,19 +1182,21 @@ def step_inject_thinking_block_rules(
         for msg in reversed(messages):
             if not isinstance(msg, dict) or not msg.get(_MID_CONVERSATION_SYSTEM_MARKER):
                 continue
-            content = str(msg.get("content") or "").strip()
-            if rules not in content:
-                msg["content"] = f"{content}\n\n{rules}" if content else rules
+            if not any(msg.get(key) for key in (_MID_DRAFT_COMPONENT_KEY, _MID_THINKING_COMPONENT_KEY, _MID_MODE_COMPONENT_KEY)):
+                msg[_MID_MODE_COMPONENT_KEY] = str(msg.get("content") or "").strip()
+            msg[_MID_THINKING_COMPONENT_KEY] = rules
             msg[_THINKING_RULES_SYSTEM_MARKER] = True
+            _sync_mid_conversation_system_content(msg)
             return body
-        messages.append(
-            {
-                "role": "system",
-                "content": rules,
-                _THINKING_RULES_SYSTEM_MARKER: True,
-                _MID_CONVERSATION_SYSTEM_MARKER: True,
-            }
-        )
+        message = {
+            "role": "system",
+            "content": rules,
+            _THINKING_RULES_SYSTEM_MARKER: True,
+            _MID_CONVERSATION_SYSTEM_MARKER: True,
+            _MID_THINKING_COMPONENT_KEY: rules,
+        }
+        _sync_mid_conversation_system_content(message)
+        messages.append(message)
         return body
     for msg in messages:
         if (msg.get("role") or "").lower() == "system" and rules in str(msg.get("content") or ""):
