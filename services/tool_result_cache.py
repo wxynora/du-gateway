@@ -21,6 +21,8 @@ from config import (
     TOOL_RESULT_CACHE_MAX_CHARS,
     TOOL_RESULT_CACHE_TRIM_TO_CHARS,
     TOOL_RESULT_CACHE_TTL_SECONDS,
+    TOOL_RESULT_HOT_MAX_CHARS,
+    TOOL_RESULT_HOT_MAX_ENTRIES,
     resolve_siliconflow_api_key,
 )
 from storage import runtime_sqlite
@@ -29,6 +31,8 @@ from utils.log import get_logger
 logger = get_logger(__name__)
 
 TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
+FROZEN_TOOL_SUMMARY_SYSTEM_MARKER = "__frozen_tool_summary__"
+HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__"
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _SPACE_RE = re.compile(r"\s+")
 _SECRET_RE = re.compile(
@@ -38,6 +42,16 @@ _BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}")
 _PROMPT_HEADER = (
     "【最近24小时工具使用摘要】\n"
     "以下是你已经完成的工具调用摘要，只用于记住刚才做过什么；需要最新结果时仍可重新调用工具。"
+)
+_FROZEN_PROMPT_HEADER = (
+    "〖已归档工具摘要〗\n"
+    "以下内容是当前缓存代际开始时已经存在的工具调用摘要。\n"
+    "需要当前状态时仍以新的工具调用结果为准。"
+)
+_HOT_PROMPT_HEADER = (
+    "〖本代新增工具结果〗\n"
+    "以下工具结果产生于当前缓存代际，时间晚于前面的已归档工具摘要。\n"
+    "同一事项存在冲突时，以这里时间更晚的结果为准。"
 )
 _GAME_LOOP_SUMMARY_MODEL = "Qwen/Qwen3-8B"
 _GAME_LOOP_SUMMARY_TOOLS = frozenset({"random_imitator_td", "farm", "cedareco", "travel"})
@@ -547,6 +561,15 @@ def _prompt_line_chars(summary: str) -> int:
     return len(f"【00:00 {summary}】")
 
 
+def _prompt_line(row: Any) -> str:
+    try:
+        label = datetime.fromtimestamp(float(row["created_at"]), tz=_BEIJING).strftime("%H:%M")
+    except Exception:
+        label = "--:--"
+    summary = _text(row["summary"], 900)
+    return f"【{label} {summary}】" if summary else ""
+
+
 def _prune(conn, now: float) -> None:
     conn.execute("DELETE FROM tool_result_cache WHERE expires_at <= ?", (now,))
     rows = conn.execute(
@@ -836,17 +859,134 @@ def list_prompt_lines() -> list[str]:
     except Exception:
         logger.warning("tool_result_cache read failed", exc_info=True)
         return []
-    out: list[str] = []
-    for row in rows:
-        try:
-            label = datetime.fromtimestamp(float(row["created_at"]), tz=_BEIJING).strftime("%H:%M")
-        except Exception:
-            label = "--:--"
-        summary = _text(row["summary"], 900)
-        if summary:
-            out.append(f"【{label} {summary}】")
-    return out
+    return [line for row in rows if (line := _prompt_line(row))]
 
 
 def prompt_system_contents() -> list[str]:
     return [_PROMPT_HEADER, *list_prompt_lines()]
+
+
+def prompt_generation_contents(*, window_id: str, generation_id: int) -> dict:
+    """Return one generation-frozen tool block and the post-cutoff hot blocks."""
+    normalized_window_id = str(window_id or "")
+    normalized_generation_id = int(generation_id or 0)
+    now = time.time()
+    snapshot_created = False
+    try:
+        with runtime_sqlite.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            _prune(conn, now)
+            generation_row = conn.execute(
+                """
+                SELECT generation_id, frozen_text, cutoff_created_at
+                FROM prompt_tool_generation
+                WHERE window_id = ?
+                """,
+                (normalized_window_id,),
+            ).fetchone()
+            if generation_row is None or int(generation_row["generation_id"]) != normalized_generation_id:
+                snapshot_rows = conn.execute(
+                    """
+                    SELECT id, summary, created_at
+                    FROM tool_result_cache
+                    ORDER BY created_at ASC, id ASC
+                    """
+                ).fetchall()
+                snapshot_lines = [line for row in snapshot_rows if (line := _prompt_line(row))]
+                frozen_text = _FROZEN_PROMPT_HEADER
+                if snapshot_lines:
+                    frozen_text += "\n\n" + "\n".join(snapshot_lines)
+                cutoff_created_at = (
+                    max(float(row["created_at"]) for row in snapshot_rows)
+                    if snapshot_rows
+                    else now
+                )
+                conn.execute(
+                    """
+                    INSERT INTO prompt_tool_generation(
+                        window_id, generation_id, frozen_text, cutoff_created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(window_id) DO UPDATE SET
+                        generation_id = excluded.generation_id,
+                        frozen_text = excluded.frozen_text,
+                        cutoff_created_at = excluded.cutoff_created_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        normalized_window_id,
+                        normalized_generation_id,
+                        frozen_text,
+                        cutoff_created_at,
+                        now,
+                    ),
+                )
+                frozen_entries = len(snapshot_lines)
+                snapshot_created = True
+            else:
+                frozen_text = str(generation_row["frozen_text"] or "")
+                cutoff_created_at = float(generation_row["cutoff_created_at"])
+                frozen_entries = 0
+
+            hot_rows_desc = conn.execute(
+                """
+                SELECT id, summary, created_at
+                FROM tool_result_cache
+                WHERE created_at > ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (cutoff_created_at, TOOL_RESULT_HOT_MAX_ENTRIES),
+            ).fetchall()
+            conn.execute("COMMIT")
+    except Exception:
+        logger.warning(
+            "tool generation prompt read failed window_id=%s generation_id=%s",
+            normalized_window_id,
+            normalized_generation_id,
+            exc_info=True,
+        )
+        return {
+            "frozen_text": "",
+            "hot_blocks": [],
+            "cutoff_created_at": 0.0,
+            "frozen_entries": 0,
+            "hot_entries": 0,
+            "hot_chars": 0,
+        }
+
+    if snapshot_created:
+        logger.info(
+            "tool_generation_snapshot window_id=%s generation_id=%s frozen_entries=%s frozen_chars=%s cutoff_created_at=%s",
+            normalized_window_id,
+            normalized_generation_id,
+            frozen_entries,
+            len(frozen_text),
+            cutoff_created_at,
+        )
+
+    selected_desc: list[tuple[Any, str]] = []
+    hot_chars = len(_HOT_PROMPT_HEADER)
+    for row in hot_rows_desc:
+        line = _prompt_line(row)
+        if not line:
+            continue
+        added_chars = len(line) + (2 if not selected_desc else 0)
+        if hot_chars + added_chars > TOOL_RESULT_HOT_MAX_CHARS:
+            break
+        selected_desc.append((row, line))
+        hot_chars += added_chars
+
+    selected_asc = list(reversed(selected_desc))
+    hot_blocks = [line for _row, line in selected_asc]
+    if hot_blocks:
+        hot_blocks[0] = _HOT_PROMPT_HEADER + "\n\n" + hot_blocks[0]
+    else:
+        hot_chars = 0
+    return {
+        "frozen_text": frozen_text,
+        "hot_blocks": hot_blocks,
+        "cutoff_created_at": cutoff_created_at,
+        "frozen_entries": frozen_entries,
+        "hot_entries": len(hot_blocks),
+        "hot_chars": hot_chars,
+    }

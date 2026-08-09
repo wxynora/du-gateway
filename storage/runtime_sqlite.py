@@ -34,6 +34,7 @@ _RUNTIME_TABLES = (
     "recall_message_markers",
     "recall_message_targets",
     "tool_result_cache",
+    "prompt_tool_generation",
     "du_body_eval_pending",
     "du_body_eval_audit",
     "watch_viewings",
@@ -154,6 +155,14 @@ def ensure_schema() -> None:
                     ON tool_result_cache(created_at, id);
                 CREATE INDEX IF NOT EXISTS idx_tool_result_cache_expires
                     ON tool_result_cache(expires_at);
+
+                CREATE TABLE IF NOT EXISTS prompt_tool_generation (
+                    window_id TEXT PRIMARY KEY,
+                    generation_id INTEGER NOT NULL,
+                    frozen_text TEXT NOT NULL,
+                    cutoff_created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
 
                 CREATE TABLE IF NOT EXISTS du_body_eval_pending (
                     window_id TEXT NOT NULL,

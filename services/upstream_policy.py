@@ -25,6 +25,9 @@ _LAST4_SYSTEM_MARKER = "__last4__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
+_STATIC_CACHE_ANCHOR_SYSTEM_MARKER = "__static_cache_anchor__"
+_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER = "__frozen_tool_summary__"
+_HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__"
 _THINKING_RULES_SYSTEM_MARKER = "__thinking_rules__"
 _ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
@@ -188,18 +191,16 @@ def _message_content_text(msg: dict) -> str:
     return str(content or "")
 
 
-def _looks_like_summary_cache_message(msg: dict) -> bool:
-    text = _message_content_text(msg).strip()
-    return bool((msg or {}).get(_SUMMARY_CACHE_SYSTEM_MARKER) or text.startswith("【近期记忆】"))
+def _is_summary_cache_message(msg: dict) -> bool:
+    return bool((msg or {}).get(_SUMMARY_CACHE_SYSTEM_MARKER))
 
 
-def _looks_like_recent_summary_message(msg: dict) -> bool:
-    text = _message_content_text(msg).strip()
-    return bool((msg or {}).get(_SUMMARY_RECENT_SYSTEM_MARKER) or text.startswith("【近期记忆（最近）】"))
+def _is_recent_summary_message(msg: dict) -> bool:
+    return bool((msg or {}).get(_SUMMARY_RECENT_SYSTEM_MARKER))
 
 
-def _looks_like_dynamic_message(msg: dict) -> bool:
-    return bool((msg or {}).get(_DYNAMIC_SYSTEM_MARKER) or _looks_like_recent_summary_message(msg))
+def _is_dynamic_message(msg: dict) -> bool:
+    return bool((msg or {}).get(_DYNAMIC_SYSTEM_MARKER) or _is_recent_summary_message(msg))
 
 
 def _cache_control(ttl: str) -> dict:
@@ -207,23 +208,6 @@ def _cache_control(ttl: str) -> dict:
     if ttl:
         out["ttl"] = ttl
     return out
-
-
-def _split_summary_text(value: str) -> tuple[str, str]:
-    text = str(value or "").strip()
-    if not text:
-        return "", ""
-    text = re.sub(r"【以上为近期记忆】\s*$", "", text).strip()
-    recent_idx = text.find("【最近】")
-    if recent_idx < 0:
-        return str(value or ""), ""
-    stable_raw = text[:recent_idx].strip()
-    recent_raw = text[recent_idx:].strip()
-    if not recent_raw:
-        return str(value or ""), ""
-    stable_text = f"{stable_raw}\n【以上为较稳定的近期记忆】" if stable_raw else ""
-    recent_text = f"\n\n【近期记忆（最近）】\n{recent_raw}\n【以上为最近记忆】"
-    return stable_text, recent_text
 
 
 def _text_blocks_from_content(content) -> list:
@@ -250,6 +234,9 @@ def _append_text_blocks_without_cache(target: list, content) -> None:
         item.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         item.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
         item.pop(_TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
+        item.pop(_STATIC_CACHE_ANCHOR_SYSTEM_MARKER, None)
+        item.pop(_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER, None)
+        item.pop(_HOT_TOOL_RESULT_SYSTEM_MARKER, None)
         item.pop(_ENTRY_STYLE_SYSTEM_MARKER, None)
         item.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
         item.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
@@ -299,6 +286,9 @@ def _strip_gateway_cache_markers(messages: list[dict]) -> None:
         msg.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         msg.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
         msg.pop(_TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
+        msg.pop(_STATIC_CACHE_ANCHOR_SYSTEM_MARKER, None)
+        msg.pop(_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER, None)
+        msg.pop(_HOT_TOOL_RESULT_SYSTEM_MARKER, None)
         msg.pop(_ENTRY_STYLE_SYSTEM_MARKER, None)
         msg.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
         msg.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
@@ -332,6 +322,9 @@ def _pioneer_clean_volatile_context_blocks(blocks: list[dict]) -> list[dict]:
         item.pop(_SUMMARY_CACHE_SYSTEM_MARKER, None)
         item.pop(_SUMMARY_RECENT_SYSTEM_MARKER, None)
         item.pop(_TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
+        item.pop(_STATIC_CACHE_ANCHOR_SYSTEM_MARKER, None)
+        item.pop(_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER, None)
+        item.pop(_HOT_TOOL_RESULT_SYSTEM_MARKER, None)
         item.pop(_ENTRY_STYLE_SYSTEM_MARKER, None)
         item.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
         item.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
@@ -382,7 +375,14 @@ def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str
     final_context_mark_idx = -1
 
     for msg_idx, msg in enumerate(leading_systems):
-        if _looks_like_recent_summary_message(msg):
+        if msg.get(_STATIC_CACHE_ANCHOR_SYSTEM_MARKER):
+            _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
+            static_mark_idx = _last_text_block_index(stable_blocks)
+            continue
+        if msg.get(_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER) or msg.get(_HOT_TOOL_RESULT_SYSTEM_MARKER):
+            _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
+            continue
+        if _is_recent_summary_message(msg):
             _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
             final_context_mark_idx = _last_text_block_index(stable_blocks)
             continue
@@ -400,20 +400,13 @@ def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str
             _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
             final_context_mark_idx = _last_text_block_index(stable_blocks)
             continue
-        if _looks_like_dynamic_message(msg):
+        if _is_dynamic_message(msg):
             _append_pioneer_volatile_context_blocks(volatile_context_blocks, msg.get("content"))
             continue
-        if _looks_like_summary_cache_message(msg):
-            next_msg = leading_systems[msg_idx + 1] if msg_idx + 1 < len(leading_systems) else {}
-            if _looks_like_recent_summary_message(next_msg):
-                stable_text, recent_text = _message_content_text(msg), ""
-            else:
-                stable_text, recent_text = _split_summary_text(_message_content_text(msg))
+        if _is_summary_cache_message(msg):
+            stable_text = _message_content_text(msg)
             if stable_text:
                 stable_blocks.append({"type": "text", "text": stable_text})
-                final_context_mark_idx = len(stable_blocks) - 1
-            if recent_text:
-                stable_blocks.append({"type": "text", "text": recent_text})
                 final_context_mark_idx = len(stable_blocks) - 1
             continue
         _append_text_blocks_without_cache(stable_blocks, msg.get("content"))

@@ -14,11 +14,22 @@ def _request_body_chars(body: dict) -> int:
 
 def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
     stripped = content.lstrip()
+    if msg.get("__static_cache_anchor__"):
+        return "固定静态区"
+    if msg.get("__frozen_tool_summary__") or stripped.startswith("〖已归档工具摘要〗"):
+        return "已归档工具摘要"
+    if msg.get("__hot_tool_result__") or stripped.startswith("〖本代新增工具结果〗"):
+        return "本代新增工具结果"
     if msg.get("__tool_result_cache__") or stripped.startswith("【最近24小时工具使用摘要】"):
         return "工具使用摘要"
     if msg.get("__play_note__") or stripped.startswith("【当前私密纸条】"):
         return "play小纸条"
-    if msg.get("__summary_cache__") or msg.get("__summary_recent__") or "【近期记忆】" in content:
+    if (
+        msg.get("__summary_cache__")
+        or msg.get("__summary_recent__")
+        or "【近期记忆】" in content
+        or stripped.startswith("〖近期记忆·")
+    ):
         return "近期记忆"
     if msg.get("__thinking_rules__") or stripped.startswith("### Thinking 规范"):
         return "thinking规则"
@@ -289,6 +300,7 @@ def extract_prompt_cache_usage(data: dict) -> dict:
     prompt_details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
     input_details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
     output_details = usage.get("output_tokens_details") if isinstance(usage.get("output_tokens_details"), dict) else {}
+    cache_creation = usage.get("cache_creation") if isinstance(usage.get("cache_creation"), dict) else {}
     iterations = usage.get("iterations")
     if not isinstance(iterations, list):
         iterations = usage.get("anthropic_iterations")
@@ -314,6 +326,14 @@ def extract_prompt_cache_usage(data: dict) -> dict:
         "input_cached_tokens": input_details.get("cached_tokens"),
         "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
         "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
+        "cache_creation_ephemeral_1h_input_tokens": usage.get(
+            "cache_creation_ephemeral_1h_input_tokens",
+            cache_creation.get("ephemeral_1h_input_tokens"),
+        ),
+        "cache_creation_ephemeral_5m_input_tokens": usage.get(
+            "cache_creation_ephemeral_5m_input_tokens",
+            cache_creation.get("ephemeral_5m_input_tokens"),
+        ),
     }
     if iterations:
         out["iterations"] = iterations

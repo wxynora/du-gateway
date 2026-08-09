@@ -52,6 +52,10 @@ _LAST4_SYSTEM_MARKER = "__last4__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
+_STATIC_CACHE_ANCHOR_SYSTEM_MARKER = "__static_cache_anchor__"
+_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER = "__frozen_tool_summary__"
+_HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__"
+_PROMPT_CACHE_LAYOUT_BODY_KEY = "__prompt_cache_layout__"
 _THINKING_RULES_SYSTEM_MARKER = "__thinking_rules__"
 _ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
@@ -68,11 +72,12 @@ _PLAY_NOTE_PENDING_BODY_KEY = "__play_note_pending__"
 # normal runtime context, temporary scene/event context, Thinking rules, then recent conversation.
 _SYSTEM_PROMPT_REGION_ORDER = (
     "static",
-    "tool_result_cache",
-    "entry_style",
-    "sumitalk_mode",
+    "frozen_tool_summary",
     "summary_cache",
     "summary_recent",
+    "hot_tool_results",
+    "entry_style",
+    "sumitalk_mode",
     "du_daily",
     "dynamic",
     "temporary_dynamic",
@@ -81,11 +86,12 @@ _SYSTEM_PROMPT_REGION_ORDER = (
 )
 _SYSTEM_PROMPT_CACHE_GROUPS = (
     ("static",),
-    ("tool_result_cache",),
-    ("entry_style",),
-    ("sumitalk_mode",),
+    ("frozen_tool_summary",),
     ("summary_cache",),
     ("summary_recent",),
+    ("hot_tool_results",),
+    ("entry_style",),
+    ("sumitalk_mode",),
     ("du_daily",),
     ("dynamic",),
     ("temporary_dynamic",),
@@ -423,8 +429,10 @@ def step_inject_custom_static_systems(body: dict) -> dict:
 
 def _system_prompt_region(msg: dict) -> str:
     """Return the logical static/dynamic sub-block for one system message."""
-    if msg.get(_TOOL_RESULT_CACHE_SYSTEM_MARKER):
-        return "tool_result_cache"
+    if msg.get(_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER) or msg.get(_TOOL_RESULT_CACHE_SYSTEM_MARKER):
+        return "frozen_tool_summary"
+    if msg.get(_HOT_TOOL_RESULT_SYSTEM_MARKER):
+        return "hot_tool_results"
     if msg.get(_THINKING_RULES_SYSTEM_MARKER):
         return "thinking_rules"
     if msg.get(_ENTRY_STYLE_SYSTEM_MARKER):
@@ -476,60 +484,26 @@ def _merge_system_region(messages: list[dict], marker: str | None = None) -> dic
     return merged
 
 
-def _split_summary_for_prompt_cache(summary: str) -> tuple[str, str]:
-    """
-    R2/UI 里的近期记忆保持「最近→稍早→更早」方便阅读；
-    发给模型时改成「更早→稍早→最近」，缓存断点只打到「稍早」末尾，
-    避免「最近」频繁变化导致整块近期记忆 miss。
-    """
-    text = (summary or "").strip()
-    if not text:
-        return "", ""
-
-    parts = re.split(r"(【(?:最近|稍早|更早)】)", text)
-    if len(parts) < 3:
-        return f"\n\n【近期记忆】\n{text}\n【以上为近期记忆】", ""
-
-    preamble = parts[0].strip()
-    sections: dict[str, list[str]] = {"最近": [], "稍早": [], "更早": []}
-    for i in range(1, len(parts), 2):
-        title = parts[i]
-        body = (parts[i + 1] if i + 1 < len(parts) else "").strip()
-        key = title.strip("【】")
-        if key in sections:
-            sections[key].append(f"{title}\n{body}".strip())
-
-    if not any(sections.values()):
-        return f"\n\n【近期记忆】\n{text}\n【以上为近期记忆】", ""
-
-    stable_parts: list[str] = []
-    if preamble:
-        stable_parts.append(preamble)
-    stable_parts.extend(sections["更早"])
-    stable_parts.extend(sections["稍早"])
-    recent_parts = sections["最近"]
-
-    stable_text = "\n\n".join(p for p in stable_parts if p).strip()
-    recent_text = "\n\n".join(p for p in recent_parts if p).strip()
-    stable_block = f"\n\n【近期记忆】\n{stable_text}\n【以上为较稳定的近期记忆】" if stable_text else ""
-    recent_block = f"\n\n【近期记忆（最近）】\n{recent_text}\n【以上为最近记忆】" if recent_text else ""
-    return stable_block, recent_block
-
-
-def _upsert_summary_cache_system(body: dict, stable_text: str, recent_text: str = "") -> dict:
+def _upsert_summary_cache_system(body: dict, stable_text: str, recent_texts: list[str] | str | None = None) -> dict:
     """
     把近期记忆放在静态 system 之后、动态 system 之前。
     stable_text 只包含「更早/稍早」，Claude proxy 在它末尾放缓存断点；
-    recent_text 单独成块，不参与缓存断点，避免最近几轮变化污染前缀缓存。
+    每个 recent chunk 单独成块，保证尾部 append 时旧块逐字节不变。
     """
+    if isinstance(recent_texts, str):
+        recent_blocks = [recent_texts] if recent_texts.strip() else []
+    else:
+        recent_blocks = [str(text) for text in (recent_texts or []) if str(text or "").strip()]
     body = copy.deepcopy(body)
     messages = body.get("messages") or []
     if not messages:
         body["messages"] = []
         if stable_text:
             body["messages"].append({"role": "system", "content": stable_text, _SUMMARY_CACHE_SYSTEM_MARKER: True})
-        if recent_text:
-            body["messages"].append({"role": "system", "content": recent_text, _SUMMARY_RECENT_SYSTEM_MARKER: True})
+        body["messages"].extend(
+            {"role": "system", "content": text, _SUMMARY_RECENT_SYSTEM_MARKER: True}
+            for text in recent_blocks
+        )
         return body
 
     messages = [
@@ -549,18 +523,34 @@ def _upsert_summary_cache_system(body: dict, stable_text: str, recent_text: str 
     new_blocks = []
     if stable_text:
         new_blocks.append({"role": "system", "content": stable_text, _SUMMARY_CACHE_SYSTEM_MARKER: True})
-    if recent_text:
-        new_blocks.append({"role": "system", "content": recent_text, _SUMMARY_RECENT_SYSTEM_MARKER: True})
+    new_blocks.extend(
+        {"role": "system", "content": text, _SUMMARY_RECENT_SYSTEM_MARKER: True}
+        for text in recent_blocks
+    )
     messages[insert_idx:insert_idx] = new_blocks
     body["messages"] = messages
     return body
 
 
-def step_inject_tool_result_cache(body: dict) -> dict:
+def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
     """Place leading system blocks into the one explicit cache-region order."""
-    from services.tool_result_cache import prompt_system_contents
+    from services.tool_result_cache import prompt_generation_contents
 
     body = copy.deepcopy(body)
+    generation_meta = body.get(_PROMPT_CACHE_LAYOUT_BODY_KEY)
+    if not isinstance(generation_meta, dict):
+        current_summary = r2_store.get_summary(window_id) or ""
+        chunks_state = r2_store.get_summary_chunks(window_id)
+        generation = deepseek_summary.summary_generation_info(chunks_state, current_summary)
+        generation_meta = {
+            "window_id": str(window_id or ""),
+            "generation_id": int(generation.get("id") or 0),
+            "generation_updates_done": int(generation.get("updates_done") or 0),
+        }
+    tool_generation = prompt_generation_contents(
+        window_id=str(window_id or generation_meta.get("window_id") or ""),
+        generation_id=int(generation_meta.get("generation_id") or 0),
+    )
     messages = list(body.get("messages") or [])
     leading_systems: list[dict] = []
     rest_start = 0
@@ -572,29 +562,39 @@ def step_inject_tool_result_cache(body: dict) -> dict:
     else:
         rest_start = len(messages)
 
-    blocks = [
-        {
-            "role": "system",
-            "content": content,
-            _TOOL_RESULT_CACHE_SYSTEM_MARKER: True,
-        }
-        for content in prompt_system_contents()
-        if str(content or "").strip()
-    ]
     region_blocks: dict[str, list[dict]] = {region: [] for region in _SYSTEM_PROMPT_REGION_ORDER}
-    for msg in [*leading_systems, *blocks]:
+    for msg in leading_systems:
         region = _system_prompt_region(msg)
-        if region == "tool_result_cache" and msg in leading_systems:
+        if region in {"frozen_tool_summary", "hot_tool_results"}:
             continue
         region_blocks[region].append(msg)
+    frozen_text = str(tool_generation.get("frozen_text") or "").strip()
+    if frozen_text:
+        region_blocks["frozen_tool_summary"].append(
+            {
+                "role": "system",
+                "content": frozen_text,
+                _FROZEN_TOOL_SUMMARY_SYSTEM_MARKER: True,
+            }
+        )
+    for content in tool_generation.get("hot_blocks") or []:
+        if str(content or "").strip():
+            region_blocks["hot_tool_results"].append(
+                {
+                    "role": "system",
+                    "content": str(content),
+                    _HOT_TOOL_RESULT_SYSTEM_MARKER: True,
+                }
+            )
     cache_group_markers = {
-        "static": None,
-        "tool_result_cache": _TOOL_RESULT_CACHE_SYSTEM_MARKER,
+        "static": _STATIC_CACHE_ANCHOR_SYSTEM_MARKER,
+        "frozen_tool_summary": _FROZEN_TOOL_SUMMARY_SYSTEM_MARKER,
         "entry_style": _ENTRY_STYLE_SYSTEM_MARKER,
         "sumitalk_mode": _SUMITALK_REAL_MODE_SYSTEM_MARKER,
         "du_daily": _DYNAMIC_SYSTEM_MARKER,
         "summary_cache": _SUMMARY_CACHE_SYSTEM_MARKER,
         "summary_recent": _SUMMARY_RECENT_SYSTEM_MARKER,
+        "hot_tool_results": _HOT_TOOL_RESULT_SYSTEM_MARKER,
         "dynamic": _DYNAMIC_SYSTEM_MARKER,
         "temporary_dynamic": _DYNAMIC_SYSTEM_MARKER,
         "thinking_rules": _THINKING_RULES_SYSTEM_MARKER,
@@ -607,16 +607,33 @@ def step_inject_tool_result_cache(body: dict) -> dict:
             for region in group
             for msg in region_blocks[region]
         ]
+        if group in {("summary_recent",), ("hot_tool_results",)}:
+            ordered_regions.extend(copy.deepcopy(group_messages))
+            continue
         merged = _merge_system_region(group_messages, cache_group_markers[group[0]])
         if merged:
-            if group == ("temporary_dynamic",):
+            if group == ("du_daily",):
+                merged[_DU_DAILY_SYSTEM_MARKER] = True
+                merged[_DYNAMIC_SYSTEM_MARKER] = True
+            elif group == ("dynamic",):
+                merged[_DYNAMIC_SYSTEM_MARKER] = True
+            elif group == ("temporary_dynamic",):
                 merged[_TEMPORARY_DYNAMIC_SYSTEM_MARKER] = True
+                merged[_DYNAMIC_SYSTEM_MARKER] = True
             elif group == ("thinking_rules",):
                 merged[_DYNAMIC_SYSTEM_MARKER] = True
             elif group == ("last4",):
                 merged[_LAST4_SYSTEM_MARKER] = True
+                merged[_DYNAMIC_SYSTEM_MARKER] = True
             ordered_regions.append(merged)
     body["messages"] = [*ordered_regions, *messages[rest_start:]]
+    body[_PROMPT_CACHE_LAYOUT_BODY_KEY] = {
+        "window_id": str(window_id or generation_meta.get("window_id") or ""),
+        "generation_id": int(generation_meta.get("generation_id") or 0),
+        "generation_updates_done": int(generation_meta.get("generation_updates_done") or 0),
+        "recent_blocks": len(region_blocks["summary_recent"]),
+        "hot_tool_blocks": len(region_blocks["hot_tool_results"]),
+    }
     return body
 
 
@@ -1521,13 +1538,23 @@ def step_inject_summary(body: dict, window_id: str, is_user_input: bool = False)
     if ASSISTANT_LUNAR_KEYWORDS and any(kw in last_lower for kw in ASSISTANT_LUNAR_KEYWORDS):
         head += f"\n{get_lunar_and_terms(now)}"
 
-    summary = r2_store.get_summary(window_id)
-    if summary and summary.strip():
-        stable_summary, recent_summary = _split_summary_for_prompt_cache(summary)
-        body = _upsert_summary_cache_system(body, stable_summary, recent_summary)
-        inject = head
-    else:
-        inject = head
+    summary = r2_store.get_summary(window_id) or ""
+    chunks_state = r2_store.get_summary_chunks(window_id)
+    stable_summary, recent_summaries, normalized_state = deepseek_summary.render_summary_prompt_blocks(
+        chunks_state,
+        summary,
+    )
+    generation = normalized_state.get("generation") if isinstance(normalized_state.get("generation"), dict) else {}
+    body[_PROMPT_CACHE_LAYOUT_BODY_KEY] = {
+        "window_id": str(window_id or ""),
+        "generation_id": int(generation.get("id") or 0),
+        "generation_updates_done": int(generation.get("updates_done") or 0),
+        "recent_blocks": len(recent_summaries),
+        "hot_tool_blocks": 0,
+    }
+    if stable_summary or recent_summaries:
+        body = _upsert_summary_cache_system(body, stable_summary, recent_summaries)
+    inject = head
     body = _append_to_dynamic_system(body, inject)
     return body
 
@@ -4168,7 +4195,12 @@ def step_run_post_archive_tasks(
             for recent in groups:
                 if not recent:
                     continue
-                new_summary, new_chunks = fetch_new_summary_update(current, recent, chunks_state)
+                new_summary, new_chunks = fetch_new_summary_update(
+                    current,
+                    recent,
+                    chunks_state,
+                    window_id=window_id,
+                )
                 if new_summary and new_chunks:
                     if r2_store.save_summary(window_id, new_summary):
                         if not r2_store.save_summary_chunks(window_id, new_chunks):
@@ -4187,6 +4219,7 @@ def step_run_post_archive_tasks(
                     current,
                     recent,
                     chunks_state,
+                    window_id=window_id,
                 )
                 if fallback_chunks is not None and fallback_summary is not None:
                     if r2_store.save_summary(window_id, fallback_summary):

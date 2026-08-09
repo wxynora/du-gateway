@@ -2942,7 +2942,7 @@ def chat_completions():
     body = step_inject_thinking_block_rules(body)
     body = step_inject_custom_static_systems(body)
     body = _inject_world_layer_prompt_system(body)
-    body = step_inject_tool_result_cache(body)
+    body = step_inject_tool_result_cache(body, window_id)
     body = step_trim_messages_if_over_limit(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
     prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
@@ -2968,9 +2968,14 @@ def chat_completions():
             msg.pop("__summary_cache__", None)
             msg.pop("__summary_recent__", None)
             msg.pop("__tool_result_cache__", None)
+            msg.pop("__static_cache_anchor__", None)
+            msg.pop("__frozen_tool_summary__", None)
+            msg.pop("__hot_tool_result__", None)
             msg.pop("__entry_style__", None)
             msg.pop("__sumitalk_real_mode__", None)
             msg.pop("__play_note__", None)
+    if not _should_use_anthropic_format(active_upstream_url):
+        body.pop("__prompt_cache_layout__", None)
     if body.get("stream"):
         if is_sumitalk_request:
             sumitalk_logger.info(

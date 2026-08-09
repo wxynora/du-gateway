@@ -12,23 +12,20 @@ from config import (
     is_cloudflare_provider_native_anthropic_url,
     is_cloudflare_rest_anthropic_url,
 )
+from utils.log import get_logger
+
+logger = get_logger(__name__)
 
 DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
+STATIC_CACHE_ANCHOR_SYSTEM_MARKER = "__static_cache_anchor__"
+FROZEN_TOOL_SUMMARY_SYSTEM_MARKER = "__frozen_tool_summary__"
+HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__"
 ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 ANTHROPIC_REQUIRED_DEFAULT_MAX_TOKENS = 128000
-GATEWAY_DYNAMIC_SYSTEM_HINTS = (
-    "【你的心事",
-    "【你的日常",
-    "今日：",
-    "听了老婆的话，我想起来",
-    "【指代提醒】",
-    "老婆当前状态",
-    "【你当前正在 RikkaHub 和小玥聊天】",
-)
 KIRO_ANTHROPIC_HOST = "api2.68886868.xyz"
 
 
@@ -177,6 +174,12 @@ def _system_blocks_from_message(msg: dict) -> list[dict]:
             block[SUMMARY_RECENT_SYSTEM_MARKER] = True
         if msg.get(TOOL_RESULT_CACHE_SYSTEM_MARKER):
             block[TOOL_RESULT_CACHE_SYSTEM_MARKER] = True
+        if msg.get(STATIC_CACHE_ANCHOR_SYSTEM_MARKER):
+            block[STATIC_CACHE_ANCHOR_SYSTEM_MARKER] = True
+        if msg.get(FROZEN_TOOL_SUMMARY_SYSTEM_MARKER):
+            block[FROZEN_TOOL_SUMMARY_SYSTEM_MARKER] = True
+        if msg.get(HOT_TOOL_RESULT_SYSTEM_MARKER):
+            block[HOT_TOOL_RESULT_SYSTEM_MARKER] = True
         if msg.get(ENTRY_STYLE_SYSTEM_MARKER):
             block[ENTRY_STYLE_SYSTEM_MARKER] = True
         if msg.get(PLAY_NOTE_SYSTEM_MARKER):
@@ -313,7 +316,25 @@ def openai_to_anthropic_request(body: dict, url: str, cache_ttl: str | None = No
     if src.get("parallel_tool_calls") is False:
         out["disable_parallel_tool_use"] = True
 
-    apply_prompt_cache(out, cache_ttl or CLOUDFLARE_CLAUDE_CACHE_TTL)
+    cache_layout = apply_prompt_cache(
+        out,
+        cache_ttl or CLOUDFLARE_CLAUDE_CACHE_TTL,
+        layout=src.get("__prompt_cache_layout__") if isinstance(src.get("__prompt_cache_layout__"), dict) else None,
+    )
+    logger.debug(
+        "prompt_cache_layout window_id=%s generation_id=%s generation_updates_done=%s recent_blocks=%s hot_tool_blocks=%s bp1_tools=%s bp2_static=%s bp3_generation=%s bp4_hot=%s bp3_ttl=%s bp4_ttl=%s",
+        cache_layout.get("window_id", ""),
+        cache_layout.get("generation_id", 0),
+        cache_layout.get("generation_updates_done", 0),
+        cache_layout.get("recent_blocks", 0),
+        cache_layout.get("hot_tool_blocks", 0),
+        int(bool(cache_layout.get("bp1_tools"))),
+        int(bool(cache_layout.get("bp2_static"))),
+        int(bool(cache_layout.get("bp3_generation"))),
+        int(bool(cache_layout.get("bp4_hot"))),
+        "1h" if cache_layout.get("bp3_generation") else "none",
+        "5m" if cache_layout.get("bp4_hot") else "none",
+    )
     return out
 
 
@@ -329,127 +350,109 @@ def _set_cache_control(item: dict | None, ttl: str) -> None:
         item["cache_control"] = _cache_control(ttl)
 
 
-def _looks_like_summary_cache_block(item: dict) -> bool:
-    return str((item or {}).get("text") or "").lstrip().startswith("【近期记忆】")
+def apply_prompt_cache(body: dict, ttl: str, *, layout: dict | None = None) -> dict:
+    """Assign the four explicit Anthropic cache breakpoints from region markers."""
+    _ = ttl  # BP1-BP3 are fixed at 1h by the generation-v3 protocol.
+    one_hour_ttl = "1h"
+    hot_ttl = "5m"
+    result = dict(layout or {})
+    result.update(
+        {
+            "bp1_tools": False,
+            "bp2_static": False,
+            "bp3_generation": False,
+            "bp4_hot": False,
+        }
+    )
 
-
-def _looks_like_recent_summary_block(item: dict) -> bool:
-    return str((item or {}).get("text") or "").lstrip().startswith("【近期记忆（最近）】")
-
-
-def _looks_like_dynamic_block(item: dict) -> bool:
-    text = str((item or {}).get("text") or "").lstrip()
-    return any(text.startswith(hint) for hint in GATEWAY_DYNAMIC_SYSTEM_HINTS)
-
-
-def _split_summary_text(value: str) -> tuple[str, str]:
-    text = str(value or "").strip()
-    if not text:
-        return "", ""
-    if text.endswith("【以上为近期记忆】"):
-        text = text[: -len("【以上为近期记忆】")].strip()
-    recent_idx = text.find("【最近】")
-    if recent_idx < 0:
-        return str(value or ""), ""
-    stable_raw = text[:recent_idx].strip()
-    recent_raw = text[recent_idx:].strip()
-    if not recent_raw:
-        return str(value or ""), ""
-    stable_text = f"{stable_raw}\n【以上为较稳定的近期记忆】" if stable_raw else ""
-    recent_text = f"\n\n【近期记忆（最近）】\n{recent_raw}\n【以上为最近记忆】"
-    return stable_text, recent_text
-
-
-def _split_gateway_summary_blocks(system_blocks: list[dict]) -> None:
-    for idx, item in enumerate(system_blocks):
-        if not (item.get(SUMMARY_CACHE_SYSTEM_MARKER) or _looks_like_summary_cache_block(item)):
-            continue
-        if idx + 1 < len(system_blocks) and (
-            system_blocks[idx + 1].get(SUMMARY_RECENT_SYSTEM_MARKER) or _looks_like_recent_summary_block(system_blocks[idx + 1])
-        ):
-            return
-        stable_text, recent_text = _split_summary_text(str(item.get("text") or ""))
-        if not recent_text:
-            return
-        item["text"] = stable_text
-        item[SUMMARY_CACHE_SYSTEM_MARKER] = True
-        system_blocks.insert(idx + 1, {"type": "text", "text": recent_text, SUMMARY_RECENT_SYSTEM_MARKER: True})
-        return
-
-
-def _find_cacheable_system_before(system_blocks: list[dict], end_idx: int) -> dict | None:
-    for idx in range(end_idx - 1, -1, -1):
-        item = system_blocks[idx]
-        if (
-            isinstance(item, dict)
-            and not item.get(DYNAMIC_SYSTEM_MARKER)
-            and not item.get(SUMMARY_RECENT_SYSTEM_MARKER)
-            and not _looks_like_recent_summary_block(item)
-        ):
-            return item
-    return None
-
-
-def _find_final_cacheable_system_after(system_blocks: list[dict], start_idx: int) -> dict | None:
-    for idx in range(len(system_blocks) - 1, start_idx, -1):
-        item = system_blocks[idx]
-        if not isinstance(item, dict):
-            continue
-        if item.get(DYNAMIC_SYSTEM_MARKER) or _looks_like_dynamic_block(item):
-            continue
-        return item
-    return None
-
-
-def apply_prompt_cache(body: dict, ttl: str) -> None:
-    if isinstance(body.get("tools"), list) and body["tools"]:
-        _set_cache_control(body["tools"][-1], ttl)
+    tools = body.get("tools") if isinstance(body.get("tools"), list) else []
+    for tool in tools:
+        if isinstance(tool, dict):
+            tool.pop("cache_control", None)
+    if tools:
+        _set_cache_control(tools[-1], one_hour_ttl)
+        result["bp1_tools"] = True
 
     system_blocks = body.get("system") if isinstance(body.get("system"), list) else []
-    if system_blocks:
-        _split_gateway_summary_blocks(system_blocks)
-        tool_cache_indices = [
-            idx
-            for idx, item in enumerate(system_blocks)
-            if isinstance(item, dict) and item.get(TOOL_RESULT_CACHE_SYSTEM_MARKER)
-        ]
-        summary_idx = -1
-        for idx, item in enumerate(system_blocks):
-            if idx > 0 and (item.get(SUMMARY_CACHE_SYSTEM_MARKER) or _looks_like_summary_cache_block(item)):
-                summary_idx = idx
-                break
-        if tool_cache_indices:
-            first_tool_idx = tool_cache_indices[0]
-            last_tool_idx = tool_cache_indices[-1]
-            _set_cache_control(_find_cacheable_system_before(system_blocks, first_tool_idx), ttl)
-            _set_cache_control(system_blocks[last_tool_idx], ttl)
-            _set_cache_control(_find_final_cacheable_system_after(system_blocks, last_tool_idx), ttl)
-        elif summary_idx > 0:
-            _set_cache_control(_find_cacheable_system_before(system_blocks, summary_idx), ttl)
-            _set_cache_control(system_blocks[summary_idx], ttl)
-            final_breakpoint = None
-            for idx, item in enumerate(system_blocks[summary_idx + 1 :], start=summary_idx + 1):
-                if item.get(PLAY_NOTE_SYSTEM_MARKER):
-                    final_breakpoint = item
-                    break
-                if final_breakpoint is None and (item.get(SUMMARY_RECENT_SYSTEM_MARKER) or _looks_like_recent_summary_block(item)):
-                    final_breakpoint = item
-            _set_cache_control(final_breakpoint, ttl)
-        else:
-            static_system = None
-            for item in system_blocks:
-                if item.get(DYNAMIC_SYSTEM_MARKER) or item.get(SUMMARY_RECENT_SYSTEM_MARKER) or _looks_like_dynamic_block(item) or _looks_like_recent_summary_block(item):
-                    break
-                static_system = item
-            _set_cache_control(static_system, ttl)
-        for item in system_blocks:
-            if isinstance(item, dict):
-                item.pop(DYNAMIC_SYSTEM_MARKER, None)
-                item.pop(SUMMARY_CACHE_SYSTEM_MARKER, None)
-                item.pop(SUMMARY_RECENT_SYSTEM_MARKER, None)
-                item.pop(TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
-                item.pop(ENTRY_STYLE_SYSTEM_MARKER, None)
-                item.pop(PLAY_NOTE_SYSTEM_MARKER, None)
+    for item in system_blocks:
+        if isinstance(item, dict):
+            item.pop("cache_control", None)
+
+    def _last_marker_index(marker: str) -> int:
+        for idx in range(len(system_blocks) - 1, -1, -1):
+            item = system_blocks[idx]
+            if isinstance(item, dict) and item.get(marker):
+                return idx
+        return -1
+
+    bp2_idx = _last_marker_index(STATIC_CACHE_ANCHOR_SYSTEM_MARKER)
+    recent_idx = _last_marker_index(SUMMARY_RECENT_SYSTEM_MARKER)
+    stable_idx = _last_marker_index(SUMMARY_CACHE_SYSTEM_MARKER)
+    frozen_idx = _last_marker_index(FROZEN_TOOL_SUMMARY_SYSTEM_MARKER)
+    legacy_tool_idx = _last_marker_index(TOOL_RESULT_CACHE_SYSTEM_MARKER)
+    bp3_idx = recent_idx if recent_idx >= 0 else stable_idx if stable_idx >= 0 else frozen_idx
+    if bp3_idx < 0:
+        bp3_idx = legacy_tool_idx
+    bp4_idx = _last_marker_index(HOT_TOOL_RESULT_SYSTEM_MARKER)
+
+    if bp2_idx >= 0:
+        _set_cache_control(system_blocks[bp2_idx], one_hour_ttl)
+        result["bp2_static"] = True
+    if bp3_idx >= 0 and bp3_idx != bp2_idx:
+        _set_cache_control(system_blocks[bp3_idx], one_hour_ttl)
+        result["bp3_generation"] = True
+    if bp4_idx >= 0 and bp4_idx not in {bp2_idx, bp3_idx}:
+        _set_cache_control(system_blocks[bp4_idx], hot_ttl)
+        result["bp4_hot"] = True
+
+    actual_breakpoints: list[tuple[int, str]] = []
+    position = 0
+    for tool in tools:
+        if isinstance(tool, dict) and isinstance(tool.get("cache_control"), dict):
+            cache_ttl = str(tool["cache_control"].get("ttl") or "5m")
+            actual_breakpoints.append((position, cache_ttl))
+        position += 1
+    for item in system_blocks:
+        if isinstance(item, dict) and isinstance(item.get("cache_control"), dict):
+            cache_ttl = str(item["cache_control"].get("ttl") or "5m")
+            actual_breakpoints.append((position, cache_ttl))
+        position += 1
+    for message in body.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        content_blocks = content if isinstance(content, list) else []
+        for item in content_blocks:
+            if isinstance(item, dict) and isinstance(item.get("cache_control"), dict):
+                cache_ttl = str(item["cache_control"].get("ttl") or "5m")
+                actual_breakpoints.append((position, cache_ttl))
+            position += 1
+
+    explicit_count = len(actual_breakpoints)
+    if explicit_count > 4:
+        raise RuntimeError(f"Anthropic explicit cache breakpoint 超过 4 个: {explicit_count}")
+    one_hour_positions = [position for position, cache_ttl in actual_breakpoints if cache_ttl == one_hour_ttl]
+    five_minute_positions = [position for position, cache_ttl in actual_breakpoints if cache_ttl == hot_ttl]
+    if one_hour_positions and five_minute_positions and max(one_hour_positions) >= min(five_minute_positions):
+        raise RuntimeError("Anthropic 1h cache breakpoint 必须全部位于 5m breakpoint 之前")
+
+    marker_keys = (
+        DYNAMIC_SYSTEM_MARKER,
+        SUMMARY_CACHE_SYSTEM_MARKER,
+        SUMMARY_RECENT_SYSTEM_MARKER,
+        TOOL_RESULT_CACHE_SYSTEM_MARKER,
+        STATIC_CACHE_ANCHOR_SYSTEM_MARKER,
+        FROZEN_TOOL_SUMMARY_SYSTEM_MARKER,
+        HOT_TOOL_RESULT_SYSTEM_MARKER,
+        ENTRY_STYLE_SYSTEM_MARKER,
+        PLAY_NOTE_SYSTEM_MARKER,
+    )
+    for item in system_blocks:
+        if isinstance(item, dict):
+            for marker in marker_keys:
+                item.pop(marker, None)
+    result["explicit_count"] = explicit_count
+    return result
 
 
 def _int_value(value) -> int:
@@ -466,6 +469,9 @@ def convert_usage(usage: dict | None) -> dict:
     cache_creation_input_tokens = _int_value(usage.get("cache_creation_input_tokens"))
     cache_read_input_tokens = _int_value(usage.get("cache_read_input_tokens"))
     total_prompt_tokens = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+    cache_creation = usage.get("cache_creation") if isinstance(usage.get("cache_creation"), dict) else {}
+    ephemeral_1h_input_tokens = _int_value(cache_creation.get("ephemeral_1h_input_tokens"))
+    ephemeral_5m_input_tokens = _int_value(cache_creation.get("ephemeral_5m_input_tokens"))
     out = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -477,9 +483,11 @@ def convert_usage(usage: dict | None) -> dict:
         "anthropic_created": cache_creation_input_tokens,
         "anthropic_read": cache_read_input_tokens,
         "prompt_tokens_details": {"cached_tokens": cache_read_input_tokens},
+        "cache_creation_ephemeral_1h_input_tokens": ephemeral_1h_input_tokens,
+        "cache_creation_ephemeral_5m_input_tokens": ephemeral_5m_input_tokens,
     }
-    if isinstance(usage.get("cache_creation"), dict):
-        out["cache_creation"] = usage["cache_creation"]
+    if cache_creation:
+        out["cache_creation"] = cache_creation
     if isinstance(usage.get("output_tokens_details"), dict):
         out["output_tokens_details"] = usage["output_tokens_details"]
     if isinstance(usage.get("iterations"), list):
@@ -565,6 +573,7 @@ class AnthropicStreamConverter:
         self.output_tokens = 0
         self.cache_creation_input_tokens = 0
         self.cache_read_input_tokens = 0
+        self.cache_creation = None
         self.output_tokens_details = None
         self.usage_iterations = None
         self.blocks: dict[int, dict] = {}
@@ -596,6 +605,7 @@ class AnthropicStreamConverter:
             self.output_tokens = _int_value(usage.get("output_tokens"))
             self.cache_creation_input_tokens = _int_value(usage.get("cache_creation_input_tokens"))
             self.cache_read_input_tokens = _int_value(usage.get("cache_read_input_tokens"))
+            self.cache_creation = deepcopy(usage.get("cache_creation")) if isinstance(usage.get("cache_creation"), dict) else None
             self.output_tokens_details = usage.get("output_tokens_details") if isinstance(usage.get("output_tokens_details"), dict) else None
             self.usage_iterations = usage.get("iterations") if isinstance(usage.get("iterations"), list) else None
             return self._chunk({"role": "assistant", "content": ""})
@@ -656,6 +666,8 @@ class AnthropicStreamConverter:
             self.output_tokens = _int_value(usage.get("output_tokens")) or self.output_tokens
             self.cache_creation_input_tokens = _int_value(usage.get("cache_creation_input_tokens")) or self.cache_creation_input_tokens
             self.cache_read_input_tokens = _int_value(usage.get("cache_read_input_tokens")) or self.cache_read_input_tokens
+            if isinstance(usage.get("cache_creation"), dict):
+                self.cache_creation = deepcopy(usage.get("cache_creation"))
             if isinstance(usage.get("output_tokens_details"), dict):
                 self.output_tokens_details = usage.get("output_tokens_details")
             if isinstance(usage.get("iterations"), list):
@@ -672,6 +684,7 @@ class AnthropicStreamConverter:
                         "output_tokens": self.output_tokens,
                         "cache_creation_input_tokens": self.cache_creation_input_tokens,
                         "cache_read_input_tokens": self.cache_read_input_tokens,
+                        "cache_creation": self.cache_creation,
                         "output_tokens_details": self.output_tokens_details,
                         "iterations": self.usage_iterations,
                     }
