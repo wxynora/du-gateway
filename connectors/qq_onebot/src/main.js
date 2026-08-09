@@ -1387,12 +1387,13 @@ function buildGroupGatewayTurn(batch) {
     ownerQqUserId ? "身份标记：带 [当前用户/辛玥] 的发言人是辛玥/当前用户；其他人是群友。" : "",
     (
       "回复人类时，如果你想用 QQ 的引用回复，" +
-      "只在回复正文开头写精确标记 [QQ_REPLY:Q编号]，例如 [QQ_REPLY:Q2]；" +
+      "在对应独立消息的正文开头写精确标记 [QQ_REPLY:Q编号]，例如 [QQ_REPLY:Q2]；" +
       "只能选择本段实际出现的编号。由你自己决定引用哪条或不引用。"
     ),
     (
-      "如果你想回复群里其他机，只在回复正文开头写精确标记 [QQ_AT:Q编号]，" +
-      "例如 [QQ_AT:Q2]；只能选择本段实际出现的编号。"
+      "如果你想回复群里其他人，在对应独立消息的正文开头写精确标记 [QQ_AT:Q编号]，" +
+      "例如 [QQ_AT:Q2]；只能选择本段实际出现的编号，直接写 @名字 只是普通文字。" +
+      "同一轮可以先用 [QQ_REPLY:Q编号] 回复一条消息，换行后再用 [QQ_AT:Q编号] 真正提醒另一个人。"
     ),
     "群聊上下文：",
     contextLines.join("\n"),
@@ -1409,11 +1410,14 @@ function buildGroupGatewayTurn(batch) {
 async function sendQqReplyToGroup(groupId, reply, options = {}) {
   const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
   const maxReplyTotalChars = Math.max(0, envInt("QQ_MAX_REPLY_TOTAL_CHARS", 0));
-  const { replyRef, atRef, cleanText: markerCleanText } = splitQqGroupControlMarker(reply);
   const replyTargets = options?.replyTargets instanceof Map ? options.replyTargets : new Map();
   const atTargets = options?.atTargets instanceof Map ? options.atTargets : new Map();
-  let pendingReplyMessageId = String(replyTargets.get(replyRef) || "").trim();
-  let pendingAtUserId = String(atTargets.get(atRef) || "").trim();
+  let pendingReplyMessageId = "";
+  let pendingAtUserId = "";
+  const setPendingControl = (replyRef, atRef) => {
+    pendingReplyMessageId = String(replyTargets.get(replyRef) || "").trim();
+    pendingAtUserId = String(atTargets.get(atRef) || "").trim();
+  };
   const takeReplyMessageId = () => {
     const value = pendingReplyMessageId;
     pendingReplyMessageId = "";
@@ -1424,20 +1428,24 @@ async function sendQqReplyToGroup(groupId, reply, options = {}) {
     pendingAtUserId = "";
     return value;
   };
-  const { cleanText: noVoiceText, voiceText } = extractVoiceTag(markerCleanText);
+  const { cleanText: noVoiceText, voiceText } = extractVoiceTag(reply);
   const pcmdHandled = await processPcmdViaGateway(noVoiceText);
   const { cleanText: replyClean, tag: stickerTag } = await extractStickerTag(pcmdHandled.visibleText);
   const stickerUrl = await resolveStickerUrl(stickerTag);
   const chunks = splitReplyByNewlineAndLen(replyClean, outChunkChars, maxReplyTotalChars);
   let sentAny = false;
-  for (let index = 0; index < chunks.length; index += 1) {
-    const isLastTextChunk = index === chunks.length - 1;
+  for (const chunk of chunks) {
+    const { replyRef, atRef, cleanText } = splitQqGroupControlMarker(chunk);
+    if (replyRef || atRef) setPendingControl(replyRef, atRef);
+    const visibleText = String(cleanText || "").trim();
+    if (!visibleText) continue;
+    const atUserId = takeAtUserId();
     await sendQqGroupText(
       groupId,
-      chunks[index],
+      visibleText,
       takeReplyMessageId(),
-      isLastTextChunk ? takeAtUserId() : "",
-      isLastTextChunk
+      atUserId,
+      Boolean(atUserId)
     );
     sentAny = true;
   }
