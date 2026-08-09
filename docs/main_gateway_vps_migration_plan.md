@@ -74,9 +74,9 @@ Claude OAuth 转发 VPS
 | --- | --- | --- |
 | `du-gateway.service` | enabled/running | 迁移 |
 | `du-realtime.service` | enabled/running | 迁移 |
-| `du-sumitalk-chat-worker.service` | enabled/running | 迁移 |
+| `du-event-dispatcher.service` | enabled/running | 迁移 |
+| `du-interactive-worker.service` | enabled/running | 迁移 |
 | `du-telegram-proactive.service` | enabled/running | 迁移 |
-| `du-telegram-webhook-worker.service` | enabled/running | 迁移 |
 | `du-wechat-ilink.service` | enabled/running | 迁移 |
 | `napcat.service` | enabled/running | 迁移 |
 | `qq-connector.service` | enabled/running | 迁移 |
@@ -445,9 +445,9 @@ CPA 仍只监听 `127.0.0.1:8317`。不要把本地 Mac 的 CPA 配置覆盖过�
 for f in \
   du-gateway.service \
   du-realtime.service \
-  du-sumitalk-chat-worker.service \
+  du-event-dispatcher.service \
+  du-interactive-worker.service \
   du-telegram-proactive.service \
-  du-telegram-webhook-worker.service \
   du-wechat-ilink.service \
   napcat.service \
   qq-connector.service \
@@ -622,9 +622,9 @@ EOF
 ssh "$OLD_GATEWAY_ALIAS" 'sudo systemctl stop \
   du-gateway.service \
   du-realtime.service \
-  du-sumitalk-chat-worker.service \
+  du-event-dispatcher.service \
+  du-interactive-worker.service \
   du-telegram-proactive.service \
-  du-telegram-webhook-worker.service \
   du-wechat-ilink.service \
   qq-connector.service \
   napcat.service'
@@ -699,8 +699,8 @@ ssh "$NEW_GATEWAY_ALIAS" 'sudo systemctl enable --now \
   du-wechat-ilink.service \
   du-gateway.service \
   du-realtime.service \
-  du-sumitalk-chat-worker.service \
-  du-telegram-webhook-worker.service \
+  du-event-dispatcher.service \
+  du-interactive-worker.service \
   du-telegram-proactive.service \
   nginx.service'
 ```
@@ -805,8 +805,8 @@ ssh "$OLD_GATEWAY_ALIAS" 'sudo systemctl start \
   du-wechat-ilink.service \
   du-gateway.service \
   du-realtime.service \
-  du-sumitalk-chat-worker.service \
-  du-telegram-webhook-worker.service \
+  du-event-dispatcher.service \
+  du-interactive-worker.service \
   du-telegram-proactive.service'
 ssh "$OLD_GATEWAY_ALIAS" 'uid=$(id -u nora); sudo -u nora XDG_RUNTIME_DIR=/run/user/$uid systemctl --user start cliproxyapi.service'
 ssh "$OLD_GATEWAY_ALIAS" 'sudo test ! -f /root/root.crontab.before-gateway-cutover || sudo crontab /root/root.crontab.before-gateway-cutover'
@@ -835,8 +835,8 @@ ssh "$OLD_GATEWAY_ALIAS" 'sudo test ! -f /root/root.crontab.before-gateway-cutov
 
 - `du-gateway.service`
 - `du-realtime.service`
-- `du-sumitalk-chat-worker.service`
-- Telegram 两个 worker
+- Event dispatcher 与 interactive worker
+- Telegram proactive worker
 - WeChat iLink
 - NapCat / QQ connector / Xvfb
 - CPA

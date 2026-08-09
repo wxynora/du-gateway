@@ -16,6 +16,7 @@ from config import (
     XIAOAI_GATEWAY_TOKEN,
 )
 from services.minimax_tts import tts_to_audio_bytes
+from runtime.wakeup_bus import RuntimeWakeSubscriber
 from services.xiaoai_audio_store import (
     create_xiaoai_audio,
     get_xiaoai_audio_row,
@@ -367,14 +368,24 @@ def xiaoai_claim_actions():
     if wait_raw is None:
         wait_raw = os.environ.get("XIAOAI_ACTION_CLAIM_WAIT_SECONDS", "0")
     wait_seconds = _bounded_float(wait_raw, 0.0, 0.0, 25.0)
-    poll_seconds = _bounded_float(os.environ.get("XIAOAI_ACTION_CLAIM_POLL_SECONDS"), 0.75, 0.2, 2.0)
+    if wait_seconds <= 0:
+        actions = claim_xiaoai_actions(runner=runner, limit=limit)
+        if actions:
+            update_xiaoai_status({"connected": True, "runner": runner, "last_event": "actions_claimed"})
+        return jsonify({"ok": True, "actions": actions})
+
     deadline = time.monotonic() + wait_seconds
     actions = []
-    while True:
-        actions = claim_xiaoai_actions(runner=runner, limit=limit)
-        if actions or wait_seconds <= 0 or time.monotonic() >= deadline:
-            break
-        time.sleep(min(poll_seconds, max(0.0, deadline - time.monotonic())))
+    with RuntimeWakeSubscriber(
+        "xiaoai-actions",
+        socket_timeout_seconds=max(2.0, wait_seconds + 1.0),
+    ) as subscriber:
+        while True:
+            actions = claim_xiaoai_actions(runner=runner, limit=limit)
+            remaining = deadline - time.monotonic()
+            if actions or remaining <= 0:
+                break
+            subscriber.wait(remaining)
     if actions:
         update_xiaoai_status({"connected": True, "runner": runner, "last_event": "actions_claimed"})
     return jsonify({"ok": True, "actions": actions})

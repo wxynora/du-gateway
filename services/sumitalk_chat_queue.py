@@ -19,7 +19,6 @@ except Exception:  # pragma: no cover - non-POSIX fallback for local tooling onl
 
 from config import (
     DATA_DIR,
-    EVENT_RUNTIME_ENABLED,
     STREAM_TIMEOUT_SECONDS,
     SUMITALK_CHAT_NATIVE_STREAM_ENABLED,
     SUMITALK_CHAT_QUEUE_DB,
@@ -27,6 +26,7 @@ from config import (
 )
 from runtime.events import EventEnvelope, SUMITALK_CHAT_JOB_CREATED
 from runtime.outbox import ensure_outbox_schema, insert_outbox_event, notify_outbox_dispatcher
+from runtime.wakeup_bus import publish_runtime_wakeup
 from storage import upstream_store
 from services.game_tool_runtime import normalize_game_id
 from services.sumitalk_voice_sidecar import (
@@ -79,6 +79,21 @@ _LIVE_EVENT_DISPATCH_THREAD: threading.Thread | None = None
 _LIVE_EVENT_PERSIST_THREAD: threading.Thread | None = None
 _LIVE_EVENT_DISPATCH_THREAD_LOCK = threading.Lock()
 _LIVE_EVENT_PERSIST_THREAD_LOCK = threading.Lock()
+
+
+def sumitalk_chat_wakeup_topic(job_id: str) -> str:
+    return f"sumitalk-chat:{str(job_id or '').strip()}"
+
+
+def _publish_sumitalk_chat_wakeup(event: dict) -> None:
+    publish_runtime_wakeup(
+        sumitalk_chat_wakeup_topic(str(event.get("job_id") or "")),
+        {
+            "job_id": str(event.get("job_id") or ""),
+            "seq": int(event.get("seq") or 0),
+            "kind": str(event.get("kind") or ""),
+        },
+    )
 
 
 @contextmanager
@@ -555,6 +570,7 @@ def _append_sumitalk_chat_job_event_record(
             raise
 
     if event_kind.endswith("_delta"):
+        _publish_sumitalk_chat_wakeup(event)
         return event
     events = current.get("events")
     if not isinstance(events, list):
@@ -565,6 +581,7 @@ def _append_sumitalk_chat_job_event_record(
     current["updated_ts"] = time.time()
     current["updated_at"] = now_beijing_iso()
     write_sumitalk_chat_job_state(current)
+    _publish_sumitalk_chat_wakeup(event)
     return event
 
 
@@ -649,6 +666,8 @@ def _persist_sumitalk_chat_live_event(event: dict) -> None:
             ).fetchone()
             if not row or str(row["event_id"] or "") != str(event.get("event_id") or ""):
                 raise
+
+    _publish_sumitalk_chat_wakeup(event)
 
     if event_kind.endswith("_delta"):
         return
@@ -1007,6 +1026,7 @@ def finalize_sumitalk_chat_job(
                 exc_info=True,
             )
     current_state = read_sumitalk_chat_job_state(job_id) or {}
+    _publish_sumitalk_chat_wakeup(event)
     if str(current_state.get("execution_mode") or "").strip().lower() == "stream":
         notify_sumitalk_voice_job_terminal(job_id)
     return True
@@ -1366,23 +1386,18 @@ def enqueue_sumitalk_chat_job(job_id: str, request_key: str, payload: dict) -> E
     payload_json = json.dumps(clean_payload, ensure_ascii=False, separators=(",", ":"))
     chat_body = clean_payload.get("chat_body") if isinstance(clean_payload.get("chat_body"), dict) else {}
     partition_key = str(chat_body.get("window_id") or clean_payload.get("reply_target") or job_id).strip()
-    event = (
-        EventEnvelope.create(
-            SUMITALK_CHAT_JOB_CREATED,
-            job_id=job_id,
-            partition_key=partition_key,
-            payload={
-                "request_key": clean_request_key or "",
-                "window_id": str(chat_body.get("window_id") or ""),
-            },
-        )
-        if EVENT_RUNTIME_ENABLED
-        else None
+    event = EventEnvelope.create(
+        SUMITALK_CHAT_JOB_CREATED,
+        job_id=job_id,
+        partition_key=partition_key,
+        payload={
+            "request_key": clean_request_key or "",
+            "window_id": str(chat_body.get("window_id") or ""),
+        },
     )
     result: EnqueueChatJobResult
     with _connect() as conn:
-        if event is not None:
-            ensure_outbox_schema(conn)
+        ensure_outbox_schema(conn)
         conn.execute("BEGIN IMMEDIATE")
         try:
             inserted = True
@@ -1427,7 +1442,7 @@ def enqueue_sumitalk_chat_job(job_id: str, request_key: str, payload: dict) -> E
                         """,
                         (job_id, clean_request_key, payload_json, now, now),
                     )
-            if inserted and event is not None:
+            if inserted:
                 insert_outbox_event(conn, event, aggregate_type="sumitalk_chat_job")
             conn.execute("COMMIT")
             result = EnqueueChatJobResult(
@@ -1439,7 +1454,7 @@ def enqueue_sumitalk_chat_job(job_id: str, request_key: str, payload: dict) -> E
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    if result.enqueued and event is not None:
+    if result.enqueued:
         notify_outbox_dispatcher("sumitalk")
     return result
 

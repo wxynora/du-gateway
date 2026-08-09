@@ -19,7 +19,7 @@ def _redis_module():
         import redis
     except ImportError as exc:
         raise RedisRuntimeUnavailable(
-            "redis-py is required when EVENT_RUNTIME_ENABLED=1"
+            "redis-py is required by Event Runtime"
         ) from exc
     return redis
 

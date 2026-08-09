@@ -111,7 +111,7 @@ A：在 `.env` 里加一行，例如：`TELEGRAM_CHAT_MODEL=claude-3-5-sonnet-20
 补充：如果你的中转站**只允许特定模型名**或**多中转站模型名不一致**，则建议显式配置 `TELEGRAM_CHAT_MODEL`；否则 Bot 可能会用兜底模型名导致上游 403。
 
 **Q：还需要跑 du-telegram-bot（轮询）吗？**  
-A：不需要轮询。但 Webhook 现在分两段：网关服务只负责接收并写入 `data/telegram_webhook_queue.sqlite3`，还需要常驻 `python scripts/run_telegram_webhook_worker.py` 来消费队列、做输入聚合并回复；主动消息调度（du-telegram-proactive）可按需保留。
+A：不需要轮询。Webhook 由网关接收并写入 `data/telegram_webhook_queue.sqlite3`，再由常驻 `python scripts/run_interactive_worker.py` 通过 Event Runtime 消费、聚合并回复；主动消息调度（du-telegram-proactive）可按需保留。
 
 **Q：Token 泄露了怎么办？**  
 A：去 @BotFather 里用 `/mybots` 找到你的 Bot，进 API Token 重新生成一个新 Token，再把 `.env` 里的旧 Token 换掉。
@@ -124,7 +124,7 @@ A：去 @BotFather 里用 `/mybots` 找到你的 Bot，进 API Token 重新生�
 - [ ] 已在 @BotFather 创建 Bot 并拿到 Token
 - [ ] 网络能访问 Telegram
 - [ ] 网关在本机/服务器能正常跑（`python app.py`）
-- [ ] Webhook worker 已常驻运行（`python scripts/run_telegram_webhook_worker.py`）
+- [ ] Event dispatcher 与 interactive worker 已常驻运行
 - [ ] `.env` 已配置：`TELEGRAM_BOT_TOKEN`、`TELEGRAM_GATEWAY_URL`
 - [ ] 已为 Bot 设置 Webhook 到 `https://你的域名/telegram/webhook`
 - [ ] 在 Telegram 里给 Bot 发消息，能收到渡的回复

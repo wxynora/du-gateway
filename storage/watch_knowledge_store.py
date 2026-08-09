@@ -204,7 +204,13 @@ def ensure_knowledge_job(session: dict) -> tuple[dict, bool]:
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return watch_analysis_store.get_job(job_id, public=True) or {}, True
+    created_job = watch_analysis_store.get_job(job_id, public=True) or {}
+    watch_analysis_store.notify_watch_analysis_worker(
+        "job_enqueued",
+        job_id=job_id,
+        session_id=session_id,
+    )
+    return created_job, True
 
 
 def retry_knowledge_job(session: dict) -> dict:
@@ -268,7 +274,13 @@ def retry_knowledge_job(session: dict) -> dict:
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return watch_analysis_store.get_job(str(existing.get("job_id") or ""), public=True) or {}
+    job_id = str(existing.get("job_id") or "")
+    watch_analysis_store.notify_watch_analysis_worker(
+        "job_requeued",
+        job_id=job_id,
+        session_id=session_id,
+    )
+    return watch_analysis_store.get_job(job_id, public=True) or {}
 
 
 def mark_building(session_id: str) -> None:

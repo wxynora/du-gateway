@@ -929,7 +929,6 @@ def main() -> int:
             last_loop_error = ""
             task = data.get("task")
             if not task:
-                time.sleep(IDLE_POLL_SECONDS)
                 continue
             task_id = str(task.get("id") or "")
             lease_token = str(task.get("lease_token") or "").strip()

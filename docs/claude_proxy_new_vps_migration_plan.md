@@ -418,10 +418,10 @@ ssh "$OLD_VPS_ALIAS" 'sudo systemctl status claude-proxy-tunnel.service --no-pag
 ssh "$OLD_VPS_ALIAS" 'sudo journalctl -u du-gateway -n 200 --no-pager -o cat | grep -Ei "Chat|Upstream resp hint|8082|oauth|claude|401|403|429|500|502|503|529|timeout|error"'
 ```
 
-看 SumiTalk worker：
+看承接 SumiTalk 的 interactive worker：
 
 ```bash
-ssh "$OLD_VPS_ALIAS" 'sudo journalctl -u du-sumitalk-chat-worker.service -n 200 --no-pager -o cat | grep -Ei "sumitalk|chat_job|gateway_call|upstream|8082|401|403|429|500|502|503|529|timeout|error"'
+ssh "$OLD_VPS_ALIAS" 'sudo journalctl -u du-interactive-worker.service -n 200 --no-pager -o cat | grep -Ei "sumitalk|chat_job|gateway_call|upstream|8082|401|403|429|500|502|503|529|timeout|error"'
 ```
 
 判断顺序：

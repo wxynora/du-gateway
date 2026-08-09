@@ -5,6 +5,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from utils.log import get_logger
+from runtime.wakeup_bus import publish_runtime_wakeup
 
 R2_KEY_PC_COMMAND_QUEUE = "pc_commands/queue.json"
 
@@ -79,6 +80,7 @@ def append_pc_command(cmd: str) -> Optional[dict]:
             pending.append(item)
             data["pending"] = pending
             _write_json(client, R2_KEY_PC_COMMAND_QUEUE, data)
+            publish_runtime_wakeup("pc-commands", {"command_id": item["id"]})
             return item
         except Exception as e:
             logger.error("append_pc_command 失败 cmd=%s error=%s", command, e, exc_info=True)

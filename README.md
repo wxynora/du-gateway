@@ -53,15 +53,15 @@ python3 -m venv .venv
 
 ## 运行边界
 
-- `EVENT_RUNTIME_ENABLED=0` 时，SumiTalk 与 Telegram webhook 继续由原 `scripts/run_sumitalk_chat_worker.py`、`scripts/run_telegram_webhook_worker.py` 消费，不要求 Redis。
-- `EVENT_RUNTIME_ENABLED=1` 时，两个入口仍先把完整 job 写入原 SQLite；同一事务额外写 `outbox_events`，再由 `scripts/run_event_dispatcher.py` 投递 `du:interactive`，`scripts/run_interactive_worker.py` 阻塞消费。旧 polling worker 会拒绝启动。
+- SumiTalk 与 Telegram webhook 先把完整 job 写入原 SQLite，同一事务写入 `outbox_events`，再由 `scripts/run_event_dispatcher.py` 投递 `du:interactive`，`scripts/run_interactive_worker.py` 阻塞消费。
+- 旧 SumiTalk/Telegram polling worker 已退役，不再提供开关回退或独立 systemd 服务；部署和排障只检查 event dispatcher 与 interactive worker。
 - 主动唤醒、日历和延迟续话由独立调度进程负责，避免 Gunicorn worker 回收时丢状态。
 - Notion 运行链已经移除。交换日记、记事本、动态记忆和其他现行数据使用 R2 / SQLite，不再依赖 Notion API。
 - 最近窗口仅用于上下文选择和诊断，保存在 `data/recent_windows.json`。
 
-## 事件运行时 Phase 1
+## 事件运行时
 
-本阶段只替换 SumiTalk 与 Telegram webhook 的 SQLite `0.5s` polling worker，不迁移业务数据，也不复制聊天正文到 Redis。统一事件为 `sumitalk.chat_job.created` 和 `telegram.webhook_job.created`，信封版本为 `1`；SQLite job 始终是业务事实源，Redis Stream 只负责即时通知、consumer group、pending 与重新 claim。
+Event Runtime 已替换 SumiTalk 与 Telegram webhook 的 SQLite `0.5s` polling worker，不迁移业务数据，也不复制聊天正文到 Redis。统一事件为 `sumitalk.chat_job.created` 和 `telegram.webhook_job.created`，信封版本为 `1`；SQLite job 始终是业务事实源，Redis Stream 只负责即时通知、consumer group、pending 与重新 claim。
 
 - job 与 outbox 同事务提交；Redis 不可用不影响入口可靠落库。
 - dispatcher 接收 `du:outbox:wakeup` 即时信号，并每 30 秒兜底扫描；发布失败保留 outbox、记录次数/错误并退避，恢复后自动补发。
@@ -77,23 +77,12 @@ python3 -m venv .venv
 - `deploy/systemd/du-interactive-worker.service`
 - 定向验证：`EVENT_RUNTIME_TEST_REDIS_URL=redis://127.0.0.1:16379/0 .venv/bin/python scripts/test_event_runtime_phase1.py`
 
-### 正式切换
+### 生产运行
 
-以下步骤必须在同一维护窗口执行；不要让部署前已经运行、尚未加载新进程锁的旧 worker 与新 worker 重叠：
-
-1. 保持 `EVENT_RUNTIME_ENABLED=0` 部署代码并执行 `.venv/bin/pip install -r requirements.txt`；准备 Redis / Valkey。
-2. 安装两个新 systemd unit 并执行 `systemctl daemon-reload`，暂不启动。
-3. 停止并 disable `du-sumitalk-chat-worker.service`、`du-telegram-webhook-worker.service`。
-4. 在 `.env` 设置 `EVENT_RUNTIME_ENABLED=1` 与正确的 `REDIS_URL`。
-5. restart `du-gateway.service`，enable/start `du-event-dispatcher.service`、`du-interactive-worker.service`。
-6. 检查 `/health` 的 `event_runtime.ready`、outbox 最老年龄、Redis pending、dead letter 和两个服务日志；旧 pending job 会由 reconciler 补事件。
-
-### 回滚
-
-1. 停止并 disable 两个新事件服务。
-2. 将 `.env` 的 `EVENT_RUNTIME_ENABLED` 改回 `0`，restart `du-gateway.service`。
-3. enable/start 两个旧 polling worker，并检查原 SQLite 队列。
-4. 不删除 outbox 或 Redis Stream；它们不是业务事实源，保留可供再次启用时幂等恢复。
+1. 配置正确的 `REDIS_URL`，安装并启用 `du-event-dispatcher.service` 与 `du-interactive-worker.service`。
+2. 部署前枚举网关与 interactive worker 的 `FragmentPath`、`DropInPaths`、`EnvironmentFile` 和环境变量键名，按实际配置消费者做差集；interactive worker 必须加载聊天工具实际需要、但根 `.env` 未提供的专用配置，当前包含农场 `aifarm-public.conf` 与旅行 `travel.conf`。Gunicorn workers/threads 只属于网关，不能复制给 interactive worker。
+3. restart `du-gateway.service`、`du-event-dispatcher.service` 与 `du-interactive-worker.service` 后，检查 `/health` 的 `event_runtime.ready`、outbox 最老年龄、Redis pending、dead letter 和两个服务日志。
+4. 从 interactive worker 的真实进程环境组装实际工具列表，并对动态 MCP 做无写入探针；service `active`、心跳正常或 schema 缓存存在都不能单独证明工具可用。
 
 ### QQ 边界与后续风险
 

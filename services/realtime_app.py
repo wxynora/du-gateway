@@ -47,6 +47,7 @@ class RealtimeConnection:
         self.device_id = str(device_id or "").strip()
         self.window_id = str(window_id or "").strip() or _SUMITALK_MAIN_WINDOW_ID
         self.send_lock = asyncio.Lock()
+        self.last_message_key = str(websocket.query_params.get("last_message_key") or "").strip()
         self.last_codex_task_states: dict[str, str] = {}
 
     async def send_json(self, payload: dict) -> None:
@@ -58,14 +59,48 @@ class RealtimeConnectionManager:
     def __init__(self) -> None:
         self._connections: set[RealtimeConnection] = set()
         self._lock = asyncio.Lock()
+        self._repair_task: asyncio.Task | None = None
 
     async def add(self, conn: RealtimeConnection) -> None:
         async with self._lock:
             self._connections.add(conn)
+            if self._repair_task is None or self._repair_task.done():
+                self._repair_task = asyncio.create_task(self._run_repair_loop())
 
     async def remove(self, conn: RealtimeConnection) -> None:
+        repair_task = None
         async with self._lock:
             self._connections.discard(conn)
+            if not self._connections and self._repair_task is not None:
+                repair_task = self._repair_task
+                self._repair_task = None
+        if repair_task is not None:
+            repair_task.cancel()
+
+    async def _run_repair_loop(self) -> None:
+        failures = 0
+        while True:
+            try:
+                connections = await self.snapshot()
+                if not connections:
+                    return
+                await _run_fallback_repair(connections)
+                failures = 0
+                await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                failures += 1
+                logger.warning("realtime shared repair failed failures=%s error=%s", failures, exc)
+                delay = min(
+                    _MAX_BACKOFF_SECONDS,
+                    _FAIL_BACKOFF_BASE_SECONDS * (2 ** min(failures, 5)),
+                )
+                await asyncio.sleep(delay)
+
+    async def snapshot(self) -> list[RealtimeConnection]:
+        async with self._lock:
+            return list(self._connections)
 
     async def broadcast(self, payload: dict, device_id: str = "", window_id: str = "") -> int:
         did = str(device_id or "").strip()
@@ -371,81 +406,120 @@ async def _receiver_loop(conn: RealtimeConnection) -> None:
         await _send_json(conn, {"type": "error", "error": f"unknown_type:{kind or '(empty)'}"})
 
 
-async def _sender_loop(conn: RealtimeConnection) -> None:
-    last_message_key = str(conn.websocket.query_params.get("last_message_key") or "").strip()
-    if not last_message_key:
+async def _initialize_sender_state(conn: RealtimeConnection) -> None:
+    if not conn.last_message_key:
         latest = await asyncio.to_thread(_latest_assistant_message, conn.device_id, conn.window_id)
-        last_message_key = str(latest.get("key") or "")
+        conn.last_message_key = str(latest.get("key") or "")
         await _send_json(conn, {
             "type": "ready",
             "device_id": conn.device_id,
             "window_id": conn.window_id,
-            "latest_message_key": last_message_key,
+            "latest_message_key": conn.last_message_key,
             "poll_interval_seconds": _POLL_INTERVAL_SECONDS,
         })
 
-    failures = 0
-    while True:
-        try:
-            latest = await asyncio.to_thread(_latest_assistant_message, conn.device_id, conn.window_id)
-            latest_key = str(latest.get("key") or "")
-            if latest_key and latest_key != last_message_key:
-                last_message_key = latest_key
-                await _send_json(conn, {"type": "assistant_message", "message": latest, "source": "fallback_poll"})
 
-            actions = await asyncio.to_thread(r2_store.poll_app_actions, device_id=conn.device_id, limit=_ACTION_LIMIT, surface="native")
+async def _run_fallback_repair(connections: list[RealtimeConnection]) -> None:
+    by_window: dict[tuple[str, str], list[RealtimeConnection]] = {}
+    by_device: dict[str, list[RealtimeConnection]] = {}
+    for conn in connections:
+        by_window.setdefault((conn.device_id, conn.window_id), []).append(conn)
+        by_device.setdefault(conn.device_id, []).append(conn)
+
+    for (device_id, window_id), targets in by_window.items():
+        latest = await asyncio.to_thread(_latest_assistant_message, device_id, window_id)
+        latest_key = str(latest.get("key") or "")
+        if not latest_key:
+            continue
+        for conn in targets:
+            if latest_key == conn.last_message_key:
+                continue
+            conn.last_message_key = latest_key
+            await _send_json(
+                conn,
+                {"type": "assistant_message", "message": latest, "source": "fallback_poll"},
+            )
+
+    for device_id in by_device:
+        try:
+            actions = await asyncio.to_thread(
+                r2_store.poll_app_actions,
+                device_id=device_id,
+                limit=_ACTION_LIMIT,
+                surface="native",
+            )
             pending = actions.get("actions") if isinstance(actions, dict) else None
             if isinstance(pending, list) and pending:
                 logger.info(
                     "device_actions_send_realtime device_id=%s source=fallback_poll count=%s ids=%s types=%s",
-                    conn.device_id,
+                    device_id,
                     len(pending),
                     [str((x or {}).get("id") or "") for x in pending if isinstance(x, dict)],
                     [str((x or {}).get("type") or "") for x in pending if isinstance(x, dict)],
                 )
-                await _send_json(conn, {"type": "device_actions", "actions": pending, "source": "fallback_poll"})
+                await _connections.broadcast(
+                    {"type": "device_actions", "actions": pending, "source": "fallback_poll"},
+                    device_id=device_id,
+                )
+        except Exception as exc:
+            logger.warning("realtime native action repair failed device_id=%s error=%s", device_id, exc)
 
+    for (device_id, window_id) in by_window:
+        try:
             chat_ui_actions = await asyncio.to_thread(
                 r2_store.poll_app_actions,
-                device_id=conn.device_id,
+                device_id=device_id,
                 limit=_ACTION_LIMIT,
                 surface="chat_ui",
-                window_id=conn.window_id,
+                window_id=window_id,
             )
             chat_ui_pending = chat_ui_actions.get("actions") if isinstance(chat_ui_actions, dict) else None
             if isinstance(chat_ui_pending, list) and chat_ui_pending:
                 logger.info(
                     "chat_ui_device_actions_send_realtime device_id=%s window_id=%s source=fallback_poll count=%s ids=%s types=%s",
-                    conn.device_id,
-                    conn.window_id,
+                    device_id,
+                    window_id,
                     len(chat_ui_pending),
                     [str((x or {}).get("id") or "") for x in chat_ui_pending if isinstance(x, dict)],
                     [str((x or {}).get("type") or "") for x in chat_ui_pending if isinstance(x, dict)],
                 )
-                await _send_json(conn, {"type": "chat_ui_device_actions", "actions": chat_ui_pending, "source": "fallback_poll"})
+                await _connections.broadcast(
+                    {
+                        "type": "chat_ui_device_actions",
+                        "actions": chat_ui_pending,
+                        "source": "fallback_poll",
+                    },
+                    device_id=device_id,
+                    window_id=window_id,
+                )
+        except Exception as exc:
+            logger.warning(
+                "realtime chat ui action repair failed device_id=%s window_id=%s error=%s",
+                device_id,
+                window_id,
+                exc,
+            )
 
-            codex_tasks = await asyncio.to_thread(_codex_group_tasks_for_device, conn.device_id)
+    for device_id, targets in by_device.items():
+        try:
+            codex_tasks = await asyncio.to_thread(_codex_group_tasks_for_device, device_id)
             for task in codex_tasks:
                 task_id = str(task.get("id") or "").strip()
                 if not task_id:
                     continue
                 state_key = _codex_group_task_state_key(task)
-                if not state_key or conn.last_codex_task_states.get(task_id) == state_key:
+                if not state_key:
                     continue
-                conn.last_codex_task_states[task_id] = state_key
-                await _send_json(conn, {"type": "codex_group_chat_task", "task": task, "source": "fallback_poll"})
-
-            failures = 0
-            await asyncio.sleep(_POLL_INTERVAL_SECONDS)
-        except WebSocketDisconnect:
-            raise
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            failures += 1
-            logger.warning("realtime sender failed device_id=%s failures=%s error=%s", conn.device_id, failures, e)
-            delay = min(_MAX_BACKOFF_SECONDS, _FAIL_BACKOFF_BASE_SECONDS * (2 ** min(failures, 5)))
-            await asyncio.sleep(delay)
+                for conn in targets:
+                    if conn.last_codex_task_states.get(task_id) == state_key:
+                        continue
+                    conn.last_codex_task_states[task_id] = state_key
+                    await _send_json(
+                        conn,
+                        {"type": "codex_group_chat_task", "task": task, "source": "fallback_poll"},
+                    )
+        except Exception as exc:
+            logger.warning("realtime codex task repair failed device_id=%s error=%s", device_id, exc)
 
 
 def _is_local_request(request: Request) -> bool:
@@ -584,22 +658,15 @@ async def websocket_device(websocket: WebSocket):
     await websocket.accept()
     window_id = str(websocket.query_params.get("window_id") or "").strip() or _SUMITALK_MAIN_WINDOW_ID
     conn = RealtimeConnection(websocket, device_id, window_id)
+    await _initialize_sender_state(conn)
     await _connections.add(conn)
     logger.info("device websocket connected device_id=%s window_id=%s client=%s", device_id, window_id, websocket.client)
     receiver = asyncio.create_task(_receiver_loop(conn))
-    sender = asyncio.create_task(_sender_loop(conn))
     try:
-        done, pending = await asyncio.wait({receiver, sender}, return_when=asyncio.FIRST_EXCEPTION)
-        for task in pending:
-            task.cancel()
-        for task in done:
-            exc = task.exception()
-            if exc and not isinstance(exc, WebSocketDisconnect):
-                raise exc
+        await receiver
     except WebSocketDisconnect:
         pass
     finally:
         receiver.cancel()
-        sender.cancel()
         await _connections.remove(conn)
         logger.info("device websocket disconnected device_id=%s window_id=%s", device_id, window_id)

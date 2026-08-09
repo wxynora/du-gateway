@@ -138,5 +138,5 @@ Worker 生成事件后先进入现有 realtime 进程间通道，`du-realtime` �
 - 已部署的基础能力包括流式/非流共存、共同游戏非流边界、静默设备配对、主动消息持久投递、通话专用 SSE 与短 TTL segment TTS。
 - 本轮已在本地完成 realtime broker 直推、通知/落库双队列、40ms SQLite 兜底、`assistant_final` 与后台归档解耦，以及同轮多段 reasoning 不再被首段正文提前截断。
 - 本轮尚未 push、部署或重启，也未请求真实模型、写 R2、连接真实 App 或模拟器。
-- 部署本轮改动时必须一起重启 `du-gateway.service`、`du-realtime.service` 和 `du-sumitalk-chat-worker.service`，再实测首事件延迟、长回复、多段 reasoning、多工具轮、断线续传、realtime 不可用兜底和终态先于后台归档。
+- 部署本轮改动时必须一起重启 `du-gateway.service`、`du-realtime.service`、`du-event-dispatcher.service` 和 `du-interactive-worker.service`，再实测首事件延迟、长回复、多段 reasoning、多工具轮、断线续传、realtime 不可用兜底和终态先于后台归档。
 - 当前工作区的植物大战僵尸相关源码与 `miniapp_static` 是未完成改动，不属于本次流式接入，不能混入提交。

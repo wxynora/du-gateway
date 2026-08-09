@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-from config import EVENT_RUNTIME_ENABLED, SUMITALK_CHAT_QUEUE_DB, TELEGRAM_WEBHOOK_QUEUE_DB
+from config import SUMITALK_CHAT_QUEUE_DB, TELEGRAM_WEBHOOK_QUEUE_DB
 from runtime.events import EventEnvelope
 from utils.time_aware import now_beijing_iso
 
@@ -82,8 +82,6 @@ def initialize_outbox_schemas(sources: Iterable[OutboxSource] | None = None) -> 
 
 
 def notify_outbox_dispatcher(source: str) -> bool:
-    if not EVENT_RUNTIME_ENABLED:
-        return False
     streams = None
     try:
         from runtime.redis_streams import RedisStreams

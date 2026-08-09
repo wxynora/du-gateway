@@ -64,7 +64,7 @@ except Exception:
     logger.warning("身体状态 evaluator 启动恢复失败", exc_info=True)
 
 # Telegram Webhook 只在 web worker 内快速落持久队列；输入聚合与回复发送由
-# scripts/run_telegram_webhook_worker.py 持有。默认不在 gunicorn worker 里启动 TG runtime，
+# scripts/run_interactive_worker.py 持有。默认不在 gunicorn worker 里启动 TG runtime，
 # 避免 max-requests 回收时丢掉 timer/buffer。
 if os.environ.get("GATEWAY_EMBEDDED_TELEGRAM_RUNTIME_ENABLED", "0").strip().lower() in ("1", "true", "yes"):
     try:

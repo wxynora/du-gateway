@@ -7,7 +7,6 @@ from typing import Any, Mapping
 from config import (
     EVENT_CONSUMER_GROUP_INTERACTIVE,
     EVENT_OUTBOX_FALLBACK_SCAN_SECONDS,
-    EVENT_RUNTIME_ENABLED,
     EVENT_STREAM_INTERACTIVE,
 )
 from runtime.events import EventEnvelope
@@ -124,9 +123,6 @@ def dead_letter_count() -> int:
 
 
 def event_runtime_health() -> dict[str, Any]:
-    if not EVENT_RUNTIME_ENABLED:
-        return {"enabled": False, "live": True, "ready": True}
-
     errors: list[str] = []
     redis_ok = False
     pending = 0

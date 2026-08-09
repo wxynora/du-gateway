@@ -3,6 +3,7 @@ import time
 
 from flask import Response, jsonify, request, stream_with_context
 
+from runtime.wakeup_bus import RuntimeWakeSubscriber
 from services.realtime_publish import subscribe_sumitalk_chat_events
 from services.sumitalk_voice_sidecar import (
     pending_sumitalk_voice_sidecar_count,
@@ -16,14 +17,15 @@ from services.sumitalk_chat_queue import (
     list_sumitalk_chat_job_events,
     maybe_mark_sumitalk_chat_job_stale,
     read_sumitalk_chat_job_state,
+    sumitalk_chat_wakeup_topic,
     valid_sumitalk_chat_job_id,
 )
 
 
 _SUMITALK_CHAT_DIRECT_WAIT_MS = 2500
 _SUMITALK_CHAT_EVENT_WAIT_MAX_MS = 25_000
-_SUMITALK_CHAT_EVENT_POLL_SECONDS = 0.04
 _SUMITALK_CHAT_EVENT_HEARTBEAT_SECONDS = 15.0
+_SUMITALK_CHAT_EVENT_REPAIR_SECONDS = 2.0
 _TERMINAL_EVENT_STATUS = {
     "assistant_final": "done",
     "run_error": "error",
@@ -98,16 +100,22 @@ def _job_payload(job_id: str, *, mode: str = "job") -> tuple[dict, int]:
 
 
 def _wait_for_sumitalk_chat_job(job_id: str, wait_s: float) -> tuple[dict, int]:
-    deadline = time.time() + max(0.0, wait_s)
-    while True:
+    if wait_s <= 0:
         payload, http_status = _job_payload(job_id, mode="direct")
         status = str(payload.get("status") or "").strip()
-        if http_status >= 400 or status in {"done", "error", "cancelled"}:
-            return payload, http_status
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            return payload, 202
-        time.sleep(min(0.15, remaining))
+        return payload, http_status if http_status >= 400 or status in {"done", "error", "cancelled"} else 202
+
+    deadline = time.time() + max(0.0, wait_s)
+    with RuntimeWakeSubscriber(sumitalk_chat_wakeup_topic(job_id)) as subscriber:
+        while True:
+            payload, http_status = _job_payload(job_id, mode="direct")
+            status = str(payload.get("status") or "").strip()
+            if http_status >= 400 or status in {"done", "error", "cancelled"}:
+                return payload, http_status
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return payload, 202
+            subscriber.wait(remaining)
 
 
 def _public_job(job_id: str) -> tuple[dict, int]:
@@ -190,20 +198,24 @@ def _wait_for_sumitalk_chat_events(
     limit: int,
     wait_ms: int,
 ) -> tuple[dict, int]:
+    if wait_ms <= 0:
+        return _event_page(job_id, after_seq=after_seq, limit=limit)
+
     deadline = time.monotonic() + max(0, wait_ms) / 1000.0
-    while True:
-        payload, http_status = _event_page(job_id, after_seq=after_seq, limit=limit)
-        if http_status >= 400 or payload.get("events"):
-            return payload, http_status
-        if (
-            str(payload.get("status") or "") in {"done", "error", "cancelled"}
-            and int(payload.get("sidecars_pending") or 0) <= 0
-        ):
-            return payload, http_status
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return payload, http_status
-        time.sleep(min(_SUMITALK_CHAT_EVENT_POLL_SECONDS, remaining))
+    with RuntimeWakeSubscriber(sumitalk_chat_wakeup_topic(job_id)) as subscriber:
+        while True:
+            payload, http_status = _event_page(job_id, after_seq=after_seq, limit=limit)
+            if http_status >= 400 or payload.get("events"):
+                return payload, http_status
+            if (
+                str(payload.get("status") or "") in {"done", "error", "cancelled"}
+                and int(payload.get("sidecars_pending") or 0) <= 0
+            ):
+                return payload, http_status
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return payload, http_status
+            subscriber.wait(remaining)
 
 
 def register_routes(bp) -> None:
@@ -325,71 +337,89 @@ def register_routes(bp) -> None:
             except Exception:
                 pass
 
-            # IPC unavailable or a sequence gap: use the durable log as the
-            # 40 ms compatibility fallback until terminal sidecars are drained.
-            while True:
-                events = list_sumitalk_chat_job_events(job_id, after_seq=cursor, limit=100)
-                for event in events:
-                    try:
-                        seq = int(event.get("seq") or 0)
-                    except Exception:
-                        continue
-                    if seq <= cursor:
-                        continue
-                    cursor = seq
-                    if str(event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
-                        terminal_seen = True
-                    yield "data: " + json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n\n"
-
-                if pending_live_event is not None:
-                    try:
-                        pending_seq = int(pending_live_event.get("seq") or 0)
-                    except Exception:
-                        pending_seq = 0
-                    if pending_seq == cursor + 1:
-                        cursor = pending_seq
+            # IPC unavailable or a sequence gap: durable storage remains the
+            # repair source, while Redis wakeups avoid a tight SQLite scan.
+            with RuntimeWakeSubscriber(sumitalk_chat_wakeup_topic(job_id)) as subscriber:
+                while True:
+                    events = list_sumitalk_chat_job_events(job_id, after_seq=cursor, limit=100)
+                    for event in events:
+                        try:
+                            seq = int(event.get("seq") or 0)
+                        except Exception:
+                            continue
+                        if seq <= cursor:
+                            continue
+                        cursor = seq
+                        if str(event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
+                            terminal_seen = True
                         yield "data: " + json.dumps(
-                            pending_live_event,
+                            event,
                             ensure_ascii=False,
                             separators=(",", ":"),
                         ) + "\n\n"
-                        if str(pending_live_event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
+
+                    if pending_live_event is not None:
+                        try:
+                            pending_seq = int(pending_live_event.get("seq") or 0)
+                        except Exception:
+                            pending_seq = 0
+                        if pending_seq == cursor + 1:
+                            cursor = pending_seq
+                            yield "data: " + json.dumps(
+                                pending_live_event,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ) + "\n\n"
+                            if str(pending_live_event.get("kind") or "") in _TERMINAL_EVENT_STATUS:
+                                terminal_seen = True
+                            pending_live_event = None
+
+                    terminal_event = get_sumitalk_chat_terminal_event(job_id) if not events else None
+                    if terminal_event:
+                        try:
+                            terminal_seq = int(terminal_event.get("seq") or 0)
+                        except Exception:
+                            terminal_seq = 0
+                        if terminal_seq <= cursor:
                             terminal_seen = True
-                        pending_live_event = None
 
-                terminal_event = get_sumitalk_chat_terminal_event(job_id) if not events else None
-                if terminal_event:
-                    try:
-                        terminal_seq = int(terminal_event.get("seq") or 0)
-                    except Exception:
-                        terminal_seq = 0
-                    if terminal_seq <= cursor:
-                        terminal_seen = True
+                    if terminal_seen:
+                        pending = pending_sumitalk_voice_sidecar_count(job_id)
+                        if pending <= 0:
+                            return
+                        resume_sumitalk_voice_sidecars(job_id)
 
-                if terminal_seen:
-                    pending = pending_sumitalk_voice_sidecar_count(job_id)
-                    if pending <= 0:
-                        return
-                    resume_sumitalk_voice_sidecars(job_id)
-
-                now = time.monotonic()
-                if now - last_state_check >= 2.0:
-                    job = read_sumitalk_chat_job_state(job_id)
-                    if not job:
-                        return
-                    job = maybe_mark_sumitalk_chat_job_stale(job_id, job) or job
-                    if (
-                        str(job.get("status") or "").strip().lower() in {"done", "error", "cancelled"}
-                        and not terminal_event
-                        and not events
-                    ):
-                        if pending_sumitalk_voice_sidecar_count(job_id) > 0:
+                    now = time.monotonic()
+                    if now - last_state_check >= _SUMITALK_CHAT_EVENT_REPAIR_SECONDS:
+                        job = read_sumitalk_chat_job_state(job_id)
+                        if not job:
+                            return
+                        job = maybe_mark_sumitalk_chat_job_stale(job_id, job) or job
+                        if (
+                            str(job.get("status") or "").strip().lower() in {"done", "error", "cancelled"}
+                            and not terminal_event
+                            and not events
+                            and pending_sumitalk_voice_sidecar_count(job_id) > 0
+                        ):
                             resume_sumitalk_voice_sidecars(job_id)
-                    last_state_check = now
-                if now - last_heartbeat >= _SUMITALK_CHAT_EVENT_HEARTBEAT_SECONDS:
-                    yield ": ping\n\n"
-                    last_heartbeat = now
-                time.sleep(_SUMITALK_CHAT_EVENT_POLL_SECONDS)
+                        last_state_check = now
+                    if now - last_heartbeat >= _SUMITALK_CHAT_EVENT_HEARTBEAT_SECONDS:
+                        yield ": ping\n\n"
+                        last_heartbeat = now
+                    subscriber.wait(
+                        min(
+                            max(
+                                0.0,
+                                _SUMITALK_CHAT_EVENT_REPAIR_SECONDS
+                                - (time.monotonic() - last_state_check),
+                            ),
+                            max(
+                                0.0,
+                                _SUMITALK_CHAT_EVENT_HEARTBEAT_SECONDS
+                                - (time.monotonic() - last_heartbeat),
+                            ),
+                        )
+                    )
 
         return Response(
             _generate(),

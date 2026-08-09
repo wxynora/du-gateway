@@ -251,6 +251,15 @@ def _publish_task(task: dict | None) -> None:
     if not public:
         return
     try:
+        from runtime.wakeup_bus import publish_runtime_wakeup
+
+        publish_runtime_wakeup(
+            "codex-group-tasks",
+            {"task_id": str(public.get("id") or ""), "status": str(public.get("status") or "")},
+        )
+    except Exception:
+        pass
+    try:
         from services.realtime_publish import publish_codex_group_task
 
         publish_codex_group_task(public)

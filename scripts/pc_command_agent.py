@@ -1,6 +1,6 @@
 """
 电脑控制常驻脚本（Windows / macOS）：
-- 轮询网关 GET /api/pc_command
+- 长等待网关 GET /api/pc_command，由新指令事件唤醒
 - 执行指令
 - 成功项按 id 回执 POST /api/pc_command/done
 
@@ -359,24 +359,25 @@ def execute_command(cmd: str) -> bool:
         return False
 
 
-def poll_once() -> None:
+def poll_once() -> bool:
     if not GATEWAY_URL or not PC_COMMAND_TOKEN:
-        _log("[PC] 缺少 GATEWAY_URL 或 PC_COMMAND_TOKEN，无法轮询")
-        return
+        _log("[PC] 缺少 GATEWAY_URL 或 PC_COMMAND_TOKEN，无法等待指令")
+        return False
     base = GATEWAY_URL.rstrip("/")
     try:
         res = requests.get(
             f"{base}/api/pc_command",
             headers=_headers(),
-            timeout=20,
+            params={"wait_seconds": PC_POLL_SECONDS},
+            timeout=(10, PC_POLL_SECONDS + 10),
         )
         if res.status_code != 200:
             _log(f"[PC] 拉取失败 status={res.status_code} body={(res.text or '')[:200]}")
-            return
+            return False
         data: dict[str, Any] = res.json() if res.content else {}
         pending = data.get("pending") if isinstance(data, dict) else []
         if not isinstance(pending, list) or not pending:
-            return
+            return True
         done_ids: list[str] = []
         for item in pending:
             if not isinstance(item, dict):
@@ -397,21 +398,23 @@ def poll_once() -> None:
             )
             if ack.status_code != 200:
                 _log(f"[PC] 回执失败 status={ack.status_code} body={(ack.text or '')[:200]}")
-                return
+                return False
             payload = ack.json() if ack.content else {}
             removed = payload.get("removedCount") if isinstance(payload, dict) else 0
             _log(f"[PC] 回执成功 done={len(done_ids)} removed={removed}")
+        return True
     except Exception as e:
-        _log(f"[PC] 轮询异常: {e}")
+        _log(f"[PC] 等待指令异常: {e}")
+        return False
 
 
 def main() -> None:
-    _log(f"[PC] 启动完成，每 {PC_POLL_SECONDS} 秒轮询一次")
+    _log(f"[PC] 启动完成，指令长等待窗口 {PC_POLL_SECONDS} 秒")
     if not GATEWAY_URL or not PC_COMMAND_TOKEN:
         _log("[PC] 请在桌面 .env（或系统环境变量）中设置 GATEWAY_URL 与 PC_COMMAND_TOKEN")
     while True:
-        poll_once()
-        time.sleep(PC_POLL_SECONDS)
+        if not poll_once():
+            time.sleep(PC_POLL_SECONDS)
 
 
 if __name__ == "__main__":

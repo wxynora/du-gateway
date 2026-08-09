@@ -19,6 +19,7 @@ from config import (
     WATCH_ANALYSIS_SAMPLE_TTL_SECONDS,
     WATCH_ANALYSIS_UNKNOWN_INTERVAL_MS,
 )
+from runtime.wakeup_bus import publish_runtime_wakeup
 from storage import runtime_sqlite
 
 
@@ -29,6 +30,14 @@ SESSION_COST_PURPOSES = {
     "knowledge_card",
     "subtitle_lookup",
 }
+WATCH_ANALYSIS_WAKEUP_TOPIC = "watch-analysis"
+
+
+def notify_watch_analysis_worker(reason: str, **payload: Any) -> None:
+    publish_runtime_wakeup(
+        WATCH_ANALYSIS_WAKEUP_TOPIC,
+        {"reason": str(reason or "state_changed"), **payload},
+    )
 
 
 def _now() -> datetime:
@@ -500,7 +509,9 @@ def enqueue_samples(
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return _row_to_job(row, public=True), True
+    created_job = _row_to_job(row, public=True)
+    notify_watch_analysis_worker("job_enqueued", job_id=job_id, session_id=session_id)
+    return created_job, True
 
 
 def enqueue_source_plan(
@@ -619,7 +630,9 @@ def enqueue_source_plan(
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return _row_to_job(row, public=True), True
+    created_job = _row_to_job(row, public=True)
+    notify_watch_analysis_worker("job_enqueued", job_id=job_id, session_id=session_id)
+    return created_job, True
 
 
 def enqueue_resumed_source_plan(session: dict) -> dict:
@@ -832,6 +845,43 @@ def claim_next_job(*, stale_after_seconds: int) -> dict | None:
             conn.execute("ROLLBACK")
             raise
     return _row_to_job(claimed, public=False)
+
+
+def seconds_until_next_claimable_job() -> float | None:
+    now = _now()
+    now_iso = _iso(now)
+    with runtime_sqlite.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT MIN(
+                CASE
+                    WHEN j.status = 'queued' THEN j.available_at
+                    WHEN j.status = 'running' THEN j.leased_until
+                    ELSE ''
+                END
+            ) AS due_at
+              FROM watch_analysis_jobs j
+              JOIN watch_sessions s ON s.id = j.session_id
+             WHERE j.attempts < j.max_attempts
+               AND j.cancel_requested = 0
+               AND s.status != 'ended'
+               AND s.client_lease_expires_at != ''
+               AND s.client_lease_expires_at > ?
+               AND (
+                    (j.status = 'queued' AND j.available_at != '')
+                    OR (j.status = 'running' AND j.leased_until != '')
+               )
+            """,
+            (now_iso,),
+        ).fetchone()
+    due_text = str(row["due_at"] or "") if row else ""
+    if not due_text:
+        return None
+    try:
+        due = datetime.strptime(due_text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return 0.0
+    return max(0.0, (due - now).total_seconds())
 
 
 def heartbeat_job(job_id: str, lease_token: str, *, lease_seconds: int) -> bool:
@@ -1177,6 +1227,13 @@ def fail_job(
         except Exception:
             conn.execute("ROLLBACK")
             raise
+    if status == "queued":
+        notify_watch_analysis_worker(
+            "job_requeued",
+            job_id=job_id,
+            session_id=str(job.get("session_id") or ""),
+            available_at=available_at,
+        )
     return status
 
 

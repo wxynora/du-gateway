@@ -20,6 +20,7 @@ from config import (
     WATCH_CLIENT_LEASE_SECONDS,
     WATCH_CONTEXT_REPLY_LEAD_MS,
 )
+from runtime.wakeup_bus import publish_runtime_wakeup
 from storage import runtime_sqlite, watch_viewing_store
 
 
@@ -64,6 +65,13 @@ TIMELINE_SECTION_KINDS = {
 RISK_FEEDBACK_TYPES = {"false_positive", "missed", "too_early", "too_late"}
 LOCAL_SUBTITLE_KINDS = {"none", "embedded", "external"}
 LOCAL_SUBTITLE_FORMATS = {"srt", "vtt"}
+
+
+def _notify_watch_analysis_worker(reason: str, session_id: str) -> None:
+    publish_runtime_wakeup(
+        "watch-analysis",
+        {"reason": reason, "session_id": str(session_id or "")},
+    )
 
 
 def _now() -> datetime:
@@ -833,6 +841,7 @@ def create_session(
                     conn.execute("COMMIT")
                     session = _row_to_session(reused)
                     session["create_reused"] = True
+                    _notify_watch_analysis_worker("session_reused", str(existing["id"] or ""))
                     return session
                 _end_session_state(
                     conn,
@@ -934,6 +943,7 @@ def create_session(
                     session = _row_to_session(resumed)
                     session["create_reused"] = True
                     session["resumed_from_progress"] = True
+                    _notify_watch_analysis_worker("session_resumed", retained_session_id)
                     return session
             actual_viewing_id = watch_viewing_store.ensure_viewing(
                 conn,
@@ -1045,6 +1055,7 @@ def create_session(
             raise
     session = _row_to_session(row)
     session["create_reused"] = False
+    _notify_watch_analysis_worker("session_created", session_id)
     return session
 
 
@@ -1186,7 +1197,9 @@ def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return _row_to_session(updated), True, ""
+    session = _row_to_session(updated)
+    _notify_watch_analysis_worker("playback_updated", session_id)
+    return session, True, ""
 
 
 def update_mode(session_id: str, changes: dict) -> dict:
@@ -1310,7 +1323,9 @@ def update_mode(session_id: str, changes: dict) -> dict:
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return _row_to_session(updated)
+    session = _row_to_session(updated)
+    _notify_watch_analysis_worker("mode_updated", session_id)
+    return session
 
 
 def update_preparation_state(

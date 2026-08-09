@@ -693,20 +693,31 @@ async function executeAction(engine, action) {
 }
 
 async function pollActions(engine) {
-  if (actionPollInFlight) return;
+  if (actionPollInFlight) return false;
   // Only claim actions after MiNA is initialized; otherwise the queue item gets
   // consumed before the speaker can actually play it.
-  if (!engine?.MiNA) return;
+  if (!engine?.MiNA) return false;
   actionPollInFlight = true;
   try {
     const actions = await claimActions();
     for (const action of actions) {
       await executeAction(engine, action);
     }
+    return true;
   } catch (e) {
-    console.warn("[xiaoai] 轮询播放队列失败：", e?.message || e);
+    console.warn("[xiaoai] 等待播放队列失败：", e?.message || e);
+    return false;
   } finally {
     actionPollInFlight = false;
+  }
+}
+
+async function runActionClaimLoop(engine) {
+  while (true) {
+    const ok = await pollActions(engine);
+    if (!ok) {
+      await sleep(ACTION_POLL_MS);
+    }
   }
 }
 
@@ -866,9 +877,7 @@ async function main() {
     void refreshConfig(false);
     void postStatus({ last_event: "heartbeat" });
   }, Math.max(HEARTBEAT_MS, CONFIG_REFRESH_MS));
-  setInterval(() => {
-    void pollActions(MiGPT);
-  }, ACTION_POLL_MS);
+  void runActionClaimLoop(MiGPT);
 
   const speaker = {
     did: XIAOAI_DID,

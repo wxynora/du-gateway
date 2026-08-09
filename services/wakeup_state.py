@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from config import WAKEUP_STATE_DB
+from runtime.wakeup_bus import publish_runtime_wakeup
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 
 KIND_SCHEDULE = "schedule"
@@ -19,6 +20,7 @@ STATUS_SCHEDULED = "scheduled"
 STATUS_CHECKED = "checked"
 STATUS_FIRED = "fired"
 STATUS_ERROR = "error"
+WAKEUP_TOPIC = "proactive-scheduler"
 
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY = False
@@ -176,6 +178,10 @@ def upsert_state(
                 ),
             )
     state = get_state(clean_kind, clean_source)
+    publish_runtime_wakeup(
+        WAKEUP_TOPIC,
+        {"kind": clean_kind, "source_id": clean_source, "next_due_at": str(next_due_at or "")},
+    )
     return state or {}
 
 

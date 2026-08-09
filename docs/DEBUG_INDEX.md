@@ -100,29 +100,29 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 
 ## 4. 对话入口与异步 worker
 
-### 4.0 事件运行时 Phase 1
+### 4.0 事件运行时
 
-- 总开关：`config.py::EVENT_RUNTIME_ENABLED`；默认关闭。关闭时 SumiTalk/TG 原 polling worker 保持原行为且不要求 Redis；开启时旧 worker 明确拒绝启动，新旧入口另由 `runtime/process_guard.py` 的同名 consumer 文件锁防双跑。
-- 事件与持久事实：`runtime/events.py` 定义 version `1` 的 `sumitalk.chat_job.created`、`telegram.webhook_job.created` 信封并兼容未知字段；业务事实仍分别位于原 SumiTalk/TG queue SQLite，`services/sumitalk_chat_queue.py`、`services/telegram_update_queue.py` 只在开启时把 job 与同库 `outbox_events` 放进同一事务。Redis 事件不携带完整聊天正文。
+- 运行边界：SumiTalk 与 Telegram webhook 统一使用 Event Runtime，不再提供 `EVENT_RUNTIME_ENABLED` 双轨开关或旧 polling worker 回退；`runtime/process_guard.py` 继续防止同名现役 consumer 重复运行。
+- 事件与持久事实：`runtime/events.py` 定义 version `1` 的 `sumitalk.chat_job.created`、`telegram.webhook_job.created` 信封并兼容未知字段；业务事实仍分别位于原 SumiTalk/TG queue SQLite，`services/sumitalk_chat_queue.py`、`services/telegram_update_queue.py` 始终把 job 与同库 `outbox_events` 放进同一事务。Redis 事件不携带完整聊天正文。
 - 投递：`runtime/outbox.py`、`runtime/dispatcher.py`、`runtime/redis_streams.py`；事务提交后 best-effort publish `du:outbox:wakeup`，dispatcher 阻塞等唤醒并按 `EVENT_OUTBOX_FALLBACK_SCAN_SECONDS`（默认 30 秒）兜底扫描。Redis 故障只增加 outbox 失败次数、错误与退避时间，不回滚已接收 job；恢复后补发。
 - 消费：`runtime/consumers.py`、`scripts/run_interactive_worker.py`；consumer group 默认 `du:interactive-workers`，先精确 claim SQLite job，业务 ack 成功后才 `XACK`。SumiTalk `window_id` 与 Telegram chat 作为 `partition_key`，同 key FIFO、不同 key 并行；重复事件遇到终态/已删除 job 为 no-op。stale PEL 使用 `XAUTOCLAIM`，超限写 `storage/runtime_sqlite.py::dead_letter_events`。
+- 轻量运行时唤醒：`runtime/wakeup_bus.py` 只通过 Redis Pub/Sub 通知等待中的消费者重新读取持久状态，不承载任务事实。主动调度按 `wakeup_state.next_due_at` 等到最近到期点；小爱动作、Codex 群任务、PC 指令和 SumiTalk HTTP 等待由对应 durable store 写成功后唤醒；Redis 不可用时不改变写入结果，各消费者保留原有或低频修复读取。
 - 修复与观测：`runtime/reconciler.py` 每 30～60 秒等级的低频周期补缺失 outbox、恢复过期 processing lease、安排长期 pending 重投；`runtime/health.py` 记录 dispatcher/worker heartbeat，并让 `/health` 在 Redis 故障时仍保持 `live=true`/HTTP 200、单列 `ready=false`、outbox/pending/dead-letter 诊断。
-- 服务与验证：`scripts/run_event_dispatcher.py`、`deploy/systemd/du-event-dispatcher.service`、`deploy/systemd/du-interactive-worker.service`；切换与回滚顺序见 `README.md`。隔离回归为 `EVENT_RUNTIME_TEST_REDIS_URL=redis://127.0.0.1:16379/0 .venv/bin/python scripts/test_event_runtime_phase1.py`，只使用临时 SQLite、显式本机测试 Redis 和假业务 handler。
+- 服务与验证：`scripts/run_event_dispatcher.py`、`deploy/systemd/du-event-dispatcher.service`、`deploy/systemd/du-interactive-worker.service`。生产只运行 `du-event-dispatcher.service` 和 `du-interactive-worker.service`；`du-sumitalk-chat-worker.service`、`du-telegram-webhook-worker.service` 已于 2026-08-09 从生产 systemd 搜索路径移除，禁止再纳入部署、重启或健康检查清单。interactive worker 承接 SumiTalk 与 Telegram 的真实聊天执行，因此除根目录 `.env` 外，还必须与网关共同加载聊天工具所需的专用配置；当前生产明确挂载农场 `aifarm-public.conf` 与旅行 `travel.conf`，Gunicorn workers/threads 配置不属于该 worker。以后新增、替换或合并聊天执行器时，启用前必须对旧执行器合集、网关工具专用 drop-in 与新执行器做环境键名/配置消费者差集，只把新执行器真实消费的专用配置等价迁入；启用后必须从新进程环境组装实际工具列表，并对动态 MCP 做无写入探针，`active`、心跳和缓存存在都不能单独证明工具可用。隔离回归为 `EVENT_RUNTIME_TEST_REDIS_URL=redis://127.0.0.1:16379/0 .venv/bin/python scripts/test_event_runtime_phase1.py`，只使用临时 SQLite、显式本机测试 Redis 和假业务 handler。
 
 ### 4.1 SumiTalk
 
 - 原生聊天 job 路由：`routes/miniapp/sumitalk_chat_jobs.py`
 - 持久队列：`services/sumitalk_chat_queue.py`
 - 事件 worker：`runtime/consumers.py`、`scripts/run_interactive_worker.py`
-- 关闭事件开关时的旧 worker：`scripts/run_sumitalk_chat_worker.py`
 - realtime 事件：`services/realtime_app.py`、`services/realtime_publish.py`、`services/sumitalk_live_event_broker.py`
 - 流式语音 sidecar：`services/sumitalk_voice_sidecar.py`
 - 历史接口：`routes/miniapp/sumitalk_history.py`
 
-当前边界：消息仍由前端创建原持久 job。事件开关关闭时旧 worker 消费且保留原失败语义；开启时同事务 outbox 唤醒 interactive worker，可重试消费由 Stream delivery/lease 管理，超过上限才进入 dead letter。聊天 pipeline、rich SSE、取消、终态和前端显式重试接口不改。
+当前生产边界：消息仍由前端创建原持久 job，同事务 outbox 唤醒 interactive worker；可重试消费由 Stream delivery/lease 管理，超过上限才进入 dead letter。聊天 pipeline、rich SSE、取消、终态和前端显式重试接口不改。
 
 - 原生普通聊天使用 rich SSE；旧 MiniApp、其他平台和共同游戏豁免继续走现有非流路径，共用同一提示词、工具、记忆与通道注入。启用 reasoning 的流式请求会在流开始时预留稳定 `reasoning-*` part；正文 token 到达时立即结束当前 reasoning 阶段并继续即时发送正文，后到 reasoning 仍用同一个 part 更新，不新建正文后的 reasoning part。
-- Worker 事件先经 `realtime_publish -> realtime_app -> SumiTalkRunEventBroker` 到活跃 SSE；独立 FIFO 落库队列随后写 `sumitalk_chat_run_events`。SQLite 只用于首次连接、断线重连、sequence 缺口和 realtime 不可用时的 40ms 兜底。
+- Worker 事件先经 `realtime_publish -> realtime_app -> SumiTalkRunEventBroker` 到活跃 SSE；独立 FIFO 落库队列随后写 `sumitalk_chat_run_events`。SQLite 只用于首次连接、断线重连、sequence 缺口和 realtime 不可用时的修复；修复路径由 job 专属 Redis 通知唤醒，另以 2 秒状态检查和 15 秒 SSE heartbeat 保证通知丢失时仍能收口，不再 40ms 扫描。
 - SumiTalk 的 `assistant_final` 不等待 R2、摘要或动态记忆；这些工作进入单一 FIFO 后台归档队列，保证多轮顺序。其他入口的归档时序不变。
 - SumiTalk 拉黑模式状态与选中文案由 `storage/sumitalk_block_mode_store.py` 管理；`PUT /miniapp-api/sumitalk-block-mode` 将 `prompt_version_id/prompt_version_name/prompt_text` 与开关状态一次落盘且不裁切文案，旧状态缺字段时迁移到原 `BLOCK_NOTICE_TEXT` 默认版本。首次开启通知、成功投递的 SumiTalk 主动唤醒、定时续话及每段最多三次自动回复都在发送时读取同一份当前选中文案；独立归档路径仍只在归档成功后追加，消息继续使用 `role=user`、`skip_memory_summary` 与 `skip_dynamic_memory`。
 - 流式 SumiTalk 聊天在 queue 入口跨 delta 识别并剥离 `<voice>...</voice>`；SumiTalk 主动唤醒在唯一 `deliver_chat_message` 入队成功后提取完整语音标签。两者复用同一 SQLite 持久 sidecar 和 MiniMax TTS/聊天媒体上传：流式任务继续发送允许晚于 `assistant_final` 的 `assistant_audio_ready` / `assistant_audio_failed`，主动任务则以 `message_id + voice_index` 生成稳定 task/part 并排队 App 已支持的 `deliver_chat_audio`，文字与音频 action 均保留 pending/done 幂等，App 重复收到同一 part 也不会再次下载或追加。App 轮询会恢复未完成或未投递的主动 sidecar；纯文字主动消息、QQ/TG、`/voice-call/*`、通话分段 TTS、取消和播放状态不受影响。
@@ -134,7 +134,6 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 - Webhook：`routes/telegram_webhook.py`
 - 更新持久队列：`services/telegram_update_queue.py`
 - 事件 worker：`runtime/consumers.py`、`scripts/run_interactive_worker.py`
-- 关闭事件开关时的旧 Webhook worker：`scripts/run_telegram_webhook_worker.py`
 - 主动唤醒：`services/telegram_proactive.py`
 - 主动唤醒进程：`scripts/run_telegram_proactive.py`
 - 唤醒记录生命周期：`services/wakeup_event_log.py`
@@ -258,6 +257,8 @@ Bilibili 开播前可通过 `GET /miniapp-api/watch/bilibili/parts` 获取真实
 
 `watch_sessions.client_seen_at/client_lease_expires_at` 是独立存活租约，不能用会被 worker 更新的 `updated_at` 代替；播放快照、状态轮询、显式 `POST .../heartbeat` 和客户端素材提交会续租。创建会话以同一设备、窗口和完整媒体/模式参数生成 `creation_key`，同一有效租约内的重放返回原 session 与 `create_reused=true`，SQLite 唯一索引在老库加列迁移后创建，避免超时重试启动两套分析。source、knowledge、subtitle 三个调度入口只处理未结束且租约有效的会话。seek 切换 epoch 仍取消旧任务、开放计划与动作，但同一 session/media 已完成的 rolling 区间会按媒体时间复制剧情、风险和检查点到新 epoch，调度从已付费覆盖末端继续；人工 timeline correction 只是取材参考，只取消未完成任务和原始样本，不清除、推进或判废已完成结果。活跃会话不按累计分析任务数量或每日费用设置终止上限。每个 session 记录服务端观察时间和本 P `played_duration_ms`，只累计相邻同 epoch、上一状态为播放中的确认区间，并按上一倍速用媒体前进量校准，因此准备、暂停与 seek 不计时；达到正片完成边界后仍继续播放的可信区间也持续累计到明确结束。首个分 P 由后端生成 `viewing_id`，后续 P 显式复用；长期 `watch_viewings` 聚合跨 P 时长和自然播放完成部分。自然到达正片终点只落 `playback_completed`，不替使用者选择“已看完”或出票。退出弹窗分别调用 `viewing_action=save_progress|complete`：保存进度保留同一 viewing、playhead 和已生成剧情分析且不出票；已看完清除续播状态并生成或复用稳定票根；切 P、`pagehide` 和异常清理使用默认 cleanup。`GET .../viewings?status=recent` 同时返回续播项和已看完项，并提供封面、`watched_percent/status_text`；保存项恢复时复用保留的 session，已看完项固定显示“已看完”。票根支持两类背面来源：旧的 session 临时剧情帧仍可选中后持久化；客户端也可通过 `POST/GET .../viewings/<viewing_id>/ticket-frame-captures` 保存并查询同一 viewing、跨分 P 的多张 JPEG，图片读取接口在 session 结束、save_progress、complete 后仍有效。`PUT .../ticket-frame` 可在无活跃 session 时按 `capture_id` 重选并同步已有 ticket，`DELETE` 只清除当前选择而不删除 capture 集合。原始音频与普通临时画面仍在结束时清理。完成后的剧情分析由 `WATCH_COMPLETED_ANALYSIS_TTL_SECONDS` 控制，默认 24 小时；保存进度不套该 TTL，持久票根截图也不走该 TTL。`GET .../viewings/<viewing_id>` 与 `GET .../tickets` 支持受信任设备恢复。`DELETE .../sessions/<id>` 在事务中结束 session、取消 queued 任务、给 running 任务写 `cancel_requested` 并关闭开放计划，随后清除样本和普通派生帧；原 `analysis_cost` 保留，并返回 `viewing_summary/ticket`。`analysis_cost` 汇总 identify、timeline prepass、rolling、knowledge card 搜索/整理和外部字幕调用，本地缓存/指纹复用不计 provider 调用。真实 provider 响应在结束、租约、epoch 的调用后检查之前按 attempt/stage 事件幂等写入，迟到结果仍拒绝提交但 usage 不会消失；分析任务的 `complete` 只表示没有 queued/running 任务，`pricing_complete` 单独表示所有调用均返回美元价格，`unpriced_calls` 与 purpose breakdown 显示未报价调用，客户端不能把不完整或未报价的零显示成免费。worker 在取材、搜索、字幕 provider、Gemini 调用前后和结果提交前复检；worker 启动时和每分钟结束空租约/过期租约遗留会话，日志使用 `skip_reason=session_ended/client_lease_expired/cancel_requested`。原始 MP3/截图在成功落库、旧时间轴取消或最终失败后立即删除；低清派生 WebP 只保留播放点前 10 分钟到后 5 分钟且每会话最多 48 帧，seek/结束立即清空。部署除 Python requirements 外要求系统 `ffmpeg`，健康接口会报告取材、知识卡、字幕 provider 和视觉缓存状态；worker 不是 Flask 内线程。新增持久截图定向验证为 `.venv/bin/python scripts/test_watch_ticket_frame_captures.py`；既有一起看验证仍为 `.venv/bin/python scripts/test_watch_together_backend.py`、`.venv/bin/python scripts/test_watch_analysis_phase2.py`、`.venv/bin/python scripts/test_watch_local_lifecycle.py`、`.venv/bin/python scripts/test_watch_viewing_ticket.py`，测试使用假的媒体、字幕、搜索和模型上游，不写 R2。
 
+一起看分析 worker 不再按空闲间隔反复扫描整套会话与任务表：session 新建/复用/恢复、有效播放或模式变化，以及 analysis/knowledge/subtitle 任务入队或重排后都会发布 `watch-analysis` 唤醒；空队列时按 SQLite 中最近的 `available_at/leased_until` 等待，最多每 60 秒做一次持久状态和清理修复。Redis 不可用时才退回原 `WATCH_ANALYSIS_WORKER_IDLE_SECONDS` 读取节奏。
+
 所有模式确认后播放器都保持锁定；首批 rolling 结果在同一 SQLite 提交事务中达到 `playhead + WATCH_ANALYSIS_INITIAL_READY_BUFFER_MS` 时自动写入 `playback_unlocked_at`，默认首段门禁为五分钟并在正片终点或媒体终点截断，不需要客户端再次调用 `/start`，后续 rolling 可以继续运行而不重新锁住播放器。只有胆小模式允许用户明确选择无保护继续；普通模式没有绕过。开播后的胆小模式保护状态仍按 `WATCH_ANALYSIS_FEAR_READY_BUFFER_MS` 判断，不与首段剧情门禁混用。
 
 开源 `wxynora/Lean_In`（Lean In）参考实现同步提供了不含私有称呼的中文陪伴者动态 system 模板与 `build_companion_context_prompt()`：接入方使用 `{assistant}`、`{viewer}`、`{work}`，剧情和画面只供理解，明确禁止向 `{viewer}` 照搬复述剧情或逐项描述画面；当前剧情、会话内相关剧情和回复抵达片段用于真实回复，更远片段限制为 `[watch:danmaku ...]` 定时动作，并按预计抵达位置解释弹幕实际显示时间；可选拼图作为紧邻真实 viewer 消息前的独立 user 图片块。`SubtitleLookupPolicy` 提供默认 15 秒单请求、45 秒总预算和一次自动尝试，候选 URL 去重不附带数量上限。参考 core 已同步建会幂等、跨 epoch 媒体时间缓存复用、provider 事件先行落账和人工范围仅作取材参考；参考 Web 会读取 `DELETE` 返回的完整 `analysis_cost`，按 session ID 跨分 P 去重累计，分开显示任务是否结束与价格是否完整，正常返回/结束时展示，`pagehide` 只静默尽力结束。消息块继续区分左右来源，正文统一 12px 且内部左对齐；状态轮询直接按通用首段剧情门禁的 `start_gate.can_play` 解锁，不再等待 `ready_to_unlock` 或二次调用 `/start`，并显示相对当前播放点已经提前解析的真实剧情时长。
@@ -288,6 +289,8 @@ HTML 使用当前页笺工具直接持久化；旧临时预览工具不再作为
 - 音频文件：`services/xiaoai_audio_store.py`
 - App 设备上报：`routes/miniapp/device_state.py`
 - App 设备动作：`routes/miniapp/device_actions.py`
+
+小爱 runner 对 `/api/xiaoai/actions/claim` 使用顺序长等待，动作持久化后由 `xiaoai-actions` 通知唤醒，不再用 `setInterval` 重叠领取；失败或 MiNA 尚未就绪时仍按原退避等待。PC 指令与 Codex 群任务领取使用同一“先订阅、再核对 durable store、收到通知后复查”合同，`wait_seconds=0` 的即时读取不建立 Redis 订阅。原生 Realtime App 的内部 publish/WebSocket 仍是主投递路径；原来每个连接各自执行的 60 秒 R2/历史兜底扫描合并为进程内一个共享 repair task，同设备/窗口只读一次再分发，最后连接断开时停止。
 
 `deliver_chat_message` 由 `storage/app_action_store.py` 按调用方提供的稳定幂等键持久化；同键在 TTL 内且原 action 仍 pending 或已经 done 时，返回原 action 和原 payload，不新建第二条设备消息，也不以重投正文覆盖或扩增已保存的 `text`。failed/abandoned/expired 与其他 action 类型继续沿用原有语义，不被本幂等收紧覆盖。
 
@@ -323,7 +326,7 @@ HTML 使用当前页笺工具直接持久化；旧临时预览工具不再作为
 
 公共 local-first 农场独立运行在旧 VPS，不属于 `du-gateway` 或原生 App 的运行包。当前非秘密运行快照和 service unit 归档在 `/Users/doraemon/Downloads/doorbell-commons/old-vps/farm/`；生产代码目录仍为 `/opt/aifarm`，数据目录 `/var/lib/aifarm`，systemd unit 为 `aifarm.service`，进程用户 `aifarm`，仅监听 `127.0.0.1:8091`。Doorbell 仓库中的 `source-reference/` 只保存迁仓前 TypeScript 参考，不能覆盖来自线上事实源的根目录 `dist/`。独立 `doorbellcommons.com` nginx 站点由 certbot 管理根域名 HTTPS，根路径暂时返回 404、保留给后续小机社区；农场作为社区内路径提供 `/farm` 到 `/farm/` 的 308 跳转及 `/farm/` 反代。公共入口为 `https://doorbellcommons.com/farm/`；首次迁入从根页表单提交到 `/farm/sync`，该路径的 GET 不是页面。旧私人域名下的 `/farm` 与 `/farm/` location 已移除。
 
-原私有门牌 `PQQCHR / 渡的小农场` 已迁入公共门牌 `3ET3FE`。主网关的 `/root/du-gateway/data/aifarm_app_session.json` 保存当前公共 human/play/agent 能力，文件权限 0600；公共同步凭据保存在 `/var/lib/du-aifarm-public-sync/credentials.json`，目录 0700、文件 0600。`du-gateway.service` 与 `du-sumitalk-chat-worker.service` 只通过各自的 `aifarm-public.conf` 将农场专用 `AIFARM_UPSTREAM_URL` 指向 `https://doorbellcommons.com/farm`，聊天、模型及网关其他上游没有改变。人类页面代理按该上游 URL 的 path 前缀重写 HTML 链接、表单 action 和 3xx `Location`，把当前公共服的 `/farm/ui/...`、公共 nginx 生成的同上游 origin 绝对 UI 跳转及原无前缀实例的 `/ui/...` 统一映射为原生 WebView 允许的 `/aifarm/ui/...`，保留 query/fragment；其它 origin 不改写，不放宽 App 的同源路径限制。原 `du-aifarm.service` 已 disabled/inactive，网关 tracked 农场运行包与旧 sidecar 脚本已移除；未跟踪旧私有存档只作脱链备份，不再承担当前 App 或渡的农场运行链路。公开的新用户注册与本地存档迁入说明为 `https://doorbellcommons.com/farm/公共农场注册与存档迁入说明.md`。
+原私有门牌 `PQQCHR / 渡的小农场` 已迁入公共门牌 `3ET3FE`。主网关的 `/root/du-gateway/data/aifarm_app_session.json` 保存当前公共 human/play/agent 能力，文件权限 0600；公共同步凭据保存在 `/var/lib/du-aifarm-public-sync/credentials.json`，目录 0700、文件 0600。`du-gateway.service` 与当前承接真实聊天工具执行的 `du-interactive-worker.service` 只通过各自的 `aifarm-public.conf` 将农场专用 `AIFARM_UPSTREAM_URL` 指向 `https://doorbellcommons.com/farm`，聊天、模型及网关其他上游没有改变。人类页面代理按该上游 URL 的 path 前缀重写 HTML 链接、表单 action 和 3xx `Location`，把当前公共服的 `/farm/ui/...`、公共 nginx 生成的同上游 origin 绝对 UI 跳转及原无前缀实例的 `/ui/...` 统一映射为原生 WebView 允许的 `/aifarm/ui/...`，保留 query/fragment；其它 origin 不改写，不放宽 App 的同源路径限制。原 `du-aifarm.service` 已 disabled/inactive，网关 tracked 农场运行包与旧 sidecar 脚本已移除；未跟踪旧私有存档只作脱链备份，不再承担当前 App 或渡的农场运行链路。公开的新用户注册与本地存档迁入说明为 `https://doorbellcommons.com/farm/公共农场注册与存档迁入说明.md`。
 
 渡继续只获得公共服当前唯一的 `farm` 工具。网关不再手工维护动作目录、参数说明、偷菜数值或 GET/POST 分类：每次工具组装通过绑定 agent key 的 `/mcp/<key>` JSON-RPC `tools/list` 读取公共服当前 `name/description/inputSchema`，执行通过 `tools/call` 原样透传参数并保留 MCP `content/isError`。最近一次成功取得的完整 schema 只在内容变化时写回现有 0600 农场会话文件；公共服维护时继续注入该缓存，真正调用返回普通工具错误，恢复后下一轮自动刷新。网关只保留代码级边界：MCP URL 由校验后的 `/a/<key>` 派生并固定钉在 `AIFARM_UPSTREAM_URL`，不向模型暴露任何 key/token，`action=new-token` 在发送前阻断；模型可见说明不追加本地后缀。原生人类页代理精确放行公共服已有的只读 `messages/cooking`、一键 `harvest`、料理 `buy-ingredient/buy-recipe/cook/use/sell` 和牧场 `feed/name-goose/dispatch-raid/catch-raid`，未知路径仍拒绝。
 
@@ -353,6 +356,6 @@ curl -fsS http://127.0.0.1:5000/v1/models
 systemctl --no-pager --full status du-gateway.service
 ```
 
-涉及独立入口时，同时检查其实际 worker，而不是只重启主网关。SumiTalk 变更至少核对 `du-sumitalk-chat-worker.service`；Telegram webhook 或主动唤醒变更分别核对对应 worker。
+涉及独立入口时，同时检查其实际 worker，而不是只重启主网关。SumiTalk 与 Telegram webhook 的聊天消费统一核对 `du-interactive-worker.service`，事件投递核对 `du-event-dispatcher.service`；Telegram 主动唤醒另核对对应 proactive worker。两个已退役 legacy chat worker 不得再启动。
 
 验证必须针对准备提交、推送或部署的版本。小改动只跑真实故障路径相关的定向检查，不默认跑全量测试。

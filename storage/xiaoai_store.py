@@ -11,6 +11,7 @@ from uuid import uuid4
 from config import DATA_DIR
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
+from runtime.wakeup_bus import publish_runtime_wakeup
 
 logger = get_logger(__name__)
 
@@ -307,6 +308,7 @@ def enqueue_xiaoai_action(
         actions = [item] + [x for x in (state.get("actions") or []) if isinstance(x, dict)]
         state["actions"] = _trim_actions(actions)
         _write_state(state)
+    publish_runtime_wakeup("xiaoai-actions", {"action_id": item["id"]})
     return dict(item)
 
 

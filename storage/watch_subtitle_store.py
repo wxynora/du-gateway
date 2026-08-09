@@ -248,7 +248,13 @@ def ensure_lookup_job(session: dict, *, force: bool = False) -> tuple[dict, bool
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return watch_analysis_store.get_job(job_id, public=True) or {}, True
+    created_job = watch_analysis_store.get_job(job_id, public=True) or {}
+    watch_analysis_store.notify_watch_analysis_worker(
+        "job_enqueued",
+        job_id=job_id,
+        session_id=session_id,
+    )
+    return created_job, True
 
 
 def commit_lookup_result(job: dict, result: dict) -> dict:
@@ -435,6 +441,11 @@ def fail_lookup_job(job: dict, error: str, *, retryable: bool) -> str:
                     (now_iso, _text(error, 1000), now_iso, job_id),
                 )
                 conn.execute("COMMIT")
+                watch_analysis_store.notify_watch_analysis_worker(
+                    "job_requeued",
+                    job_id=job_id,
+                    session_id=session_id,
+                )
                 return "queued"
             session_row = conn.execute(
                 "SELECT subtitle_lookup_json, knowledge_card_status, preparation_status FROM watch_sessions WHERE id = ?",

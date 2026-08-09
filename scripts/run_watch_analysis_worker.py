@@ -32,6 +32,7 @@ from config import (  # noqa: E402
     WATCH_ANALYSIS_WORKER_IDLE_SECONDS,
     WATCH_KNOWLEDGE_ENABLED,
 )
+from runtime.wakeup_bus import RuntimeWakeSubscriber  # noqa: E402
 from services.watch_analysis import (  # noqa: E402
     WatchAnalysisProviderError,
     analyze_watch_samples,
@@ -652,45 +653,52 @@ def run_worker_loop() -> None:
             abandoned,
         )
     logger.info(
-        "一起看分析 worker 已启动 idle=%.1f stale_after=%s source=%s stats=%s",
+        "一起看分析 worker 已启动 redis_wakeup=watch-analysis fallback_idle=%.1f stale_after=%s source=%s stats=%s",
         idle,
         WATCH_ANALYSIS_JOB_STALE_SECONDS,
         watch_analysis_source_health(),
         watch_analysis_store.queue_stats(),
     )
     last_cleanup = 0.0
-    while True:
-        now = time.monotonic()
-        if now - last_cleanup >= 60:
-            cleanup = watch_analysis_store.cleanup_expired_samples()
-            if cleanup.get("samples_deleted"):
-                logger.info("清理一起看过期样本 stats=%s", cleanup)
-            visual_cleanup = watch_visual_store.cleanup_expired_frames()
-            if visual_cleanup.get("rows_deleted"):
-                logger.info("清理一起看过期派生帧 stats=%s", visual_cleanup)
-            subtitle_deleted = watch_subtitle_store.cleanup_expired_assets()
-            if subtitle_deleted:
-                logger.info("清理一起看过期字幕资产 count=%s", subtitle_deleted)
-            abandoned = cleanup_abandoned_sessions()
-            if abandoned.get("sessions_ended"):
-                logger.info(
-                    "结束一起看失联会话 skip_reason=client_lease_expired stats=%s",
-                    abandoned,
-                )
-            watch_runtime_store.cleanup_expired_sessions()
-            last_cleanup = now
-        knowledge_scheduled = schedule_knowledge_jobs()
-        if knowledge_scheduled.get("jobs_created"):
-            logger.info("一起看知识卡任务已入队 stats=%s", knowledge_scheduled)
-        subtitle_scheduled = schedule_subtitle_jobs()
-        if subtitle_scheduled.get("jobs_created"):
-            logger.info("一起看字幕准备任务已入队 stats=%s", subtitle_scheduled)
-        scheduled = schedule_source_jobs()
-        if scheduled.get("jobs_created"):
-            logger.info("一起看后端取材任务已入队 stats=%s", scheduled)
-        outcome = process_next_job()
-        if outcome is None:
-            time.sleep(idle)
+    with RuntimeWakeSubscriber(watch_analysis_store.WATCH_ANALYSIS_WAKEUP_TOPIC) as subscriber:
+        while True:
+            now = time.monotonic()
+            if now - last_cleanup >= 60:
+                cleanup = watch_analysis_store.cleanup_expired_samples()
+                if cleanup.get("samples_deleted"):
+                    logger.info("清理一起看过期样本 stats=%s", cleanup)
+                visual_cleanup = watch_visual_store.cleanup_expired_frames()
+                if visual_cleanup.get("rows_deleted"):
+                    logger.info("清理一起看过期派生帧 stats=%s", visual_cleanup)
+                subtitle_deleted = watch_subtitle_store.cleanup_expired_assets()
+                if subtitle_deleted:
+                    logger.info("清理一起看过期字幕资产 count=%s", subtitle_deleted)
+                abandoned = cleanup_abandoned_sessions()
+                if abandoned.get("sessions_ended"):
+                    logger.info(
+                        "结束一起看失联会话 skip_reason=client_lease_expired stats=%s",
+                        abandoned,
+                    )
+                watch_runtime_store.cleanup_expired_sessions()
+                last_cleanup = now
+            knowledge_scheduled = schedule_knowledge_jobs()
+            if knowledge_scheduled.get("jobs_created"):
+                logger.info("一起看知识卡任务已入队 stats=%s", knowledge_scheduled)
+            subtitle_scheduled = schedule_subtitle_jobs()
+            if subtitle_scheduled.get("jobs_created"):
+                logger.info("一起看字幕准备任务已入队 stats=%s", subtitle_scheduled)
+            scheduled = schedule_source_jobs()
+            if scheduled.get("jobs_created"):
+                logger.info("一起看后端取材任务已入队 stats=%s", scheduled)
+            outcome = process_next_job()
+            if outcome is not None:
+                continue
+            if not subscriber.available:
+                subscriber.wait(idle)
+                continue
+            next_due = watch_analysis_store.seconds_until_next_claimable_job()
+            wait_seconds = 60.0 if next_due is None else min(60.0, max(idle, next_due))
+            subscriber.wait(wait_seconds)
 
 
 if __name__ == "__main__":

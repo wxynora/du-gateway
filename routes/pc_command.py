@@ -4,6 +4,7 @@ import time
 from flask import Blueprint, jsonify, request
 
 from config import PC_COMMAND_TOKEN
+from runtime.wakeup_bus import RuntimeWakeSubscriber
 from storage import r2_store
 from storage.sense_store import mark_screen_awake_from_pc_activity
 from services import codex_group_chat
@@ -111,7 +112,21 @@ def list_pc_commands():
     token_err = _require_pc_token()
     if token_err:
         return token_err
-    queue = r2_store.get_pc_command_queue()
+    wait_seconds = _bounded_float(request.args.get("wait_seconds"), 0.0, 0.0, 25.0)
+    if wait_seconds <= 0:
+        return jsonify(r2_store.get_pc_command_queue())
+
+    deadline = time.monotonic() + wait_seconds
+    with RuntimeWakeSubscriber(
+        "pc-commands",
+        socket_timeout_seconds=max(2.0, wait_seconds + 1.0),
+    ) as subscriber:
+        while True:
+            queue = r2_store.get_pc_command_queue()
+            remaining = deadline - time.monotonic()
+            if queue.get("pending") or remaining <= 0:
+                break
+            subscriber.wait(remaining)
     return jsonify(queue)
 
 
@@ -175,16 +190,32 @@ def claim_codex_group_chat_task():
     if wait_raw is None:
         wait_raw = os.environ.get("CODEX_GROUP_CHAT_SERVER_CLAIM_WAIT_SECONDS", "0")
     wait_seconds = _bounded_float(wait_raw, 0.0, 0.0, 25.0)
-    poll_seconds = _bounded_float(os.environ.get("CODEX_GROUP_CHAT_SERVER_CLAIM_POLL_SECONDS"), 0.75, 0.2, 2.0)
+    if wait_seconds <= 0:
+        task = codex_group_chat.claim_next(
+            worker_id=worker_id,
+            worker_meta=worker_meta,
+            record_worker=True,
+        )
+        return jsonify({"ok": True, "task": task})
+
     deadline = time.monotonic() + wait_seconds
     record_worker = True
     task = None
-    while True:
-        task = codex_group_chat.claim_next(worker_id=worker_id, worker_meta=worker_meta, record_worker=record_worker)
-        if task or wait_seconds <= 0 or time.monotonic() >= deadline:
-            break
-        record_worker = False
-        time.sleep(min(poll_seconds, max(0.0, deadline - time.monotonic())))
+    with RuntimeWakeSubscriber(
+        "codex-group-tasks",
+        socket_timeout_seconds=max(2.0, wait_seconds + 1.0),
+    ) as subscriber:
+        while True:
+            task = codex_group_chat.claim_next(
+                worker_id=worker_id,
+                worker_meta=worker_meta,
+                record_worker=record_worker,
+            )
+            remaining = deadline - time.monotonic()
+            if task or remaining <= 0:
+                break
+            record_worker = False
+            subscriber.wait(remaining)
     return jsonify({"ok": True, "task": task})
 
 

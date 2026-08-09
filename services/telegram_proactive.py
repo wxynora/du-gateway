@@ -64,6 +64,7 @@ from services.proactive_prompt_templates import (
 )
 from services.qq_group_delivery import qq_group_delivery_target, split_qq_group_delivery_marker
 from services.reply_channel_context import resolve_recent_reply_context
+from runtime.wakeup_bus import RuntimeWakeSubscriber
 
 logger = get_logger(__name__)
 _GATEWAY_DYNAMIC_SYSTEM_MARKER = "__dynamic__"
@@ -3093,12 +3094,19 @@ def _run_due_state(kind: str, uid: int, source_id: str, schedule_interval_s: int
     logger.info("%s tick result=%s next_due_at=%s state_status=%s", label, result, next_due_at, status)
 
 
-def _sleep_for_state_index(active_kinds: list[str], source_id: str) -> None:
+def _sleep_for_state_index(
+    active_kinds: list[str],
+    source_id: str,
+    subscriber: RuntimeWakeSubscriber,
+) -> None:
     wait = wakeup_state.seconds_until_next(kinds=active_kinds, source_id=source_id)
     if wait is None:
-        time.sleep(15)
+        subscriber.wait(60.0)
         return
-    time.sleep(max(1.0, min(15.0, wait)))
+    if wait <= 0:
+        return
+    # 精确睡到最近到期时间；60 秒仅用于 Redis 通知丢失时的持久状态修复扫描。
+    subscriber.wait(min(60.0, wait))
 
 
 def _state_due_now(kind: str, source_id: str) -> bool:
@@ -3152,15 +3160,16 @@ def run_scheduler_loop():
         proactive_enabled=proactive_enabled,
         schedule_interval_s=schedule_interval_s,
     )
-    while True:
-        due = wakeup_state.list_due_states(kinds=active_kinds, source_id=source_id, limit=10)
-        if not due:
-            _sleep_for_state_index(active_kinds, source_id)
-            continue
-        for row in due:
-            kind = str(row.get("kind") or "").strip()
-            if kind not in active_kinds:
+    with RuntimeWakeSubscriber(wakeup_state.WAKEUP_TOPIC) as subscriber:
+        while True:
+            due = wakeup_state.list_due_states(kinds=active_kinds, source_id=source_id, limit=10)
+            if not due:
+                _sleep_for_state_index(active_kinds, source_id, subscriber)
                 continue
-            if not _state_due_now(kind, source_id):
-                continue
-            _run_due_state(kind, uid, source_id, schedule_interval_s)
+            for row in due:
+                kind = str(row.get("kind") or "").strip()
+                if kind not in active_kinds:
+                    continue
+                if not _state_due_now(kind, source_id):
+                    continue
+                _run_due_state(kind, uid, source_id, schedule_interval_s)

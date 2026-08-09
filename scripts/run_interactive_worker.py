@@ -15,7 +15,6 @@ from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env", override=False)
 
-from config import EVENT_RUNTIME_ENABLED  # noqa: E402
 from runtime.consumers import run_interactive_worker  # noqa: E402
 from runtime.process_guard import RuntimeProcessGuard  # noqa: E402
 from utils.log import get_logger, setup_logging  # noqa: E402
@@ -27,8 +26,6 @@ from app import app as flask_app  # noqa: E402
 
 
 def main() -> None:
-    if not EVENT_RUNTIME_ENABLED:
-        raise RuntimeError("interactive worker requires EVENT_RUNTIME_ENABLED=1")
     stop_event = threading.Event()
 
     def _stop(signum, _frame) -> None:

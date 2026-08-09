@@ -46,5 +46,5 @@ def telegram_webhook():
 
 """
 注意：不要在 Blueprint 上使用 before_app_first_request（不同 Flask 版本可能不存在）。
-Webhook 只负责快速落持久队列；Telegram 运行时由 scripts/run_telegram_webhook_worker.py 常驻进程持有。
+Webhook 只负责快速落持久队列；Telegram 运行时由 scripts/run_interactive_worker.py 常驻进程持有。
 """

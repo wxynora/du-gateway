@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from config import EVENT_RUNTIME_ENABLED, TELEGRAM_WEBHOOK_QUEUE_DB
+from config import TELEGRAM_WEBHOOK_QUEUE_DB
 from runtime.events import EventEnvelope, TELEGRAM_WEBHOOK_JOB_CREATED
 from runtime.outbox import ensure_outbox_schema, insert_outbox_event, notify_outbox_dispatcher
 from utils.log import get_logger
@@ -149,20 +149,15 @@ def enqueue_update(update: dict, bot_kind: str) -> EnqueueResult:
     update_key = make_update_key(clean_update, kind)
     now = time.time()
     payload = json.dumps(clean_update, ensure_ascii=False, separators=(",", ":"))
-    event = (
-        EventEnvelope.create(
-            TELEGRAM_WEBHOOK_JOB_CREATED,
-            job_id=update_key,
-            partition_key=telegram_update_partition_key(clean_update, kind),
-            payload={"bot_kind": kind, "update_key": update_key},
-        )
-        if EVENT_RUNTIME_ENABLED
-        else None
+    event = EventEnvelope.create(
+        TELEGRAM_WEBHOOK_JOB_CREATED,
+        job_id=update_key,
+        partition_key=telegram_update_partition_key(clean_update, kind),
+        payload={"bot_kind": kind, "update_key": update_key},
     )
     result: EnqueueResult
     with _connect() as conn:
-        if event is not None:
-            ensure_outbox_schema(conn)
+        ensure_outbox_schema(conn)
         conn.execute("BEGIN IMMEDIATE")
         try:
             inserted = True
@@ -178,7 +173,7 @@ def enqueue_update(update: dict, bot_kind: str) -> EnqueueResult:
                 )
             except sqlite3.IntegrityError:
                 inserted = False
-            if inserted and event is not None:
+            if inserted:
                 insert_outbox_event(conn, event, aggregate_type="telegram_webhook_update")
             conn.execute("COMMIT")
             result = EnqueueResult(
@@ -189,7 +184,7 @@ def enqueue_update(update: dict, bot_kind: str) -> EnqueueResult:
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    if result.enqueued and event is not None:
+    if result.enqueued:
         notify_outbox_dispatcher("telegram")
     return result
 

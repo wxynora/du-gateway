@@ -634,7 +634,6 @@ WENYOU_SQLITE_DB = (
 if not WENYOU_SQLITE_DB.is_absolute():
     WENYOU_SQLITE_DB = BASE_DIR / WENYOU_SQLITE_DB
 WENYOU_R2_BACKUP_ENABLED = os.environ.get("WENYOU_R2_BACKUP_ENABLED", "").strip().lower() in ("1", "true", "yes")
-TELEGRAM_WEBHOOK_WORKER_IDLE_SECONDS = float(os.environ.get("TELEGRAM_WEBHOOK_WORKER_IDLE_SECONDS", "0.5") or "0.5")
 TELEGRAM_WEBHOOK_QUEUE_STALE_SECONDS = float(os.environ.get("TELEGRAM_WEBHOOK_QUEUE_STALE_SECONDS", "300") or "300")
 TELEGRAM_WEBHOOK_QUEUE_MAX_ATTEMPTS = int(float(os.environ.get("TELEGRAM_WEBHOOK_QUEUE_MAX_ATTEMPTS", "8") or "8"))
 # SumiTalk 聊天持久队列：MiniApp 请求只入队，独立 worker 消费，避免 gunicorn 回收/超时杀掉长回复任务
@@ -646,12 +645,9 @@ SUMITALK_CHAT_QUEUE_DB = (
 )
 if not SUMITALK_CHAT_QUEUE_DB.is_absolute():
     SUMITALK_CHAT_QUEUE_DB = BASE_DIR / SUMITALK_CHAT_QUEUE_DB
-SUMITALK_CHAT_WORKER_IDLE_SECONDS = float(os.environ.get("SUMITALK_CHAT_WORKER_IDLE_SECONDS", "0.5") or "0.5")
 SUMITALK_CHAT_QUEUE_STALE_SECONDS = float(os.environ.get("SUMITALK_CHAT_QUEUE_STALE_SECONDS", str(max(120, STREAM_TIMEOUT_SECONDS + 180))) or str(max(120, STREAM_TIMEOUT_SECONDS + 180)))
 # 原生 Android 任务走真实 SSE；旧 MiniApp job 继续沿用非流式响应。
 SUMITALK_CHAT_NATIVE_STREAM_ENABLED = os.environ.get("SUMITALK_CHAT_NATIVE_STREAM_ENABLED", "1").strip().lower() in ("1", "true", "yes")
-# SumiTalk / Telegram Webhook 事件运行时。关闭时完全保留旧 SQLite polling worker。
-EVENT_RUNTIME_ENABLED = os.environ.get("EVENT_RUNTIME_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0").strip()
 EVENT_STREAM_INTERACTIVE = os.environ.get("EVENT_STREAM_INTERACTIVE", "du:interactive").strip() or "du:interactive"
 EVENT_CONSUMER_GROUP_INTERACTIVE = (
