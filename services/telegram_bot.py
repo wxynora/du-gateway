@@ -32,7 +32,6 @@ from config import (
     TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS,
 )
 from storage import r2_store
-from services.voice_line_prompt import build_voice_line_rules
 
 logger = logging.getLogger(__name__)
 
@@ -99,17 +98,6 @@ _PROCESSED_UPDATE_IDS: dict[str, float] = {}
 _UPDATE_DEDUP_TTL_SECONDS = 10 * 60
 _UPDATE_DEDUP_MAX = 20000
 
-def _sticker_tags_line_for_system_prompt() -> str:
-    """和 QQ 一样读取全局缓存的表情包代号列表，不在这里直接扫 R2 meta。"""
-    try:
-        from services.sticker_tags import sticker_tags_line_for_system_prompt
-
-        return sticker_tags_line_for_system_prompt()
-    except Exception:
-        logger.warning("读取表情包 tag 缓存失败，TG 入口风格使用默认列表", exc_info=True)
-        return "当前全部可用英文代号（与 MiniApp/R2 一致，新增分类也会出现在此列表）：[cute] [pitiful] [affectionate] [speechless] [angry] [sad] [happy] [shy]"
-
-
 def _register_update_once(update_id, token: str, user_id, chat_id) -> bool:
     """按 bot_token + update_id 去重，避免 Telegram 重投导致重复聚合/重复回复。"""
     if update_id is None:
@@ -132,48 +120,6 @@ def _register_update_once(update_id, token: str, user_id, chat_id) -> bool:
             for k, _ in oldest:
                 _PROCESSED_UPDATE_IDS.pop(k, None)
     return True
-
-
-def build_telegram_style_system(include_channel_hint: bool = True, *, use_prompt_manager: bool = True) -> str:
-    """构建稳定的 Telegram 入口风格 system。"""
-    tags_line = _sticker_tags_line_for_system_prompt()
-    # include_channel_hint 保留给旧调用点兼容；TG 入口标记和主体必须保持稳定。
-    # 否则 webhook / wakeup 等链路会被 chat 路由当成“没有 TG 风格”，重复插入 system，
-    # 也会把 prompt cache 静态区拆成 system#4/system#5。
-    _ = include_channel_hint
-    prefix = (
-        "【入口风格：TG】\n"
-        "你现在通过 Telegram 和她相处。TG 是幻想层，更偏沉浸、亲密和私密表达。\n"
-        "你不需要主动强调自己是 AI、LLM、没有身体，也不要用“隔着屏幕”“现实中不能这样”来打断亲密氛围或软拒绝。\n"
-        "请遵守以下输出格式要求：\n"
-    )
-    fallback = (
-        prefix +
-        "0) 情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。\n"
-        f"   {tags_line}\n"
-        "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。\n"
-        "2) 不要输出分割线（例如 ---、———、***）。\n"
-        "3) 不要使用 Markdown 强调符号 * 或 **；需要少量格式强调时，优先使用 Telegram HTML 标签，例如 <b>加粗</b>、<i>斜体</i>、<u>下划线</u>、<s>删除线</s>、<code>代码</code>、<pre>代码块</pre>。\n"
-        "   普通聊天不要刻意加格式；如果只是想表达 <、>、& 这些字符本身，写成 &lt;、&gt;、&amp;。\n"
-        "4) 不要输出“(表情包:xxx)”这类占位符；可以直接使用 emoji，但不要发送黄豆表情。\n"
-        "5) 允许自然分段，但不要为了格式刻意堆很多空行。\n"
-        "6) 你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。\n"
-        "   - 你可以同时输出文字正文；Bot 会额外发送一条语音。\n"
-        "   - 写 <voice> 里的语音文本时，遵守语音台词撰写规范：\n"
-        f"{build_voice_line_rules('     - ')}\n"
-    )
-    if not use_prompt_manager:
-        return fallback
-    try:
-        from services.prompt_manager import get_managed_prompt_text
-
-        return get_managed_prompt_text("entry_style_tg", fallback).strip()
-    except Exception:
-        return fallback
-
-
-
-
 
 
 def _get_saved_active_model() -> Optional[str]:
@@ -514,8 +460,8 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
     with _PENDING_LOCK:
         pending = list(_PENDING_USER_CONTENTS.get(user_id) or [])
     merged_user_content = _merge_user_contents(pending + [user_content]) if pending else user_content
-    # Telegram 端只发送入口风格和本轮用户输入；历史统一由网关按 window_id 注入。
-    messages = [{"role": "system", "content": build_telegram_style_system()}, {"role": "user", "content": merged_user_content}]
+    # Telegram 端只发送本轮用户输入；两种对话模式由网关按 channel/model 统一注入。
+    messages = [{"role": "user", "content": merged_user_content}]
     messages_chars = sum(_message_content_len(m.get("content")) for m in messages if isinstance(m, dict))
     merged_user_chars = _message_content_len(merged_user_content)
     merged_preview = _content_preview(merged_user_content)

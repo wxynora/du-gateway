@@ -14,6 +14,8 @@ def _request_body_chars(body: dict) -> int:
 
 def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
     stripped = content.lstrip()
+    if msg.get("__voice_rules__"):
+        return "语音规范"
     if msg.get("__static_cache_anchor__"):
         return "固定静态区"
     if msg.get("__frozen_tool_summary__") or stripped.startswith("〖已归档工具摘要〗"):
@@ -33,14 +35,6 @@ def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
         return "近期记忆"
     if msg.get("__thinking_rules__") or stripped.startswith("### Thinking 规范"):
         return "thinking规则"
-    if stripped.startswith("【入口风格：QQ】"):
-        return "QQ入口风格"
-    if stripped.startswith("【入口风格：微信】"):
-        return "微信入口风格"
-    if stripped.startswith("【入口风格：SumiTalk】"):
-        return "SumiTalk入口风格"
-    if stripped.startswith("【入口风格：TG】"):
-        return "TG入口风格"
     if stripped.startswith("### thinking block 约束"):
         return "thinking规则"
     if stripped.startswith("### 核心行为与前置判断规则"):
@@ -83,10 +77,6 @@ def _static_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
     if not content:
         return []
     marker_labels = [
-        ("【入口风格：QQ】", "QQ入口风格"),
-        ("【入口风格：TG】", "TG入口风格"),
-        ("【入口风格：微信】", "微信入口风格"),
-        ("【入口风格：SumiTalk】", "SumiTalk入口风格"),
         ("【入口风格：小爱音箱】", "小爱音箱入口风格"),
         ("【核心XP与互动逻辑】", "NSFW规则"),
         ("【你的拟态心跳", "拟态心跳规则"),

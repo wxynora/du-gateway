@@ -91,8 +91,8 @@ def save_stickers_meta(payload: dict) -> bool:
                 from services.sticker_tags import cache_sticker_tag_keys_from_meta
 
                 cache_sticker_tag_keys_from_meta(saved)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("sticker tag shared cache update failed error=%s", exc, exc_info=True)
             return True
         except Exception as exc:
             logger.error("save_stickers_meta failed error=%s", exc, exc_info=True)

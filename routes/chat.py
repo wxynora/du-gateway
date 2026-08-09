@@ -51,6 +51,7 @@ from pipeline.pipeline import (
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
     step_inject_tool_result_cache,
+    step_inject_voice_rules,
     step_inject_sumitalk_real_mode,
     step_inject_play_note,
     step_inject_sense_snapshot,
@@ -2858,6 +2859,7 @@ def chat_completions():
         is_miniapp=_is_miniapp_request(),
         speaker=_xiaoai_speaker_from_request(),
     )
+    body = step_inject_voice_rules(body, reply_channel=prompt_reply_channel)
     body = _inject_million_plan_player_prompt_if_enabled(body)
     body = _inject_codex_oauth_prompt_system(body, upstream_url=_get_active_upstream_url())
     body = _inject_channel_nsfw_system(body, reply_channel=prompt_reply_channel)
@@ -2901,6 +2903,12 @@ def chat_completions():
         body,
         enabled=sumitalk_real_mode,
         app_request=sumitalk_prompt_assembly,
+        reply_channel=prompt_reply_channel,
+        model=req_model,
+        anthropic_messages=(
+            _is_local_claude_oauth_proxy_url(active_upstream_url)
+            or _should_use_anthropic_format(active_upstream_url)
+        ),
         wakeup_kind=_wakeup_kind_for_archive(),
     )
     body = step_inject_play_note(body)
@@ -2939,7 +2947,14 @@ def chat_completions():
         or _should_use_anthropic_format(active_upstream_url)
     ) and not _skip_claude_thinking_carryover_request():
         body = _inject_previous_claude_thinking_blocks(body, window_id)
-    body = step_inject_thinking_block_rules(body)
+    body = step_inject_thinking_block_rules(
+        body,
+        model=req_model,
+        anthropic_messages=(
+            _is_local_claude_oauth_proxy_url(active_upstream_url)
+            or _should_use_anthropic_format(active_upstream_url)
+        ),
+    )
     body = step_inject_custom_static_systems(body)
     body = _inject_world_layer_prompt_system(body)
     body = step_inject_tool_result_cache(body, window_id)
@@ -2973,8 +2988,13 @@ def chat_completions():
             msg.pop("__hot_tool_result__", None)
             msg.pop("__entry_style__", None)
             msg.pop("__sumitalk_real_mode__", None)
+            msg.pop("__voice_rules__", None)
+            msg.pop("__mid_conversation_system__", None)
             msg.pop("__play_note__", None)
-    if not _should_use_anthropic_format(active_upstream_url):
+    if not (
+        _is_local_claude_oauth_proxy_url(active_upstream_url)
+        or _should_use_anthropic_format(active_upstream_url)
+    ):
         body.pop("__prompt_cache_layout__", None)
     if body.get("stream"):
         if is_sumitalk_request:

@@ -20,7 +20,6 @@ from config import (
 )
 from services.telegram_bot import (
     _sanitize_reply_for_telegram,
-    build_telegram_style_system,
     send_rich_message,
     send_message_segmented,
 )
@@ -646,8 +645,6 @@ def _call_gateway_followup(
         "stream": False,
         "messages": [],
     }
-    if channel == "tg":
-        body["messages"].append({"role": "system", "content": build_telegram_style_system(include_channel_hint=False)})
     body["messages"].append(
         {
             "role": "user",
@@ -913,8 +910,6 @@ def _send_wakeup_event(
     if tools:
         body["tools"] = list(tools)
         body["tool_choice"] = "auto"
-    if generation_channel == "tg":
-        body["messages"].insert(0, {"role": "system", "content": build_telegram_style_system(include_channel_hint=False)})
     if system_event and not image:
         system_msg = {"role": "system", "content": message_content}
         if dynamic_system_event:

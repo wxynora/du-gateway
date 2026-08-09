@@ -31,6 +31,8 @@ _HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__"
 _THINKING_RULES_SYSTEM_MARKER = "__thinking_rules__"
 _ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
+_VOICE_RULES_SYSTEM_MARKER = "__voice_rules__"
+_MID_CONVERSATION_SYSTEM_MARKER = "__mid_conversation_system__"
 _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 
 
@@ -291,6 +293,8 @@ def _strip_gateway_cache_markers(messages: list[dict]) -> None:
         msg.pop(_HOT_TOOL_RESULT_SYSTEM_MARKER, None)
         msg.pop(_ENTRY_STYLE_SYSTEM_MARKER, None)
         msg.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
+        msg.pop(_VOICE_RULES_SYSTEM_MARKER, None)
+        msg.pop(_MID_CONVERSATION_SYSTEM_MARKER, None)
         msg.pop(_PLAY_NOTE_SYSTEM_MARKER, None)
 
 
@@ -391,10 +395,6 @@ def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str
                 static_mark_idx = _last_text_block_index(stable_blocks)
             _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
             tool_cache_mark_idx = _last_text_block_index(stable_blocks)
-            continue
-        if msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER):
-            _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
-            final_context_mark_idx = _last_text_block_index(stable_blocks)
             continue
         if msg.get(_PLAY_NOTE_SYSTEM_MARKER):
             _append_text_blocks_without_cache(stable_blocks, msg.get("content"))

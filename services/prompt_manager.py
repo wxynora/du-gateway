@@ -45,23 +45,19 @@ PROMPT_SECTIONS: tuple[PromptSectionDef, ...] = (
     ),
     PromptSectionDef("core_prompt", "核心 Prompt", "渡的基础人格、关系定位和长期稳定规则。", 180_000),
     PromptSectionDef("common_knowledge", "常识块", "长期稳定常识，独立注入在核心 Prompt 后面。", 80_000),
-    PromptSectionDef("thinking_rules", "Thinking 规范", "控制思维链/脑内 OS 的写法边界。", 30_000),
     PromptSectionDef("core_behavior_rules", "核心行为规则", "互动原则、主动触发和感知数据使用规则。", 80_000),
     PromptSectionDef("non_retreat_rules", "不退缩原则", "不满、争执和哄回来的固定规则。", 40_000),
-    PromptSectionDef("entry_style_sumitalk", "入口风格：SumiTalk", "SumiTalk 入口的输出格式和物理边界。", 40_000),
     PromptSectionDef(
-        "sumitalk_real_mode_prompt",
-        "SumiTalk Real 模式",
-        "SumiTalk 进入具象 Real 模式时注入的固定静态提示词。",
+        "conversation_reality_mode_prompt",
+        "现实模式",
+        "QQ、TG 与 SumiTalk 线下模式共用；{channel} 和 {sticker_tags} 在注入时替换。",
     ),
     PromptSectionDef(
-        "sumitalk_app_mode_prompt",
-        "SumiTalk 普通模式",
-        "SumiTalk 普通 App 对话模式注入的固定静态提示词。",
+        "conversation_real_mode_prompt",
+        "Real 模式",
+        "SumiTalk 赛博小家模式使用的对话提示词。",
     ),
-    PromptSectionDef("entry_style_qq", "入口风格：QQ", "QQ 入口的输出格式和表情标签规则。", 40_000),
-    PromptSectionDef("entry_style_tg", "入口风格：TG", "Telegram 入口的输出格式规则。", 40_000),
-    PromptSectionDef("entry_style_wechat", "入口风格：微信", "微信入口的输出格式规则。", 30_000),
+    PromptSectionDef("thinking_rules", "Thinking 规范", "控制思维链/脑内 OS 的写法边界。", 30_000),
     PromptSectionDef("entry_style_xiaoai", "入口风格：小爱音箱", "小爱音箱语音播报入口规则。", 30_000),
     PromptSectionDef("voice_line_rules", "语音台词规范", "生成 <voice> 台词时使用的口语规则。", 30_000),
     PromptSectionDef(
@@ -146,14 +142,6 @@ def _default_entry_style(section_id: str) -> str:
     try:
         import services.entry_style_prompt as entry_mod
 
-        if section_id == "entry_style_sumitalk":
-            return entry_mod.build_sumitalk_style_system(use_prompt_manager=False).strip()
-        if section_id == "entry_style_qq":
-            return entry_mod.build_qq_style_system(use_prompt_manager=False).strip()
-        if section_id == "entry_style_tg":
-            return entry_mod.build_tg_style_system(use_prompt_manager=False).strip()
-        if section_id == "entry_style_wechat":
-            return entry_mod.build_wechat_style_system(use_prompt_manager=False).strip()
         if section_id == "entry_style_xiaoai":
             return entry_mod.build_xiaoai_style_system(use_prompt_manager=False).strip()
     except Exception:
@@ -197,9 +185,9 @@ def default_prompt_content(section_id: str) -> str:
         return _default_pipeline_constant("_CORE_BEHAVIOR_RULES")
     if sid == "non_retreat_rules":
         return _default_pipeline_constant("_DU_NON_RETREAT_RULES")
-    if sid == "sumitalk_real_mode_prompt":
+    if sid == "conversation_real_mode_prompt":
         return _default_pipeline_constant("SUMITALK_REAL_MODE_PROMPT")
-    if sid == "sumitalk_app_mode_prompt":
+    if sid == "conversation_reality_mode_prompt":
         return _default_pipeline_constant("SUMITALK_APP_PROMPT")
     if sid.startswith("entry_style_"):
         return _default_entry_style(sid)

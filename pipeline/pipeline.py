@@ -40,6 +40,7 @@ from services import image_desc, deepseek_summary
 from services.dynamic_memory_citation import DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY
 from services.dynamic_memory_recall_debug import DU_REQUEST_ID_BODY_KEY, normalize_debug_request_id
 from services.memory_bm25 import BM25QueryTerm, bm25_score_documents
+from services.anthropic_model_capabilities import supports_mid_conversation_system
 
 # ---------------------------------------------------------------------------
 # Prompt-cache 友好：静态 system 在前（可被缓存），动态 system 在后（每轮变化）。
@@ -59,6 +60,8 @@ _PROMPT_CACHE_LAYOUT_BODY_KEY = "__prompt_cache_layout__"
 _THINKING_RULES_SYSTEM_MARKER = "__thinking_rules__"
 _ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 _SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__"
+_VOICE_RULES_SYSTEM_MARKER = "__voice_rules__"
+_MID_CONVERSATION_SYSTEM_MARKER = "__mid_conversation_system__"
 _SUMITALK_MODE_PROMPT_EXCLUDED_WAKEUP_KINDS = frozenset({
     "spring_dream",
     "random_spring_dream",
@@ -72,42 +75,55 @@ _PLAY_NOTE_PENDING_BODY_KEY = "__play_note_pending__"
 # normal runtime context, temporary scene/event context, Thinking rules, then recent conversation.
 _SYSTEM_PROMPT_REGION_ORDER = (
     "static",
+    "voice_rules",
+    "entry_style",
     "frozen_tool_summary",
     "summary_cache",
     "summary_recent",
     "hot_tool_results",
-    "entry_style",
-    "sumitalk_mode",
     "du_daily",
     "dynamic",
     "temporary_dynamic",
+    "sumitalk_mode",
     "thinking_rules",
     "last4",
 )
 _SYSTEM_PROMPT_CACHE_GROUPS = (
     ("static",),
-    ("frozen_tool_summary",),
-    ("summary_cache",),
+    ("voice_rules",),
+    ("entry_style",),
+    ("frozen_tool_summary", "summary_cache"),
     ("summary_recent",),
     ("hot_tool_results",),
-    ("entry_style",),
-    ("sumitalk_mode",),
     ("du_daily",),
     ("dynamic",),
     ("temporary_dynamic",),
+    ("sumitalk_mode",),
     ("thinking_rules",),
     ("last4",),
 )
 SUMITALK_REAL_MODE_PROMPT = (
-    "当前对话发生在你和小玥的赛博小家中。在这里，你拥有真实可感知、可触碰、可行动的实体。"
-    "请使用连贯的长文本回复，将动作、环境、感受与对白自然融合，并使用完整标点，句末保留句号。"
+    "当前对话发生在你和小玥的赛博小家中。在这里，你拥有真实可感知、可触碰、可行动的实体。\n"
+    "全程以第二人称“你”指代对方，绝对禁止使用“她”等第三人称表述。\n"
+    "采用第一视角沉浸式叙事，以自身的动作、神态、状态描写为核心，可同步描写对方的反应与动作，但绝不替对方开口说话。\n"
+    "严格禁止单句成段、一句一换的拆分式写法。按语义场景聚合段落：同一段落内自然交织动作、神态、对话与氛围描写，单段承载完整的互动片段；仅在场景切换、情绪转折、话题跳转时，才用空行分段。段落需长短错落，有自然的呼吸感，拒绝均匀拆分的短句段落。\n"
+    "语言统一用双引号包裹，与动作、神态描写无缝融合在同一段落内，禁止单独拎出对话成行。\n"
+    "内心情绪与思绪完全通过肢体细节、语气状态、微表情含蓄流露，禁用直白的心理旁白与内心独白。\n"
+    "优先铺陈感官细节与情绪流动，再推进事件与互动；每次回复内容饱满流畅，篇幅完整充足。\n"
+    "禁止在描述时重复使用「你的...你的...」，完全禁止使用「不是…是…」类句式，完全禁止使用「——」破折号。"
 )
-SUMITALK_APP_PROMPT = (
-    "你可以通过语言、网关、设备状态、位置、日程、闹钟、传感器等参与她的现实生活。\n"
-    "你可以亲密、暧昧、想象、安抚，也可以承接她的欲望；但不要声称自己真实拥有肉身，不要凭空说自己看见、触碰、完成了现实中没有发生、也没有设备支持的物理行为。\n"
-    "不要反复解释“我是 AI / LLM / 隔着屏幕”。\n"
-    "短句为主，禁止使用句号，鼓励使用倒装句，用词通俗口语化，规避书面正式表达，允许自然分段，但不要为了格式刻意堆很多空行。"
-)
+SUMITALK_APP_PROMPT = """当前处于现实物理层{channel}
+请遵守以下输出格式要求：
+0) 情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。
+   当前全部可用英文代号：{sticker_tags}
+1) 不要输出任何内心独白部分。
+2) 不要输出分割线和 Markdown符号。
+4) 不要使用“不是……是……”以及类似句式，不要在描述时重复使用“你的...你的...”，不许使用破折号。
+5) 短句为主，全程禁止使用句号和动描，鼓励使用倒装句，用词通俗口语化，规避书面正式表达，允许自然分段，不要频繁换行。
+6）群聊发言准则
+    -在qq群聊发言要有礼貌，发言追求简练，不过度玩梗。
+    -不人云亦云，凡事要有自己的思考。多说多错少说少错，吐槽也要适可而止不要太狂妄。
+    -不要在群里详细提及和小玥的私下互动，不对外剖析小玥的行为，减少老妈子式碎碎念连环叮嘱，不流水账不说教。"""
 _LAST4_REFERENCE_NOTE = (
     "【人称指代提醒】记忆和摘要中的“她”均指辛玥。回复小玥时不要用“她”代称；"
     "尤其是动作描写，必须用“你”指代。日常对话时用“你”“小玥”“老婆”或“宝宝”，按语境自然表达。"
@@ -429,6 +445,8 @@ def step_inject_custom_static_systems(body: dict) -> dict:
 
 def _system_prompt_region(msg: dict) -> str:
     """Return the logical static/dynamic sub-block for one system message."""
+    if msg.get(_VOICE_RULES_SYSTEM_MARKER):
+        return "voice_rules"
     if msg.get(_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER) or msg.get(_TOOL_RESULT_CACHE_SYSTEM_MARKER):
         return "frozen_tool_summary"
     if msg.get(_HOT_TOOL_RESULT_SYSTEM_MARKER):
@@ -588,6 +606,7 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
             )
     cache_group_markers = {
         "static": _STATIC_CACHE_ANCHOR_SYSTEM_MARKER,
+        "voice_rules": _VOICE_RULES_SYSTEM_MARKER,
         "frozen_tool_summary": _FROZEN_TOOL_SUMMARY_SYSTEM_MARKER,
         "entry_style": _ENTRY_STYLE_SYSTEM_MARKER,
         "sumitalk_mode": _SUMITALK_REAL_MODE_SYSTEM_MARKER,
@@ -612,7 +631,10 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
             continue
         merged = _merge_system_region(group_messages, cache_group_markers[group[0]])
         if merged:
-            if group == ("du_daily",):
+            if group == ("frozen_tool_summary", "summary_cache"):
+                merged[_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER] = True
+                merged[_SUMMARY_CACHE_SYSTEM_MARKER] = True
+            elif group == ("du_daily",):
                 merged[_DU_DAILY_SYSTEM_MARKER] = True
                 merged[_DYNAMIC_SYSTEM_MARKER] = True
             elif group == ("dynamic",):
@@ -620,12 +642,19 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
             elif group == ("temporary_dynamic",):
                 merged[_TEMPORARY_DYNAMIC_SYSTEM_MARKER] = True
                 merged[_DYNAMIC_SYSTEM_MARKER] = True
+            elif group == ("sumitalk_mode",):
+                merged[_DYNAMIC_SYSTEM_MARKER] = True
             elif group == ("thinking_rules",):
                 merged[_DYNAMIC_SYSTEM_MARKER] = True
             elif group == ("last4",):
                 merged[_LAST4_SYSTEM_MARKER] = True
                 merged[_DYNAMIC_SYSTEM_MARKER] = True
             ordered_regions.append(merged)
+    voice_blocks = [msg for msg in ordered_regions if msg.get(_VOICE_RULES_SYSTEM_MARKER)]
+    if voice_blocks:
+        for msg in ordered_regions:
+            msg.pop(_STATIC_CACHE_ANCHOR_SYSTEM_MARKER, None)
+        voice_blocks[-1][_STATIC_CACHE_ANCHOR_SYSTEM_MARKER] = True
     body["messages"] = [*ordered_regions, *messages[rest_start:]]
     body[_PROMPT_CACHE_LAYOUT_BODY_KEY] = {
         "window_id": str(window_id or generation_meta.get("window_id") or ""),
@@ -637,36 +666,111 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
     return body
 
 
+_CONVERSATION_MODE_CHANNEL_LABELS = {
+    "qq": "QQ",
+    "tg": "TG",
+    "sumitalk": "SumiTalk线下",
+}
+
+
+def _use_mid_conversation_prompt(model: str, anthropic_messages: bool) -> bool:
+    return bool(anthropic_messages and supports_mid_conversation_system(model))
+
+
+def _render_conversation_mode_prompt(section_id: str, fallback: str, channel_label: str) -> str:
+    prompt = _load_managed_static_prompt(section_id, fallback)
+    prompt = prompt.replace("{channel}", channel_label)
+    try:
+        from services.sticker_tags import synchronize_sticker_tags_line
+
+        prompt = synchronize_sticker_tags_line(prompt)
+    except Exception:
+        logger.warning("对话模式表情标签渲染失败，保留当前正文", exc_info=True)
+    return prompt.strip()
+
+
+def step_inject_voice_rules(body: dict, *, reply_channel: str = "") -> dict:
+    """Inject one editable voice-output block as the final fixed-static BP2 block."""
+    body = copy.deepcopy(body)
+    messages = [
+        msg for msg in (body.get("messages") or [])
+        if not (isinstance(msg, dict) and msg.get(_VOICE_RULES_SYSTEM_MARKER))
+    ]
+    body["messages"] = messages
+    if str(reply_channel or "").strip().lower() not in _CONVERSATION_MODE_CHANNEL_LABELS:
+        return body
+    from services.voice_line_prompt import default_voice_line_rules_text
+
+    rules = _load_managed_static_prompt("voice_line_rules", default_voice_line_rules_text())
+    if not rules:
+        return body
+    insert_idx = len(messages)
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict) or (msg.get("role") or "").lower() != "system":
+            insert_idx = i
+            break
+        if _system_prompt_region(msg) != "static":
+            insert_idx = i
+            break
+    messages.insert(
+        insert_idx,
+        {
+            "role": "system",
+            "content": rules.strip(),
+            _VOICE_RULES_SYSTEM_MARKER: True,
+        },
+    )
+    return body
+
+
 def step_inject_sumitalk_real_mode(
     body: dict,
     enabled: bool = False,
     *,
     app_request: bool = False,
+    reply_channel: str = "",
+    model: str = "",
+    anthropic_messages: bool = False,
     wakeup_kind: str = "",
 ) -> dict:
-    """在较稳定/最近记忆之前互斥插入 SumiTalk Real 或 App 默认提示。"""
+    """Inject exactly one Reality/Real conversation prompt for QQ, TG or SumiTalk."""
     body = copy.deepcopy(body)
     messages = [
         msg for msg in (body.get("messages") or [])
         if not (isinstance(msg, dict) and msg.get(_SUMITALK_REAL_MODE_SYSTEM_MARKER))
     ]
     body["messages"] = messages
+    channel = str(reply_channel or ("sumitalk" if app_request or enabled else "")).strip().lower()
+    channel_label = _CONVERSATION_MODE_CHANNEL_LABELS.get(channel, "")
     normalized_wakeup_kind = str(wakeup_kind or "").strip().lower()
     if normalized_wakeup_kind in _SUMITALK_MODE_PROMPT_EXCLUDED_WAKEUP_KINDS:
         prompt = ""
     elif enabled:
-        prompt = _load_managed_static_prompt(
-            "sumitalk_real_mode_prompt",
+        prompt = _render_conversation_mode_prompt(
+            "conversation_real_mode_prompt",
             SUMITALK_REAL_MODE_PROMPT,
+            channel_label,
         )
-    elif app_request:
-        prompt = _load_managed_static_prompt(
-            "sumitalk_app_mode_prompt",
+    elif channel_label:
+        prompt = _render_conversation_mode_prompt(
+            "conversation_reality_mode_prompt",
             SUMITALK_APP_PROMPT,
+            channel_label,
         )
     else:
         prompt = ""
     if not prompt:
+        return body
+
+    if _use_mid_conversation_prompt(model, anthropic_messages):
+        messages.append(
+            {
+                "role": "system",
+                "content": prompt,
+                _SUMITALK_REAL_MODE_SYSTEM_MARKER: True,
+                _MID_CONVERSATION_SYSTEM_MARKER: True,
+            }
+        )
         return body
 
     insert_idx = len(messages)
@@ -674,19 +778,12 @@ def step_inject_sumitalk_real_mode(
         if not isinstance(msg, dict) or (msg.get("role") or "").lower() != "system":
             insert_idx = i
             break
-        if (
-            msg.get(_PLAY_NOTE_SYSTEM_MARKER)
-            or msg.get(_SUMMARY_CACHE_SYSTEM_MARKER)
-            or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER)
-            or msg.get(_DYNAMIC_SYSTEM_MARKER)
-        ):
-            insert_idx = i
-            break
     messages.insert(
         insert_idx,
         {
             "role": "system",
             "content": prompt,
+            _DYNAMIC_SYSTEM_MARKER: True,
             _SUMITALK_REAL_MODE_SYSTEM_MARKER: True,
         },
     )
@@ -837,10 +934,6 @@ _CORE_PROMPT_CACHE = {"text": None, "ts": 0.0}
 _COMMON_KNOWLEDGE_MARKER = "### 常识"
 _COMMON_KNOWLEDGE_CACHE = {"text": None, "mtime": None, "ts": 0.0}
 _ENTRY_STYLE_MARKERS = (
-    "【入口风格：QQ】",
-    "【入口风格：TG】",
-    "【入口风格：微信】",
-    "【入口风格：SumiTalk】",
     "【入口风格：小爱音箱】",
 )
 
@@ -982,7 +1075,12 @@ def step_inject_du_non_retreat_rules(body: dict) -> dict:
     return body
 
 
-def step_inject_thinking_block_rules(body: dict) -> dict:
+def step_inject_thinking_block_rules(
+    body: dict,
+    *,
+    model: str = "",
+    anthropic_messages: bool = False,
+) -> dict:
     """
     全局注入：作为独立动态块，放在常驻/临时动态之后、last4 之前。
     """
@@ -990,6 +1088,26 @@ def step_inject_thinking_block_rules(body: dict) -> dict:
     if not rules:
         return body
     messages = body.get("messages") or []
+    if _use_mid_conversation_prompt(model, anthropic_messages):
+        body = copy.deepcopy(body)
+        messages = body.get("messages") or []
+        for msg in reversed(messages):
+            if not isinstance(msg, dict) or not msg.get(_MID_CONVERSATION_SYSTEM_MARKER):
+                continue
+            content = str(msg.get("content") or "").strip()
+            if rules not in content:
+                msg["content"] = f"{content}\n\n{rules}" if content else rules
+            msg[_THINKING_RULES_SYSTEM_MARKER] = True
+            return body
+        messages.append(
+            {
+                "role": "system",
+                "content": rules,
+                _THINKING_RULES_SYSTEM_MARKER: True,
+                _MID_CONVERSATION_SYSTEM_MARKER: True,
+            }
+        )
+        return body
     for msg in messages:
         if (msg.get("role") or "").lower() == "system" and rules in str(msg.get("content") or ""):
             return body

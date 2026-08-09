@@ -85,7 +85,10 @@ const FROZEN_TOOL_SUMMARY_SYSTEM_MARKER = "__frozen_tool_summary__";
 const HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__";
 const ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__";
 const SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__";
+const VOICE_RULES_SYSTEM_MARKER = "__voice_rules__";
+const MID_CONVERSATION_SYSTEM_MARKER = "__mid_conversation_system__";
 const PLAY_NOTE_SYSTEM_MARKER = "__play_note__";
+const PROMPT_CACHE_LAYOUT_BODY_KEY = "__prompt_cache_layout__";
 
 const MODEL_MAP = {
   "gpt-4o": "claude-sonnet-4-6",
@@ -798,6 +801,7 @@ async function openaiToAnthropic(oai) {
   const model = MODEL_MAP[oai.model] || oai.model;
   const messages = [];
   const systemBlocks = [];
+  const midConversationSystem = modelSupportsMidConversationSystem(model);
   let pendingToolResults = [];
 
   const flushToolResults = () => {
@@ -809,6 +813,12 @@ async function openaiToAnthropic(oai) {
 
   for (const msg of oai.messages || []) {
     if (msg.role === "system") {
+      if (midConversationSystem && msg[MID_CONVERSATION_SYSTEM_MARKER]) {
+        flushToolResults();
+        const content = await openaiContentToAnthropic(msg.content);
+        if (content.length) messages.push({ role: "system", content });
+        continue;
+      }
       const recentSummaryBlocks = msg[SUMMARY_RECENT_SYSTEM_MARKER]
         ? splitGatewayRecentSummaryContent(msg.content)
         : null;
@@ -828,6 +838,7 @@ async function openaiToAnthropic(oai) {
         if (msg[HOT_TOOL_RESULT_SYSTEM_MARKER]) block[HOT_TOOL_RESULT_SYSTEM_MARKER] = true;
         if (msg[ENTRY_STYLE_SYSTEM_MARKER]) block[ENTRY_STYLE_SYSTEM_MARKER] = true;
         if (msg[SUMITALK_REAL_MODE_SYSTEM_MARKER]) block[SUMITALK_REAL_MODE_SYSTEM_MARKER] = true;
+        if (msg[VOICE_RULES_SYSTEM_MARKER]) block[VOICE_RULES_SYSTEM_MARKER] = true;
         if (msg[PLAY_NOTE_SYSTEM_MARKER]) block[PLAY_NOTE_SYSTEM_MARKER] = true;
         systemBlocks.push(block);
       }
@@ -864,6 +875,10 @@ async function openaiToAnthropic(oai) {
     max_tokens: oai.max_tokens || oai.max_completion_tokens || DEFAULT_MAX_TOKENS,
     messages,
   };
+
+  if (oai[PROMPT_CACHE_LAYOUT_BODY_KEY] && typeof oai[PROMPT_CACHE_LAYOUT_BODY_KEY] === "object") {
+    body[PROMPT_CACHE_LAYOUT_BODY_KEY] = { ...oai[PROMPT_CACHE_LAYOUT_BODY_KEY] };
+  }
 
   if (systemBlocks.length) body.system = systemBlocks;
   if (oai.thinking && typeof oai.thinking === "object" && !Array.isArray(oai.thinking)) {
@@ -928,6 +943,16 @@ function modelSupportsAdaptiveThinking(model) {
   return /claude-(opus-4-(6|7|8)|opus-5|fable-5)(\b|-|$)/.test(String(model || ""));
 }
 
+function modelSupportsMidConversationSystem(model) {
+  const match = String(model || "").match(/claude-(opus|fable|mythos)-(\d+)(?:[-.](\d+))?/i);
+  if (!match) return false;
+  const family = match[1].toLowerCase();
+  const major = Number(match[2] || 0);
+  const minor = Number(match[3] || 0);
+  if (family === "opus") return major > 4 || (major === 4 && minor >= 8);
+  return major >= 5;
+}
+
 function modelIsClaudeOpus46(model) {
   return /claude-opus-4-6(\b|-|$)/.test(String(model || ""));
 }
@@ -953,6 +978,14 @@ function convertUsage(usage = {}) {
       cached_tokens: cacheReadInputTokens,
     },
   };
+  const cacheCreation = usage.cache_creation && typeof usage.cache_creation === "object"
+    ? { ...usage.cache_creation }
+    : null;
+  if (cacheCreation) {
+    out.cache_creation = cacheCreation;
+    out.cache_creation_ephemeral_1h_input_tokens = cacheCreation.ephemeral_1h_input_tokens || 0;
+    out.cache_creation_ephemeral_5m_input_tokens = cacheCreation.ephemeral_5m_input_tokens || 0;
+  }
   if (usage.output_tokens_details && typeof usage.output_tokens_details === "object") {
     out.output_tokens_details = usage.output_tokens_details;
   }
@@ -1051,6 +1084,7 @@ function createOpenaiStreamConverter(model) {
   let outputTokens = 0;
   let cacheCreationInputTokens = 0;
   let cacheReadInputTokens = 0;
+  let cacheCreation = null;
   let outputTokensDetails = null;
   let usageIterations = null;
   const blocks = new Map();
@@ -1094,6 +1128,9 @@ function createOpenaiStreamConverter(model) {
       outputTokens = event.message?.usage?.output_tokens || 0;
       cacheCreationInputTokens = event.message?.usage?.cache_creation_input_tokens || 0;
       cacheReadInputTokens = event.message?.usage?.cache_read_input_tokens || 0;
+      cacheCreation = event.message?.usage?.cache_creation && typeof event.message.usage.cache_creation === "object"
+        ? { ...event.message.usage.cache_creation }
+        : cacheCreation;
       outputTokensDetails = event.message?.usage?.output_tokens_details || outputTokensDetails;
       usageIterations = Array.isArray(event.message?.usage?.iterations) ? event.message.usage.iterations : usageIterations;
       return chunk({ role: "assistant", content: "" });
@@ -1164,6 +1201,9 @@ function createOpenaiStreamConverter(model) {
       outputTokens = event.usage?.output_tokens || outputTokens;
       cacheCreationInputTokens = event.usage?.cache_creation_input_tokens || cacheCreationInputTokens;
       cacheReadInputTokens = event.usage?.cache_read_input_tokens || cacheReadInputTokens;
+      cacheCreation = event.usage?.cache_creation && typeof event.usage.cache_creation === "object"
+        ? { ...event.usage.cache_creation }
+        : cacheCreation;
       outputTokensDetails = event.usage?.output_tokens_details || outputTokensDetails;
       usageIterations = Array.isArray(event.usage?.iterations) ? event.usage.iterations : usageIterations;
       const fullThinkingBlocks = [
@@ -1181,6 +1221,7 @@ function createOpenaiStreamConverter(model) {
             output_tokens: outputTokens,
             cache_creation_input_tokens: cacheCreationInputTokens,
             cache_read_input_tokens: cacheReadInputTokens,
+            cache_creation: cacheCreation,
             output_tokens_details: outputTokensDetails,
             iterations: usageIterations,
           }),
@@ -1282,6 +1323,9 @@ function applyPromptCache(body) {
   const hotCacheControl = { type: "ephemeral", ttl: "5m" };
   const tools = Array.isArray(body.tools) ? body.tools : [];
   const systemBlocks = Array.isArray(body.system) ? body.system : [];
+  const layout = body[PROMPT_CACHE_LAYOUT_BODY_KEY] && typeof body[PROMPT_CACHE_LAYOUT_BODY_KEY] === "object"
+    ? body[PROMPT_CACHE_LAYOUT_BODY_KEY]
+    : {};
 
   for (const tool of tools) {
     if (tool && typeof tool === "object") delete tool.cache_control;
@@ -1370,9 +1414,14 @@ function applyPromptCache(body) {
   }
 
   log(
-    `Prompt cache: count=${explicitBreakpoints.length} ` +
+    `prompt_cache_layout window_id=${String(layout.window_id || "")} ` +
+    `generation_id=${Number(layout.generation_id || 0)} ` +
+    `generation_updates_done=${Number(layout.generation_updates_done || 0)} ` +
+    `recent_blocks=${Number(layout.recent_blocks || 0)} ` +
+    `hot_tool_blocks=${Number(layout.hot_tool_blocks || 0)} ` +
     `bp1_tools=${Number(bp1Tools)} bp2_static=${Number(bp2Static)} ` +
-    `bp3_generation=${Number(bp3Generation)} bp4_hot=${Number(bp4Hot)}`
+    `bp3_generation=${Number(bp3Generation)} bp4_hot=${Number(bp4Hot)} ` +
+    `bp3_ttl=${bp3Generation ? "1h" : "none"} bp4_ttl=${bp4Hot ? "5m" : "none"}`
   );
 
   const markerKeys = [
@@ -1385,12 +1434,14 @@ function applyPromptCache(body) {
     HOT_TOOL_RESULT_SYSTEM_MARKER,
     ENTRY_STYLE_SYSTEM_MARKER,
     SUMITALK_REAL_MODE_SYSTEM_MARKER,
+    VOICE_RULES_SYSTEM_MARKER,
     PLAY_NOTE_SYSTEM_MARKER,
   ];
   for (const item of systemBlocks) {
     if (!item || typeof item !== "object") continue;
     for (const marker of markerKeys) delete item[marker];
   }
+  delete body[PROMPT_CACHE_LAYOUT_BODY_KEY];
 }
 
 function sendError(res, status, msg) {

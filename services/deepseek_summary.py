@@ -652,7 +652,24 @@ def _normalize_summary_chunks_state(chunks_state: dict | None) -> dict:
         version = int(data.get("version") or 0)
     except Exception:
         version = 0
-    if version != 3:
+    required_plan_keys = {
+        "id",
+        "updates_done",
+        "base_recent_ids",
+        "slightly_move_ids",
+        "slightly_heavy_ids",
+        "drop_ids",
+    }
+    raw_generation = data.get("generation")
+    # The first generation-v3 release still forced version=2 in the R2 writer.
+    # Preserve those already-v3 states instead of sending them through the
+    # one-time legacy trim again on every read.
+    is_misversioned_v3 = (
+        version == 2
+        and isinstance(raw_generation, dict)
+        and required_plan_keys.issubset(raw_generation)
+    )
+    if version != 3 and not is_misversioned_v3:
         legacy = _legacy_normalized_state(data)
         chunks = legacy["chunks"]
         for item in chunks:
@@ -680,15 +697,6 @@ def _normalize_summary_chunks_state(chunks_state: dict | None) -> dict:
         update_count = max(0, int(data.get("update_count") or 0))
     except Exception:
         update_count = 0
-    raw_generation = data.get("generation")
-    required_plan_keys = {
-        "id",
-        "updates_done",
-        "base_recent_ids",
-        "slightly_move_ids",
-        "slightly_heavy_ids",
-        "drop_ids",
-    }
     if not isinstance(raw_generation, dict) or not required_plan_keys.issubset(raw_generation):
         generation = _build_generation_plan(chunks, 0)
     else:

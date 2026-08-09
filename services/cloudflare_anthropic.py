@@ -12,6 +12,7 @@ from config import (
     is_cloudflare_provider_native_anthropic_url,
     is_cloudflare_rest_anthropic_url,
 )
+from services.anthropic_model_capabilities import supports_mid_conversation_system
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -24,6 +25,8 @@ STATIC_CACHE_ANCHOR_SYSTEM_MARKER = "__static_cache_anchor__"
 FROZEN_TOOL_SUMMARY_SYSTEM_MARKER = "__frozen_tool_summary__"
 HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__"
 ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
+VOICE_RULES_SYSTEM_MARKER = "__voice_rules__"
+MID_CONVERSATION_SYSTEM_MARKER = "__mid_conversation_system__"
 PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 ANTHROPIC_REQUIRED_DEFAULT_MAX_TOKENS = 128000
 KIRO_ANTHROPIC_HOST = "api2.68886868.xyz"
@@ -182,6 +185,8 @@ def _system_blocks_from_message(msg: dict) -> list[dict]:
             block[HOT_TOOL_RESULT_SYSTEM_MARKER] = True
         if msg.get(ENTRY_STYLE_SYSTEM_MARKER):
             block[ENTRY_STYLE_SYSTEM_MARKER] = True
+        if msg.get(VOICE_RULES_SYSTEM_MARKER):
+            block[VOICE_RULES_SYSTEM_MARKER] = True
         if msg.get(PLAY_NOTE_SYSTEM_MARKER):
             block[PLAY_NOTE_SYSTEM_MARKER] = True
     return text_blocks
@@ -237,6 +242,7 @@ def openai_to_anthropic_request(body: dict, url: str, cache_ttl: str | None = No
     messages: list[dict] = []
     system_blocks: list[dict] = []
     pending_tool_results: list[dict] = []
+    mid_conversation_system = supports_mid_conversation_system(str(src.get("model") or ""))
 
     def flush_tool_results() -> None:
         nonlocal pending_tool_results
@@ -249,7 +255,13 @@ def openai_to_anthropic_request(body: dict, url: str, cache_ttl: str | None = No
             continue
         role = str(raw_msg.get("role") or "").strip().lower()
         if role == "system":
-            system_blocks.extend(_system_blocks_from_message(raw_msg))
+            if mid_conversation_system and raw_msg.get(MID_CONVERSATION_SYSTEM_MARKER):
+                flush_tool_results()
+                content = _openai_content_to_anthropic(raw_msg.get("content"))
+                if content:
+                    messages.append({"role": "system", "content": content})
+            else:
+                system_blocks.extend(_system_blocks_from_message(raw_msg))
         elif role in {"tool", "function"}:
             _add_tool_result(pending_tool_results, raw_msg)
         elif role == "user":
@@ -445,6 +457,7 @@ def apply_prompt_cache(body: dict, ttl: str, *, layout: dict | None = None) -> d
         FROZEN_TOOL_SUMMARY_SYSTEM_MARKER,
         HOT_TOOL_RESULT_SYSTEM_MARKER,
         ENTRY_STYLE_SYSTEM_MARKER,
+        VOICE_RULES_SYSTEM_MARKER,
         PLAY_NOTE_SYSTEM_MARKER,
     )
     for item in system_blocks:

@@ -95,7 +95,11 @@ def save_summary_chunks(window_id: str, chunks_state: dict) -> bool:
     chunks = payload.get("chunks")
     if not isinstance(chunks, list):
         payload["chunks"] = []
-    payload["version"] = 2
+    try:
+        state_version = int(payload.get("version") or 2)
+    except Exception:
+        state_version = 2
+    payload["version"] = 3 if state_version == 3 else 2
     payload["updated_at"] = now_beijing_iso()
     with _global_write_lock:
         try:
