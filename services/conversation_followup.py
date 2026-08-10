@@ -353,7 +353,7 @@ def _send_via_qq(text: str, split: bool = True) -> bool:
         return False
 
 
-def _send_via_qq_group(text: str, group_id: str, split: bool = True) -> bool:
+def _send_via_qq_group(text: str, group_id: str, split: bool = True, *, at_owner: bool = False) -> bool:
     try:
         target_group_id = int(str(group_id or "").strip())
     except Exception:
@@ -367,14 +367,14 @@ def _send_via_qq_group(text: str, group_id: str, split: bool = True) -> bool:
     if QQ_PROACTIVE_PUSH_TOKEN:
         headers["Authorization"] = f"Bearer {QQ_PROACTIVE_PUSH_TOKEN}"
     try:
-        body = json.dumps(
-            {
-                "text": str(text or ""),
-                "group_id": str(target_group_id),
-                "split": bool(split),
-            },
-            ensure_ascii=False,
-        ).encode("utf-8")
+        payload = {
+            "text": str(text or ""),
+            "group_id": str(target_group_id),
+            "split": bool(split),
+        }
+        if at_owner:
+            payload["at_owner"] = True
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         r = requests.post(url, headers=headers, data=body, timeout=30)
         if r.status_code == 200 and bool((r.json() or {}).get("ok")):
             return True

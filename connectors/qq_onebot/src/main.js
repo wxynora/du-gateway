@@ -1413,7 +1413,7 @@ async function sendQqReplyToGroup(groupId, reply, options = {}) {
   const replyTargets = options?.replyTargets instanceof Map ? options.replyTargets : new Map();
   const atTargets = options?.atTargets instanceof Map ? options.atTargets : new Map();
   let pendingReplyMessageId = "";
-  let pendingAtUserId = "";
+  let pendingAtUserId = String(options?.initialAtUserId || "").trim();
   const setPendingControl = (replyRef, atRef) => {
     pendingReplyMessageId = String(replyTargets.get(replyRef) || "").trim();
     pendingAtUserId = String(atTargets.get(atRef) || "").trim();
@@ -1722,6 +1722,7 @@ async function main() {
         const body = await readJsonBody(req);
         const text = String(body?.text || "").trim();
         const groupId = Number(body?.group_id || 0);
+        const atOwner = body?.at_owner === true;
         if (!text) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: false, error: "empty_text" }));
@@ -1737,8 +1738,15 @@ async function main() {
           res.end(JSON.stringify({ ok: false, error: "group_not_bound" }));
           return;
         }
+        if (atOwner && (!Number.isSafeInteger(ownerQqUserId) || ownerQqUserId <= 0)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "owner_not_configured" }));
+          return;
+        }
         try {
-          const sent = await sendQqReplyToGroup(groupId, text);
+          const sent = await sendQqReplyToGroup(groupId, text, {
+            initialAtUserId: atOwner ? String(ownerQqUserId) : "",
+          });
           if (!sent) {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ ok: false, error: "empty_after_parse" }));

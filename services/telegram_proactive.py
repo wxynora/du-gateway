@@ -62,7 +62,11 @@ from services.proactive_prompt_templates import (
     RANDOM_PROACTIVE_DECISION_SECTION_ID,
     RANDOM_PROACTIVE_DECISION_TEMPLATE,
 )
-from services.qq_group_delivery import qq_group_delivery_target, split_qq_group_delivery_marker
+from services.qq_group_delivery import (
+    qq_group_delivery_at_owner,
+    qq_group_delivery_target,
+    split_qq_group_delivery_directives,
+)
 from services.reply_channel_context import resolve_recent_reply_context
 from runtime.wakeup_bus import RuntimeWakeSubscriber
 
@@ -149,6 +153,7 @@ class ProactiveDecision:
     game: str = ""              # action=game 时选择的渡单机游戏 id
     executed_tools: tuple[str, ...] = ()
     qq_group_id: str = ""       # 仅由网关根据本轮群聊上下文回填；模型不能填写
+    qq_group_at_me: bool = False # 仅由 [QQ_AT_ME] 控制标记产生；发送端转为 OneBot 原生 at
     archive_round_index: int = 0
 
 
@@ -776,7 +781,7 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
 def _apply_qq_group_delivery_to_decision(decision: ProactiveDecision, response_data: dict | None) -> ProactiveDecision:
     if not isinstance(decision, ProactiveDecision):
         return decision
-    marked, cleaned = split_qq_group_delivery_marker(decision.text)
+    marked, at_owner, cleaned = split_qq_group_delivery_directives(decision.text)
     if not marked:
         return decision
     decision.text = cleaned
@@ -787,6 +792,7 @@ def _apply_qq_group_delivery_to_decision(decision: ProactiveDecision, response_d
         group_id = ""
     if decision.should_send and cleaned and group_id:
         decision.qq_group_id = group_id
+        decision.qq_group_at_me = at_owner
     else:
         logger.warning(
             "主动决策群聊标记未生效 should_send=%s has_text=%s has_group=%s",
@@ -951,6 +957,7 @@ def _generate_schedule_reply(
         return {
             "text": text,
             "qq_group_id": qq_group_delivery_target(msg),
+            "qq_group_at_me": qq_group_delivery_at_owner(msg),
             "archive_round_index": int((data or {}).get("du_gateway_archive_round_index") or 0),
         }
     except Exception as e:
@@ -1026,7 +1033,12 @@ def handle_galatea_garden_wake(reason: str, message: str) -> dict:
     text = str(generated.get("text") or "").strip()
     qq_group_id = str(generated.get("qq_group_id") or "").strip()
     if qq_group_id:
-        delivered = _send_via_qq_group(text, qq_group_id, split=True)
+        delivered = _send_via_qq_group(
+            text,
+            qq_group_id,
+            split=True,
+            at_owner=bool(generated.get("qq_group_at_me")),
+        )
         delivered_channel = "qq_group"
     else:
         delivered = _dispatch_send(
@@ -1481,7 +1493,12 @@ def schedule_tick(target_user_id: int = 0) -> dict:
         sent_channel = ""
         requested_group_id = str((reply_result or {}).get("qq_group_id") or "").strip()
         if requested_group_id:
-            ok = _send_via_qq_group(text_to_send, requested_group_id, split=True)
+            ok = _send_via_qq_group(
+                text_to_send,
+                requested_group_id,
+                split=True,
+                at_owner=bool((reply_result or {}).get("qq_group_at_me")),
+            )
             if ok:
                 sent_channel = "qq_group"
             else:
@@ -1669,7 +1686,7 @@ def _dispatch_proactive_decision_message(
     group_id = str(decision.qq_group_id or "").strip()
     if group_id:
         attempted.append("qq_group")
-        if _send_via_qq_group(text, group_id, split=True):
+        if _send_via_qq_group(text, group_id, split=True, at_owner=decision.qq_group_at_me):
             return True, "qq_group", attempted
         logger.warning(
             "随机主动消息发 QQ 群失败，回退原渠道 group_id=%s fallback_channel=%s",
