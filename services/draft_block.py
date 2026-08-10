@@ -12,10 +12,10 @@ SCRATCHPAD_START = "<scratchpad>"
 SCRATCHPAD_END = "</scratchpad>"
 
 DRAFT_REMINDER_PROMPT = f"""<important_notice>
-如果你在回复前或多轮工具调用途中输出分析、推理、计划、判断过程、自言自语、内心独白，或任何不准备直接发给小玥的文字，这些都属于思路草稿。
-思路草稿必须从第一字起使用 {SCRATCHPAD_START}...{SCRATCHPAD_END} 完整包裹，不要先用普通文字写出草稿，再在最后补标签。
-{SCRATCHPAD_START} 内的内容只会记入思维链日志的“草稿”块，不会作为正文发送。
-真正要发给小玥的回复写在标签外；没有草稿时不要输出 {SCRATCHPAD_START}。
+正文只输出准备直接发给小玥的内容。
+禁止在正文中直接输出分析、推理、计划、判断过程、自言自语、内心独白，或其他不准备发送的文字。
+如果这类文字仍出现在普通输出中，必须从第一个字起使用 {SCRATCHPAD_START}...{SCRATCHPAD_END} 完整包裹；这只是泄漏兜底，不要为了使用标签额外生成草稿。
+没有草稿时不要输出标签。
 </important_notice>"""
 
 _SCRATCHPAD_START_RE = re.compile(r"<\s*scratchpad\s*>", flags=re.IGNORECASE)
