@@ -1,6 +1,7 @@
 # 管道主流程：清洗(图片) → 新窗口注入 → 记忆注入 → 转发 → 存档/总结（不再按窗口 ID 判定）
 import copy
 import json
+import math
 import re
 import threading
 import time
@@ -680,10 +681,17 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
 
 
 _CONVERSATION_MODE_CHANNEL_LABELS = {
-    "qq": "QQ",
     "tg": "TG",
     "sumitalk": "SumiTalk线下",
 }
+
+
+def _conversation_mode_channel_label(reply_channel: str, reply_target: str = "") -> str:
+    channel = str(reply_channel or "").strip().lower()
+    if channel == "qq":
+        target = str(reply_target or "").strip().lower()
+        return "QQ群聊" if target == "qq_group_mention" else "QQ私聊"
+    return _CONVERSATION_MODE_CHANNEL_LABELS.get(channel, "")
 
 
 def _use_mid_conversation_prompt(model: str, anthropic_messages: bool) -> bool:
@@ -757,6 +765,7 @@ def step_inject_sumitalk_real_mode(
     *,
     app_request: bool = False,
     reply_channel: str = "",
+    reply_target: str = "",
     model: str = "",
     anthropic_messages: bool = False,
     wakeup_kind: str = "",
@@ -769,7 +778,7 @@ def step_inject_sumitalk_real_mode(
     ]
     body["messages"] = messages
     channel = str(reply_channel or ("sumitalk" if app_request or enabled else "")).strip().lower()
-    channel_label = _CONVERSATION_MODE_CHANNEL_LABELS.get(channel, "")
+    channel_label = _conversation_mode_channel_label(channel, reply_target)
     normalized_wakeup_kind = str(wakeup_kind or "").strip().lower()
     if normalized_wakeup_kind in _SUMITALK_MODE_PROMPT_EXCLUDED_WAKEUP_KINDS:
         prompt = ""
@@ -2482,7 +2491,8 @@ def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str])
     原始 query 保底 + 扩展 query 增广：
     - 召回：每个 query 各取 top10
     - 合并：按 memory_id 去重
-    - 重排：召回返回的语义分 + 记忆权重 + 命中源数
+    - 归一化：原始 query、扩展 query 与多 query 支撑度都压到 0..1
+    - 宽候选：保留 reranker 可消费的候选池，不在这里提前裁成最终 5 条
     - 保护：至少保留 2 条原始 query 命中（如果有）
     """
     from memory_vector.dynamic_vector_retriever import dynamic_vector_retrieve
@@ -2502,7 +2512,7 @@ def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str])
 
     by_id: dict[str, dict] = {}
     source_count: dict[str, int] = {}
-    best_semantic: dict[str, float] = {}
+    expanded_semantic: dict[str, float] = {}
     base_semantic: dict[str, float] = {}
     base_hit_ids: list[str] = []
     for idx, (_q, items) in enumerate(query_hits):
@@ -2514,45 +2524,46 @@ def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str])
             sem = float(mem.get("_semantic_score") or 0.0)
             if mid not in by_id:
                 by_id[mid] = mem
-            if sem > best_semantic.get(mid, 0.0):
-                best_semantic[mid] = sem
             if mid not in seen_local:
                 source_count[mid] = int(source_count.get(mid) or 0) + 1
                 seen_local.add(mid)
             if idx == 0 and mid not in base_hit_ids:
                 base_semantic[mid] = max(base_semantic.get(mid, 0.0), sem)
                 base_hit_ids.append(mid)
+            elif idx > 0:
+                expanded_semantic[mid] = max(expanded_semantic.get(mid, 0.0), sem)
     if not by_id:
         return []
 
-    scored: list[tuple[float, float, float, dict]] = []
+    query_count = len(query_hits)
+    scored: list[tuple[float, dict]] = []
     for mid, mem in by_id.items():
-        sem_ctx = best_semantic.get(mid, 0.0)
-        sem_user = base_semantic.get(mid, sem_ctx)
-        weight = _memory_weight(mem)
+        sem_user_raw = base_semantic.get(mid, 0.0)
+        sem_ctx_raw = expanded_semantic.get(mid, 0.0)
+        sem_user = _normalize_semantic_score(sem_user_raw)
+        sem_ctx = _normalize_semantic_score(sem_ctx_raw)
+        semantic = max(sem_user, sem_ctx * 0.85)
         src = int(source_count.get(mid) or 0)
-        # 语义分直接复用向量召回结果，避免候选记忆二次 embedding。
-        # sem_ctx 字段名保留给调试面板兼容；这里表示多 query 的最佳语义支撑分。
-        score = sem_user * 0.50 + sem_ctx * 0.20 + weight * 0.22 + src * 0.08
-        scored.append((score, sem_user, sem_ctx, mem))
+        support = _normalize_query_support(src, query_count)
+        vector_score = semantic * 0.95 + support * 0.05
+        scored_mem = dict(mem)
+        scored_mem["_recall_score"] = {
+            "total": round(vector_score, 4),
+            "sem_user": round(sem_user, 4),
+            "sem_ctx": round(sem_ctx, 4),
+            "semantic": round(semantic, 4),
+            "support": round(support, 4),
+            "base_cosine_raw": round(float(sem_user_raw), 4),
+            "expanded_cosine_raw": round(float(sem_ctx_raw), 4),
+        }
+        by_id[mid] = scored_mem
+        scored.append((vector_score, scored_mem))
     scored.sort(key=lambda x: -x[0])
 
-    # 为每条记忆附上打分明细（供调试事件记录）
-    score_map: dict[str, dict] = {}
-    for total, su, sc, mem in scored:
-        mid = str(mem.get("id") or "")
-        if mid:
-            score_map[mid] = {"total": round(total, 4), "sem_user": round(su, 4), "sem_ctx": round(sc, 4)}
+    ranked = [mem for _, mem in scored]
 
-    # 综合分最低门槛：低于此分的不注入
-    from memory_vector.config import RERANK_MIN_SCORE
-    scored_above = [(s, su, sc, m) for s, su, sc, m in scored if s >= RERANK_MIN_SCORE]
-
-    ranked = [m for _, _, _, m in scored_above]
-
-    # 原始 query 保底：若有命中且过了阈值，最终至少保留 2 条
-    base_keep = [by_id[mid] for mid in base_hit_ids
-                 if mid in by_id and mid in score_map and score_map[mid]["total"] >= RERANK_MIN_SCORE][:2]
+    # 原始 query 保底：如果扩展 query 数量很多，仍至少把两个原句命中带进宽候选池。
+    base_keep = [by_id[mid] for mid in base_hit_ids if mid in by_id][:2]
     out: list[dict] = []
     used: set[str] = set()
     for m in base_keep + ranked:
@@ -2561,16 +2572,74 @@ def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str])
             continue
         used.add(mid)
         out.append(m)
-        if len(out) >= 5:
+        if len(out) >= _dynamic_recall_pool_limit():
             break
-
-    # 把 score 明细挂到每条记忆的 _recall_score 字段（临时，不持久化到 R2）
-    for m in out:
-        mid = str(m.get("id") or "")
-        if mid in score_map:
-            m["_recall_score"] = score_map[mid]
-
     return out
+
+
+def _clamp_unit(value: float) -> float:
+    try:
+        return min(1.0, max(0.0, float(value)))
+    except Exception:
+        return 0.0
+
+
+def _dynamic_recall_pool_limit() -> int:
+    from config import DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES
+
+    return max(1, int(DYNAMIC_MEMORY_TOP_N or 1), int(DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES or 30))
+
+
+def _normalize_semantic_score(value: float) -> float:
+    """把已过向量门槛的 cosine 映射到 0..1；放宽门槛仍保留可比较的小正分。"""
+    from memory_vector.config import VECTOR_MIN_SIM
+
+    floor = _clamp_unit(float(VECTOR_MIN_SIM) - 0.06)
+    if floor >= 1.0:
+        return 0.0
+    return _clamp_unit((float(value or 0.0) - floor) / (1.0 - floor))
+
+
+def _normalize_query_support(source_count: int, query_count: int) -> float:
+    if query_count <= 1:
+        return 0.0
+    return _clamp_unit((max(0, int(source_count)) - 1) / float(query_count - 1))
+
+
+def _normalize_bm25_score(raw_score: float) -> float:
+    """固定饱和映射，避免“本轮最强但仍很弱”的唯一命中被归一成 1。"""
+    raw = max(0.0, float(raw_score or 0.0))
+    return raw / (raw + 1.0) if raw > 0.0 else 0.0
+
+
+def _mention_count_p95(memories: list[dict]) -> int:
+    counts = sorted(max(0, int((mem or {}).get("mention_count") or 0)) for mem in memories or [])
+    if not counts:
+        return 0
+    index = max(0, min(len(counts) - 1, math.ceil(len(counts) * 0.95) - 1))
+    return counts[index]
+
+
+def _normalized_memory_prior(mem: dict, mention_count_p95: int, now=None) -> float:
+    """只用于相关候选间轻量排序；与物理淘汰使用的生命周期权重相互独立。"""
+    from utils.time_aware import parse_iso_to_beijing, _now_beijing
+
+    importance_norm = _clamp_unit(max(0, int((mem or {}).get("importance") or 0)) / 5.0)
+    mention_count = max(0, int((mem or {}).get("mention_count") or 0))
+    if mention_count_p95 > 0:
+        mention_norm = _clamp_unit(math.log1p(mention_count) / math.log1p(max(1, mention_count_p95)))
+    else:
+        mention_norm = 0.0
+
+    now = now or _now_beijing()
+    last_mentioned = (mem or {}).get("last_mentioned") or (mem or {}).get("created_at") or ""
+    dt = parse_iso_to_beijing(last_mentioned)
+    days_since = max(0, (now - dt).days) if dt is not None else 0
+    if days_since <= 15:
+        recency_norm = 1.0
+    else:
+        recency_norm = _clamp_unit(1.0 - ((days_since - 15) / 20.0))
+    return _clamp_unit(importance_norm * 0.60 + mention_norm * 0.25 + recency_norm * 0.15)
 
 
 def _bm25_query_terms(keyword_candidates: list[dict]) -> list[BM25QueryTerm]:
@@ -2604,11 +2673,8 @@ def _bm25_recall_scores(
         if old and float(old.get("raw") or 0.0) >= raw_score:
             continue
         by_id[mid] = {"raw": float(raw_score), "mem": mem}
-    max_score = max((float(item.get("raw") or 0.0) for item in by_id.values()), default=0.0)
-    if max_score <= 0:
-        return {}
     for item in by_id.values():
-        item["norm"] = float(item.get("raw") or 0.0) / max_score
+        item["norm"] = _normalize_bm25_score(float(item.get("raw") or 0.0))
     return by_id
 
 
@@ -2620,8 +2686,6 @@ def _merge_vector_and_bm25_recall(
     向量召回和 BM25 同时进入候选池，最后按一个融合分统一排序。
     BM25 只覆盖动态层；向量侧仍可带入 core:: pending。
     """
-    from memory_vector.config import RERANK_MIN_SCORE
-
     by_id: dict[str, dict] = {}
     for mem in vector_recalled or []:
         mid = str((mem or {}).get("id") or "").strip()
@@ -2630,8 +2694,10 @@ def _merge_vector_and_bm25_recall(
         score = mem.get("_recall_score") if isinstance(mem.get("_recall_score"), dict) else {}
         by_id[mid] = {
             "mem": mem,
-            "sem_user": float(score.get("sem_user") or mem.get("_semantic_score") or 0.0),
-            "sem_ctx": float(score.get("sem_ctx") or mem.get("_semantic_score") or 0.0),
+            "sem_user": float(score["sem_user"] if "sem_user" in score else (mem.get("_semantic_score") or 0.0)),
+            "sem_ctx": float(score["sem_ctx"] if "sem_ctx" in score else (mem.get("_semantic_score") or 0.0)),
+            "semantic": float(score.get("semantic") or 0.0),
+            "support": float(score.get("support") or 0.0),
             "vector_total": float(score.get("total") or mem.get("_final_score") or 0.0),
             "vector_hit": True,
             "bm25_raw": 0.0,
@@ -2648,6 +2714,8 @@ def _merge_vector_and_bm25_recall(
                 "mem": mem,
                 "sem_user": 0.0,
                 "sem_ctx": 0.0,
+                "semantic": 0.0,
+                "support": 0.0,
                 "vector_total": 0.0,
                 "vector_hit": False,
                 "bm25_raw": 0.0,
@@ -2657,29 +2725,34 @@ def _merge_vector_and_bm25_recall(
         row["bm25_raw"] = max(float(row.get("bm25_raw") or 0.0), float(item.get("raw") or 0.0))
         row["bm25_norm"] = max(float(row.get("bm25_norm") or 0.0), float(item.get("norm") or 0.0))
 
+    mention_count_p95 = _mention_count_p95([row["mem"] for row in by_id.values()])
     scored: list[tuple[float, float, dict]] = []
     for mid, row in by_id.items():
         mem = row["mem"]
-        weight = _memory_weight(mem)
-        sem_user = float(row.get("sem_user") or 0.0)
-        sem_ctx = float(row.get("sem_ctx") or 0.0)
-        bm25_norm = float(row.get("bm25_norm") or 0.0)
-        both_bonus = 0.02 if row.get("vector_hit") and bm25_norm > 0 else 0.0
-        final_score = sem_user * 0.42 + sem_ctx * 0.18 + bm25_norm * 0.30 + weight * 0.08 + both_bonus
-        if final_score < RERANK_MIN_SCORE:
-            continue
+        sem_user = _clamp_unit(float(row.get("sem_user") or 0.0))
+        sem_ctx = _clamp_unit(float(row.get("sem_ctx") or 0.0))
+        semantic = _clamp_unit(float(row.get("semantic") or max(sem_user, sem_ctx * 0.85)))
+        support = _clamp_unit(float(row.get("support") or 0.0))
+        bm25_norm = _clamp_unit(float(row.get("bm25_norm") or 0.0))
+        memory_prior = _normalized_memory_prior(mem, mention_count_p95)
+        recall_score = _clamp_unit(semantic * 0.70 + bm25_norm * 0.25 + support * 0.05)
+        fallback_final = _clamp_unit(recall_score * 0.95 + memory_prior * 0.05)
         mem["_recall_score"] = {
-            "total": round(float(final_score), 4),
+            "total": round(float(recall_score), 4),
+            "final_total": round(float(fallback_final), 4),
             "sem_user": round(float(sem_user), 4),
             "sem_ctx": round(float(sem_ctx), 4),
+            "semantic": round(float(semantic), 4),
+            "support": round(float(support), 4),
             "bm25": round(float(bm25_norm), 4),
             "bm25_raw": round(float(row.get("bm25_raw") or 0.0), 4),
-            "weight": round(float(weight), 4),
+            "memory_prior": round(float(memory_prior), 4),
+            "lifecycle_weight": round(float(_memory_weight(mem)), 4),
             "vector_total": round(float(row.get("vector_total") or 0.0), 4),
         }
-        scored.append((final_score, weight, mem))
+        scored.append((fallback_final, recall_score, mem))
     scored.sort(key=lambda x: (-x[0], -x[1]))
-    return [mem for _, _, mem in scored]
+    return [mem for _, _, mem in scored[: _dynamic_recall_pool_limit()]]
 
 
 def _dynamic_memory_rerank_query(
@@ -2735,7 +2808,7 @@ def _apply_external_dynamic_memory_rerank(
     if not recalled:
         return recalled, recall_source, {"enabled": False, "reason": "empty_recalled"}
     try:
-        from config import DYNAMIC_MEMORY_RERANK_BLEND, DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES
+        from config import DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES
         from services.dynamic_memory_reranker import dynamic_memory_rerank_enabled, rerank_dynamic_memory_documents
 
         if not dynamic_memory_rerank_enabled():
@@ -2757,8 +2830,6 @@ def _apply_external_dynamic_memory_rerank(
         if not result.get("ok"):
             return recalled, recall_source, result
 
-        blend = float(result.get("blend") or DYNAMIC_MEMORY_RERANK_BLEND or 0.78)
-        blend = min(1.0, max(0.0, blend))
         returned_indexes: set[int] = set()
         scored: list[tuple[float, float, dict]] = []
         for item in result.get("ranked") or []:
@@ -2772,12 +2843,13 @@ def _apply_external_dynamic_memory_rerank(
             returned_indexes.add(idx)
             score = float(item.get("score") or 0.0)
             old_score = mem.get("_recall_score") if isinstance(mem.get("_recall_score"), dict) else {}
-            hybrid_total = float(old_score.get("total") or 0.0)
-            final_score = score * blend + hybrid_total * (1.0 - blend)
+            recall_score = _clamp_unit(float(old_score.get("total") or 0.0))
+            memory_prior = _clamp_unit(float(old_score.get("memory_prior") or 0.0))
+            final_score = _clamp_unit(score * 0.85 + recall_score * 0.10 + memory_prior * 0.05)
             merged_score = dict(old_score)
             merged_score.update(
                 {
-                    "hybrid_total": round(hybrid_total, 4),
+                    "hybrid_total": round(recall_score, 4),
                     "rerank": round(score, 4),
                     "rerank_rank": int(item.get("rank") or 0),
                     "rerank_model": str(result.get("model") or ""),
@@ -2785,18 +2857,19 @@ def _apply_external_dynamic_memory_rerank(
                 }
             )
             mem["_recall_score"] = merged_score
-            scored.append((final_score, _memory_weight(mem), mem))
+            scored.append((final_score, memory_prior, mem))
 
         for idx, mem in enumerate(candidate_mems):
             if idx in returned_indexes:
                 continue
             old_score = mem.get("_recall_score") if isinstance(mem.get("_recall_score"), dict) else {}
-            hybrid_total = float(old_score.get("total") or 0.0)
-            final_score = hybrid_total * (1.0 - blend)
+            recall_score = _clamp_unit(float(old_score.get("total") or 0.0))
+            memory_prior = _clamp_unit(float(old_score.get("memory_prior") or 0.0))
+            final_score = _clamp_unit(recall_score * 0.10 + memory_prior * 0.05)
             merged_score = dict(old_score)
             merged_score.update(
                 {
-                    "hybrid_total": round(hybrid_total, 4),
+                    "hybrid_total": round(recall_score, 4),
                     "rerank": 0.0,
                     "rerank_missing": True,
                     "rerank_model": str(result.get("model") or ""),
@@ -2804,7 +2877,7 @@ def _apply_external_dynamic_memory_rerank(
                 }
             )
             mem["_recall_score"] = merged_score
-            scored.append((final_score, _memory_weight(mem), mem))
+            scored.append((final_score, memory_prior, mem))
 
         scored.sort(key=lambda x: (-x[0], -x[1]))
         reranked = [mem for _, _, mem in scored] + tail_mems
@@ -2825,6 +2898,11 @@ def _memory_recall_sort_score(mem: dict) -> float:
         return float(value)
     except Exception:
         return 0.0
+
+
+def _memory_recall_prior(mem: dict) -> float:
+    score = mem.get("_recall_score") if isinstance((mem or {}).get("_recall_score"), dict) else {}
+    return _clamp_unit(float(score.get("memory_prior") or 0.0))
 
 
 def _memory_dedupe_keys(mem: dict) -> list[str]:
@@ -3375,7 +3453,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
             _append_dynamic_recall_debug_event_safe(event)
             return body
 
-    scored = [(_memory_recall_sort_score(mem), _memory_weight(mem), mem) for mem in recalled]
+    scored = [(_memory_recall_sort_score(mem), _memory_recall_prior(mem), mem) for mem in recalled]
     scored.sort(key=lambda x: (-x[0], -x[1]))
 
     budget = memory_dynamic_budget()

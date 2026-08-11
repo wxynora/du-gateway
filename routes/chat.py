@@ -2937,6 +2937,7 @@ def chat_completions():
         enabled=sumitalk_real_mode,
         app_request=sumitalk_prompt_assembly,
         reply_channel=prompt_reply_channel,
+        reply_target=reply_target,
         model=req_model,
         anthropic_messages=(
             _is_local_claude_oauth_proxy_url(active_upstream_url)
