@@ -416,6 +416,10 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
         return execute_xiaoai_tool(name, arguments)
     if name in VOICE_CALL_TOOL_NAMES:
         return execute_voice_call_tool(name, arguments)
+    if name == "generate_image":
+        from services.generated_image_tool import execute_generate_image_tool
+
+        return execute_generate_image_tool(arguments if isinstance(arguments, dict) else {})
     if name in SEX_PLAY_DRAW_TOOL_NAMES:
         return execute_sex_play_draw_tool(name, arguments)
     if name in DU_SURF_TOOL_NAMES:

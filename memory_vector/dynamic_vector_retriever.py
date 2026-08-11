@@ -14,6 +14,7 @@ from memory_vector.core_pending_index import CORE_PENDING_INDEX_TAG
 from memory_vector.cosine import cosine
 from memory_vector.embedding_client import embed_text
 from memory_vector.vector_index_store import load_index
+from services.dynamic_memory_weight import dynamic_memory_weight
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import parse_iso_to_beijing, _now_beijing
@@ -25,19 +26,9 @@ ROOM_TAGS = ("客厅", "书房", "图书馆", "卧室")
 _RECENT_RANGE_DAYS = {"recent_7d": 7, "recent_15d": 15, "recent_30d": 30}
 
 
-def _memory_weight(m: dict) -> float:
-    """
-    保持与 pipeline.py 的权重公式一致（不要改动逻辑）。
-    """
-    importance = int(m.get("importance") or 0)
-    mention_count = int(m.get("mention_count") or 0)
-    last_mentioned = m.get("last_mentioned") or m.get("created_at") or ""
-    dt = parse_iso_to_beijing(last_mentioned)
-    if dt is None:
-        dt = _now_beijing()
-    days_since = (_now_beijing() - dt).days
-    time_decay = min(days_since * 0.5, 10)
-    return importance + mention_count - time_decay
+def _memory_weight(memory: dict, now: Optional[datetime] = None) -> float:
+    """兼容现有调用；实际公式统一由共享模块维护。"""
+    return dynamic_memory_weight(memory, now=now)
 
 
 def _memory_event_timestamp(mem: dict) -> str:

@@ -112,6 +112,7 @@ def _miniapp_auth():
         or request.path.rstrip("/").endswith("/stickers/resolve")
         or request.path.rstrip("/").endswith("/stickers/raw-public")
         or request.path.rstrip("/").endswith("/chat-media/raw-public")
+        or "/miniapp-api/generated-images/" in request.path
         or "/miniapp-api/voice-call/tts-audio/" in request.path
         or request.path.rstrip("/").endswith("/device-screenshots/raw-public")
     ):

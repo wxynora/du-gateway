@@ -191,6 +191,9 @@ from services.chat_tool_helpers import (
     should_retry_tool_followup as _should_retry_tool_followup,
     sse_delta_chunk_bytes as _sse_delta_chunk_bytes,
 )
+from services.generated_image_tool import (
+    collect_generated_image_payloads as _collect_generated_image_payloads,
+)
 from services.tool_result_cache import (
     enqueue_game_tool_loop_summary as _enqueue_game_tool_loop_summary,
     record_tool_loop as _record_tool_result_loop,
@@ -249,6 +252,7 @@ def _run_sumitalk_stream_archive_queue() -> None:
                 reply_channel,
                 skip_dynamic_memory_write,
                 skip_body_delta,
+                dynamic_memory_recall_candidate_ids,
             ) = task
             step_archive_and_maybe_summary(
                 window_id,
@@ -258,6 +262,7 @@ def _run_sumitalk_stream_archive_queue() -> None:
                 reply_channel=reply_channel,
                 skip_dynamic_memory_write=skip_dynamic_memory_write,
                 skip_body_delta=skip_body_delta,
+                dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
             )
             logger.info("R2 SumiTalk 流式请求后台存档完成")
         except Exception:
@@ -1088,6 +1093,9 @@ def _build_round_cleaned_for_archive(
                 gomoku_player_text=gomoku_player_text,
                 travel_player_text=travel_player_text,
             )
+            if wakeup_kind in {"spring_dream", "random_spring_dream"}:
+                archive_assistant = dict(assistant_msg)
+                archive_assistant["archive_label"] = "春梦"
             if wakeup_kind in {"exchange_diary_comment", "diary_comment"}:
                 diary_reply = _exchange_diary_reply_content_from_tool_calls(assistant_msg.get("tool_calls"))
                 if diary_reply:
@@ -1329,6 +1337,37 @@ def _executed_tool_names_from_messages(messages: list) -> list[str]:
     return names
 
 
+def _attach_generated_images_to_response(resp_json: dict, images: list[dict]) -> dict:
+    if not isinstance(resp_json, dict) or not images:
+        return resp_json
+    choices = resp_json.get("choices") or []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else None
+    message = choice.get("message") if isinstance(choice, dict) else None
+    if not isinstance(message, dict):
+        return resp_json
+
+    def _image_url(item: dict) -> str:
+        value = item.get("image_url")
+        if isinstance(value, dict):
+            return str(value.get("url") or "").strip()
+        return str(value or item.get("url") or "").strip()
+
+    existing = message.get("images") if isinstance(message.get("images"), list) else []
+    merged = list(existing)
+    seen_urls = {_image_url(item) for item in existing if isinstance(item, dict)}
+    for image in images:
+        image_url = _image_url(image)
+        if image_url and image_url not in seen_urls:
+            merged.append(image)
+            seen_urls.add(image_url)
+    if merged:
+        message["images"] = merged
+        choice["message"] = message
+        choices[0] = choice
+        resp_json["choices"] = choices
+    return resp_json
+
+
 def _tool_trace_has_game_tool_loop(tool_trace: list) -> bool:
     try:
         from services.game_tool_runtime import tool_trace_has_game_marker
@@ -1526,6 +1565,7 @@ def _stream_with_r2_archive(
     reply_channel: str = "",
     du_daily_trigger: Optional[dict] = None,
     dynamic_memory_citation_map: Optional[dict] = None,
+    dynamic_memory_recall_candidate_ids: Optional[list[str]] = None,
     skip_post_archive_dynamic_memory_write: bool = False,
     skip_post_archive_body_delta: bool = False,
     du_request_id: str = "",
@@ -1572,6 +1612,7 @@ def _stream_with_r2_archive(
                 reply_channel=reply_channel,
                 skip_dynamic_memory_write=skip_dynamic_memory_write,
                 skip_body_delta=skip_body_delta,
+                dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
             )
             logger.info("R2 流式请求已存档")
             return
@@ -1588,6 +1629,7 @@ def _stream_with_r2_archive(
                 reply_channel,
                 skip_dynamic_memory_write,
                 skip_body_delta,
+                list(dynamic_memory_recall_candidate_ids or []),
             )
         )
         logger.info("R2 SumiTalk 流式请求已交后台存档")
@@ -1809,12 +1851,26 @@ def _stream_with_r2_archive(
         except Exception:
             return
 
-    def _finish_assistant_stream_event(round_no: int, part_id: str, state: dict) -> None:
-        if not state.get("started") or state.get("finished"):
+    def _finish_assistant_stream_event(
+        round_no: int,
+        part_id: str,
+        state: dict,
+        *,
+        images: list[dict] | None = None,
+    ) -> None:
+        if state.get("finished") or (not state.get("started") and not images):
             return
+        payload = {
+            "part_id": part_id,
+            "round": round_no,
+            "mode": "delta",
+            "role": "assistant",
+        }
+        if images:
+            payload["images"] = images
         _emit_stream_event(
             "assistant_text_finished",
-            {"part_id": part_id, "round": round_no, "mode": "delta", "role": "assistant"},
+            payload,
         )
         state["finished"] = True
 
@@ -2295,10 +2351,16 @@ def _stream_with_r2_archive(
                 final_thinking_blocks = [b for b in (parsed.get("thinking_blocks") or []) if isinstance(b, dict)]
             if parsed.get("reasoning_omitted"):
                 reasoning_omitted = True
+            generated_images = (
+                _collect_generated_image_payloads(completed_tool_results)
+                if sumitalk_event_sink
+                else []
+            )
             _finish_assistant_stream_event(
                 event_round,
                 assistant_part_id,
                 assistant_event_state,
+                images=generated_images,
             )
             tool_loop_finished = True
             if done_chunks:
@@ -2929,8 +2991,13 @@ def chat_completions():
     body = step_inject_du_vitals(body, window_id)
     body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
     body = step_inject_pixel_home(body, window_id)
+    dynamic_memory_recall_candidate_ids: list[str] = []
     if not skip_dynamic_memory:
-        body = step_inject_dynamic_memory(body, window_id)
+        body = step_inject_dynamic_memory(
+            body,
+            window_id,
+            recall_candidate_ids_out=dynamic_memory_recall_candidate_ids,
+        )
     body = step_inject_humor_memes(body)
     body = step_inject_sumitalk_real_mode(
         body,
@@ -3059,6 +3126,7 @@ def chat_completions():
                 reply_channel=reply_channel,
                 du_daily_trigger=du_daily_trigger,
                 dynamic_memory_citation_map=dynamic_memory_citation_map,
+                dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
                 skip_post_archive_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
                 skip_post_archive_body_delta=skip_post_archive_body_delta,
                 du_request_id=du_request_id,
@@ -3562,6 +3630,7 @@ def chat_completions():
                             reply_channel=reply_channel,
                             skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
                             skip_body_delta=archive_skip_body_delta,
+                            dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
                         )
                 else:
                     archived = step_archive_and_maybe_summary(
@@ -3572,6 +3641,7 @@ def chat_completions():
                         reply_channel=archive_reply_channel,
                         skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
                         skip_body_delta=archive_skip_body_delta,
+                        dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
                     )
                     if archived:
                         archived_round_index = int(archived.get("round_index") or 0)
@@ -3592,6 +3662,7 @@ def chat_completions():
                             reply_channel=reply_channel,
                             skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
                             skip_body_delta=archive_skip_body_delta,
+                            dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
                         )
                 else:
                     archived = step_archive_and_maybe_summary(
@@ -3601,6 +3672,7 @@ def chat_completions():
                         reply_channel=archive_reply_channel,
                         skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
                         skip_body_delta=archive_skip_body_delta,
+                        dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
                     )
                     if archived:
                         archived_round_index = int(archived.get("round_index") or 0)
@@ -3612,6 +3684,11 @@ def chat_completions():
         resp_json["du_gateway_executed_tools"] = _executed_tool_names_from_messages(body.get("messages") or [])
         if qq_group_delivery_target:
             resp_json["du_qq_group_delivery_target"] = qq_group_delivery_target
+
+    if (reply_channel == "qq" or is_sumitalk_request) and isinstance(resp_json, dict):
+        generated_images = _collect_generated_image_payloads(completed_tool_results)
+        if generated_images:
+            resp_json = _attach_generated_images_to_response(resp_json, generated_images)
 
     if is_sumitalk_request:
         msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}

@@ -291,12 +291,14 @@ def get_gateway_tools_for_inject() -> List[dict]:
     from services.cedareco_tool import get_cedareco_tools_for_inject
     from services.du_pages import get_du_page_tools_for_inject
     from services.galatea_garden_tool import get_galatea_garden_tools_for_inject
+    from services.generated_image_tool import get_generate_image_tools_for_inject
     from services.secret_drawer import get_secret_drawer_tools_for_inject
     from services.travel_tool import get_travel_tools_for_inject
 
     return [
         *get_gateway_xiaoai_tools(),
         *get_gateway_voice_call_tools(),
+        *get_generate_image_tools_for_inject(),
         *get_gateway_sex_play_draw_tools(),
         *get_gateway_du_surf_tools(),
         *get_secret_drawer_tools_for_inject(),

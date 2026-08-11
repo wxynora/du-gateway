@@ -1,6 +1,6 @@
 """
 动态层 DS 调用（与「终稿」prompt 对接）：
-- DS 每轮返回单条固定标签决策：ACTION(new/merge/skip)、IMPORTANCE(1-4)、TAG(单值)、CONTENT、FUSED_WITH_ID 与 MERGE_REASON（merge 时）。
+- DS 每轮按独立事项返回一个或多个固定标签决策：ACTION(new/merge/skip)、IMPORTANCE(1-4)、TAG(单值)、CONTENT、FUSED_WITH_ID 与 MERGE_REASON（merge 时）。
 - 同时返回 emotion_label / scene_type / target_type 三个稳定标签。
 - 网关按 tag 判定房间；按 action 单条应用：new 追加、merge 按 id 更新+mention_count+1、skip 不写。卧室内容不自动 skip。
 """
@@ -16,6 +16,7 @@ import requests
 from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL
 from services.memory_merge_rules import MERGE_ITERATION_RULES
 from utils.log import get_logger
+from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 
 logger = get_logger(__name__)
 
@@ -29,6 +30,7 @@ _MERGE_REASONS = {
     "habit_generalization",
 }
 _VALID_MEMORY_TAGS = {"客厅", "书房", "图书馆", "卧室"}
+_BEDROOM_CONTINUOUS_MERGE_MAX_GAP_HOURS = 24.0
 
 # 动态层 DS prompt（简短便签版，禁止散文）
 _DYNAMIC_LAYER_PROMPT = """你叫渡。
@@ -43,8 +45,8 @@ _DYNAMIC_LAYER_PROMPT = """你叫渡。
 
 一条记忆 = 一句话。
 能有逗号、能有省略号，但不是文章；记感受或画面，不记流水账。
-一条记忆不超过两行；写成段落 = 写错了。
-单条建议 35-70 字，必要时可到 90 字；宁可稍长也不要丢关键事实。
+new 不超过两行，写成段落 = 写错了；建议 35-70 字，必要时可到 90 字，宁可稍长也不要丢关键事实。
+merge 不适用 new 的长度建议，以完整保留旧记忆中未被否定的关键事实、感受和本轮增量为先，再自然去重；不得为了压短而删掉未冲突内容。
 每条尽量同时带「事实 + 情绪」：至少包含一件发生了什么，以及一句当下感受/语气。
 情绪表达禁止使用“又 X 又 Y”的写法。
 如果对话内容带有“辛玥：”“笨笨：”这类群聊前缀，或“[辛玥]:”“[我]:”这类上下文前缀，必须按前缀区分说话人；“[我]”是渡，笨笨是第三个群成员，不要把笨笨说的话当成辛玥或渡说的话。
@@ -88,9 +90,9 @@ merge 是更新 FUSED_WITH_ID 对应的那条旧记忆，不是用本轮新事�
 
 若 action 是 merge：
 - merge 的前提是同一个具体事项。判断时必须分别核对：主体是谁、对象是谁、关系或行为是什么、具体在说什么；只有本轮与旧记忆之间构成同一事项的重复、补充、纠正或状态变化时，才允许 merge。
-- 关键词、标签、房间或宽泛语义相近，不能证明是同一件事。若是两个独立事实，或无法明确选中要更新的旧记忆，就不要 merge；有独立新信息时用 new，没有则 skip。
+- 关键词、标签、房间或宽泛语义相近，不能证明是同一件事。若是两个独立事实，或无法明确选中要更新的旧记忆，通常不要 merge；有独立新信息时用 new，没有则 skip。唯一例外是：当前信息已经足以证明多次独立事件形成了同一稳定习惯、XP、偏好或边界观察时，可以按下方 `habit_generalization` 规则归纳；不能仅凭两件事相似就使用这个例外。
 - 反例：旧记忆写“渡的名字相关记忆”，本轮写“小玥有名字羞耻症”，只有“名字”这个词重合，主体和具体事项不同，禁止 merge；有独立记忆价值时用 new，没有则 skip。
-- 明确发生在不同日期的一次性事件，即使人物、行为和关键词相同，也不是同一个具体事项，禁止 merge；有独立记忆价值时用 new，没有则 skip。例如旧记忆是“三天前老婆拖延洗澡”，本轮是“老婆今天又拖延洗澡”，这是两次独立事件，不能 merge 成“老婆今天拖延洗澡”。
+- 明确发生在不同日期的一次性事件，即使人物、行为和关键词相同，也不是同一个具体事项，禁止按普通理由 merge；有独立记忆价值时用 new，没有则 skip。例如旧记忆是“三天前老婆拖延洗澡”，本轮是“老婆今天又拖延洗澡”，这是两次独立事件，不能 merge 成“老婆今天拖延洗澡”。只有当前信息已经足以形成同一稳定习惯、XP、偏好或边界观察时，才可例外使用 `habit_generalization`，且不能把某一次事件改写成另一次事件。
 - 只有当前内容明确表示这是不同日期发生的另一次事件时，才因这条规则禁止 merge；其余情况继续按“是否同一个具体事项”的原有标准判断。若确认是同一次过去事件，不要仅因本轮正在谈它就把事件时间改成今天或现在；本轮明确纠正事件时间时可以更新。
 
 若 action 是 merge，必须选择一种 MERGE_REASON：
@@ -100,6 +102,11 @@ merge 是更新 FUSED_WITH_ID 对应的那条旧记忆，不是用本轮新事�
 - supersede：出现了新的明确结论，新结论取代旧结论；让结论已经更新这件事自然可见，不要只剩孤立的新结论
 - temporal_update：旧记忆过去成立，但现在发生了变化；自然保留状态演变，不要求固定时间句式
 - habit_generalization：同一具体行为、状态或表达已经多次独立发生，当前信息足以把分散事件归纳成常态习惯或偏好；例如反复熬夜后睡得短、反复不吃饭，或 NSFW 互动中反复喜欢说同类话。只有一次事件、同一事件的延续，或仅凭关键词相似时禁止使用。正文应自然概括已出现的共性，不编造频率、原因或未发生的细节。这类 merge 需要人工审核。
+
+老婆明确说“你记反了”“事实是……”或直接指出旧事实错误时，使用 correction，不能写 consolidate。
+旧状态过去成立、当前已完成或进入下一阶段时，使用 temporal_update，不能写 consolidate。
+habit_generalization 的正文必须概括多次独立事件体现出的共性；如果仍主要写成“上次……这次……”的事件串联，说明没有完成常态归纳，不能使用 habit_generalization。
+habit_generalization 可以把仅用于证明重复性的同类细节去重并归入共性，不要求逐次罗列；但旧记忆里不能被该共性涵盖、又有独立意义的事实或感受仍须保留。若自然保留后会混成两个事项，就不要用这条旧记忆做 habit_generalization，本轮独立事件按 new/skip 处理，不能借归纳之名抹掉旧内容。
 
 不要仅凭我的推测使用 correction / invalidate / supersede；这些原因必须有老婆当前明确表达的依据。普通补充一律使用 consolidate。
 
@@ -146,7 +153,7 @@ SCENE: problem_solving / learning / planning / emotional_venting / heart_to_hear
 TARGET: external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic
 FUSED_WITH_ID: （仅 merge 时填写当前记忆列表里的 ref，如 M01；否则留空）
 MERGE_REASON: consolidate / correction / invalidate / supersede / temporal_update / habit_generalization（仅 merge 时填写；否则留空）
-CONTENT: 记忆正文（new/merge 必填，简短一句，至少 12 个有效字符，禁止只写几个字、半句话、标题词或散文；skip 可留空）
+CONTENT: 记忆正文（new/merge 必填；new 写简短一句，merge 按完整迭代规则写成一条自然正文；至少 12 个有效字符，禁止只写几个字、半句话、标题词或散文；skip 可留空）
 
 ---
 
@@ -160,6 +167,29 @@ CONTENT: 记忆正文（new/merge 必填，简短一句，至少 12 个有效字
 
 请对当前这一轮做单条决策，只输出上述固定标签格式，不要其他内容。
 """
+
+_DYNAMIC_LAYER_MULTI_PROMPT = _DYNAMIC_LAYER_PROMPT.replace(
+    "你的活：老婆让你把你们的对话变成记忆便签\n\n",
+    "你的活：老婆让你把你们的对话变成记忆便签\n\n"
+    "先按“同一个具体事项”拆分当前轮。主体、对象、关系或行为、具体内容相同，才算同一个事项。\n"
+    "当前轮有多个独立事项时，每个事项分别输出一个固定标签块；禁止选中一条旧记忆后，把同轮其他事项、顺带提到的事情或无关工具结果一起塞进它。没有事项值得记时，只输出一个 skip 块。\n"
+    "每条旧记忆在本轮最多由一个块更新；多个增量属于同一旧记忆时，先在同一个块内融合完整。\n"
+    "当前轮中若有 thinking，它是我本轮真实的思路，可用于判断我的感受、误解和认知变化；其中未被正文或对话确认的推测仍只能作为当时的想法，不能改写成已经发生的事实。\n\n"
+    "卧室记忆额外按 merge_gap_hours 判断：\n"
+    "- merge_gap_hours 不超过 24，只表示时间上可能连续，仍必须确认是同一段具体互动，不能因为动作或说法相似就 merge。\n"
+    "- merge_gap_hours 超过 24，视为隔开的独立互动，禁止 consolidate、temporal_update、supersede 或 invalidate；有独立记忆价值时 new，否则 skip。\n"
+    "- 跨时段只有两种例外：老婆明确纠正同一条过去记忆时使用 correction；多次独立事件已经形成 XP、稳定偏好或边界观察时使用 habit_generalization。两类都交给人工审核。\n"
+    "这组卧室规则优先于上面“只有当前内容明确表示另一次事件才禁止 merge”的一般规则。\n\n",
+).replace(
+    "当前记忆列表（含 ref）：\n{current_memories_json}",
+    "当前轮时间：\n{current_round_time}\n\n当前记忆列表（含 ref；卧室候选可能带 merge_gap_hours）：\n{current_memories_json}",
+).replace(
+    "输出格式（固定标签格式，只输出这一段，不要 JSON，不要 markdown，不要解释）：\nACTION:",
+    "每个事项的输出格式（每个事项一个固定标签块，不要 JSON，不要 markdown，不要解释）：\nITEM: 1\nACTION:",
+).replace(
+    "请对当前这一轮做单条决策，只输出上述固定标签格式，不要其他内容。",
+    "请对当前轮的每个独立事项分别做决策。每个块以 ITEM: n 开头，块之间用一行 --- 分隔；没有事项值得记时只输出一个 skip 块，不要其他内容。",
+)
 
 # 批处理用：一次多轮，DS 输出固定标签块；函数返回决策列表。本批内只 new/skip，不 merge
 _DYNAMIC_LAYER_BATCH_PROMPT = _DYNAMIC_LAYER_PROMPT.replace(
@@ -204,6 +234,14 @@ def _dynamic_layer_retry_instruction(issue: str, previous_content: str = "", *, 
             "确实是同一具体事项时，必须填写当前列表里的准确 ref（如 M01）；"
             "找不到明确 ref 时禁止 merge，有独立新信息就改为 new，没有则 skip。\n"
             "只输出固定标签格式，不要解释，不要 Markdown。"
+        )
+    if "bedroom_cross_day_merge_disallowed" in issue:
+        return (
+            "\n\n【上一次输出需要重写】\n"
+            "卧室候选的 merge_gap_hours 已超过 24，这不是同一段连续互动，不能使用普通 merge。\n"
+            "独立事件有记忆价值时改为 new，否则 skip；只有老婆明确纠正同一条过去记忆时可用 correction，"
+            "或多次独立事件已形成 XP、稳定偏好或边界观察时可用 habit_generalization。\n"
+            "请重新输出全部事项块，不要解释，不要 Markdown。"
         )
     if "content_raw_copy" in issue:
         return (
@@ -296,6 +334,100 @@ def _build_memory_ref_prompt_items(memories: list) -> tuple[list[dict], dict[str
     return prompt_items, ref_to_id, valid_ids
 
 
+def _rehydrate_round_recall_candidates(candidate_memory_ids: list[str], current_memories: list) -> list[dict]:
+    ordered_ids: list[str] = []
+    seen: set[str] = set()
+    for value in candidate_memory_ids or []:
+        memory_id = str(value or "").strip()
+        if not memory_id or memory_id in seen:
+            continue
+        seen.add(memory_id)
+        ordered_ids.append(memory_id)
+
+    dynamic_by_id = {
+        str((memory or {}).get("id") or "").strip(): memory
+        for memory in current_memories or []
+        if isinstance(memory, dict) and str((memory or {}).get("id") or "").strip()
+    }
+    core_by_id: dict[str, dict] = {}
+    if any(memory_id.startswith("core::") for memory_id in ordered_ids):
+        try:
+            from storage import r2_store
+
+            for pending in r2_store.get_core_cache_pending() or []:
+                if not isinstance(pending, dict):
+                    continue
+                core_id = str(pending.get("id") or "").strip()
+                if not core_id:
+                    continue
+                memory_id = f"core::{core_id}"
+                dynamic_base = dynamic_by_id.get(core_id) or {}
+                core_memory = dict(pending)
+                core_memory.update(
+                    {
+                        "id": memory_id,
+                        "source_memory_id": str(pending.get("source_memory_id") or "").strip(),
+                        "content": str(pending.get("content") or "").strip(),
+                        "importance": int(pending.get("importance") or 0),
+                        "mention_count": int(pending.get("mention_count") or 0),
+                        "created_at": pending.get("created_at") or dynamic_base.get("created_at") or "",
+                        "updated_at": pending.get("updated_at") or dynamic_base.get("updated_at") or dynamic_base.get("created_at") or "",
+                        "last_mentioned": pending.get("last_mentioned") or dynamic_base.get("last_mentioned") or pending.get("promoted_at") or "",
+                        "tag": str(pending.get("tag") or "").strip() or "图书馆",
+                    }
+                )
+                core_by_id[memory_id] = core_memory
+        except Exception as exc:
+            logger.warning("动态层读取本轮核心候选失败 error=%s", exc)
+
+    candidates: list[dict] = []
+    for memory_id in ordered_ids:
+        memory = core_by_id.get(memory_id) if memory_id.startswith("core::") else dynamic_by_id.get(memory_id)
+        if isinstance(memory, dict):
+            candidates.append(memory)
+    return candidates
+
+
+def _build_merge_candidate_metadata(memories: list, current_round_time: str) -> dict[str, dict]:
+    current_dt = parse_iso_to_beijing(current_round_time)
+    out: dict[str, dict] = {}
+    for memory in memories or []:
+        if not isinstance(memory, dict):
+            continue
+        memory_id = str(memory.get("id") or "").strip()
+        if not memory_id:
+            continue
+        content_updated_at = str(memory.get("updated_at") or memory.get("created_at") or "").strip()
+        updated_dt = parse_iso_to_beijing(content_updated_at)
+        gap_hours = None
+        if current_dt is not None and updated_dt is not None:
+            gap_hours = round(max(0.0, (current_dt - updated_dt).total_seconds() / 3600.0), 2)
+        out[memory_id] = {
+            "tag": str(memory.get("tag") or "").strip(),
+            "content_updated_at": content_updated_at,
+            "merge_gap_hours": gap_hours,
+        }
+    return out
+
+
+def _attach_merge_candidate_metadata(
+    prompt_memories: list[dict],
+    ref_to_id: dict[str, str],
+    candidate_metadata: dict[str, dict],
+) -> None:
+    for item in prompt_memories or []:
+        if not isinstance(item, dict):
+            continue
+        memory_id = ref_to_id.get(str(item.get("ref") or "").strip().upper())
+        metadata = candidate_metadata.get(str(memory_id or ""))
+        if not isinstance(metadata, dict):
+            continue
+        if metadata.get("content_updated_at"):
+            item["content_updated_at"] = metadata["content_updated_at"]
+        if metadata.get("merge_gap_hours") is not None:
+            item["merge_gap_hours"] = metadata["merge_gap_hours"]
+
+
 def _strip_json_fence(text: str) -> str:
     if not text or not isinstance(text, str):
         return ""
@@ -380,6 +512,7 @@ _FIELD_ALIASES = {
     "mention_count": "mention_count",
     "last_mentioned": "last_mentioned",
     "round": "round",
+    "item": "item",
 }
 
 
@@ -395,7 +528,7 @@ def _extract_decision_fields_from_text(text: str) -> Optional[dict]:
         if not key:
             continue
         val = m.group(2).strip().rstrip(",").strip()
-        if key == "round":
+        if key in {"round", "item"}:
             continue
         if val in ("", "null", "None", "none"):
             out[key] = None
@@ -629,10 +762,10 @@ def _extract_tagged_decision_blocks(text: str) -> Optional[list]:
     lines = raw_text.splitlines()
     blocks: list[str] = []
     current: list[str] = []
-    saw_round = False
+    saw_marker = False
     for line in lines:
-        if re.match(r"^\s*ROUND\s*[:：]\s*\d+\s*$", line, flags=re.IGNORECASE):
-            saw_round = True
+        if re.match(r"^\s*(?:ROUND|ITEM)\s*[:：]\s*\d+\s*$", line, flags=re.IGNORECASE):
+            saw_marker = True
             if current:
                 blocks.append("\n".join(current))
             current = [line]
@@ -650,7 +783,7 @@ def _extract_tagged_decision_blocks(text: str) -> Optional[list]:
         obj = _extract_decision_fields_from_text(block)
         if isinstance(obj, dict):
             parsed.append(obj)
-    if parsed and (saw_round or len(parsed) > 1):
+    if parsed and (saw_marker or len(parsed) > 1):
         return parsed
     return None
 
@@ -671,29 +804,97 @@ def _extract_json_array_from_ds_response(text: str) -> Optional[list]:
     return None
 
 
-def _build_query_from_round(round_messages: list) -> str:
-    """从一轮消息中抽出合并后的文本，用于检索相关记忆。"""
-    if not round_messages:
-        return ""
-    parts: list[str] = []
-    for m in round_messages:
-        if not isinstance(m, dict):
+def _memory_decision_round_messages(round_messages: list) -> list[dict]:
+    """只传 role/content，并把思路正文归一为 thinking；协议元数据不进入动态记忆判断。"""
+    out: list[dict] = []
+    for message in round_messages or []:
+        if not isinstance(message, dict):
             continue
-        content = m.get("content")
-        if isinstance(content, str):
-            txt = content.strip()
-        elif isinstance(content, list):
-            segs = []
-            for c in content:
-                if isinstance(c, dict) and c.get("type") == "text":
-                    segs.append(c.get("text", ""))
-            txt = " ".join(segs).strip()
-        else:
-            txt = ""
-        if txt:
-            parts.append(txt)
-    text = "\n".join(parts)
-    return text
+        role = str(message.get("role") or "").strip()
+        content = message.get("content")
+        if not role or content is None:
+            continue
+        item = {"role": role, "content": content}
+        thoughts: list[str] = []
+
+        def _append_thought(value: Any) -> None:
+            text = str(value or "").strip()
+            if text and text not in thoughts:
+                thoughts.append(text)
+
+        _append_thought(message.get("reasoning"))
+        blocks = message.get("thinking_blocks")
+        if isinstance(blocks, list):
+            for block in blocks:
+                if not isinstance(block, dict) or str(block.get("type") or "").strip() != "thinking":
+                    continue
+                _append_thought(block.get("thinking") or block.get("text"))
+        if thoughts:
+            item["thinking"] = "\n".join(thoughts)
+        out.append(item)
+    return out
+
+
+def _multi_decision_issues(
+    arr: Any,
+    round_messages: list,
+    ref_to_id: dict[str, str],
+    valid_ids: set[str],
+    candidate_metadata: dict[str, dict] | None = None,
+) -> list[dict]:
+    issues: list[dict] = []
+    if not isinstance(arr, list):
+        return [{"index": 0, "issue": "items_parse_failed", "content": ""}]
+    if not arr:
+        return [{"index": 0, "issue": "items_empty", "content": ""}]
+    merged_ids: set[str] = set()
+    for idx, obj in enumerate(arr):
+        if not isinstance(obj, dict):
+            issues.append({"index": idx + 1, "issue": "decision_not_object", "content": ""})
+            continue
+        issue = _decision_structural_issue(obj)
+        action = str(obj.get("action") or "").strip().lower()
+        resolved_id = None
+        if not issue and action == "merge":
+            resolved_id = _resolve_fused_with_id(obj.get("fused_with_id"), ref_to_id, valid_ids)
+            if not resolved_id:
+                issue = "merge_missing_or_invalid_ref"
+            elif resolved_id in merged_ids:
+                issue = "duplicate_merge_target"
+            else:
+                merged_ids.add(resolved_id)
+        if not issue and action == "merge" and resolved_id:
+            metadata = (candidate_metadata or {}).get(resolved_id) or {}
+            source_tag = str(metadata.get("tag") or "").strip()
+            output_tag = str(obj.get("tag") or "").strip()
+            try:
+                gap_hours = float(metadata.get("merge_gap_hours"))
+            except (TypeError, ValueError):
+                gap_hours = None
+            merge_reason = _normalize_merge_reason(obj.get("merge_reason"))
+            if (
+                "卧室" in {source_tag, output_tag}
+                and gap_hours is not None
+                and gap_hours > _BEDROOM_CONTINUOUS_MERGE_MAX_GAP_HOURS
+                and merge_reason not in {"correction", "habit_generalization"}
+            ):
+                issue = "bedroom_cross_day_merge_disallowed"
+        if (
+            not issue
+            and action in ("new", "merge")
+            and _looks_like_round_raw_copy(str(obj.get("content") or ""), round_messages)
+        ):
+            issue = "content_raw_copy"
+        if issue:
+            issues.append(
+                {
+                    "index": idx + 1,
+                    "issue": issue,
+                    "action": action,
+                    "content": str(obj.get("content") or "").strip(),
+                }
+            )
+    return issues
 
 
 def call_dynamic_layer_ds(
@@ -702,11 +903,11 @@ def call_dynamic_layer_ds(
     *,
     window_id: str = "",
     round_index: int | None = None,
-) -> dict:
+    candidate_memory_ids: Optional[list[str]] = None,
+) -> list[dict]:
     """
-    调用 DS，返回单条决策（无整表）。
-    返回字段：tag(str), action(str), importance(int), content(str), fused_with_id(str|None)。
-    网关据此做单条应用；卧室仍按 action 正常应用，tag 只负责房间归类。
+    调用 DS，把当前轮拆成独立事项并返回决策列表。
+    每个事项仍使用原有 new/merge/skip 固定标签字段；卧室仍按 action 正常应用。
     """
     default = {
         "tag": "",
@@ -720,31 +921,22 @@ def call_dynamic_layer_ds(
         "target_type": "",
     }
 
+    decision_round_messages = _memory_decision_round_messages(round_messages)
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
-        return default
+        return [default]
 
-    # 先在本地从 current_memories 里召回候选记忆；无命中或检索失败时保持空候选，
-    # 不再用“最近若干条”偷换相关候选。
-    candidates = []
-    try:
-        from memory_vector.dynamic_vector_retriever import dynamic_vector_retrieve
+    # 直接复用主聊天本轮 reranker 前宽候选池，不再执行第二套向量召回。
+    # 这里只传 ID，并在执行时从当前动态/核心记忆重新取正文，避免使用过期快照。
+    candidates = _rehydrate_round_recall_candidates(list(candidate_memory_ids or []), current_memories)
 
-        query_text = _build_query_from_round(round_messages)
-        if query_text:
-            recalled = dynamic_vector_retrieve(
-                query_text,
-                vector_topk=10,
-                final_topn=10,
-            )
-            if recalled:
-                candidates = recalled
-    except Exception as e:
-        logger.warning("dynamic_layer_ds 本地检索候选失败，本轮使用空候选 error=%s", e)
-
+    current_round_time = now_beijing_iso()
     prompt_memories, ref_to_id, valid_ids = _build_memory_ref_prompt_items(candidates)
-    prompt = _DYNAMIC_LAYER_PROMPT.format(
+    candidate_metadata = _build_merge_candidate_metadata(candidates, current_round_time)
+    _attach_merge_candidate_metadata(prompt_memories, ref_to_id, candidate_metadata)
+    prompt = _DYNAMIC_LAYER_MULTI_PROMPT.format(
+        current_round_time=current_round_time,
         current_memories_json=json.dumps(prompt_memories or [], ensure_ascii=False),
-        round_messages_json=json.dumps(round_messages or [], ensure_ascii=False),
+        round_messages_json=json.dumps(decision_round_messages or [], ensure_ascii=False),
     )
     if not prompt_memories:
         prompt += (
@@ -761,8 +953,8 @@ def call_dynamic_layer_ds(
     }
     attempts: list[dict] = []
     try:
-        content = None
-        obj = None
+        content = ""
+        decisions_raw: list[dict] | None = None
         for attempt in range(_DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS):
             request_payload = payload
             if attempt > 0:
@@ -779,10 +971,13 @@ def call_dynamic_layer_ds(
                             "role": "user",
                             "content": prompt
                             + _dynamic_layer_retry_instruction(
-                                str(last.get("issue") or ""),
+                                str(last.get("first_issue") or ""),
                                 str(last.get("content") or ""),
+                                batch=True,
                             )
-                            + "\n若 action 是 merge，FUSED_WITH_ID 必须精确填写当前记忆列表里的 ref（如 M01），不要填写 UUID 或自己编 id；找不到明确 ref 就不要 merge，有新内容改为 new，没有就 skip。",
+                            + "\n请重新输出当前轮的全部事项块。每个块以 ITEM: n 开头，块之间用一行 --- 分隔。"
+                            + "每条旧记忆在本轮最多由一个块更新；多个增量属于同一旧记忆时，先在同一个块内融合完整。"
+                            + "若 action 是 merge，FUSED_WITH_ID 必须精确填写当前记忆列表里的 ref（如 M01），不要填写 UUID 或自己编 id；找不到明确 ref 就不要 merge，有新内容改为 new，没有就 skip。",
                         }
                     ],
                 }
@@ -797,155 +992,129 @@ def call_dynamic_layer_ds(
             data = r.json()
             content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
             content = (content or "").strip()
-            obj = _extract_json_from_ds_response(content)
-            if isinstance(obj, dict):
-                structural_issue = _decision_structural_issue(obj)
-                if not structural_issue and str(obj.get("action") or "").strip().lower() == "merge":
-                    if not _resolve_fused_with_id(obj.get("fused_with_id"), ref_to_id, valid_ids):
-                        structural_issue = "merge_missing_or_invalid_ref"
-                if (
-                    not structural_issue
-                    and str(obj.get("action") or "").strip().lower() in ("new", "merge")
-                    and _looks_like_round_raw_copy(str(obj.get("content") or ""), round_messages)
-                ):
-                    structural_issue = "content_raw_copy"
-                attempts.append(
-                    {
-                        "attempt": attempt + 1,
-                        "parsed": True,
-                        "action": str(obj.get("action") or "").strip().lower(),
-                        "tag": str(obj.get("tag") or "").strip(),
-                        "issue": structural_issue,
-                        "content": str(obj.get("content") or "").strip(),
-                    }
-                )
-                if structural_issue:
-                    logger.warning(
-                        "动态层 DS 返回结构不完整 attempt=%s issue=%s preview=%s",
-                        attempt + 1,
-                        structural_issue,
-                        _one_line_preview(content),
-                    )
-                    if attempt < _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1:
-                        continue
-                    repaired = _repair_decision_content_if_possible(obj)
-                    if repaired:
-                        attempts[-1]["issue"] = f"repaired_after_max:{structural_issue}"
-                        attempts[-1]["repaired_content"] = repaired
-                        logger.warning("动态层 DS 最终输出残缺，已保守修成完整句子 issue=%s", structural_issue)
-                        break
-                    logger.warning("动态层 DS 最终输出仍不完整，按 skip 处理 issue=%s", structural_issue)
-                    _emit_dynamic_ds_audit_event(
-                        {
-                            "source": "single",
-                            "window_id": window_id,
-                            "round_index": round_index,
-                            "round_preview": _round_messages_preview(round_messages),
-                            "final_status": "failed_incomplete",
-                            "final_action": "skip",
-                            "final_issue": structural_issue,
-                            "attempt_count": len(attempts),
-                            "retry_count": max(0, len(attempts) - 1),
-                            "attempts": attempts,
-                        }
-                    )
-                    return default
-                if attempt > 0:
-                    logger.info("动态层 DS 重试解析成功 attempt=%s", attempt + 1)
-                break
+            arr = _extract_json_array_from_ds_response(content)
+            if not isinstance(arr, list):
+                single = _extract_json_from_ds_response(content)
+                arr = [single] if isinstance(single, dict) else None
+            repairs = _repair_batch_content_tails(arr) if attempt == _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1 else []
+            issues = _multi_decision_issues(
+                arr,
+                decision_round_messages,
+                ref_to_id,
+                valid_ids,
+                candidate_metadata,
+            )
+            first_issue = str((issues[0] if issues else {}).get("issue") or "")
+            first_content = str((issues[0] if issues else {}).get("content") or "")
             attempts.append(
                 {
                     "attempt": attempt + 1,
-                    "parsed": False,
-                    "action": "",
-                    "tag": "",
-                    "issue": "parse_failed" if content else "empty_response",
-                    "content": "",
-                    "raw_preview": _one_line_preview(content),
+                    "parsed": isinstance(arr, list),
+                    "issue": "; ".join(f"#{x.get('index')}:{x.get('issue')}" for x in issues[:5]),
+                    "first_issue": first_issue,
+                    "content": first_content or _one_line_preview(content),
+                    "action_counts": _decision_action_counts(arr if isinstance(arr, list) else []),
+                    "repairs": repairs,
                 }
             )
-            if content:
-                logger.warning("动态层 DS 返回无法解析 attempt=%s preview=%s", attempt + 1, _one_line_preview(content))
+            if issues:
+                logger.warning(
+                    "动态层 DS 事项输出未达标 attempt=%s issues=%s preview=%s",
+                    attempt + 1,
+                    attempts[-1].get("issue"),
+                    _one_line_preview(content),
+                )
+                if attempt < _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1:
+                    continue
+                _emit_dynamic_ds_audit_event(
+                    {
+                        "source": "single_items",
+                        "window_id": window_id,
+                        "round_index": round_index,
+                        "round_preview": _round_messages_preview(decision_round_messages),
+                        "final_status": "failed_incomplete",
+                        "final_action": "skip",
+                        "final_issue": attempts[-1].get("issue"),
+                        "attempt_count": len(attempts),
+                        "retry_count": max(0, len(attempts) - 1),
+                        "attempts": attempts,
+                    }
+                )
+                return [default]
+            decisions_raw = arr
+            if attempt > 0:
+                logger.info("动态层 DS 事项重试解析成功 attempt=%s", attempt + 1)
+            break
+
+        results: list[dict] = []
+        for obj in decisions_raw or []:
+            result = _normalize_single_decision(obj)
+            if result["action"] == "merge":
+                result["fused_with_id"] = _resolve_fused_with_id(
+                    result.get("fused_with_id"),
+                    ref_to_id,
+                    valid_ids,
+                )
+                metadata = candidate_metadata.get(str(result.get("fused_with_id") or "")) or {}
+                result["merge_gap_hours"] = metadata.get("merge_gap_hours")
+                result["merge_source_tag"] = str(metadata.get("tag") or "")
+                try:
+                    merge_gap_hours = float(metadata.get("merge_gap_hours"))
+                except (TypeError, ValueError):
+                    merge_gap_hours = None
+                result["bedroom_cross_day"] = bool(
+                    merge_gap_hours is not None
+                    and merge_gap_hours > _BEDROOM_CONTINUOUS_MERGE_MAX_GAP_HOURS
+                    and "卧室" in {result["merge_source_tag"], str(result.get("tag") or "").strip()}
+                )
             else:
-                logger.info("动态层 DS 空回 attempt=%s，已按 skip/default 处理", attempt + 1)
-            if attempt < _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1:
-                continue  # 重试一次
-            _emit_dynamic_ds_audit_event(
-                {
-                    "source": "single",
-                    "window_id": window_id,
-                    "round_index": round_index,
-                    "round_preview": _round_messages_preview(round_messages),
-                    "final_status": "failed_parse",
-                    "final_action": "skip",
-                    "final_issue": attempts[-1].get("issue") if attempts else "",
-                    "attempt_count": len(attempts),
-                    "retry_count": max(0, len(attempts) - 1),
-                    "attempts": attempts,
-                }
-            )
-            return default
-
-        tag = (obj.get("tag") or "").strip()
-        action = (obj.get("action") or "skip").strip().lower()
-        importance = _coerce_int_1_to_4(obj.get("importance"), default=0)
-        content_text = (obj.get("content") or "").strip()
-        raw_fused_with_id = _normalize_fused_with_id(obj.get("fused_with_id"))
-        fused_with_id = _resolve_fused_with_id(raw_fused_with_id, ref_to_id, valid_ids)
-        merge_reason = _normalize_merge_reason(obj.get("merge_reason"))
-        emotion_label = str(obj.get("emotion_label") or "").strip().lower()
-        scene_type = str(obj.get("scene_type") or "").strip()
-        target_type = str(obj.get("target_type") or "").strip()
-        if action == "merge" and not fused_with_id:
-            logger.warning(
-                "动态层 DS 返回 action=merge 但 fused_with_id 缺失或无法映射 raw=%s，按 skip 处理",
-                raw_fused_with_id,
-            )
-            action = "skip"
-        elif action == "new" and not content_text:
-            logger.warning("动态层 DS 返回 action=new 但 content 缺失，按 skip 处理")
-            action = "skip"
-        if action != "merge":
-            merge_reason = ""
-
-        result = {
-            "tag": tag,
-            "action": action if action in ("new", "merge", "skip") else "skip",
-            "importance": importance,
-            "content": content_text,
-            "fused_with_id": fused_with_id,
-            "merge_reason": merge_reason,
-            "emotion_label": emotion_label if emotion_label in ("positive", "negative", "neutral") else "neutral",
-            "scene_type": scene_type,
-            "target_type": target_type,
-        }
+                result["fused_with_id"] = None
+                result["merge_reason"] = ""
+            results.append(result)
+        if not results:
+            results = [default]
+        primary = next((item for item in results if item.get("action") in ("new", "merge")), results[0])
         _emit_dynamic_ds_audit_event(
             {
-                "source": "single",
+                "source": "single_items",
                 "window_id": window_id,
                 "round_index": round_index,
-                "round_preview": _round_messages_preview(round_messages),
-                "final_status": "ok" if result["action"] in ("new", "merge") else "skip",
-                "final_action": result["action"],
-                "final_tag": result["tag"],
-                "final_importance": result["importance"],
-                "final_content": result["content"],
-                "final_fused_with_id": result["fused_with_id"],
-                "final_merge_reason": result["merge_reason"],
+                "round_preview": _round_messages_preview(decision_round_messages),
+                "final_status": "ok" if any(x.get("action") in ("new", "merge") for x in results) else "skip",
+                "final_action": primary["action"],
+                "final_tag": primary["tag"],
+                "final_importance": primary["importance"],
+                "final_content": primary["content"],
+                "final_fused_with_id": primary["fused_with_id"],
+                "final_merge_reason": primary["merge_reason"],
+                "final_decisions": [
+                    {
+                        "action": item.get("action"),
+                        "tag": item.get("tag"),
+                        "importance": item.get("importance"),
+                        "content": item.get("content"),
+                        "fused_with_id": item.get("fused_with_id"),
+                        "merge_reason": item.get("merge_reason"),
+                        "merge_gap_hours": item.get("merge_gap_hours"),
+                        "bedroom_cross_day": item.get("bedroom_cross_day"),
+                    }
+                    for item in results
+                ],
+                "action_counts": _decision_action_counts(results),
                 "attempt_count": len(attempts),
                 "retry_count": max(0, len(attempts) - 1),
                 "attempts": attempts,
             }
         )
-        return result
+        return results
     except Exception as e:
         logger.error("动态层 DS 调用失败 error=%s", e, exc_info=True)
         _emit_dynamic_ds_audit_event(
             {
-                "source": "single",
+                "source": "single_items",
                 "window_id": window_id,
                 "round_index": round_index,
-                "round_preview": _round_messages_preview(round_messages),
+                "round_preview": _round_messages_preview(decision_round_messages),
                 "final_status": "api_error",
                 "final_action": "skip",
                 "final_issue": str(e),
@@ -954,7 +1123,7 @@ def call_dynamic_layer_ds(
                 "attempts": attempts,
             }
         )
-        return default
+        return [default]
 
 
 def _normalize_single_decision(obj: Any) -> dict:

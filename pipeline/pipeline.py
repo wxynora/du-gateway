@@ -40,6 +40,7 @@ logger = get_logger(__name__)
 from services import image_desc, deepseek_summary
 from services.dynamic_memory_citation import DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY
 from services.dynamic_memory_recall_debug import DU_REQUEST_ID_BODY_KEY, normalize_debug_request_id
+from services.dynamic_memory_weight import dynamic_memory_weight
 from services.memory_bm25 import BM25QueryTerm, bm25_score_documents
 from services.anthropic_model_capabilities import supports_mid_conversation_system
 
@@ -2462,7 +2463,12 @@ def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> lis
         "- 不要直接复述前几轮内容，不要让前几轮上下文喧宾夺主\n"
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
-    payload = {"model": DEEPSEEK_CHAT_MODEL, "messages": [{"role": "user", "content": prompt}], "max_tokens": 160}
+    payload = {
+        "model": DEEPSEEK_CHAT_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "thinking": {"type": "disabled"},
+        "max_tokens": 160,
+    }
     try:
         r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=8)
         r.raise_for_status()
@@ -2960,22 +2966,8 @@ def _dedupe_recalled_memories(memories: list[dict]) -> list[dict]:
 
 
 def _memory_weight(m: dict, now=None) -> float:
-    """权重 = 基础重要度 + 提及加成 - 时间衰减。"""
-    importance = int(m.get("importance") or 0)
-    mention_count = int(m.get("mention_count") or 0)
-    from utils.time_aware import parse_iso_to_beijing, _now_beijing
-
-    now = now or _now_beijing()
-    last_mentioned = m.get("last_mentioned") or m.get("created_at") or ""
-    dt = parse_iso_to_beijing(last_mentioned)
-    if dt is None:
-        dt = now
-    days_since = (now - dt).days
-    if days_since < 0:
-        days_since = 0
-    decay_days = max(0, days_since - 15)
-    time_decay = min(decay_days * 0.1, 2.0)
-    return float(importance + mention_count - time_decay)
+    """兼容现有调用；实际公式统一由共享模块维护。"""
+    return dynamic_memory_weight(m, now=now)
 
 
 def _dynamic_memory_tag(mem: dict) -> str:
@@ -3234,11 +3226,28 @@ def _build_sqlite_shadow_compare(
         return {"enabled": True, "ok": False, "error": str(e)}
 
 
-def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: bool = True) -> dict:
+def _replace_recall_candidate_ids(target: Optional[list[str]], candidates: list[dict]) -> None:
+    if target is None:
+        return
+    target[:] = [
+        memory_id
+        for mem in candidates or []
+        if (memory_id := str((mem or {}).get("id") or "").strip())
+    ]
+
+
+def step_inject_dynamic_memory(
+    body: dict,
+    window_id: str,
+    *,
+    use_recall_cache: bool = True,
+    recall_candidate_ids_out: Optional[list[str]] = None,
+) -> dict:
     """
     每轮对话开始前：从 R2 读动态层，用向量召回 + BM25 关键词召回融合排序后注入 system 末尾。
     DYNAMIC_MEMORY_TOP_N<=0 时不注入、不调向量检索，便于测试延迟。
     """
+    _replace_recall_candidate_ids(recall_candidate_ids_out, [])
     if DYNAMIC_MEMORY_TOP_N <= 0:
         return body
     du_request_id = normalize_debug_request_id((body or {}).get(DU_REQUEST_ID_BODY_KEY))
@@ -3297,8 +3306,10 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
                 last_user_text = content
             elif isinstance(content, list):
                 last_user_text = " ".join(
-                    c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
-                )
+                    str(c.get("text") or "")
+                    for c in content
+                    if isinstance(c, dict) and c.get("type") == "text"
+                ).strip()
             break
     # 元问题：不要触发动态记忆（避免”问记忆→召回一堆含记忆字样的记忆”）
     if _is_memory_meta_query(last_user_text):
@@ -3361,6 +3372,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
             cached = None
     if cached is not None:
         recalled = _dedupe_recalled_memories(cached_results)
+        _replace_recall_candidate_ids(recall_candidate_ids_out, recalled)
         recall_source = str(cached.get("source") or "hybrid")
         vector_error = ""
         expanded_queries = []
@@ -3394,6 +3406,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str, *, use_recall_cache: 
 
         bm25_scores = _bm25_recall_scores(last_user_text, keyword_candidates, memories)
         recalled = _dedupe_recalled_memories(_merge_vector_and_bm25_recall(vector_recalled, bm25_scores))
+        _replace_recall_candidate_ids(recall_candidate_ids_out, recalled)
         has_vector = any(float(((m.get("_recall_score") or {}).get("sem_user") or 0.0)) > 0 for m in recalled)
         has_bm25 = any(float(((m.get("_recall_score") or {}).get("bm25") or 0.0)) > 0 for m in recalled)
         if has_vector and has_bm25:
@@ -4060,18 +4073,24 @@ def _apply_one_decision(
                 logger.warning("核心层 merge 候选未暂存 window_id=%s fused_with_id=%s", window_id, fused_with_id)
             return None
 
-        if merge_reason == "habit_generalization":
-            current_dynamic = next(
-                (
-                    item
-                    for item in current_memories
-                    if isinstance(item, dict) and str(item.get("id") or "").strip() == str(fused_with_id).strip()
-                ),
-                None,
-            )
+        current_dynamic = next(
+            (
+                item
+                for item in current_memories
+                if isinstance(item, dict) and str(item.get("id") or "").strip() == str(fused_with_id).strip()
+            ),
+            None,
+        )
+        cross_day_bedroom_correction = bool(
+            merge_reason == "correction"
+            and decision.get("bedroom_cross_day") is True
+            and isinstance(current_dynamic, dict)
+            and "卧室" in {str(current_dynamic.get("tag") or "").strip(), tag}
+        )
+        if merge_reason == "habit_generalization" or cross_day_bedroom_correction:
             if not isinstance(current_dynamic, dict):
                 logger.warning(
-                    "动态层常态归纳 merge 未找到 fused_with_id=%s，本轮回退为 skip window_id=%s",
+                    "动态层待审 merge 未找到 fused_with_id=%s，本轮回退为 skip window_id=%s",
                     fused_with_id,
                     window_id,
                 )
@@ -4097,15 +4116,18 @@ def _apply_one_decision(
             )
             if staged:
                 logger.info(
-                    "动态层常态归纳 merge 已生成待审核候选 window_id=%s fused_with_id=%s",
+                    "动态层待审 merge 已生成候选 window_id=%s fused_with_id=%s reason=%s gap_hours=%s",
                     window_id,
                     fused_with_id,
+                    merge_reason,
+                    decision.get("merge_gap_hours"),
                 )
             else:
                 logger.warning(
-                    "动态层常态归纳 merge 候选未暂存 window_id=%s fused_with_id=%s",
+                    "动态层待审 merge 候选未暂存 window_id=%s fused_with_id=%s reason=%s",
                     window_id,
                     fused_with_id,
+                    merge_reason,
                 )
             return None
 
@@ -4221,9 +4243,11 @@ def _step_dynamic_layer_evolve(
     *,
     skip_dynamic_memory_write: bool = False,
     skip_body_delta: bool = False,
+    dynamic_memory_recall_candidate_ids: Optional[list[str]] = None,
 ) -> Optional[dict]:
     """
-    动态层演化：调用 DS 得单条决策并应用。返回若应写记忆库则返回 archive 载荷，否则 None（实时对话忽略返回值）。
+    动态层演化：调用 DS 得到当前轮各独立事项的决策并逐条应用。
+    返回首条应写记忆库的 archive 载荷，否则 None（实时对话忽略返回值）。
     """
     if _wenyou_round_skip_dynamic(round_messages):
         logger.info("动态层跳过：文游虚构回合 window_id=%s round_index=%s", window_id, round_index)
@@ -4236,38 +4260,53 @@ def _step_dynamic_layer_evolve(
         if changed:
             r2_store.save_dynamic_memory_list(current_memories)
 
-    decision = call_dynamic_layer_ds(
+    decisions = call_dynamic_layer_ds(
         round_messages,
         current_memories,
         window_id=window_id,
         round_index=round_index,
+        candidate_memory_ids=list(dynamic_memory_recall_candidate_ids or []),
     )
+    if isinstance(decisions, dict):
+        decisions = [decisions]
+    if not isinstance(decisions, list):
+        decisions = []
     archive_payload = None
     if skip_dynamic_memory_write:
         logger.info(
-            "动态层记忆写入跳过 window_id=%s round_index=%s action=%s",
+            "动态层记忆写入跳过 window_id=%s round_index=%s actions=%s",
             window_id,
             round_index,
-            decision.get("action") if isinstance(decision, dict) else "",
+            [item.get("action") for item in decisions if isinstance(item, dict)],
         )
     else:
-        archive_payload = _apply_one_decision(window_id, round_index, round_messages, decision, current_memories)
+        for decision in decisions:
+            if not isinstance(decision, dict):
+                continue
+            applied = _apply_one_decision(window_id, round_index, round_messages, decision, current_memories)
+            if archive_payload is None and applied is not None:
+                archive_payload = applied
+    body_delta_decisions = [
+        item for item in decisions if isinstance(item, dict) and item.get("body_delta")
+    ]
     if skip_body_delta:
         logger.info(
-            "动态层 BODY delta 跳过 window_id=%s round_index=%s body_delta=%s",
+            "动态层 BODY delta 跳过 window_id=%s round_index=%s body_deltas=%s",
             window_id,
             round_index,
-            decision.get("body_delta") if isinstance(decision, dict) else {},
+            [item.get("body_delta") for item in body_delta_decisions],
         )
     elif DU_DYNAMIC_LAYER_BODY_DELTA_ENABLED:
-        _apply_dynamic_body_delta(decision, window_id=window_id, round_index=round_index)
-    elif isinstance(decision, dict) and decision.get("body_delta"):
-        logger.info(
-            "动态层 BODY delta 未应用：已由独立 evaluator 接管 window_id=%s round_index=%s body_delta=%s",
-            window_id,
-            round_index,
-            decision.get("body_delta"),
-        )
+        for decision in body_delta_decisions:
+            _apply_dynamic_body_delta(decision, window_id=window_id, round_index=round_index)
+    else:
+        for decision in body_delta_decisions:
+            logger.info(
+                "动态层 BODY delta 未应用：已由独立 evaluator 接管 window_id=%s round_index=%s body_delta=%s",
+                window_id,
+                round_index,
+                decision.get("body_delta"),
+            )
     return archive_payload
 
 
@@ -4279,6 +4318,7 @@ def step_archive_and_maybe_summary(
     reply_channel: str = "",
     skip_dynamic_memory_write: bool = False,
     skip_body_delta: bool = False,
+    dynamic_memory_recall_candidate_ids: Optional[list[str]] = None,
 ) -> Optional[dict]:
     """
     存档本轮对话到 R2（完整清洗版）；每 4 轮异步更新实时层「渡的回忆」；动态层演化占位。
@@ -4301,6 +4341,7 @@ def step_archive_and_maybe_summary(
         archived["round_messages"],
         skip_dynamic_memory_write=skip_dynamic_memory_write,
         skip_body_delta=skip_body_delta,
+        dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
     )
     return archived
 
@@ -4469,6 +4510,7 @@ def step_run_post_archive_tasks(
     *,
     skip_dynamic_memory_write: bool = False,
     skip_body_delta: bool = False,
+    dynamic_memory_recall_candidate_ids: Optional[list[str]] = None,
 ) -> None:
     """本轮已写入 R2 后执行实时层总结与动态层演化等慢任务。"""
     # 实时层：每 4 轮 → DS 总结成「渡的回忆」（第一人称、详细版）
@@ -4567,4 +4609,5 @@ def step_run_post_archive_tasks(
         round_messages,
         skip_dynamic_memory_write=skip_dynamic_memory_write,
         skip_body_delta=skip_body_delta,
+        dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
     )

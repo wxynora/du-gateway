@@ -788,6 +788,8 @@ def _archive_wakeup_after_delivery(
     else:
         archive_user = {"role": "event", "archive_label": "网关提醒", "content": "这是一次网关唤醒提醒。"}
     archive_assistant = {"role": "assistant", "content": str(assistant_text or "").strip()}
+    if kind in {"spring_dream", "random_spring_dream"}:
+        archive_assistant["archive_label"] = "春梦"
     if not archive_assistant["content"]:
         return False
     source_message = assistant_message if isinstance(assistant_message, dict) else {}

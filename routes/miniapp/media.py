@@ -1106,6 +1106,16 @@ def register_routes(bp) -> None:
             return jsonify({"ok": False, "error": "未找到"}), 404
         return _media_range_response(data, ctype or "application/octet-stream")
 
+    @bp.route("/generated-images/<image_id>", methods=["GET"])
+    def miniapp_generated_image(image_id: str):
+        from services.generated_image_tool import read_generated_image
+
+        item = read_generated_image(image_id)
+        if not item:
+            return jsonify({"ok": False, "error": "图片不存在"}), 404
+        data, mime_type = item
+        return _media_range_response(data, mime_type, cache_control="public, max-age=31536000, immutable")
+
     @bp.route("/call-records", methods=["GET"])
     def miniapp_get_call_records():
         items = _sort_call_records(r2_store.get_miniapp_call_records() or [])
