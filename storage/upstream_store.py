@@ -219,6 +219,15 @@ def _current_active_context() -> tuple[int, dict, str, str]:
     return active, item, url, _upstream_stable_key(item, active)
 
 
+def get_codex_oauth_item() -> dict:
+    """返回既有 CPA Codex OAuth 上游；不受当前 active 选择影响。"""
+    data = load_upstreams()
+    for index, item in enumerate(data.get("items") or []):
+        if isinstance(item, dict) and _upstream_stable_key(item, index) == "local-oauth:codex":
+            return dict(item)
+    return {}
+
+
 def _active_model_entry_from_payload(payload: dict, active: int, item: dict, url: str, key: str) -> dict:
     if not isinstance(payload, dict):
         return {}

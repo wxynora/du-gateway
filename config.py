@@ -71,11 +71,6 @@ _TARGET_AI_KEYS_STR = os.environ.get("TARGET_AI_API_KEYS", "").strip()
 # 过滤空 key：避免 env 里出现诸如 ",key" / 换行续接导致第一项为空，从而上游拿不到 Authorization 而 403
 TARGET_AI_API_KEYS = [k.strip() for k in _TARGET_AI_KEYS_STR.split(",") if k.strip()] if _TARGET_AI_KEYS_STR else []
 
-# 渡的独立画图工具。与普通聊天上游完全分开，URL 直接指向 CPA Images endpoint。
-DU_IMAGE_GENERATION_URL = os.environ.get("DU_IMAGE_GENERATION_URL", "").strip()
-DU_IMAGE_GENERATION_API_KEY = os.environ.get("DU_IMAGE_GENERATION_API_KEY", "").strip()
-DU_IMAGE_GENERATION_MODEL = os.environ.get("DU_IMAGE_GENERATION_MODEL", "gpt-image-2").strip() or "gpt-image-2"
-
 # 模型名匹配（用于多中转站）：请求的 model 含这些关键词时才走多目标 fallback，避免误转发
 # 必含：逗号分隔，全部出现才匹配，默认 claude,opus（不再写死版本号）
 _GATEWAY_MODEL_KEYWORDS_STR = os.environ.get("GATEWAY_MODEL_KEYWORDS", "claude,opus").strip()

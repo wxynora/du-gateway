@@ -11,12 +11,10 @@ import requests
 
 from config import (
     DATA_DIR,
-    DU_IMAGE_GENERATION_API_KEY,
-    DU_IMAGE_GENERATION_MODEL,
-    DU_IMAGE_GENERATION_URL,
     STREAM_TIMEOUT_SECONDS,
 )
 from services.public_url import resolve_public_base_url
+from storage.upstream_store import get_codex_oauth_item
 from utils.log import get_logger
 
 
@@ -24,6 +22,7 @@ logger = get_logger(__name__)
 
 GENERATED_IMAGE_DIR = DATA_DIR / "generated_images"
 GENERATE_IMAGE_TOOL_NAMES = ("generate_image",)
+_IMAGE_MODEL = "gpt-image-2"
 _SUPPORTED_SIZE = {"auto", "1024x1024", "1536x1024", "1024x1536"}
 _SUPPORTED_QUALITY = {"auto", "low", "medium", "high"}
 _SUPPORTED_BACKGROUND = {"auto", "opaque", "transparent"}
@@ -34,8 +33,26 @@ _MIME_EXTENSIONS = {
 }
 
 
+def _images_endpoint(chat_url: str) -> str:
+    base = str(chat_url or "").strip().rstrip("/")
+    for suffix in ("/v1/chat/completions", "/chat/completions", "/v1/responses", "/responses"):
+        if base.lower().endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base.rstrip("/") + "/v1/images/generations" if base else ""
+
+
+def _codex_image_target() -> tuple[str, str]:
+    item = get_codex_oauth_item() or {}
+    return (
+        _images_endpoint(str(item.get("url") or "")),
+        str(item.get("api_key") or "").strip(),
+    )
+
+
 def image_generation_configured() -> bool:
-    return bool(str(DU_IMAGE_GENERATION_URL or "").strip())
+    endpoint, _ = _codex_image_target()
+    return bool(endpoint)
 
 
 def get_generate_image_tools_for_inject() -> list[dict]:
@@ -197,12 +214,12 @@ def execute_generate_image_tool(arguments: dict) -> str:
     prompt = str(args.get("prompt") or "").strip()
     if not prompt:
         return json.dumps({"ok": False, "error": "prompt 为空"}, ensure_ascii=False)
-    endpoint = str(DU_IMAGE_GENERATION_URL or "").strip()
+    endpoint, api_key = _codex_image_target()
     if not endpoint:
-        return json.dumps({"ok": False, "error": "画图工具尚未配置 DU_IMAGE_GENERATION_URL"}, ensure_ascii=False)
+        return json.dumps({"ok": False, "error": "未找到现有 CPA Codex OAuth 上游"}, ensure_ascii=False)
 
     payload: dict[str, Any] = {
-        "model": DU_IMAGE_GENERATION_MODEL,
+        "model": _IMAGE_MODEL,
         "prompt": prompt,
         "n": 1,
         "response_format": "b64_json",
@@ -219,7 +236,6 @@ def execute_generate_image_tool(arguments: dict) -> str:
             payload[key] = value
 
     headers = {"Content-Type": "application/json"}
-    api_key = str(DU_IMAGE_GENERATION_API_KEY or "").strip()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     try:
