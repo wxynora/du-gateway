@@ -24,7 +24,6 @@ from config import (
     MAX_REQUEST_CHARS,
     DEEPSEEK_API_URL,
     DEEPSEEK_API_KEY,
-    DEEPSEEK_CHAT_MODEL,
     DU_DYNAMIC_LAYER_BODY_DELTA_ENABLED,
 )
 from pathlib import Path
@@ -77,6 +76,7 @@ _SUMITALK_MODE_PROMPT_EXCLUDED_WAKEUP_KINDS = frozenset({
 _DU_DAILY_SYSTEM_MARKER = "__du_daily__"
 _PLAY_NOTE_SYSTEM_MARKER = "__play_note__"
 _PLAY_NOTE_PENDING_BODY_KEY = "__play_note_pending__"
+_MEMORY_QUERY_REWRITE_MODEL = "deepseek-v4-pro"
 
 # Keep logical prompt regions explicit. Dynamic context is ordered by injection slot:
 # normal runtime context, temporary scene/event context, Thinking rules, then recent conversation.
@@ -2542,10 +2542,10 @@ def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> lis
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload = {
-        "model": DEEPSEEK_CHAT_MODEL,
+        "model": _MEMORY_QUERY_REWRITE_MODEL,
         "messages": [{"role": "user", "content": prompt}],
-        "thinking": {"type": "enabled"},
-        "max_tokens": 2048,
+        "thinking": {"type": "disabled"},
+        "max_tokens": 200,
     }
     try:
         r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=8)
