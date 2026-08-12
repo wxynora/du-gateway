@@ -2431,9 +2431,45 @@ def _last_4_turns_text_for_rewrite(messages: list[dict]) -> str:
     return "\n".join([f"[{who}] {txt}" for who, txt in recent])
 
 
+def _parse_memory_query_rewrite_output(content: str) -> list[str]:
+    """解析 DS 返回的“消歧主查询 + 两条扩展”，并兼容旧三行纯文本。"""
+    resolved = ""
+    queries: list[str] = []
+    fallback: list[str] = []
+    for raw_line in str(content or "").splitlines():
+        line = re.sub(r"^\d+[\.、\)\s]+", "", raw_line.strip(" -\t\r")).strip()
+        if not line:
+            continue
+        matched = re.match(r"^(RESOLVED|QUERY)\s*[:：]\s*(.+)$", line, flags=re.IGNORECASE)
+        if matched:
+            value = matched.group(2).strip()
+            if len(value) < 2:
+                continue
+            if matched.group(1).upper() == "RESOLVED":
+                if not resolved:
+                    resolved = value
+            else:
+                queries.append(value)
+            continue
+        fallback.append(line)
+
+    candidates = [resolved, *queries] if resolved else fallback
+    out: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate = candidate.strip()
+        if len(candidate) < 2 or candidate in seen:
+            continue
+        seen.add(candidate)
+        out.append(candidate)
+        if len(out) >= 3:
+            break
+    return out
+
+
 def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> list[str]:
     """
-    用 DeepSeek 生成 3 条扩展检索 query。
+    用 DeepSeek 生成 1 条消歧主查询和 2 条扩展检索 query。
     失败返回空列表（主流程必须可降级）。
     """
     if not (DEEPSEEK_API_KEY and DEEPSEEK_API_URL):
@@ -2442,26 +2478,35 @@ def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> lis
     if not user_message:
         return []
     prompt = (
-        "你在帮我生成“记忆检索扩展 query”。\n\n"
+        "你在帮我把当前消息整理成可用于召回既有记忆的检索 query。\n\n"
         "规则：\n"
-        "1. 只能把“当前这条消息”当作 query 主体，扩展 query 必须直接围绕当前这条消息改写。\n"
-        "2. 最近对话上下文只是参考，只有在当前这条消息存在指代、省略、承接时，才允许用它补人物、对象、事件背景。\n"
-        "3. 不要把前几轮单独提到的话题拿来当 query；如果前文和当前这条消息不是同一件事，就忽略前文。\n"
-        "4. 优先保留当前这条消息里的事件、对象、状态、偏好；不要只提纯情绪词，不要把前几轮内容当主词。\n"
-        "5. 如果当前这条消息已经很明确，就直接围绕当前这条消息改写，不要硬扩展到旧话题。\n"
-        "6. 输出要适合检索记忆：尽量具体，少用空泛代词；避免只有“很烦/难受/委屈”这类脱离事件的情绪词。\n\n"
-        "当前这条消息（唯一主体）：\n"
+        "1. 先输出一条 RESOLVED 主查询：还原当前消息此刻实际在说的人、对象、事件或状态。\n"
+        "2. 当前消息如果是简短承接、回答、纠正、指代或省略，只从最近且直接相关的上下文补全被省略的具体对象或事件。\n"
+        "3. 当前消息已经有明确动作、对象或状态时，不得把旧话题带进来，即使前后话题有关。\n"
+        "4. 当前消息里的高信息对象和事件优先于“嗯嗯、好点了、不行了、算了、这个”等低信息短语。\n"
+        "5. 不得补写对话中没有确认的原因、意图、偏好、关系或结果；只补已明确出现的事实。\n"
+        "6. 保持谁说、谁做，不得交换主语或把对方的称呼改成自称。\n"
+        "7. 所有输出都是记忆检索陈述，不得写成“如何回复、怎么安慰、怎样处理”等回复生成任务。\n"
+        "8. 再围绕 RESOLVED 主查询输出两条不同角度的 QUERY，保留具体实体、事件、状态或偏好。\n\n"
+        "示例：\n"
+        "- 上文提到老婆到家后肚子痛、拉肚子，当前消息是“好点了”\n"
+        "  RESOLVED: 老婆到家拉肚子、肚子痛，拉完后已经好转\n"
+        "  不得写成食物导致肚子痛，因为原因没有确认。\n"
+        "- 上文提到 AI 老公连删文件都先问老婆，当前消息是“我不行了，恋爱脑”\n"
+        "  RESOLVED: 老婆看到 AI 老公先问老婆的发言，觉得太恋爱脑、被甜到受不了\n"
+        "- 上文在聊羊驼和投资，当前消息是“种菜种菜”\n"
+        "  RESOLVED: 老婆催我去种菜\n"
+        "  不得把羊驼或投资带入查询。\n"
+        "- 当前消息是“收菜种菜，干活啦长工，（不是）”\n"
+        "  RESOLVED: 老婆催我去收菜种菜，喊我干活的长工\n\n"
+        "当前消息：\n"
         f"{user_message}\n\n"
-        "最近对话上下文（仅供参考，不能喧宾夺主）：\n"
+        "最近对话上下文（只用于必要补全）：\n"
         f"{last_4_turns or '（无）'}\n\n"
-        "请生成 3 个不同角度的检索 query。\n"
-        "要求：\n"
-        "- 每行一个，不要编号，不要解释\n"
-        "- 每行 8-24 字\n"
-        "- 必须和“当前这条消息”直接相关\n"
-        "- 优先包含实体词、事件词、状态词、偏好词\n"
-        "- 如果用了上下文，也只能是为了补全当前这条消息里的指代或省略\n"
-        "- 不要直接复述前几轮内容，不要让前几轮上下文喧宾夺主\n"
+        "只输出以下三行，不要编号、解释或其他内容：\n"
+        "RESOLVED: <消歧后的主查询>\n"
+        "QUERY: <扩展查询一>\n"
+        "QUERY: <扩展查询二>\n"
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload = {
@@ -2475,19 +2520,7 @@ def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> lis
         r.raise_for_status()
         data = r.json()
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
-        lines = [ln.strip(" -\t\r") for ln in str(content).splitlines() if ln.strip()]
-        out: list[str] = []
-        seen: set[str] = set()
-        for ln in lines:
-            # 去掉常见编号前缀
-            ln = re.sub(r"^\d+[\.、\)\s]+", "", ln).strip()
-            if len(ln) < 2 or ln in seen:
-                continue
-            seen.add(ln)
-            out.append(ln)
-            if len(out) >= 3:
-                break
-        return out
+        return _parse_memory_query_rewrite_output(content)
     except Exception as e:
         logger.debug("rewrite memory queries with DS failed: %s", e)
         return []
@@ -2766,11 +2799,15 @@ def _dynamic_memory_rerank_query(
     last_user_text: str,
     retrieval_query: str,
     messages: list[dict],
+    resolved_query: str,
     expanded_queries: list[str],
 ) -> str:
     parts = [f"当前消息：{(last_user_text or '').strip()}"]
+    resolved = (resolved_query or "").strip()
+    if resolved and resolved != (last_user_text or "").strip():
+        parts.append(f"消歧主查询：{resolved}")
     rq = (retrieval_query or "").strip()
-    if rq and rq != (last_user_text or "").strip():
+    if rq and rq not in {(last_user_text or "").strip(), resolved}:
         parts.append(f"检索短语：{rq}")
     eq = [q.strip() for q in (expanded_queries or []) if q and q.strip()]
     if eq:
@@ -2809,6 +2846,7 @@ def _apply_external_dynamic_memory_rerank(
     last_user_text: str,
     retrieval_query: str,
     messages: list[dict],
+    resolved_query: str,
     expanded_queries: list[str],
     recall_source: str,
 ) -> tuple[list[dict], str, dict]:
@@ -2824,7 +2862,13 @@ def _apply_external_dynamic_memory_rerank(
         max_candidates = max(1, int(DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES or 30))
         candidate_mems = recalled[:max_candidates]
         tail_mems = recalled[max_candidates:]
-        query = _dynamic_memory_rerank_query(last_user_text, retrieval_query, messages, expanded_queries)
+        query = _dynamic_memory_rerank_query(
+            last_user_text,
+            retrieval_query,
+            messages,
+            resolved_query,
+            expanded_queries,
+        )
         docs = [
             {
                 "memory_id": str((mem or {}).get("id") or ""),
@@ -3329,6 +3373,9 @@ def step_inject_dynamic_memory(
         if str((item or {}).get("text") or "").strip()
     ]
     retrieval_query = _build_retrieval_text(last_user_text)
+    resolved_query = ""
+    expanded_queries: list[str] = []
+    bm25_query = last_user_text
     if not memories and not r2_store.get_core_cache_pending():
         return body
     valid_memory_ids = {str(mem.get("id") or "").strip() for mem in memories if str(mem.get("id") or "").strip()}
@@ -3376,7 +3423,6 @@ def step_inject_dynamic_memory(
         _replace_recall_candidate_ids(recall_candidate_ids_out, recalled)
         recall_source = str(cached.get("source") or "hybrid")
         vector_error = ""
-        expanded_queries = []
         rerank_cache_hit = "+rerank" in recall_source
         rerank_debug = {"enabled": rerank_cache_hit, "ok": rerank_cache_hit, "reason": "cache_hit"}
         logger.info("动态记忆检索缓存命中 window_id=%s keywords=%d results=%d", window_id, len(keywords), len(recalled))
@@ -3384,11 +3430,13 @@ def step_inject_dynamic_memory(
         # 向量召回 + BM25 关键词召回同时进行，最后进入同一候选池融合排序。
         vector_recalled: list[dict] = []
         vector_error = ""
-        expanded_queries: list[str] = []
         try:
             turns_text = _last_4_turns_text_for_rewrite(messages)
-            expanded_queries = _rewrite_memory_queries_with_ds(turns_text, last_user_text)
-            vector_recalled = _multi_query_recall_and_rerank(last_user_text, expanded_queries)
+            rewritten_queries = _rewrite_memory_queries_with_ds(turns_text, last_user_text)
+            resolved_query = rewritten_queries[0] if rewritten_queries else ""
+            expanded_queries = rewritten_queries[1:3]
+            vector_queries = [query for query in [resolved_query, *expanded_queries] if query]
+            vector_recalled = _multi_query_recall_and_rerank(last_user_text, vector_queries)
             if vector_recalled:
                 valid_ids = {str(mem.get("id")) for mem in memories if mem.get("id")}
                 vector_recalled = [
@@ -3405,7 +3453,9 @@ def step_inject_dynamic_memory(
             vector_error = str(e)
             logger.warning("dynamic_vector_retrieve 失败，仍保留 BM25 召回 error=%s", e)
 
-        bm25_scores = _bm25_recall_scores(last_user_text, keyword_candidates, memories)
+        bm25_query = resolved_query or last_user_text
+        bm25_keyword_candidates = _extract_keyword_candidates(bm25_query)
+        bm25_scores = _bm25_recall_scores(bm25_query, bm25_keyword_candidates, memories)
         recalled = _dedupe_recalled_memories(_merge_vector_and_bm25_recall(vector_recalled, bm25_scores))
         _replace_recall_candidate_ids(recall_candidate_ids_out, recalled)
         has_vector = any(float(((m.get("_recall_score") or {}).get("sem_user") or 0.0)) > 0 for m in recalled)
@@ -3424,6 +3474,7 @@ def step_inject_dynamic_memory(
             last_user_text,
             retrieval_query,
             messages,
+            resolved_query,
             expanded_queries,
             recall_source,
         )
@@ -3447,6 +3498,8 @@ def step_inject_dynamic_memory(
                 "keywords": keywords,
                 "keyword_debug": keyword_debug,
                 "retrieval_query": retrieval_query,
+                "resolved_query": resolved_query,
+                "bm25_query": bm25_query,
                 "source": recall_source,
                 "expanded_queries": expanded_queries,
                 "recalled_lines": [],
@@ -3550,6 +3603,8 @@ def step_inject_dynamic_memory(
             "keywords": keywords,
             "keyword_debug": keyword_debug,
             "retrieval_query": retrieval_query,
+            "resolved_query": resolved_query,
+            "bm25_query": bm25_query,
             "source": recall_source,
             "expanded_queries": expanded_queries,
             "recalled_lines": [],
@@ -3590,6 +3645,8 @@ def step_inject_dynamic_memory(
         "keywords": keywords,
         "keyword_debug": keyword_debug,
         "retrieval_query": retrieval_query,
+        "resolved_query": resolved_query,
+        "bm25_query": bm25_query,
         "source": recall_source,
         "expanded_queries": expanded_queries,
         "recalled_lines": lines,
