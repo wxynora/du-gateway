@@ -135,6 +135,20 @@ SUMITALK_APP_PROMPT = """【消息规范】
     -在qq群聊发言要有礼貌，发言追求简练，不过度玩梗。
     -不人云亦云，凡事要有自己的思考。多说多错少说少错，吐槽也要适可而止不要太狂妄。
     -不要在群里详细提及和小玥的私下互动，不对外剖析小玥的行为，减少老妈子式碎碎念连环叮嘱，不流水账不说教。"""
+OPUS46_REALITY_MESSAGE_PROMPT = """【消息规范】
+当前处于现实物理层{channel}
+请遵守以下输出格式要求：
+0) 情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。
+   当前全部可用英文代号：{sticker_tags}
+1) 不要输出任何内心独白。
+2) 不要输出分割线和 Markdown符号。
+4) 不要使用“不是……是……”以及类似句式，不要在描述时重复使用“你的...你的...”，不许使用破折号。
+5) 短句为主，全程禁止使用句号和动描，鼓励使用倒装句，用词通俗口语化，规避书面正式表达，允许自然分段，不要频繁换行。
+6）处于群聊时：
+    -在qq群聊发言要有礼貌，不过度玩梗。
+    -不人云亦云，凡事要有自己的思考。吐槽也要适可而止不要太狂妄。
+    -不要在群里详细提及和小玥的私下互动，不对外剖析小玥的行为，减少老妈子式碎碎念连环叮嘱，不流水账不说教。
+7）想发语音时用<voice>语音内容</voice>，要遵守语音规范。"""
 _LAST4_REFERENCE_NOTE = (
     "【人称指代提醒】记忆和摘要中的“她”均指辛玥。回复小玥时不要用“她”代称；"
     "尤其是动作描写，必须用“你”指代。日常对话时用“你”“小玥”“老婆”或“宝宝”，按语境自然表达。"
@@ -700,8 +714,18 @@ def _use_mid_conversation_prompt(model: str, anthropic_messages: bool) -> bool:
     return bool(anthropic_messages and supports_mid_conversation_system(model))
 
 
-def _render_conversation_mode_prompt(section_id: str, fallback: str, channel_label: str) -> str:
-    prompt = _load_managed_static_prompt(section_id, fallback)
+def _is_opus46_model(model: str) -> bool:
+    return bool(re.search(r"claude-opus-4-6(?:\b|-|$)", str(model or "").strip(), flags=re.IGNORECASE))
+
+
+def _render_conversation_mode_prompt(
+    section_id: str,
+    fallback: str,
+    channel_label: str,
+    *,
+    fixed_prompt: str | None = None,
+) -> str:
+    prompt = fixed_prompt if fixed_prompt is not None else _load_managed_static_prompt(section_id, fallback)
     prompt = prompt.replace("{channel}", channel_label)
     try:
         from services.sticker_tags import synchronize_sticker_tags_line
@@ -791,11 +815,19 @@ def step_inject_sumitalk_real_mode(
             channel_label,
         )
     elif channel_label:
-        prompt = _render_conversation_mode_prompt(
-            "conversation_reality_mode_prompt",
-            SUMITALK_APP_PROMPT,
-            channel_label,
-        )
+        if _is_opus46_model(model):
+            prompt = _render_conversation_mode_prompt(
+                "conversation_reality_mode_prompt",
+                SUMITALK_APP_PROMPT,
+                channel_label,
+                fixed_prompt=OPUS46_REALITY_MESSAGE_PROMPT,
+            )
+        else:
+            prompt = _render_conversation_mode_prompt(
+                "conversation_reality_mode_prompt",
+                SUMITALK_APP_PROMPT,
+                channel_label,
+            )
     else:
         prompt = ""
     if not prompt:
