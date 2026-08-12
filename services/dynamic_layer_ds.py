@@ -94,6 +94,8 @@ merge 是更新 FUSED_WITH_ID 对应的那条旧记忆，不是用本轮新事�
 - 反例：旧记忆写“渡的名字相关记忆”，本轮写“小玥有名字羞耻症”，只有“名字”这个词重合，主体和具体事项不同，禁止 merge；有独立记忆价值时用 new，没有则 skip。
 - 明确发生在不同日期的一次性事件，即使人物、行为和关键词相同，也不是同一个具体事项，禁止按普通理由 merge；有独立记忆价值时用 new，没有则 skip。例如旧记忆是“三天前老婆拖延洗澡”，本轮是“老婆今天又拖延洗澡”，这是两次独立事件，不能 merge 成“老婆今天拖延洗澡”。只有当前信息已经足以形成同一稳定习惯、XP、偏好或边界观察时，才可例外使用 `habit_generalization`，且不能把某一次事件改写成另一次事件。
 - 只有当前内容明确表示这是不同日期发生的另一次事件时，才因这条规则禁止 merge；其余情况继续按“是否同一个具体事项”的原有标准判断。若确认是同一次过去事件，不要仅因本轮正在谈它就把事件时间改成今天或现在；本轮明确纠正事件时间时可以更新。
+- 候选若带 `merge_locked: true`，表示这条正式记忆已经有一版等待老婆审核的 merge；可以参考正式正文判断本轮是否重复，但禁止再次把它选为 FUSED_WITH_ID。有独立新信息时用 new，没有则 skip。
+- 候选若带 `review_feedback`，这是老婆对这条记忆过去一次 merge 的真实审核结果，优先级高于一般示例：approved 表示当时的 proposed_content 被直接通过；edited 表示 proposed_content 不够准确，final_content 才是老婆确认的写法；rejected 表示该候选被拒绝，禁止照着重犯。审核例子只用于学习怎么判断和融合，不是本轮新发生的事实。
 
 若 action 是 merge，必须选择一种 MERGE_REASON：
 - consolidate：同一件事的重复、补充或延续；未冲突内容继续合并同类项，再融入本轮增量
@@ -235,6 +237,13 @@ def _dynamic_layer_retry_instruction(issue: str, previous_content: str = "", *, 
             "找不到明确 ref 时禁止 merge，有独立新信息就改为 new，没有则 skip。\n"
             "只输出固定标签格式，不要解释，不要 Markdown。"
         )
+    if "merge_target_locked" in issue:
+        return (
+            "\n\n【上一次输出需要重写】\n"
+            "你选择的 FUSED_WITH_ID 已有待审核 merge，当前被 merge_locked 锁定，不能再次更新。\n"
+            "请重新判断：本轮有独立新信息时用 new，没有则 skip；不要改选另一个仅仅关键词相近的候选。\n"
+            "只输出固定标签格式，不要解释，不要 Markdown。"
+        )
     if "bedroom_cross_day_merge_disallowed" in issue:
         return (
             "\n\n【上一次输出需要重写】\n"
@@ -330,8 +339,45 @@ def _build_memory_ref_prompt_items(memories: list) -> tuple[list[dict], dict[str
             if key == "retrieval_text" and value == item.get("content"):
                 continue
             item[key] = value
+        if isinstance(mem.get("pending_merge"), dict):
+            item["merge_locked"] = True
         prompt_items.append(item)
     return prompt_items, ref_to_id, valid_ids
+
+
+def _merge_locked_memory_ids(memories: list) -> set[str]:
+    return {
+        str(memory.get("id") or "").strip()
+        for memory in memories or []
+        if isinstance(memory, dict)
+        and str(memory.get("id") or "").strip()
+        and isinstance(memory.get("pending_merge"), dict)
+    }
+
+
+def _attach_merge_review_feedback(
+    prompt_memories: list[dict],
+    ref_to_id: dict[str, str],
+) -> None:
+    memory_ids = [
+        str(ref_to_id.get(str(item.get("ref") or "").strip().upper()) or "").strip()
+        for item in prompt_memories or []
+        if isinstance(item, dict)
+    ]
+    try:
+        from services.dynamic_memory_provenance import latest_merge_reviews_for_memories
+
+        feedback_by_id = latest_merge_reviews_for_memories(memory_ids)
+    except Exception as exc:
+        logger.warning("动态层读取 merge 审核学习例子失败 error=%s", exc)
+        return
+    for item in prompt_memories or []:
+        if not isinstance(item, dict):
+            continue
+        memory_id = str(ref_to_id.get(str(item.get("ref") or "").strip().upper()) or "").strip()
+        feedback = feedback_by_id.get(memory_id)
+        if isinstance(feedback, dict):
+            item["review_feedback"] = feedback
 
 
 def _rehydrate_round_recall_candidates(candidate_memory_ids: list[str], current_memories: list) -> list[dict]:
@@ -841,6 +887,7 @@ def _multi_decision_issues(
     ref_to_id: dict[str, str],
     valid_ids: set[str],
     candidate_metadata: dict[str, dict] | None = None,
+    merge_locked_ids: set[str] | None = None,
 ) -> list[dict]:
     issues: list[dict] = []
     if not isinstance(arr, list):
@@ -859,6 +906,8 @@ def _multi_decision_issues(
             resolved_id = _resolve_fused_with_id(obj.get("fused_with_id"), ref_to_id, valid_ids)
             if not resolved_id:
                 issue = "merge_missing_or_invalid_ref"
+            elif resolved_id in (merge_locked_ids or set()):
+                issue = "merge_target_locked"
             elif resolved_id in merged_ids:
                 issue = "duplicate_merge_target"
             else:
@@ -931,8 +980,10 @@ def call_dynamic_layer_ds(
 
     current_round_time = now_beijing_iso()
     prompt_memories, ref_to_id, valid_ids = _build_memory_ref_prompt_items(candidates)
+    merge_locked_ids = _merge_locked_memory_ids(candidates)
     candidate_metadata = _build_merge_candidate_metadata(candidates, current_round_time)
     _attach_merge_candidate_metadata(prompt_memories, ref_to_id, candidate_metadata)
+    _attach_merge_review_feedback(prompt_memories, ref_to_id)
     prompt = _DYNAMIC_LAYER_MULTI_PROMPT.format(
         current_round_time=current_round_time,
         current_memories_json=json.dumps(prompt_memories or [], ensure_ascii=False),
@@ -1003,6 +1054,7 @@ def call_dynamic_layer_ds(
                 ref_to_id,
                 valid_ids,
                 candidate_metadata,
+                merge_locked_ids,
             )
             first_issue = str((issues[0] if issues else {}).get("issue") or "")
             first_content = str((issues[0] if issues else {}).get("content") or "")

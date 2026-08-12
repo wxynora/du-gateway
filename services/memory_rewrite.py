@@ -341,6 +341,46 @@ def _record_dynamic_rewrite(before: dict[str, Any], after: dict[str, Any]) -> bo
     )
 
 
+def _matching_pending_merge(item: dict[str, Any], original_content: str) -> dict[str, Any] | None:
+    pending = item.get("pending_merge")
+    if not isinstance(pending, dict):
+        return None
+    if str(pending.get("original_content") or "").strip() != str(original_content or "").strip():
+        return None
+    if not str(pending.get("rewritten_content") or "").strip():
+        return None
+    return dict(pending)
+
+
+def _record_merge_review_safe(
+    *,
+    layer: str,
+    memory_id: str,
+    before: dict[str, Any],
+    pending_merge: dict[str, Any],
+    outcome: str,
+    final_content: str,
+) -> bool:
+    try:
+        from services.dynamic_memory_provenance import record_merge_review
+
+        return record_merge_review(
+            layer=layer,
+            memory_id=memory_id,
+            outcome=outcome,
+            original_content=str(pending_merge.get("original_content") or ""),
+            proposed_content=str(pending_merge.get("rewritten_content") or ""),
+            final_content=final_content,
+            merge_reason=str(pending_merge.get("merge_reason") or ""),
+            window_id=str(pending_merge.get("window_id") or ""),
+            round_index=pending_merge.get("round_index"),
+            item=before,
+        )
+    except Exception as error:
+        logger.warning("memory merge review record failed layer=%s memory_id=%s error=%s", layer, memory_id, error)
+        return False
+
+
 def _apply_dynamic_rewrite(
     memory_id: str,
     expected_content: str,
@@ -353,13 +393,13 @@ def _apply_dynamic_rewrite(
         raise MemoryRewriteConflict("这条动态记忆已经变化，请重新生成候选")
     if current_content == rewritten_content:
         return current, []
+    review_pending = _matching_pending_merge(current, expected_content)
 
     updated = dict(current)
     updated["content"] = rewritten_content
-    pending_merge = current.get("pending_merge")
-    if isinstance(pending_merge, dict):
-        pending_original = str(pending_merge.get("original_content") or "").strip()
-        pending_rewritten = str(pending_merge.get("rewritten_content") or "").strip()
+    if isinstance(review_pending, dict):
+        pending_original = str(review_pending.get("original_content") or "").strip()
+        pending_rewritten = str(review_pending.get("rewritten_content") or "").strip()
         if pending_original == expected_content and pending_rewritten == rewritten_content:
             allowed_updates = {
                 "importance",
@@ -370,7 +410,7 @@ def _apply_dynamic_rewrite(
                 "target_type",
                 "last_mentioned",
             }
-            field_updates = pending_merge.get("field_updates")
+            field_updates = review_pending.get("field_updates")
             if isinstance(field_updates, dict):
                 for key in allowed_updates:
                     if key in field_updates:
@@ -393,11 +433,26 @@ def _apply_dynamic_rewrite(
     except Exception as error:
         logger.warning("memory rewrite mirror sync failed: %s", error, exc_info=True)
         warnings.append("SQLite mirror 同步失败，可稍后在记忆整理页重试")
-    try:
-        audit_saved = _record_dynamic_rewrite(current, updated)
-    except Exception as error:
-        logger.warning("memory rewrite audit write failed: %s", error, exc_info=True)
-        audit_saved = False
+    if isinstance(review_pending, dict):
+        review_outcome = (
+            "approved"
+            if rewritten_content == str(review_pending.get("rewritten_content") or "").strip()
+            else "edited"
+        )
+        audit_saved = _record_merge_review_safe(
+            layer="dynamic",
+            memory_id=memory_id,
+            before=current,
+            pending_merge=review_pending,
+            outcome=review_outcome,
+            final_content=rewritten_content,
+        )
+    else:
+        try:
+            audit_saved = _record_dynamic_rewrite(current, updated)
+        except Exception as error:
+            logger.warning("memory rewrite audit write failed: %s", error, exc_info=True)
+            audit_saved = False
     if not audit_saved:
         warnings.append("改写已保存，但审计记录写入失败")
     return updated, warnings
@@ -415,13 +470,13 @@ def _apply_core_rewrite(
         raise MemoryRewriteConflict("这条核心记忆已经变化，请重新生成候选")
     if current_content == rewritten_content:
         return current, []
+    review_pending = _matching_pending_merge(current, expected_content)
 
     updated = dict(current)
     updated["content"] = rewritten_content
-    pending_merge = current.get("pending_merge")
-    if isinstance(pending_merge, dict):
-        pending_original = str(pending_merge.get("original_content") or "").strip()
-        pending_rewritten = str(pending_merge.get("rewritten_content") or "").strip()
+    if isinstance(review_pending, dict):
+        pending_original = str(review_pending.get("original_content") or "").strip()
+        pending_rewritten = str(review_pending.get("rewritten_content") or "").strip()
         if pending_original == expected_content and pending_rewritten == rewritten_content:
             allowed_updates = {
                 "importance",
@@ -432,7 +487,7 @@ def _apply_core_rewrite(
                 "target_type",
                 "last_mentioned",
             }
-            field_updates = pending_merge.get("field_updates")
+            field_updates = review_pending.get("field_updates")
             if isinstance(field_updates, dict):
                 for key in allowed_updates:
                     if key in field_updates:
@@ -444,7 +499,23 @@ def _apply_core_rewrite(
     if not r2_store.save_core_cache_pending(items):
         raise MemoryRewriteStorageError("核心记忆保存失败")
     r2_store._upsert_core_cache_pending_index_safe([updated])
-    return updated, []
+    warnings: list[str] = []
+    if isinstance(review_pending, dict):
+        review_outcome = (
+            "approved"
+            if rewritten_content == str(review_pending.get("rewritten_content") or "").strip()
+            else "edited"
+        )
+        if not _record_merge_review_safe(
+            layer="core",
+            memory_id=memory_id,
+            before=current,
+            pending_merge=review_pending,
+            outcome=review_outcome,
+            final_content=rewritten_content,
+        ):
+            warnings.append("改写已保存，但 merge 审核学习记录写入失败")
+    return updated, warnings
 
 
 def apply_memory_rewrite(
@@ -503,9 +574,18 @@ def reject_memory_rewrite(
     )
     if not saved:
         raise MemoryRewriteStorageError(f"拒绝{'动态' if normalized_layer == 'dynamic' else '核心'}记忆 merge 失败")
+    review_saved = _record_merge_review_safe(
+        layer=normalized_layer,
+        memory_id=normalized_id,
+        before=current,
+        pending_merge=dict(pending_merge),
+        outcome="rejected",
+        final_content=expected,
+    )
     return {
         "layer": normalized_layer,
         "memory_id": normalized_id,
         "rejected": True,
         "content": str(updated.get("content") or "").strip(),
+        "warnings": [] if review_saved else ["候选已拒绝，但 merge 审核学习记录写入失败"],
     }

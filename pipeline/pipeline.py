@@ -17,6 +17,7 @@ from config import (
     DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT,
     DYNAMIC_MEMORY_MARGINAL_PRUNE_MIN_DAYS,
     DYNAMIC_MEMORY_MIRROR_SHADOW_ENABLED,
+    DYNAMIC_MEMORY_REVIEW_ALL_MERGES,
     ASSISTANT_TIME_KEYWORDS,
     ASSISTANT_LUNAR_KEYWORDS,
     REPLY_GAP_THRESHOLD_MINUTES,
@@ -4081,13 +4082,25 @@ def _apply_one_decision(
             ),
             None,
         )
+        if isinstance(current_dynamic, dict) and isinstance(current_dynamic.get("pending_merge"), dict):
+            logger.info(
+                "动态层 merge 目标已有待审核候选，本轮保持锁定并跳过 window_id=%s fused_with_id=%s",
+                window_id,
+                fused_with_id,
+            )
+            return None
         cross_day_bedroom_correction = bool(
             merge_reason == "correction"
             and decision.get("bedroom_cross_day") is True
             and isinstance(current_dynamic, dict)
             and "卧室" in {str(current_dynamic.get("tag") or "").strip(), tag}
         )
-        if merge_reason == "habit_generalization" or cross_day_bedroom_correction:
+        review_required = bool(
+            DYNAMIC_MEMORY_REVIEW_ALL_MERGES
+            or merge_reason == "habit_generalization"
+            or cross_day_bedroom_correction
+        )
+        if review_required:
             if not isinstance(current_dynamic, dict):
                 logger.warning(
                     "动态层待审 merge 未找到 fused_with_id=%s，本轮回退为 skip window_id=%s",

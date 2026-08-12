@@ -15,6 +15,13 @@ logger = get_logger(__name__)
 
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY = False
+_MERGE_REVIEW_ACTIONS = frozenset(
+    {
+        "merge_review_approved",
+        "merge_review_edited",
+        "merge_review_rejected",
+    }
+)
 
 
 def _db_path() -> Path:
@@ -248,6 +255,102 @@ def list_events_for_round(window_id: str, round_index: Any, limit: int = 100) ->
             (wid, idx, n),
         ).fetchall()
     return [_row_to_event(row) for row in rows]
+
+
+def record_merge_review(
+    *,
+    layer: str,
+    memory_id: str,
+    outcome: str,
+    original_content: str,
+    proposed_content: str,
+    final_content: str,
+    merge_reason: str = "",
+    window_id: str = "",
+    round_index: Any = 0,
+    item: dict | None = None,
+) -> bool:
+    """保存一次人工 merge 审核，供后续同一个 DS 作为正反例读取。"""
+    clean_layer = str(layer or "").strip().lower()
+    clean_memory_id = str(memory_id or "").strip()
+    clean_outcome = str(outcome or "").strip().lower()
+    original = str(original_content or "").strip()
+    proposed = str(proposed_content or "").strip()
+    final = str(final_content or "").strip()
+    if (
+        clean_layer not in {"dynamic", "core"}
+        or not clean_memory_id
+        or clean_outcome not in {"approved", "edited", "rejected"}
+        or not original
+        or not proposed
+    ):
+        return False
+    stored_memory_id = f"core::{clean_memory_id}" if clean_layer == "core" else clean_memory_id
+    labels = item if isinstance(item, dict) else {}
+    return record_event(
+        memory_id=stored_memory_id,
+        action=f"merge_review_{clean_outcome}",
+        window_id=window_id,
+        round_index=round_index,
+        content_before=original,
+        content_after=final or original,
+        tag=str(labels.get("tag") or ""),
+        importance=labels.get("importance"),
+        emotion_label=str(labels.get("emotion_label") or ""),
+        scene_type=str(labels.get("scene_type") or ""),
+        target_type=str(labels.get("target_type") or ""),
+        source="memory_merge_review",
+        decision={
+            "layer": clean_layer,
+            "outcome": clean_outcome,
+            "proposed_content": proposed,
+            "merge_reason": str(merge_reason or "").strip(),
+        },
+    )
+
+
+def latest_merge_reviews_for_memories(memory_ids: list[str]) -> dict[str, dict]:
+    """返回候选记忆各自最新的一次人工 merge 审核；不做语义判断。"""
+    ids = list(dict.fromkeys(str(value or "").strip() for value in memory_ids or [] if str(value or "").strip()))
+    if not ids:
+        return {}
+    ensure_schema()
+    id_placeholders = ",".join("?" for _ in ids)
+    action_placeholders = ",".join("?" for _ in _MERGE_REVIEW_ACTIONS)
+    params = [*ids, *sorted(_MERGE_REVIEW_ACTIONS)]
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM dynamic_memory_provenance_events
+            WHERE memory_id IN ({id_placeholders})
+              AND action IN ({action_placeholders})
+            ORDER BY event_time DESC, created_at DESC, event_id DESC
+            """,
+            params,
+        ).fetchall()
+
+    latest: dict[str, dict] = {}
+    for row in rows:
+        event = _row_to_event(row)
+        memory_id = str(event.get("memory_id") or "").strip()
+        if not memory_id or memory_id in latest:
+            continue
+        decision = event.get("decision") if isinstance(event.get("decision"), dict) else {}
+        action = str(event.get("action") or "").strip()
+        outcome = action.removeprefix("merge_review_")
+        proposed = str(decision.get("proposed_content") or "").strip()
+        original = str(event.get("content_before") or "").strip()
+        final = str(event.get("content_after") or "").strip()
+        if not proposed or not original or outcome not in {"approved", "edited", "rejected"}:
+            continue
+        latest[memory_id] = {
+            "outcome": outcome,
+            "original_content": original,
+            "proposed_content": proposed,
+            "final_content": final if outcome != "rejected" else "",
+            "merge_reason": str(decision.get("merge_reason") or "").strip(),
+        }
+    return latest
 
 
 def delete_events_for_memories(memory_ids: set[str] | list[str] | tuple[str, ...]) -> int:

@@ -1555,6 +1555,13 @@ def stage_core_memory_merge(
             continue
         if str(item.get("content") or "").strip() != original:
             return False
+        existing_pending = item.get("pending_merge")
+        if isinstance(existing_pending, dict):
+            return bool(
+                str(existing_pending.get("original_content") or "").strip() == original
+                and str(existing_pending.get("rewritten_content") or "").strip() == rewritten
+                and str(existing_pending.get("merge_reason") or "").strip() == str(merge_reason or "").strip()
+            )
         updated = dict(item)
         updated["pending_merge"] = {
             "original_content": original,
@@ -1594,15 +1601,31 @@ def stage_dynamic_memory_merge(
             continue
         if str(item.get("content") or "").strip() != original:
             return False
+        existing_pending = item.get("pending_merge")
+        if isinstance(existing_pending, dict):
+            return bool(
+                str(existing_pending.get("original_content") or "").strip() == original
+                and str(existing_pending.get("rewritten_content") or "").strip() == rewritten
+                and str(existing_pending.get("merge_reason") or "").strip() == str(merge_reason or "").strip()
+            )
+        reason_by_type = {
+            "consolidate": "同一具体事项的补充或延续，等待人工审核",
+            "correction": "旧记忆中的事实或判断被明确纠正，等待人工审核",
+            "invalidate": "旧记忆已被明确说明为无效，等待人工审核",
+            "supersede": "新的明确结论将取代旧结论，等待人工审核",
+            "temporal_update": "旧状态已经发生变化，等待人工审核",
+            "habit_generalization": "多次重复内容归纳成常态习惯，等待人工审核",
+        }
+        clean_merge_reason = str(merge_reason or "").strip()
         updated = dict(item)
         updated["pending_merge"] = {
             "original_content": original,
             "rewritten_content": rewritten,
-            "reason": "多次重复内容归纳成常态习惯，等待人工审核",
+            "reason": reason_by_type.get(clean_merge_reason, "动态记忆 merge 候选，等待人工审核"),
             "proposed_at": str(proposed_at or "").strip() or now_beijing_iso(),
             "window_id": str(window_id or "").strip(),
             "round_index": int(round_index or 0),
-            "merge_reason": str(merge_reason or "").strip(),
+            "merge_reason": clean_merge_reason,
             "field_updates": dict(field_updates or {}),
         }
         memories[index] = updated
