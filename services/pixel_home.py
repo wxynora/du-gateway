@@ -2414,7 +2414,7 @@ def format_state_block() -> str:
 def format_rule_block() -> str:
     return (
         "【小家状态写入规则】\n"
-        "这是你和小玥的赛博小家状态，并非现实定位或真实房间。\n"
+        "这是你和小玥的小家「星落小屋」中的状态，不对应现实定位或真实房间。\n"
         "小家的天气由独立虚构天气引擎生成，与现实城市、定位和真实天气无关。花园里的花有自己的季节和养护习性；你想去浇花、松土时可以主动行动，不需要等小玥先提出。先看当前花朵、土壤和天气状态再决定，例如下雨或土壤偏湿时不要机械重复浇花；做完后照常更新小家短隐藏标记，网关会从 garden 位置和 activity 自动记录养护结果。\n"
         "如果需要移动去别的房间做什么事，可以在回复正文之后、DU_FOLLOWUP 之前附加一行小家短隐藏标记：\n"
         f"{PIXEL_HOME_SHORT_MARKER}\n"
@@ -2437,7 +2437,7 @@ def format_inject_block() -> str:
 
 
 def build_pixel_home_event(spot: Any, action: Any) -> str:
-    return f"【小家事件】\n小玥在赛博小家选择了：{spot_label(spot)} / {_clean_activity(action, '待着')}。"
+    return f"【小家事件】\n小玥在星落小屋选择了：{spot_label(spot)} / {_clean_activity(action, '待着')}。"
 
 
 def build_pixel_home_body_event(body_state: Any) -> str:
