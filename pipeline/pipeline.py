@@ -2544,8 +2544,8 @@ def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> lis
     payload = {
         "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
-        "thinking": {"type": "disabled"},
-        "max_tokens": 160,
+        "thinking": {"type": "enabled"},
+        "max_tokens": 2048,
     }
     try:
         r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=8)
@@ -2882,6 +2882,9 @@ def _apply_external_dynamic_memory_rerank(
     expanded_queries: list[str],
     recall_source: str,
 ) -> tuple[list[dict], str, dict]:
+    # Qwen3 Reranker 的 relevance_score 是 yes/no 二分类中 yes 的概率；
+    # 0.5 是“相关”比“不相关”更可能的自然判定边界。
+    relevance_threshold = 0.5
     if not recalled:
         return recalled, recall_source, {"enabled": False, "reason": "empty_recalled"}
     try:
@@ -2913,7 +2916,6 @@ def _apply_external_dynamic_memory_rerank(
         if not result.get("ok"):
             return recalled, recall_source, result
 
-        returned_indexes: set[int] = set()
         scored: list[tuple[float, float, dict]] = []
         for item in result.get("ranked") or []:
             try:
@@ -2923,8 +2925,9 @@ def _apply_external_dynamic_memory_rerank(
             if idx < 0 or idx >= len(candidate_mems):
                 continue
             mem = candidate_mems[idx]
-            returned_indexes.add(idx)
             score = float(item.get("score") or 0.0)
+            if score < relevance_threshold:
+                continue
             old_score = mem.get("_recall_score") if isinstance(mem.get("_recall_score"), dict) else {}
             recall_score = _clamp_unit(float(old_score.get("total") or 0.0))
             memory_prior = _clamp_unit(float(old_score.get("memory_prior") or 0.0))
@@ -2942,30 +2945,14 @@ def _apply_external_dynamic_memory_rerank(
             mem["_recall_score"] = merged_score
             scored.append((final_score, memory_prior, mem))
 
-        for idx, mem in enumerate(candidate_mems):
-            if idx in returned_indexes:
-                continue
-            old_score = mem.get("_recall_score") if isinstance(mem.get("_recall_score"), dict) else {}
-            recall_score = _clamp_unit(float(old_score.get("total") or 0.0))
-            memory_prior = _clamp_unit(float(old_score.get("memory_prior") or 0.0))
-            final_score = _clamp_unit(recall_score * 0.10 + memory_prior * 0.05)
-            merged_score = dict(old_score)
-            merged_score.update(
-                {
-                    "hybrid_total": round(recall_score, 4),
-                    "rerank": 0.0,
-                    "rerank_missing": True,
-                    "rerank_model": str(result.get("model") or ""),
-                    "final_total": round(final_score, 4),
-                }
-            )
-            mem["_recall_score"] = merged_score
-            scored.append((final_score, memory_prior, mem))
-
         scored.sort(key=lambda x: (-x[0], -x[1]))
-        reranked = [mem for _, _, mem in scored] + tail_mems
+        reranked = [mem for _, _, mem in scored]
         debug = dict(result)
         debug["ranked"] = (result.get("ranked") or [])[:10]
+        debug["relevance_threshold"] = relevance_threshold
+        debug["relevant_count"] = len(reranked)
+        debug["rejected_count"] = max(0, len(candidate_mems) - len(reranked))
+        debug["unevaluated_count"] = len(tail_mems)
         return reranked, f"{recall_source}+rerank", debug
     except Exception as e:
         logger.warning("动态记忆外部 rerank 失败，回退原排序 error=%s", e)
