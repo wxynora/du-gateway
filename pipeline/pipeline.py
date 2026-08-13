@@ -2353,6 +2353,35 @@ def _memory_retrieval_text(mem: dict) -> str:
     return retrieval_text or content
 
 
+def _memory_keyword_search_text(mem: dict) -> str:
+    """关键词召回同时搜索检索文本与完整正文，与 search_memory 保持一致。"""
+    if not isinstance(mem, dict):
+        return ""
+    retrieval_text = str(mem.get("retrieval_text") or "").strip()
+    content = str(mem.get("content") or "").strip()
+    if retrieval_text and content and retrieval_text != content:
+        return f"{retrieval_text}\n{content}"
+    return retrieval_text or content
+
+
+def _normalize_direct_keyword_text(text: str) -> str:
+    """仅用于比较既有关键词；不重新分词。"""
+    compact = re.sub(r"[\W_]+", "", str(text or "").strip().lower(), flags=re.UNICODE)
+    return re.sub(r"([零〇一二两三四五六七八九十百千万0-9])个(?=[\u4e00-\u9fff])", r"\1", compact)
+
+
+def _direct_keyword_hit(mem: dict, keyword_candidates: list[dict]) -> str:
+    document = _normalize_direct_keyword_text(_memory_keyword_search_text(mem))
+    if not document:
+        return ""
+    for item in keyword_candidates or []:
+        keyword = str((item or {}).get("text") or "").strip()
+        normalized = _normalize_direct_keyword_text(keyword)
+        if len(normalized) >= 3 and normalized in document:
+            return keyword
+    return ""
+
+
 _EMOTION_LABELS = {"positive", "negative", "neutral"}
 _SCENE_TYPES = {
     "problem_solving",
@@ -2754,7 +2783,7 @@ def _bm25_recall_scores(
     ranked = bm25_score_documents(
         query,
         memories,
-        lambda mem: _memory_retrieval_text(mem),
+        lambda mem: _memory_keyword_search_text(mem),
         query_terms=_bm25_query_terms(keyword_candidates),
     )
     by_id: dict[str, dict] = {}
@@ -2902,14 +2931,13 @@ def _apply_external_dynamic_memory_rerank(
     resolved_query: str,
     expanded_queries: list[str],
     recall_source: str,
+    keyword_candidates: list[dict] | None = None,
 ) -> tuple[list[dict], str, dict]:
-    # Qwen3 Reranker 的 relevance_score 是 yes/no 二分类中 yes 的概率；
-    # 0.5 是“相关”比“不相关”更可能的自然判定边界。
-    relevance_threshold = 0.5
     if not recalled:
         return recalled, recall_source, {"enabled": False, "reason": "empty_recalled"}
     try:
         from config import DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES
+        from memory_vector.config import RERANK_MIN_SCORE
         from services.dynamic_memory_reranker import dynamic_memory_rerank_enabled, rerank_dynamic_memory_documents
 
         if not dynamic_memory_rerank_enabled():
@@ -2937,6 +2965,14 @@ def _apply_external_dynamic_memory_rerank(
         if not result.get("ok"):
             return recalled, recall_source, result
 
+        score_weights = {
+            "rerank": 0.45,
+            "semantic": 0.30,
+            "bm25": 0.15,
+            "support": 0.05,
+            "memory_prior": 0.05,
+        }
+        direct_keyword_bonus_value = 0.15
         scored: list[tuple[float, float, dict]] = []
         for item in result.get("ranked") or []:
             try:
@@ -2946,13 +2982,25 @@ def _apply_external_dynamic_memory_rerank(
             if idx < 0 or idx >= len(candidate_mems):
                 continue
             mem = candidate_mems[idx]
-            score = float(item.get("score") or 0.0)
-            if score < relevance_threshold:
-                continue
+            score = _clamp_unit(float(item.get("score") or 0.0))
             old_score = mem.get("_recall_score") if isinstance(mem.get("_recall_score"), dict) else {}
             recall_score = _clamp_unit(float(old_score.get("total") or 0.0))
+            semantic_score = _clamp_unit(float(old_score.get("semantic") or 0.0))
+            bm25_score = _clamp_unit(float(old_score.get("bm25") or 0.0))
+            support_score = _clamp_unit(float(old_score.get("support") or 0.0))
             memory_prior = _clamp_unit(float(old_score.get("memory_prior") or 0.0))
-            final_score = _clamp_unit(score * 0.85 + recall_score * 0.10 + memory_prior * 0.05)
+            matched_keyword = _direct_keyword_hit(mem, keyword_candidates or [])
+            direct_keyword_bonus = direct_keyword_bonus_value if matched_keyword else 0.0
+            base_score = _clamp_unit(
+                score * score_weights["rerank"]
+                + semantic_score * score_weights["semantic"]
+                + bm25_score * score_weights["bm25"]
+                + support_score * score_weights["support"]
+                + memory_prior * score_weights["memory_prior"]
+            )
+            final_score = _clamp_unit(base_score + direct_keyword_bonus)
+            if final_score < float(RERANK_MIN_SCORE):
+                continue
             merged_score = dict(old_score)
             merged_score.update(
                 {
@@ -2960,6 +3008,9 @@ def _apply_external_dynamic_memory_rerank(
                     "rerank": round(score, 4),
                     "rerank_rank": int(item.get("rank") or 0),
                     "rerank_model": str(result.get("model") or ""),
+                    "base_score": round(base_score, 4),
+                    "direct_keyword": matched_keyword,
+                    "direct_keyword_bonus": round(direct_keyword_bonus, 4),
                     "final_total": round(final_score, 4),
                 }
             )
@@ -2970,7 +3021,9 @@ def _apply_external_dynamic_memory_rerank(
         reranked = [mem for _, _, mem in scored]
         debug = dict(result)
         debug["ranked"] = (result.get("ranked") or [])[:10]
-        debug["relevance_threshold"] = relevance_threshold
+        debug["score_weights"] = score_weights
+        debug["direct_keyword_bonus"] = direct_keyword_bonus_value
+        debug["final_score_threshold"] = float(RERANK_MIN_SCORE)
         debug["relevant_count"] = len(reranked)
         debug["rejected_count"] = max(0, len(candidate_mems) - len(reranked))
         debug["unevaluated_count"] = len(tail_mems)
@@ -3494,7 +3547,14 @@ def step_inject_dynamic_memory(
             logger.warning("dynamic_vector_retrieve 失败，仍保留 BM25 召回 error=%s", e)
 
         bm25_query = resolved_query or last_user_text
-        bm25_keyword_candidates = _extract_keyword_candidates(bm25_query)
+        bm25_keyword_candidates: list[dict] = []
+        seen_bm25_keywords: set[str] = set()
+        for item in [*_extract_keyword_candidates(bm25_query), *keyword_candidates]:
+            text = str((item or {}).get("text") or "").strip()
+            if not text or text in seen_bm25_keywords:
+                continue
+            seen_bm25_keywords.add(text)
+            bm25_keyword_candidates.append(item)
         bm25_scores = _bm25_recall_scores(bm25_query, bm25_keyword_candidates, memories)
         recalled = _dedupe_recalled_memories(_merge_vector_and_bm25_recall(vector_recalled, bm25_scores))
         _replace_recall_candidate_ids(recall_candidate_ids_out, recalled)
@@ -3517,6 +3577,7 @@ def step_inject_dynamic_memory(
             resolved_query,
             expanded_queries,
             recall_source,
+            keyword_candidates,
         )
         rerank_reason = str((rerank_debug or {}).get("reason") or "")
         rerank_attempted = bool((rerank_debug or {}).get("enabled"))
