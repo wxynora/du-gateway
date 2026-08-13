@@ -1320,7 +1320,7 @@ function processAnthropicBody(body) {
 
 function applyPromptCache(body) {
   const oneHourCacheControl = { type: "ephemeral", ttl: "1h" };
-  const hotCacheControl = { type: "ephemeral", ttl: "5m" };
+  const hotCacheControl = { type: "ephemeral", ttl: "1h" };
   const tools = Array.isArray(body.tools) ? body.tools : [];
   const systemBlocks = Array.isArray(body.system) ? body.system : [];
   const layout = body[PROMPT_CACHE_LAYOUT_BODY_KEY] && typeof body[PROMPT_CACHE_LAYOUT_BODY_KEY] === "object"
@@ -1421,7 +1421,7 @@ function applyPromptCache(body) {
     `hot_tool_blocks=${Number(layout.hot_tool_blocks || 0)} ` +
     `bp1_tools=${Number(bp1Tools)} bp2_static=${Number(bp2Static)} ` +
     `bp3_generation=${Number(bp3Generation)} bp4_hot=${Number(bp4Hot)} ` +
-    `bp3_ttl=${bp3Generation ? "1h" : "none"} bp4_ttl=${bp4Hot ? "5m" : "none"}`
+    `bp3_ttl=${bp3Generation ? "1h" : "none"} bp4_ttl=${bp4Hot ? "1h" : "none"}`
   );
 
   const markerKeys = [

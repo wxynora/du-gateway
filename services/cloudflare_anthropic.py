@@ -345,7 +345,7 @@ def openai_to_anthropic_request(body: dict, url: str, cache_ttl: str | None = No
         int(bool(cache_layout.get("bp3_generation"))),
         int(bool(cache_layout.get("bp4_hot"))),
         "1h" if cache_layout.get("bp3_generation") else "none",
-        "5m" if cache_layout.get("bp4_hot") else "none",
+        "1h" if cache_layout.get("bp4_hot") else "none",
     )
     return out
 
@@ -364,9 +364,9 @@ def _set_cache_control(item: dict | None, ttl: str) -> None:
 
 def apply_prompt_cache(body: dict, ttl: str, *, layout: dict | None = None) -> dict:
     """Assign the four explicit Anthropic cache breakpoints from region markers."""
-    _ = ttl  # BP1-BP3 are fixed at 1h by the generation-v3 protocol.
+    _ = ttl  # BP1-BP4 are fixed at 1h by the generation-v3 protocol.
     one_hour_ttl = "1h"
-    hot_ttl = "5m"
+    hot_ttl = "1h"
     result = dict(layout or {})
     result.update(
         {
@@ -444,7 +444,7 @@ def apply_prompt_cache(body: dict, ttl: str, *, layout: dict | None = None) -> d
     if explicit_count > 4:
         raise RuntimeError(f"Anthropic explicit cache breakpoint 超过 4 个: {explicit_count}")
     one_hour_positions = [position for position, cache_ttl in actual_breakpoints if cache_ttl == one_hour_ttl]
-    five_minute_positions = [position for position, cache_ttl in actual_breakpoints if cache_ttl == hot_ttl]
+    five_minute_positions = [position for position, cache_ttl in actual_breakpoints if cache_ttl == "5m"]
     if one_hour_positions and five_minute_positions and max(one_hour_positions) >= min(five_minute_positions):
         raise RuntimeError("Anthropic 1h cache breakpoint 必须全部位于 5m breakpoint 之前")
 
