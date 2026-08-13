@@ -3015,7 +3015,16 @@ def chat_completions():
     body = step_inject_play_note(body)
     body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
     body = step_inject_sense_snapshot(body, window_id)
-    body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
+    claude_thinking_carryover_enabled = (
+        _is_local_claude_oauth_proxy_url(active_upstream_url)
+        or _should_use_anthropic_format(active_upstream_url)
+    ) and not _skip_claude_thinking_carryover_request()
+    body = step_inject_latest_4_rounds_for_new_window(
+        body,
+        window_id,
+        force_last4=force_last4,
+        exclude_claude_carryover_round=claude_thinking_carryover_enabled,
+    )
     body = step_inject_interaction_candidate(body, window_id)
     if not du_daily_maintenance:
         body = step_inject_rikkahub_reminder(body, window_id)
@@ -3043,10 +3052,7 @@ def chat_completions():
     )
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
-    if (
-        _is_local_claude_oauth_proxy_url(active_upstream_url)
-        or _should_use_anthropic_format(active_upstream_url)
-    ) and not _skip_claude_thinking_carryover_request():
+    if claude_thinking_carryover_enabled:
         body = _inject_previous_claude_thinking_blocks(body, window_id)
     body = step_inject_draft_reminder(
         body,

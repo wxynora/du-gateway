@@ -1,5 +1,6 @@
 import copy
 import json
+import re
 import threading
 
 from pipeline.pipeline import step_run_post_archive_tasks
@@ -122,7 +123,28 @@ def _message_text_for_archive(msg: dict) -> str:
 
 
 def _normalize_qq_group_line(line: str) -> str:
-    return " ".join(str(line or "").strip().split())
+    normalized = " ".join(str(line or "").strip().split())
+    return re.sub(r"^\[Q\d+\]\s*", "", normalized).strip()
+
+
+def _numbered_qq_group_context_records(text: str) -> list[str]:
+    marker = "群聊上下文："
+    if marker not in str(text or ""):
+        return []
+    context = str(text or "").split(marker, 1)[1]
+    records: list[str] = []
+    current: list[str] = []
+    for raw_line in context.splitlines():
+        line = str(raw_line or "").strip()
+        if re.match(r"^\[Q\d+\]\s*", line):
+            if current:
+                records.append(" ".join(current))
+            current = [_normalize_qq_group_line(line)]
+        elif current and line:
+            current.append(_normalize_qq_group_line(line))
+    if current:
+        records.append(" ".join(current))
+    return [record for record in records if record]
 
 
 _QQ_GROUP_ARCHIVE_META_PREFIXES = (
@@ -169,6 +191,27 @@ def _qq_group_seen_lines_from_rounds(window_id: str, last_n: int = 8) -> set[str
 def compact_qq_group_context_for_archive(msg: dict, window_id: str = "") -> dict:
     def _strip_text(text: str) -> str:
         raw = str(text or "")
+        numbered_records = _numbered_qq_group_context_records(raw)
+        if "【QQ 群聊】" in raw and numbered_records:
+            seen_lines = _qq_group_seen_lines_from_rounds(window_id)
+            context_lines = []
+            for record in numbered_records:
+                line = _normalize_qq_group_line(record)
+                if not line or "：" not in line or line in seen_lines:
+                    continue
+                seen_lines.add(line)
+                context_lines.append(line)
+
+            meta_lines = []
+            before_context = raw.split("群聊上下文：", 1)[0]
+            for raw_line in before_context.splitlines():
+                line = str(raw_line or "").strip()
+                if line.startswith(("群号：", "当前发言人：", "身份标记：")):
+                    meta_lines.append(line)
+            parts = ["【QQ 群聊 @】", *meta_lines, "本次新增群聊上下文："]
+            parts.extend(context_lines or ["（与最近存档重复，已省略）"])
+            return "\n".join(parts)
+
         marker = "当前 @ 你的消息："
         if "【QQ 群聊】" not in raw or marker not in raw:
             return raw

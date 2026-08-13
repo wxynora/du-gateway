@@ -1611,7 +1611,12 @@ def _filter_rounds_for_recent_context(rounds: list) -> list[dict]:
     return [r for r in (rounds or []) if isinstance(r, dict) and not _is_internal_proactive_decision_round(r)]
 
 
-def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force_last4: bool = False) -> dict:
+def step_inject_latest_4_rounds_for_new_window(
+    body: dict,
+    window_id: str,
+    force_last4: bool = False,
+    exclude_claude_carryover_round: bool = False,
+) -> dict:
     """
     新窗口：从 R2 读取全局「最新四轮」注入。
     Telegram 窗口优先注入该窗口自己的最近四轮，不混入全局 latest_4_rounds。
@@ -1625,11 +1630,26 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
     rounds = []
     desc_scope_window_id: str | None = None
     is_telegram_window = window_id.startswith("tg_")
+    excluded_round_index = 0
+    if exclude_claude_carryover_round:
+        from services.claude_thinking_carryover import previous_claude_thinking_carryover_round_index
+
+        excluded_round_index = previous_claude_thinking_carryover_round_index(window_id, body=body)
+
+    def _recent_rounds_without_carryover(items: list) -> list[dict]:
+        filtered = _filter_rounds_for_recent_context(items)
+        if excluded_round_index <= 0:
+            return filtered
+        return [
+            item
+            for item in filtered
+            if int((item or {}).get("index") or (item or {}).get("round_index") or 0) != excluded_round_index
+        ]
 
     if is_telegram_window:
         # Telegram 只按“本窗口 Last4”注入；文游已迁出 TG，不再混入群窗口上下文。
         if force_last4 or len(messages) <= 2 or r2_store.has_window_history(window_id):
-            private_rounds = _filter_rounds_for_recent_context(
+            private_rounds = _recent_rounds_without_carryover(
                 r2_store.get_conversation_rounds(window_id, last_n=12) or []
             )
             merged = []
@@ -1651,14 +1671,14 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
             desc_scope_window_id = window_id
     else:
         if not r2_store.has_window_history(window_id):
-            rounds = _filter_rounds_for_recent_context(r2_store.get_latest_4_rounds_global() or [])[-4:]
+            rounds = _recent_rounds_without_carryover(r2_store.get_latest_4_rounds_global() or [])[-4:]
             inject_label = "最近的对话"
             desc_scope_window_id = None
         else:
             # 已有历史且当前请求消息很少（如 proactive 只发 1 条 user）→ 注入本窗口最近 4 轮
             # force_last4=True 时即使 messages 较多也强制注入。
             if force_last4 or len(messages) <= 2:
-                rounds = _filter_rounds_for_recent_context(
+                rounds = _recent_rounds_without_carryover(
                     r2_store.get_conversation_rounds(window_id, last_n=12) or []
                 )[-4:]
                 inject_label = "最近的对话"

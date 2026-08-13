@@ -105,6 +105,31 @@ def _latest_round_for_carryover(window_id: str) -> tuple[dict | None, str]:
     return None, ""
 
 
+def previous_claude_thinking_carryover_round_index(window_id: str, body: dict | None = None) -> int:
+    round_obj, _source = _latest_round_for_carryover(window_id)
+    if not round_obj:
+        return 0
+    prev_user, prev_assistant = _round_user_and_assistant(round_obj)
+    if not prev_user or not prev_assistant or not extract_claude_thinking_blocks(prev_assistant):
+        return 0
+    if isinstance(body, dict):
+        messages = body.get("messages") or []
+        idx = _last_user_index(messages) if isinstance(messages, list) else None
+        if idx is None:
+            return 0
+        if any(
+            isinstance(msg, dict)
+            and _role(msg) == "assistant"
+            and extract_claude_thinking_blocks(msg)
+            for msg in messages[:idx]
+        ):
+            return 0
+    try:
+        return int(round_obj.get("index") or round_obj.get("round_index") or 0)
+    except Exception:
+        return 0
+
+
 def _round_user_and_assistant(round_obj: dict) -> tuple[dict | None, dict | None]:
     user_msg = None
     assistant_msg = None

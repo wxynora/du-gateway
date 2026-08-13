@@ -214,8 +214,8 @@ def clear_group_activity_context(reason: str = "user_private_reply") -> bool:
         return False
 
 
-def _items_after_last_proactive(items: list[dict]) -> list[dict]:
-    last_contact = r2_store.get_last_proactive_contact_at()
+def _items_after_last_proactive(items: list[dict], last_contact: str = "") -> list[dict]:
+    last_contact = str(last_contact or r2_store.get_last_proactive_contact_at() or "").strip()
     last_dt = parse_iso_to_beijing(str(last_contact or "").strip())
     if not last_dt:
         return []
@@ -234,11 +234,12 @@ def _items_after_last_proactive(items: list[dict]) -> list[dict]:
     return sorted(out, key=lambda x: str(x.get("latest_owner_at") or x.get("recorded_at") or ""))
 
 
-def _recent_context_images(rows: list[dict]) -> list[dict]:
+def _recent_context_images(rows: list[dict], *, after_at: str = "") -> list[dict]:
     now_dt = parse_iso_to_beijing(now_beijing_iso())
     cutoff = None
     if now_dt:
         cutoff = now_dt - timedelta(hours=_IMAGE_CONTEXT_TTL_HOURS)
+    after_dt = parse_iso_to_beijing(str(after_at or "").strip())
     out: list[dict] = []
     seen_urls: set[str] = set()
     for row in reversed(rows[-_MAX_CONTEXT_ROWS:]):
@@ -246,6 +247,8 @@ def _recent_context_images(rows: list[dict]) -> list[dict]:
             continue
         row_dt = parse_iso_to_beijing(str(row.get("at") or "").strip())
         if cutoff and (not row_dt or row_dt < cutoff):
+            continue
+        if after_dt and (not row_dt or row_dt <= after_dt):
             continue
         for url in reversed(_image_urls(row.get("images"))):
             if url not in seen_urls:
@@ -265,13 +268,15 @@ def _recent_context_images(rows: list[dict]) -> list[dict]:
 
 def build_group_activity_delivery_for_wakeup() -> dict:
     try:
+        last_contact = str(r2_store.get_last_proactive_contact_at() or "").strip()
         state = _load_state()
         items = _items_after_last_proactive(
             [
                 x
                 for x in (state.get("items") or [])
                 if isinstance(x, dict) and _is_bound_group_id(x.get("group_id"))
-            ]
+            ],
+            last_contact=last_contact,
         )
     except Exception as e:
         logger.debug("qq_group_activity_build_skip error=%s", e)
@@ -288,7 +293,7 @@ def build_group_activity_delivery_for_wakeup() -> dict:
         for x in (latest.get("context") or [])[-_MAX_CONTEXT_ROWS:]
         if isinstance(x, dict) and _is_bound_group_id(x.get("group_id"))
     ]
-    image_entries = list(reversed(_recent_context_images(latest_rows)))
+    image_entries = list(reversed(_recent_context_images(latest_rows, after_at=last_contact)))
 
     lines = [
         "【辛玥近期的QQ群活动】",
