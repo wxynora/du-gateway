@@ -697,6 +697,7 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
 
 
 _CONVERSATION_MODE_CHANNEL_LABELS = {
+    "qq": "QQ",
     "tg": "TG",
     "sumitalk": "SumiTalk线下",
 }
