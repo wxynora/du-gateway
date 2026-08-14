@@ -16,10 +16,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 SYSTEM_NOTIFICATION = "📬 新消息：\nDoorbell Commons 信箱里有一封新信。"
-CONTEXT_EXPLANATION = (
-    "这是一条 Doorbell Commons 的系统通知，不是小玥说的话。"
-    "请根据通知内容，自行决定要不要回应。"
-)
 WAKE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
 
 
@@ -65,7 +61,6 @@ def build_chat_body(wake_id: str, window_id: str) -> dict:
                 "__dynamic__": True,
                 "__temporary_dynamic__": True,
             },
-            {"role": "user", "content": CONTEXT_EXPLANATION},
         ],
     }
 
