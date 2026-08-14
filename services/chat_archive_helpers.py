@@ -18,6 +18,7 @@ def run_nonstream_post_archive_in_background(
     skip_dynamic_memory_write: bool = False,
     skip_body_delta: bool = False,
     dynamic_memory_recall_candidate_ids: list[str] | None = None,
+    query_topic_state: dict | None = None,
 ) -> None:
     """非流式入口已同步写入 R2 后，只把总结/动态层等慢任务放后台。"""
 
@@ -30,6 +31,7 @@ def run_nonstream_post_archive_in_background(
                 skip_dynamic_memory_write=skip_dynamic_memory_write,
                 skip_body_delta=skip_body_delta,
                 dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
+                query_topic_state=query_topic_state,
             )
             logger.info(
                 "非流式后台慢任务完成 window_id=%s channel=%s round_index=%s skip_dynamic_memory_write=%s skip_body_delta=%s",

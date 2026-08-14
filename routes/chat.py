@@ -253,6 +253,7 @@ def _run_sumitalk_stream_archive_queue() -> None:
                 skip_dynamic_memory_write,
                 skip_body_delta,
                 dynamic_memory_recall_candidate_ids,
+                query_topic_state,
             ) = task
             step_archive_and_maybe_summary(
                 window_id,
@@ -263,6 +264,7 @@ def _run_sumitalk_stream_archive_queue() -> None:
                 skip_dynamic_memory_write=skip_dynamic_memory_write,
                 skip_body_delta=skip_body_delta,
                 dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
+                query_topic_state=query_topic_state,
             )
             logger.info("R2 SumiTalk 流式请求后台存档完成")
         except Exception:
@@ -1566,6 +1568,7 @@ def _stream_with_r2_archive(
     du_daily_trigger: Optional[dict] = None,
     dynamic_memory_citation_map: Optional[dict] = None,
     dynamic_memory_recall_candidate_ids: Optional[list[str]] = None,
+    query_topic_state: Optional[dict] = None,
     skip_post_archive_dynamic_memory_write: bool = False,
     skip_post_archive_body_delta: bool = False,
     du_request_id: str = "",
@@ -1613,6 +1616,7 @@ def _stream_with_r2_archive(
                 skip_dynamic_memory_write=skip_dynamic_memory_write,
                 skip_body_delta=skip_body_delta,
                 dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
+                query_topic_state=query_topic_state,
             )
             logger.info("R2 流式请求已存档")
             return
@@ -1630,6 +1634,7 @@ def _stream_with_r2_archive(
                 skip_dynamic_memory_write,
                 skip_body_delta,
                 list(dynamic_memory_recall_candidate_ids or []),
+                copy.deepcopy(query_topic_state or {}),
             )
         )
         logger.info("R2 SumiTalk 流式请求已交后台存档")
@@ -2992,11 +2997,13 @@ def chat_completions():
     body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
     body = step_inject_pixel_home(body, window_id)
     dynamic_memory_recall_candidate_ids: list[str] = []
+    query_topic_state: dict = {}
     if not skip_dynamic_memory:
         body = step_inject_dynamic_memory(
             body,
             window_id,
             recall_candidate_ids_out=dynamic_memory_recall_candidate_ids,
+            recall_topic_state_out=query_topic_state,
         )
     body = step_inject_humor_memes(body)
     body = step_inject_sumitalk_real_mode(
@@ -3133,6 +3140,7 @@ def chat_completions():
                 du_daily_trigger=du_daily_trigger,
                 dynamic_memory_citation_map=dynamic_memory_citation_map,
                 dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
+                query_topic_state=query_topic_state,
                 skip_post_archive_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
                 skip_post_archive_body_delta=skip_post_archive_body_delta,
                 du_request_id=du_request_id,
@@ -3637,6 +3645,7 @@ def chat_completions():
                             skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
                             skip_body_delta=archive_skip_body_delta,
                             dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
+                            query_topic_state=query_topic_state,
                         )
                 else:
                     archived = step_archive_and_maybe_summary(
@@ -3648,6 +3657,7 @@ def chat_completions():
                         skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
                         skip_body_delta=archive_skip_body_delta,
                         dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
+                        query_topic_state=query_topic_state,
                     )
                     if archived:
                         archived_round_index = int(archived.get("round_index") or 0)
@@ -3669,6 +3679,7 @@ def chat_completions():
                             skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
                             skip_body_delta=archive_skip_body_delta,
                             dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
+                            query_topic_state=query_topic_state,
                         )
                 else:
                     archived = step_archive_and_maybe_summary(
@@ -3679,6 +3690,7 @@ def chat_completions():
                         skip_dynamic_memory_write=archive_skip_dynamic_memory_write,
                         skip_body_delta=archive_skip_body_delta,
                         dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
+                        query_topic_state=query_topic_state,
                     )
                     if archived:
                         archived_round_index = int(archived.get("round_index") or 0)

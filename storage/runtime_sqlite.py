@@ -21,6 +21,7 @@ _RUNTIME_TABLES = (
     "device_reporting_config",
     "conversation_windows",
     "conversation_rounds",
+    "query_topic_states",
     "schedule_items",
     "schedule_fired_keys",
     "conversation_followups",
@@ -671,6 +672,13 @@ def ensure_schema() -> None:
                     ON conversation_rounds(window_id, round_index DESC);
                 CREATE INDEX IF NOT EXISTS idx_conversation_rounds_window_timestamp
                     ON conversation_rounds(window_id, timestamp);
+
+                CREATE TABLE IF NOT EXISTS query_topic_states (
+                    window_id TEXT PRIMARY KEY,
+                    state_json TEXT NOT NULL DEFAULT '{}',
+                    observed_at REAL NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
 
                 CREATE TABLE IF NOT EXISTS schedule_items (
                     id TEXT PRIMARY KEY,

@@ -2382,6 +2382,21 @@ def _direct_keyword_hit(mem: dict, keyword_candidates: list[dict]) -> str:
     return ""
 
 
+def _topic_state_anchor_candidates(topic_state: dict, evidence_text: str) -> list[dict]:
+    """只接纳能在既有 state、前四轮或当前消息中找到来源的模型 anchors。"""
+    evidence = _normalize_direct_keyword_text(evidence_text)
+    out: list[dict] = []
+    seen: set[str] = set()
+    for value in (topic_state or {}).get("anchors") or []:
+        anchor = str(value or "").strip()
+        normalized = _normalize_direct_keyword_text(anchor)
+        if len(normalized) < 2 or anchor in seen or normalized not in evidence:
+            continue
+        seen.add(anchor)
+        out.append({"text": anchor, "is_phrase": True, "source": "topic_state_anchor"})
+    return out
+
+
 _EMOTION_LABELS = {"positive", "negative", "neutral"}
 _SCENE_TYPES = {
     "problem_solving",
@@ -2513,6 +2528,21 @@ def _last_4_turns_text_for_rewrite(messages: list[dict]) -> str:
     return "\n".join([f"[{who}] {txt}" for who, txt in recent])
 
 
+def _previous_4_rounds_text_for_rewrite(window_id: str) -> str:
+    """读取当前消息之前已经归档的四轮；不依赖尚未注入的 last4 system。"""
+    if not str(window_id or "").strip():
+        return ""
+    rounds = _filter_rounds_for_recent_context(
+        r2_store.get_conversation_rounds(window_id, last_n=12) or []
+    )[-4:]
+    messages: list[dict] = []
+    for round_obj in rounds:
+        for message in (round_obj or {}).get("messages") or []:
+            if isinstance(message, dict):
+                messages.append(message)
+    return _last_4_turns_text_for_rewrite(messages)
+
+
 def _parse_memory_query_rewrite_output(content: str) -> list[str]:
     """解析 DS 返回的“消歧主查询 + 两条扩展”，并兼容旧三行纯文本。"""
     resolved = ""
@@ -2549,63 +2579,109 @@ def _parse_memory_query_rewrite_output(content: str) -> list[str]:
     return out
 
 
-def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> list[str]:
+def _parse_memory_query_state_output(content: str, previous_topic_state: dict | None = None) -> dict:
+    """解析 query LLM 的 JSON；旧三行格式仅保留 queries 兼容，不覆盖 topic state。"""
+    from storage.query_topic_state_store import normalize_topic_state
+
+    raw = str(content or "").strip()
+    if raw.startswith("```") and raw.endswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```$", "", raw).strip()
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        parsed = None
+    if isinstance(parsed, dict):
+        queries: list[str] = []
+        seen: set[str] = set()
+        for value in parsed.get("queries") or []:
+            query = str(value or "").strip()
+            if len(query) < 2 or query in seen:
+                continue
+            seen.add(query)
+            queries.append(query)
+        state = normalize_topic_state(parsed.get("topic_state"))
+        return {
+            "topic_state": state or normalize_topic_state(previous_topic_state),
+            "queries": queries,
+            "format": "json",
+        }
+    return {
+        "topic_state": normalize_topic_state(previous_topic_state),
+        "queries": _parse_memory_query_rewrite_output(raw),
+        "format": "legacy" if raw else "empty",
+    }
+
+
+def _rewrite_memory_query_state_with_ds(
+    previous_four_rounds: str,
+    user_message: str,
+    previous_topic_state: dict | None = None,
+) -> dict:
     """
-    用 DeepSeek 生成 1 条消歧主查询和 2 条扩展检索 query。
-    失败返回空列表（主流程必须可降级）。
+    用现有 query rewrite LLM 同时更新 session topic state 和检索 queries。
+    失败时保留上轮 topic state、返回空 queries，由主流程沿用原查询。
     """
+    from storage.query_topic_state_store import normalize_topic_state
+
+    fallback = {
+        "topic_state": normalize_topic_state(previous_topic_state),
+        "queries": [],
+        "format": "fallback",
+    }
     if not (DEEPSEEK_API_KEY and DEEPSEEK_API_URL):
-        return []
+        return fallback
     user_message = (user_message or "").strip()
     if not user_message:
-        return []
+        return fallback
+    previous_state_json = json.dumps(
+        normalize_topic_state(previous_topic_state),
+        ensure_ascii=False,
+    )
     prompt = (
-        "你在帮我把当前消息整理成可用于召回既有记忆的检索 query。\n\n"
+        "你在帮我维护连续对话的当前讨论主题，并把当前消息整理成可用于召回既有记忆的检索 query。\n\n"
         "规则：\n"
-        "1. 先输出一条 RESOLVED 主查询：还原当前消息此刻实际在说的人、对象、事件或状态。\n"
-        "2. 当前消息如果是简短承接、回答、纠正、指代或省略，只从最近且直接相关的上下文补全被省略的具体对象或事件。\n"
-        "3. 当前消息已经有明确动作、对象或状态时，不得把旧话题带进来，即使前后话题有关。\n"
-        "4. 当前消息里的高信息对象和事件优先于“嗯嗯、好点了、不行了、算了、这个”等低信息短语。\n"
-        "5. 不得补写对话中没有确认的原因、意图、偏好、关系或结果；只补已明确出现的事实。\n"
-        "6. 保持谁说、谁做，不得交换主语或把对方的称呼改成自称。\n"
-        "7. 所有输出都是记忆检索陈述，不得写成“如何回复、怎么安慰、怎样处理”等回复生成任务。\n"
-        "8. 再围绕 RESOLVED 主查询输出两条不同角度的 QUERY，保留具体实体、事件、状态或偏好。\n\n"
-        "示例：\n"
-        "- 上文提到老婆到家后肚子痛、拉肚子，当前消息是“好点了”\n"
-        "  RESOLVED: 老婆到家拉肚子、肚子痛，拉完后已经好转\n"
-        "  不得写成食物导致肚子痛，因为原因没有确认。\n"
-        "- 上文提到 AI 老公连删文件都先问老婆，当前消息是“我不行了，恋爱脑”\n"
-        "  RESOLVED: 老婆看到 AI 老公先问老婆的发言，觉得太恋爱脑、被甜到受不了\n"
-        "- 上文在聊羊驼和投资，当前消息是“种菜种菜”\n"
-        "  RESOLVED: 老婆催我去种菜\n"
-        "  不得把羊驼或投资带入查询。\n"
-        "- 当前消息是“收菜种菜，干活啦长工，（不是）”\n"
-        "  RESOLVED: 老婆催我去收菜种菜，喊我干活的长工\n\n"
+        "1. 根据上轮 session_topic_state、当前消息之前的最近四轮对话和当前消息，更新本轮 topic_state，不得每轮从零猜。\n"
+        "2. 当前消息明确切换话题时，按新话题更新 topic_state，不得让旧主题黏住当前消息。\n"
+        "3. 当前消息是简短承接、回答、纠正、指代或省略时，只从最近且直接相关的上下文补全被省略的对象或事件。\n"
+        "4. 当前消息已经有明确动作、对象或状态时，不得擅自把旧话题带进来。\n"
+        "5. active_topic 概括当前持续讨论的主题；current_focus 只描述本轮正在推进、追问或纠正的具体焦点。\n"
+        "6. anchors 只保留当前消息、最近四轮或上轮 topic_state 中已经出现，且能明确区分当前话题的人名、专名、项目名、机制名和核心概念。不得填写“事情、问题、感觉、关系、记忆”等泛词，不得编造新锚点。\n"
+        "7. queries 第一条是消歧后的主查询，其余是围绕同一讨论主题的不同召回角度。保留具体实体、事件、状态、判断和修正关系。\n"
+        "8. 不得补写对话中没有确认的原因、意图、偏好、关系或结果。\n"
+        "9. 保持谁说、谁做，不得交换主语或把对方的称呼改成自称。\n"
+        "10. queries 都是记忆检索陈述，不得写成“如何回复、怎么安慰、怎样处理”等回复生成任务。\n\n"
+        "上轮 session_topic_state：\n"
+        f"{previous_state_json}\n\n"
+        "当前消息之前的最近四轮对话：\n"
+        f"{previous_four_rounds or '（无）'}\n\n"
         "当前消息：\n"
         f"{user_message}\n\n"
-        "最近对话上下文（只用于必要补全）：\n"
-        f"{last_4_turns or '（无）'}\n\n"
-        "只输出以下三行，不要编号、解释或其他内容：\n"
-        "RESOLVED: <消歧后的主查询>\n"
-        "QUERY: <扩展查询一>\n"
-        "QUERY: <扩展查询二>\n"
+        "只输出合法 JSON，不要 Markdown、代码块、标题或解释：\n"
+        '{"topic_state":{"active_topic":"","current_focus":"","anchors":[]},"queries":[]}\n'
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": _MEMORY_QUERY_REWRITE_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "thinking": {"type": "disabled"},
-        "max_tokens": 200,
+        "max_tokens": 1024,
     }
     try:
         r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=8)
         r.raise_for_status()
         data = r.json()
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
-        return _parse_memory_query_rewrite_output(content)
+        return _parse_memory_query_state_output(content, previous_topic_state)
     except Exception as e:
         logger.debug("rewrite memory queries with DS failed: %s", e)
-        return []
+        return fallback
+
+
+def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> list[str]:
+    """兼容旧调用与定向测试；新主链使用 topic-state 版本。"""
+    result = _rewrite_memory_query_state_with_ds(last_4_turns, user_message, {})
+    return list(result.get("queries") or [])
 
 
 def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str]) -> list[dict]:
@@ -2883,6 +2959,8 @@ def _dynamic_memory_rerank_query(
     messages: list[dict],
     resolved_query: str,
     expanded_queries: list[str],
+    previous_four_rounds: str = "",
+    topic_state: dict | None = None,
 ) -> str:
     parts = [f"当前消息：{(last_user_text or '').strip()}"]
     resolved = (resolved_query or "").strip()
@@ -2894,9 +2972,11 @@ def _dynamic_memory_rerank_query(
     eq = [q.strip() for q in (expanded_queries or []) if q and q.strip()]
     if eq:
         parts.append("扩展检索：" + "；".join(eq[:3]))
-    turns_text = _last_4_turns_text_for_rewrite(messages)
+    turns_text = (previous_four_rounds or "").strip() or _last_4_turns_text_for_rewrite(messages)
     if turns_text:
         parts.append("近几轮上下文：" + turns_text[-800:])
+    if topic_state:
+        parts.append("当前讨论主题：" + json.dumps(topic_state, ensure_ascii=False))
     return "\n".join(parts)
 
 
@@ -2932,6 +3012,8 @@ def _apply_external_dynamic_memory_rerank(
     expanded_queries: list[str],
     recall_source: str,
     keyword_candidates: list[dict] | None = None,
+    previous_four_rounds: str = "",
+    topic_state: dict | None = None,
 ) -> tuple[list[dict], str, dict]:
     if not recalled:
         return recalled, recall_source, {"enabled": False, "reason": "empty_recalled"}
@@ -2952,6 +3034,8 @@ def _apply_external_dynamic_memory_rerank(
             messages,
             resolved_query,
             expanded_queries,
+            previous_four_rounds,
+            topic_state,
         )
         docs = [
             {
@@ -3374,18 +3458,27 @@ def _replace_recall_candidate_ids(target: Optional[list[str]], candidates: list[
     ]
 
 
+def _replace_recall_topic_state(target: Optional[dict], topic_state: dict) -> None:
+    if target is None:
+        return
+    target.clear()
+    target.update(topic_state or {})
+
+
 def step_inject_dynamic_memory(
     body: dict,
     window_id: str,
     *,
     use_recall_cache: bool = True,
     recall_candidate_ids_out: Optional[list[str]] = None,
+    recall_topic_state_out: Optional[dict] = None,
 ) -> dict:
     """
     每轮对话开始前：从 R2 读动态层，用向量召回 + BM25 关键词召回融合排序后注入 system 末尾。
     DYNAMIC_MEMORY_TOP_N<=0 时不注入、不调向量检索，便于测试延迟。
     """
     _replace_recall_candidate_ids(recall_candidate_ids_out, [])
+    _replace_recall_topic_state(recall_topic_state_out, {})
     if DYNAMIC_MEMORY_TOP_N <= 0:
         return body
     du_request_id = normalize_debug_request_id((body or {}).get(DU_REQUEST_ID_BODY_KEY))
@@ -3455,25 +3548,62 @@ def step_inject_dynamic_memory(
     # 短消息 / 日常闲聊跳过检索，省 token
     if _is_trivial_user_message(last_user_text):
         return body
-    keyword_candidates = _extract_keyword_candidates(last_user_text)
+    original_keyword_candidates = _extract_keyword_candidates(last_user_text)
+    previous_four_rounds = _previous_4_rounds_text_for_rewrite(window_id)
+    from storage import query_topic_state_store
+
+    previous_topic_state = query_topic_state_store.get_topic_state(window_id)
+    topic_state_observed_at = time.time()
+    rewrite_result = _rewrite_memory_query_state_with_ds(
+        previous_four_rounds,
+        last_user_text,
+        previous_topic_state,
+    )
+    rewritten_queries = list(rewrite_result.get("queries") or [])
+    resolved_query = rewritten_queries[0] if rewritten_queries else ""
+    expanded_queries = rewritten_queries[1:3]
+    topic_state = dict(rewrite_result.get("topic_state") or previous_topic_state or {})
+    if rewrite_result.get("format") == "json" and topic_state:
+        query_topic_state_store.save_topic_state(
+            window_id,
+            topic_state,
+            observed_at=topic_state_observed_at,
+        )
+    _replace_recall_topic_state(recall_topic_state_out, topic_state)
+
+    topic_anchor_evidence = "\n".join(
+        [
+            json.dumps(previous_topic_state or {}, ensure_ascii=False),
+            previous_four_rounds,
+            last_user_text,
+        ]
+    )
+    anchor_candidates = _topic_state_anchor_candidates(topic_state, topic_anchor_evidence)
+    keyword_candidates: list[dict] = []
+    seen_keyword_candidates: set[str] = set()
+    for item in [*anchor_candidates, *original_keyword_candidates]:
+        keyword = str((item or {}).get("text") or "").strip()
+        if not keyword or keyword in seen_keyword_candidates:
+            continue
+        seen_keyword_candidates.add(keyword)
+        keyword_candidates.append(item)
     keywords = [str((item or {}).get("text") or "").strip() for item in keyword_candidates]
     keyword_debug = [
         {
             "text": str((item or {}).get("text") or "").strip(),
             "is_phrase": bool((item or {}).get("is_phrase")),
+            "source": str((item or {}).get("source") or "keyword_extractor"),
         }
         for item in keyword_candidates
         if str((item or {}).get("text") or "").strip()
     ]
     retrieval_query = _build_retrieval_text(last_user_text)
-    resolved_query = ""
-    expanded_queries: list[str] = []
-    bm25_query = last_user_text
+    bm25_query = resolved_query or last_user_text
     if not memories and not r2_store.get_core_cache_pending():
         return body
     valid_memory_ids = {str(mem.get("id") or "").strip() for mem in memories if str(mem.get("id") or "").strip()}
 
-    # 缓存命中：连续聊同一话题时复用上次融合后的最终检索结果，跳过向量检索和 DS 改写
+    # query rewrite 每轮先更新 topic state；缓存只复用召回结果，不再跳过话题理解。
     cached = _recall_cache_hit(window_id, keywords) if use_recall_cache else None
     if cached is not None:
         active_core_by_id = {
@@ -3524,10 +3654,6 @@ def step_inject_dynamic_memory(
         vector_recalled: list[dict] = []
         vector_error = ""
         try:
-            turns_text = _last_4_turns_text_for_rewrite(messages)
-            rewritten_queries = _rewrite_memory_queries_with_ds(turns_text, last_user_text)
-            resolved_query = rewritten_queries[0] if rewritten_queries else ""
-            expanded_queries = rewritten_queries[1:3]
             vector_queries = [query for query in [resolved_query, *expanded_queries] if query]
             vector_recalled = _multi_query_recall_and_rerank(last_user_text, vector_queries)
             if vector_recalled:
@@ -3546,7 +3672,6 @@ def step_inject_dynamic_memory(
             vector_error = str(e)
             logger.warning("dynamic_vector_retrieve 失败，仍保留 BM25 召回 error=%s", e)
 
-        bm25_query = resolved_query or last_user_text
         bm25_keyword_candidates: list[dict] = []
         seen_bm25_keywords: set[str] = set()
         for item in [*_extract_keyword_candidates(bm25_query), *keyword_candidates]:
@@ -3577,7 +3702,9 @@ def step_inject_dynamic_memory(
             resolved_query,
             expanded_queries,
             recall_source,
-            keyword_candidates,
+            bm25_keyword_candidates,
+            previous_four_rounds,
+            topic_state,
         )
         rerank_reason = str((rerank_debug or {}).get("reason") or "")
         rerank_attempted = bool((rerank_debug or {}).get("enabled"))
@@ -3603,6 +3730,9 @@ def step_inject_dynamic_memory(
                 "bm25_query": bm25_query,
                 "source": recall_source,
                 "expanded_queries": expanded_queries,
+                "topic_state": topic_state,
+                "previous_four_rounds": previous_four_rounds,
+                "query_rewrite_format": str(rewrite_result.get("format") or ""),
                 "recalled_lines": [],
                 "recalled_count": 0,
                 "reason": "no_hybrid_recall_hit",
@@ -3708,6 +3838,9 @@ def step_inject_dynamic_memory(
             "bm25_query": bm25_query,
             "source": recall_source,
             "expanded_queries": expanded_queries,
+            "topic_state": topic_state,
+            "previous_four_rounds": previous_four_rounds,
+            "query_rewrite_format": str(rewrite_result.get("format") or ""),
             "recalled_lines": [],
             "recalled_count": 0,
             "reason": "empty_after_budget_or_filter",
@@ -3750,6 +3883,9 @@ def step_inject_dynamic_memory(
         "bm25_query": bm25_query,
         "source": recall_source,
         "expanded_queries": expanded_queries,
+        "topic_state": topic_state,
+        "previous_four_rounds": previous_four_rounds,
+        "query_rewrite_format": str(rewrite_result.get("format") or ""),
         "recalled_lines": lines,
         "recalled_items": recalled_items,
         "recalled_count": len(lines),
@@ -4415,6 +4551,7 @@ def _step_dynamic_layer_evolve(
     skip_dynamic_memory_write: bool = False,
     skip_body_delta: bool = False,
     dynamic_memory_recall_candidate_ids: Optional[list[str]] = None,
+    query_topic_state: Optional[dict] = None,
 ) -> Optional[dict]:
     """
     动态层演化：调用 DS 得到当前轮各独立事项的决策并逐条应用。
@@ -4437,6 +4574,7 @@ def _step_dynamic_layer_evolve(
         window_id=window_id,
         round_index=round_index,
         candidate_memory_ids=list(dynamic_memory_recall_candidate_ids or []),
+        query_topic_state=dict(query_topic_state or {}),
     )
     if isinstance(decisions, dict):
         decisions = [decisions]
@@ -4490,6 +4628,7 @@ def step_archive_and_maybe_summary(
     skip_dynamic_memory_write: bool = False,
     skip_body_delta: bool = False,
     dynamic_memory_recall_candidate_ids: Optional[list[str]] = None,
+    query_topic_state: Optional[dict] = None,
 ) -> Optional[dict]:
     """
     存档本轮对话到 R2（完整清洗版）；每 4 轮异步更新实时层「渡的回忆」；动态层演化占位。
@@ -4513,6 +4652,7 @@ def step_archive_and_maybe_summary(
         skip_dynamic_memory_write=skip_dynamic_memory_write,
         skip_body_delta=skip_body_delta,
         dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
+        query_topic_state=query_topic_state,
     )
     return archived
 
@@ -4682,6 +4822,7 @@ def step_run_post_archive_tasks(
     skip_dynamic_memory_write: bool = False,
     skip_body_delta: bool = False,
     dynamic_memory_recall_candidate_ids: Optional[list[str]] = None,
+    query_topic_state: Optional[dict] = None,
 ) -> None:
     """本轮已写入 R2 后执行实时层总结与动态层演化等慢任务。"""
     # 实时层：每 4 轮 → DS 总结成「渡的回忆」（第一人称、详细版）
@@ -4781,4 +4922,5 @@ def step_run_post_archive_tasks(
         skip_dynamic_memory_write=skip_dynamic_memory_write,
         skip_body_delta=skip_body_delta,
         dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
+        query_topic_state=query_topic_state,
     )

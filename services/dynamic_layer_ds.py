@@ -953,6 +953,7 @@ def call_dynamic_layer_ds(
     window_id: str = "",
     round_index: int | None = None,
     candidate_memory_ids: Optional[list[str]] = None,
+    query_topic_state: Optional[dict] = None,
 ) -> list[dict]:
     """
     调用 DS，把当前轮拆成独立事项并返回决策列表。
@@ -989,6 +990,14 @@ def call_dynamic_layer_ds(
         current_memories_json=json.dumps(prompt_memories or [], ensure_ascii=False),
         round_messages_json=json.dumps(decision_round_messages or [], ensure_ascii=False),
     )
+    if query_topic_state:
+        prompt += (
+            "\n\n【本轮 session topic state】\n"
+            + json.dumps(query_topic_state, ensure_ascii=False)
+            + "\n\n这段状态只用于理解当前轮的指代、讨论背景和关注点。topic、focus 或 anchor 相同，"
+            "不代表两条记忆是同一事项，也不构成 merge 依据；仍须根据具体事件、判断和状态是否明确属于同一内容或连续变化，"
+            "决定 new、merge 或 skip。"
+        )
     if not prompt_memories:
         prompt += (
             "\n\n【本轮候选状态】\n"
