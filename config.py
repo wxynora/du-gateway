@@ -333,6 +333,15 @@ if not WATCH_VISUAL_CACHE_DIR.is_absolute():
 DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_CHAT_MODEL = os.environ.get("DEEPSEEK_CHAT_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
+RECENT_SUMMARY_PRIMARY_API_URL = os.environ.get(
+    "RECENT_SUMMARY_PRIMARY_API_URL",
+    "https://opencode.ai/zen/v1/chat/completions",
+).strip()
+RECENT_SUMMARY_PRIMARY_API_KEY = os.environ.get("RECENT_SUMMARY_PRIMARY_API_KEY", "").strip()
+RECENT_SUMMARY_PRIMARY_MODEL = os.environ.get(
+    "RECENT_SUMMARY_PRIMARY_MODEL",
+    "deepseek-v4-flash-free",
+).strip() or "deepseek-v4-flash-free"
 
 # 渡的身体状态：独立四轮 DS evaluator，不参与动态记忆和实时总结计数。
 DU_BODY_EVALUATOR_ENABLED = os.environ.get("DU_BODY_EVALUATOR_ENABLED", "1").strip().lower() in ("1", "true", "yes")

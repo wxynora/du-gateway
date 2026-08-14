@@ -9,6 +9,9 @@ from config import (
     DEEPSEEK_API_URL,
     DEEPSEEK_API_KEY,
     DEEPSEEK_CHAT_MODEL,
+    RECENT_SUMMARY_PRIMARY_API_KEY,
+    RECENT_SUMMARY_PRIMARY_API_URL,
+    RECENT_SUMMARY_PRIMARY_MODEL,
     SUMMARY_EVERY_N_ROUNDS,
     SUMMARY_GENERATION_UPDATES,
     SUMMARY_OLDER_MAX_CHUNKS,
@@ -31,6 +34,32 @@ _SUMMARY_SLIGHTLY_MAX_CHUNKS = SUMMARY_SLIGHTLY_MAX_CHUNKS
 _SUMMARY_OLDER_MAX_CHUNKS = SUMMARY_OLDER_MAX_CHUNKS
 _SUMMARY_DS_MAX_ATTEMPTS = 3
 _SUMMARY_DS_RETRY_SLEEP_SECONDS = 3
+
+
+def _summary_request_targets() -> list[dict[str, str]]:
+    targets: list[dict[str, str]] = []
+    if RECENT_SUMMARY_PRIMARY_API_KEY and RECENT_SUMMARY_PRIMARY_API_URL:
+        targets.append(
+            {
+                "name": "opencode_zen",
+                "url": RECENT_SUMMARY_PRIMARY_API_URL,
+                "api_key": RECENT_SUMMARY_PRIMARY_API_KEY,
+                "model": RECENT_SUMMARY_PRIMARY_MODEL,
+            }
+        )
+    if DEEPSEEK_API_KEY and DEEPSEEK_API_URL:
+        fallback = {
+            "name": "existing_deepseek",
+            "url": DEEPSEEK_API_URL,
+            "api_key": DEEPSEEK_API_KEY,
+            "model": DEEPSEEK_CHAT_MODEL,
+        }
+        if not targets or any(
+            fallback[key] != targets[-1][key]
+            for key in ("url", "api_key", "model")
+        ):
+            targets.append(fallback)
+    return targets
 
 _SUMMARY_RETRY_INSTRUCTION = """
 
@@ -1219,7 +1248,8 @@ def fetch_new_summary_update(
     调用 DeepSeek 完成一次小段更新：
     1) 每次总结最新 4 轮；2) 每两次总结只预压缩 plan 中最多 2+2 个旧小段。
     """
-    if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
+    request_targets = _summary_request_targets()
+    if not request_targets:
         return None, None
 
     state = normalize_summary_chunks_state(chunks_state, current_summary)
@@ -1241,21 +1271,31 @@ def fetch_new_summary_update(
         chunk_to_compress_to_slightly=recent_to_slightly,
         chunk_to_compress_to_older=slightly_to_older,
     )
-    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     attempt_prompt = prompt
+    target_index = 0
     for attempt in range(1, _SUMMARY_DS_MAX_ATTEMPTS + 1):
+        target = request_targets[target_index]
+        headers = {"Authorization": f"Bearer {target['api_key']}", "Content-Type": "application/json"}
         payload = {
-            "model": DEEPSEEK_CHAT_MODEL,
+            "model": target["model"],
             "messages": [{"role": "user", "content": attempt_prompt}],
             "max_tokens": 1800,
             "thinking": {"type": "disabled"},
         }
         try:
-            r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)
+            r = requests.post(target["url"], headers=headers, json=payload, timeout=60)
             r.raise_for_status()
             data = r.json()
         except Exception as e:
-            logger.warning("DeepSeek 小段总结请求失败 attempt=%s/%s error=%s", attempt, _SUMMARY_DS_MAX_ATTEMPTS, e)
+            logger.warning(
+                "近期记忆小段总结请求失败 provider=%s attempt=%s/%s error=%s",
+                target["name"],
+                attempt,
+                _SUMMARY_DS_MAX_ATTEMPTS,
+                e,
+            )
+            if target_index + 1 < len(request_targets):
+                target_index += 1
             if attempt < _SUMMARY_DS_MAX_ATTEMPTS:
                 time.sleep(_SUMMARY_DS_RETRY_SLEEP_SECONDS)
                 continue
@@ -1266,10 +1306,13 @@ def fetch_new_summary_update(
         validation_error = _summary_result_validation_error(result, recent_to_slightly, slightly_to_older)
         if validation_error:
             logger.warning(
-                "DeepSeek 小段总结结果校验失败 attempt=%s reason=%s",
+                "近期记忆小段总结结果校验失败 provider=%s attempt=%s reason=%s",
+                target["name"],
                 attempt,
                 validation_error,
             )
+            if target_index + 1 < len(request_targets):
+                target_index += 1
             if attempt < _SUMMARY_DS_MAX_ATTEMPTS:
                 if not result:
                     attempt_prompt = prompt + _SUMMARY_JSON_RETRY_INSTRUCTION
@@ -1301,7 +1344,13 @@ def fetch_new_summary_update(
             window_id=window_id,
         )
         if not updated_state:
-            logger.warning("DeepSeek 小段总结构建 chunks 失败 attempt=%s", attempt)
+            logger.warning(
+                "近期记忆小段总结构建 chunks 失败 provider=%s attempt=%s",
+                target["name"],
+                attempt,
+            )
+            if target_index + 1 < len(request_targets):
+                target_index += 1
             if attempt < _SUMMARY_DS_MAX_ATTEMPTS:
                 attempt_prompt = prompt + _summary_result_retry_instruction("结果字段通过初检，但无法构建 summary chunks")
                 continue
