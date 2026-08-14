@@ -1045,6 +1045,25 @@ def save_dynamic_memory_list(memories: list) -> bool:
             return False
 
 
+def save_dynamic_memory_list_if_unchanged(expected: list, memories: list) -> str:
+    """仅在 current.json 仍等于读取快照时写回，避免离线维护覆盖较新的状态。"""
+    client = _s3_client()
+    if not client:
+        return "write_failed"
+    with _global_write_lock:
+        try:
+            data = _read_json(client, R2_KEY_DYNAMIC_MEMORY)
+            latest = data.get("memories") if isinstance(data, dict) else None
+            latest = latest if isinstance(latest, list) else []
+            if latest != list(expected or []):
+                return "conflict"
+            _write_json(client, R2_KEY_DYNAMIC_MEMORY, {"memories": memories})
+            return "saved"
+        except Exception as e:
+            logger.error("save_dynamic_memory_list_if_unchanged 失败 error=%s", e, exc_info=True)
+            return "write_failed"
+
+
 def touch_dynamic_memory_mentions(memory_ids: list[str]) -> int:
     """按 memory_id 给动态记忆 mention_count +1，并刷新 last_mentioned。"""
     ids: list[str] = []
@@ -1318,6 +1337,67 @@ def save_core_cache_pending(pending: list) -> bool:
 def _normalize_memory_layer(layer: str) -> str:
     normalized = str(layer or "").strip().lower()
     return normalized if normalized in {"dynamic", "core"} else ""
+
+
+def reject_pending_memory_merge(
+    layer: str,
+    entry_id: str,
+    *,
+    original_content: str,
+    rewritten_content: str,
+) -> dict:
+    """按当前线上 pending_merge 精确拒绝候选，不修改正式条目其他字段。"""
+    normalized_layer = _normalize_memory_layer(layer)
+    clean_id = str(entry_id or "").strip()
+    expected_original = str(original_content or "").strip()
+    expected_rewritten = str(rewritten_content or "").strip()
+    if not normalized_layer or not clean_id:
+        return {"status": "not_found"}
+
+    client = _s3_client()
+    if not client:
+        return {"status": "write_failed"}
+    key = R2_KEY_DYNAMIC_MEMORY if normalized_layer == "dynamic" else R2_KEY_CORE_CACHE
+    field = "memories" if normalized_layer == "dynamic" else "pending"
+    try:
+        with _global_write_lock:
+            data = _read_json(client, key)
+            items = data.get(field) if isinstance(data, dict) else None
+            if not isinstance(items, list):
+                return {"status": "not_found"}
+            for index, raw_item in enumerate(items):
+                if not isinstance(raw_item, dict) or str(raw_item.get("id") or "").strip() != clean_id:
+                    continue
+                current = dict(raw_item)
+                pending_merge = current.get("pending_merge")
+                if not isinstance(pending_merge, dict):
+                    return {"status": "no_pending", "item": current}
+                if (
+                    str(pending_merge.get("original_content") or "").strip() != expected_original
+                    or str(pending_merge.get("rewritten_content") or "").strip() != expected_rewritten
+                ):
+                    return {"status": "conflict", "item": current}
+                updated = dict(current)
+                updated.pop("pending_merge", None)
+                updated_items = list(items)
+                updated_items[index] = updated
+                _write_json(client, key, {field: updated_items})
+                return {
+                    "status": "rejected",
+                    "before": current,
+                    "item": updated,
+                    "pending_merge": dict(pending_merge),
+                }
+            return {"status": "not_found"}
+    except Exception as e:
+        logger.error(
+            "reject_pending_memory_merge 失败 layer=%s memory_id=%s error=%s",
+            normalized_layer,
+            clean_id,
+            e,
+            exc_info=True,
+        )
+        return {"status": "write_failed"}
 
 
 def _memory_trash_entry_id(entry: dict) -> str:

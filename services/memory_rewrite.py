@@ -389,11 +389,16 @@ def _apply_dynamic_rewrite(
     items = _load_layer_items("dynamic")
     index, current = _find_item(items, memory_id)
     current_content = str(current.get("content") or "").strip()
+    review_pending = _matching_pending_merge(current, expected_content)
     if current_content != expected_content:
+        pending_merge = current.get("pending_merge")
+        if isinstance(pending_merge, dict) and current_content != str(
+            pending_merge.get("original_content") or ""
+        ).strip():
+            raise MemoryRewriteConflict("待审核候选基于旧正文，不能直接通过；请拒绝后重新生成")
         raise MemoryRewriteConflict("这条动态记忆已经变化，请重新生成候选")
     if current_content == rewritten_content:
         return current, []
-    review_pending = _matching_pending_merge(current, expected_content)
 
     updated = dict(current)
     updated["content"] = rewritten_content
@@ -466,11 +471,16 @@ def _apply_core_rewrite(
     items = _load_layer_items("core")
     index, current = _find_item(items, memory_id)
     current_content = str(current.get("content") or "").strip()
+    review_pending = _matching_pending_merge(current, expected_content)
     if current_content != expected_content:
+        pending_merge = current.get("pending_merge")
+        if isinstance(pending_merge, dict) and current_content != str(
+            pending_merge.get("original_content") or ""
+        ).strip():
+            raise MemoryRewriteConflict("待审核候选基于旧正文，不能直接通过；请拒绝后重新生成")
         raise MemoryRewriteConflict("这条核心记忆已经变化，请重新生成候选")
     if current_content == rewritten_content:
         return current, []
-    review_pending = _matching_pending_merge(current, expected_content)
 
     updated = dict(current)
     updated["content"] = rewritten_content
@@ -552,35 +562,31 @@ def reject_memory_rewrite(
     normalized_id = _normalize_memory_id(memory_id)
     expected = _normalize_content(original_content, field="original_content")
     rewritten = _normalize_content(rewritten_content, field="rewritten_content")
-    items = _load_layer_items(normalized_layer)
-    index, current = _find_item(items, normalized_id)
-    if str(current.get("content") or "").strip() != expected:
-        raise MemoryRewriteConflict(f"这条{'动态' if normalized_layer == 'dynamic' else '核心'}记忆已经变化，请刷新后再操作")
-    pending_merge = current.get("pending_merge")
-    if not isinstance(pending_merge, dict):
-        raise MemoryRewriteNotFound(f"这条{'动态' if normalized_layer == 'dynamic' else '核心'}记忆没有待审核 merge")
-    if (
-        str(pending_merge.get("original_content") or "").strip() != expected
-        or str(pending_merge.get("rewritten_content") or "").strip() != rewritten
-    ):
-        raise MemoryRewriteConflict("待审核 merge 已经变化，请刷新后再操作")
-    updated = dict(current)
-    updated.pop("pending_merge", None)
-    items[index] = updated
-    saved = (
-        r2_store.save_dynamic_memory_list(items)
-        if normalized_layer == "dynamic"
-        else r2_store.save_core_cache_pending(items)
+    rejected = r2_store.reject_pending_memory_merge(
+        normalized_layer,
+        normalized_id,
+        original_content=expected,
+        rewritten_content=rewritten,
     )
-    if not saved:
+    status = str(rejected.get("status") or "")
+    if status == "not_found":
+        raise MemoryRewriteNotFound("没有找到这条记忆")
+    if status == "no_pending":
+        raise MemoryRewriteNotFound(f"这条{'动态' if normalized_layer == 'dynamic' else '核心'}记忆没有待审核 merge")
+    if status == "conflict":
+        raise MemoryRewriteConflict("待审核 merge 已经变化，请刷新后再操作")
+    if status != "rejected":
         raise MemoryRewriteStorageError(f"拒绝{'动态' if normalized_layer == 'dynamic' else '核心'}记忆 merge 失败")
+    current = dict(rejected.get("before") or {})
+    updated = dict(rejected.get("item") or {})
+    pending_merge = dict(rejected.get("pending_merge") or {})
     review_saved = _record_merge_review_safe(
         layer=normalized_layer,
         memory_id=normalized_id,
         before=current,
-        pending_merge=dict(pending_merge),
+        pending_merge=pending_merge,
         outcome="rejected",
-        final_content=expected,
+        final_content=str(current.get("content") or "").strip(),
     )
     return {
         "layer": normalized_layer,

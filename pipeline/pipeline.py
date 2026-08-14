@@ -3259,6 +3259,8 @@ def _core_protected_dynamic_memory_ids(core_pending: list) -> set[str]:
 
 
 def _should_prune_dynamic_memory(mem: dict, now, protected_ids: set[str]) -> bool:
+    if isinstance((mem or {}).get("pending_merge"), dict):
+        return False
     memory_id = str((mem or {}).get("id") or "").strip()
     if memory_id and memory_id in protected_ids:
         return False
@@ -3308,7 +3310,12 @@ def _upsert_dynamic_memory_index(mem: dict) -> None:
         logger.warning("动态层索引增量更新失败 memory_id=%s tag=%s error=%s", mid, tag, e)
 
 
-def _move_promoted_memories_out_of_dynamic(current_memories: list, promoted_ids: set[str]) -> bool:
+def _move_promoted_memories_out_of_dynamic(
+    current_memories: list,
+    promoted_ids: set[str],
+    *,
+    expected_snapshot: list | None = None,
+) -> bool:
     """核心副本确认落盘后，把对应源记忆从动态层与动态索引移走。"""
     ids = {str(x or "").strip() for x in (promoted_ids or set()) if str(x or "").strip()}
     if not ids:
@@ -3316,8 +3323,14 @@ def _move_promoted_memories_out_of_dynamic(current_memories: list, promoted_ids:
     remaining = [m for m in current_memories if str((m or {}).get("id") or "").strip() not in ids]
     if len(remaining) == len(current_memories):
         return True
-    if not r2_store.save_dynamic_memory_list(remaining):
-        logger.error("核心记忆晋升后动态层移出失败 ids=%s", sorted(ids))
+    if expected_snapshot is None:
+        saved = r2_store.save_dynamic_memory_list(remaining)
+        save_status = "saved" if saved else "write_failed"
+    else:
+        save_status = r2_store.save_dynamic_memory_list_if_unchanged(expected_snapshot, remaining)
+        saved = save_status == "saved"
+    if not saved:
+        logger.error("核心记忆晋升后动态层移出失败 ids=%s status=%s", sorted(ids), save_status)
         return False
 
     current_memories[:] = remaining
@@ -3499,7 +3512,8 @@ def step_inject_dynamic_memory(
             for m in memories
             if m.get("id") and _should_prune_dynamic_memory(m, now, protected_ids)
         }
-        if r2_store.save_dynamic_memory_list(pruned):
+        save_status = r2_store.save_dynamic_memory_list_if_unchanged(memories, pruned)
+        if save_status == "saved":
             provenance_deleted = 0
             try:
                 from memory_vector.vector_index_store import remove_memory_ids_from_all_indices
@@ -3526,6 +3540,9 @@ def step_inject_dynamic_memory(
                 )
             except Exception as e:
                 logger.debug("动态层边缘淘汰日志失败 error=%s", e)
+        else:
+            logger.info("动态层边缘淘汰放弃旧快照写回 status=%s", save_status)
+            pruned = r2_store.get_dynamic_memory_list() or []
     memories = pruned
     messages = body.get("messages") or []
     # 取最后一条 user 内容做关键词
@@ -4438,6 +4455,36 @@ def _apply_one_decision(
                 )
             return None
 
+        latest_memories = [
+            dict(item)
+            for item in (r2_store.get_dynamic_memory_list() or [])
+            if isinstance(item, dict)
+        ]
+        latest_dynamic = next(
+            (
+                item
+                for item in latest_memories
+                if str(item.get("id") or "").strip() == str(fused_with_id).strip()
+            ),
+            None,
+        )
+        if not isinstance(latest_dynamic, dict):
+            logger.warning(
+                "动态层 merge 最新条目未找到 fused_with_id=%s，本轮回退为 skip window_id=%s",
+                fused_with_id,
+                window_id,
+            )
+            return None
+        if isinstance(latest_dynamic.get("pending_merge"), dict):
+            logger.info(
+                "动态层 merge 最新条目已有待审核候选，本轮保持锁定并跳过 window_id=%s fused_with_id=%s",
+                window_id,
+                fused_with_id,
+            )
+            return None
+        latest_snapshot = copy.deepcopy(latest_memories)
+        current_memories[:] = latest_memories
+
         found = False
         merged_mem = None
         for mem in current_memories:
@@ -4469,9 +4516,26 @@ def _apply_one_decision(
                 touched_mem_id=fused_with_id,
             )
         if promoted_ids:
-            dynamic_saved = _move_promoted_memories_out_of_dynamic(current_memories, promoted_ids)
+            dynamic_saved = _move_promoted_memories_out_of_dynamic(
+                current_memories,
+                promoted_ids,
+                expected_snapshot=latest_snapshot,
+            )
         else:
-            dynamic_saved = r2_store.save_dynamic_memory_list(current_memories)
+            save_status = r2_store.save_dynamic_memory_list_if_unchanged(
+                latest_snapshot,
+                current_memories,
+            )
+            dynamic_saved = save_status == "saved"
+            if not dynamic_saved:
+                logger.info(
+                    "动态层 merge 放弃旧快照写回 status=%s window_id=%s fused_with_id=%s",
+                    save_status,
+                    window_id,
+                    fused_with_id,
+                )
+        if not dynamic_saved:
+            return None
         if dynamic_saved and fused_with_id not in promoted_ids:
             _upsert_dynamic_memory_index(merged_mem)
         try:

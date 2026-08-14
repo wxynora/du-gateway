@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import time
 from collections import defaultdict
@@ -199,6 +200,7 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
     )
 
     memories = r2_store.get_dynamic_memory_list() or []
+    source_snapshot = copy.deepcopy(memories)
     current_memories, changed = r2_store.ensure_dynamic_memory_ids(memories)
     core_pending = r2_store.get_core_cache_pending() or []
     protected_ids = _core_protected_dynamic_memory_ids(core_pending)
@@ -211,6 +213,9 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
 
     for mem in current_memories:
         if not isinstance(mem, dict):
+            continue
+        if isinstance(mem.get("pending_merge"), dict):
+            retained.append(mem)
             continue
         mid = str(mem.get("id") or "").strip()
         content = str(mem.get("content") or "").strip()
@@ -228,6 +233,8 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
 
     tag_buckets: dict[str, list[dict]] = defaultdict(list)
     for mem in retained:
+        if isinstance(mem.get("pending_merge"), dict):
+            continue
         retrieval_text = str(mem.get("retrieval_text") or "").strip()
         if retrieval_text:
             tag_buckets[str(mem.get("tag") or "").strip() or "ALL"].append(mem)
@@ -315,6 +322,7 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
     duplicate_candidates = duplicate_candidates[: max(1, int(limit_candidates or 20))]
 
     ds_resolutions: list[dict] = []
+    provenance_events: list[dict] = []
     if not dry_run:
         for group in candidate_groups[:_DS_GROUP_MAX]:
             result = _resolve_duplicate_group_with_ds(group)
@@ -351,26 +359,23 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
             retained = [m for m in retained if str((m or {}).get("id") or "") not in drop_ids]
             backfilled_ids.append(keep_id)
             changed = True
-            try:
-                from services.dynamic_memory_provenance import record_event
-
-                record_event(
-                    memory_id=keep_id,
-                    action="maintenance_merge",
-                    event_time=str(keep_mem.get("last_mentioned") or ""),
-                    content_before=content_before,
-                    content_after=merged_content,
-                    related_memory_ids=sorted(drop_ids),
-                    tag=str(keep_mem.get("tag") or ""),
-                    importance=int(keep_mem.get("importance") or 0),
-                    emotion_label=str(keep_mem.get("emotion_label") or ""),
-                    scene_type=str(keep_mem.get("scene_type") or ""),
-                    target_type=str(keep_mem.get("target_type") or ""),
-                    source="memory_maintenance",
-                    decision=result,
-                )
-            except Exception as e:
-                logger.warning("memory maintenance provenance record failed keep_id=%s error=%s", keep_id, e)
+            provenance_events.append(
+                {
+                    "memory_id": keep_id,
+                    "action": "maintenance_merge",
+                    "event_time": str(keep_mem.get("last_mentioned") or ""),
+                    "content_before": content_before,
+                    "content_after": merged_content,
+                    "related_memory_ids": sorted(drop_ids),
+                    "tag": str(keep_mem.get("tag") or ""),
+                    "importance": int(keep_mem.get("importance") or 0),
+                    "emotion_label": str(keep_mem.get("emotion_label") or ""),
+                    "scene_type": str(keep_mem.get("scene_type") or ""),
+                    "target_type": str(keep_mem.get("target_type") or ""),
+                    "source": "memory_maintenance",
+                    "decision": result,
+                }
+            )
 
     report = {
         "timestamp": now_beijing_iso(),
@@ -393,9 +398,27 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
         return report
 
     if changed:
-        ok = r2_store.save_dynamic_memory_list(retained)
-        if not ok:
+        save_status = r2_store.save_dynamic_memory_list_if_unchanged(source_snapshot, retained)
+        if save_status == "conflict":
+            report["write_skipped_reason"] = "dynamic_memory_changed_during_maintenance"
+            report["memory_count_after"] = before_count
+            report["pruned_count"] = 0
+            report["applied"] = False
+            if not r2_store.save_dynamic_memory_maintenance_report(report):
+                raise RuntimeError("保存离线整理报告失败")
+            logger.info("memory maintenance skipped stale snapshot write")
+            return report
+        if save_status != "saved":
             raise RuntimeError("保存动态记忆失败")
+        report["applied"] = True
+        if provenance_events:
+            try:
+                from services.dynamic_memory_provenance import record_event
+
+                for event in provenance_events:
+                    record_event(**event)
+            except Exception as e:
+                logger.warning("memory maintenance provenance record failed error=%s", e)
         if removed_ids:
             try:
                 remove_memory_ids_from_all_indices(removed_ids)
