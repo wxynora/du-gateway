@@ -114,6 +114,8 @@ system 分区采用显式标记合同：凡辛玥明确指定为动态区、临�
 
 ### 4.1 SumiTalk
 
+- Doorbell Bell 首户 adapter 位于 `scripts/doorbell_bell_injector.py`。它只接受 version 1、固定 `mailbox_unread` reason 与已批准的固定信箱存在提示；信件标题／正文、Bell token 和额外字段全部拒绝。固定提示作为临时动态 system，独立说明作为 user，`wake_id` 映射为 `client_request_id=doorbell-bell:<wake_id>` 后调用既有 `build_sumitalk_chat_job_payload()`；同 wake 重放只复用非错误／非取消的原持久任务。成功入队或复用才向 Bell 返回严格 `accepted`，SQLite／队列异常返回可重试错误，缺少固定 SumiTalk window／device 配置返回永久错误。当前为本地候选，生产安装与一次真实投递仍待本任务验收。
+
 - 原生聊天 job 路由：`routes/miniapp/sumitalk_chat_jobs.py`
 - 持久队列：`services/sumitalk_chat_queue.py`
 - 事件 worker：`runtime/consumers.py`、`scripts/run_interactive_worker.py`
