@@ -423,9 +423,27 @@ def _apply_dynamic_rewrite(
     updated.pop("pending_merge", None)
     updated["retrieval_text"] = _build_dynamic_retrieval_text(rewritten_content)
     updated["updated_at"] = now_beijing_iso()
-    items[index] = updated
-    if not r2_store.save_dynamic_memory_list(items):
+    replaced = r2_store.replace_memory_item_if_unchanged(
+        "dynamic",
+        memory_id,
+        expected_item=current,
+        updated_item=updated,
+    )
+    replace_status = str(replaced.get("status") or "")
+    if replace_status == "not_found":
+        raise MemoryRewriteNotFound("没有找到这条动态记忆")
+    if replace_status == "conflict":
+        latest = dict(replaced.get("item") or {})
+        latest_pending = latest.get("pending_merge")
+        if isinstance(latest_pending, dict) and str(latest.get("content") or "").strip() != str(
+            latest_pending.get("original_content") or ""
+        ).strip():
+            raise MemoryRewriteConflict("待审核候选基于旧正文，不能直接通过；请拒绝后重新生成")
+        raise MemoryRewriteConflict("这条动态记忆已经变化，请重新生成候选")
+    if replace_status != "replaced":
         raise MemoryRewriteStorageError("动态记忆保存失败")
+    items = list(replaced.get("items") or [])
+    updated = dict(replaced.get("item") or updated)
 
     warnings: list[str] = []
     try:
@@ -505,9 +523,26 @@ def _apply_core_rewrite(
     updated.pop("pending_merge", None)
     updated["retrieval_text"] = _build_dynamic_retrieval_text(rewritten_content)
     updated["updated_at"] = now_beijing_iso()
-    items[index] = updated
-    if not r2_store.save_core_cache_pending(items):
+    replaced = r2_store.replace_memory_item_if_unchanged(
+        "core",
+        memory_id,
+        expected_item=current,
+        updated_item=updated,
+    )
+    replace_status = str(replaced.get("status") or "")
+    if replace_status == "not_found":
+        raise MemoryRewriteNotFound("没有找到这条核心记忆")
+    if replace_status == "conflict":
+        latest = dict(replaced.get("item") or {})
+        latest_pending = latest.get("pending_merge")
+        if isinstance(latest_pending, dict) and str(latest.get("content") or "").strip() != str(
+            latest_pending.get("original_content") or ""
+        ).strip():
+            raise MemoryRewriteConflict("待审核候选基于旧正文，不能直接通过；请拒绝后重新生成")
+        raise MemoryRewriteConflict("这条核心记忆已经变化，请重新生成候选")
+    if replace_status != "replaced":
         raise MemoryRewriteStorageError("核心记忆保存失败")
+    updated = dict(replaced.get("item") or updated)
     r2_store._upsert_core_cache_pending_index_safe([updated])
     warnings: list[str] = []
     if isinstance(review_pending, dict):

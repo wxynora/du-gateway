@@ -102,10 +102,8 @@ def api_memory_append():
         "last_mentioned": now,
     }
 
-    memories = r2_store.get_dynamic_memory_list() or []
-    memories.append(new_entry)
-    ok = r2_store.save_dynamic_memory_list(memories)
-    if not ok:
+    append_result = r2_store.append_dynamic_memory(new_entry)
+    if str(append_result.get("status") or "") != "appended":
         return jsonify({"ok": False, "error": "R2 写入失败"}), 503
 
     # 向量索引更新（best-effort，失败不影响写入结果）

@@ -309,10 +309,14 @@ except Exception:  # pragma: no cover - production Linux and local macOS provide
 
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
+_dynamic_memory_write_lock = threading.Lock()
+_core_memory_write_lock = threading.Lock()
 _notebook_write_lock = threading.Lock()
 _trip_plan_write_lock = threading.Lock()
 _conversation_followups_write_lock = threading.Lock()
 _conversation_followups_lock_path = DATA_DIR / "conversation_followups.lock"
+_dynamic_memory_lock_path = DATA_DIR / "dynamic_memory.lock"
+_core_memory_lock_path = DATA_DIR / "core_memory.lock"
 _conversation_followups_bootstrap_lock = threading.Lock()
 _CONVERSATION_FOLLOWUPS_BOOTSTRAPPED = False
 
@@ -340,6 +344,25 @@ LAST_USER_ACTIVITY_ALLOWED_SOURCES = frozenset(
 
 def _get_key(prefix: str, key: str) -> str:
     return f"{prefix}/{key}" if prefix else key
+
+
+@contextmanager
+def _memory_layer_write_guard(layer: str):
+    """Serialize dynamic/core memory read-modify-write across local processes."""
+    normalized = _normalize_memory_layer(layer)
+    lock = _dynamic_memory_write_lock if normalized == "dynamic" else _core_memory_write_lock
+    lock_path = _dynamic_memory_lock_path if normalized == "dynamic" else _core_memory_lock_path
+    with lock:
+        if fcntl is None:
+            yield
+            return
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 # ---------- 小本本（按时间先后排序，滚动保留） ----------
@@ -1036,7 +1059,7 @@ def save_dynamic_memory_list(memories: list) -> bool:
     client = _s3_client()
     if not client:
         return False
-    with _global_write_lock:
+    with _memory_layer_write_guard("dynamic"):
         try:
             _write_json(client, R2_KEY_DYNAMIC_MEMORY, {"memories": memories})
             return True
@@ -1050,7 +1073,7 @@ def save_dynamic_memory_list_if_unchanged(expected: list, memories: list) -> str
     client = _s3_client()
     if not client:
         return "write_failed"
-    with _global_write_lock:
+    with _memory_layer_write_guard("dynamic"):
         try:
             data = _read_json(client, R2_KEY_DYNAMIC_MEMORY)
             latest = data.get("memories") if isinstance(data, dict) else None
@@ -1062,6 +1085,76 @@ def save_dynamic_memory_list_if_unchanged(expected: list, memories: list) -> str
         except Exception as e:
             logger.error("save_dynamic_memory_list_if_unchanged 失败 error=%s", e, exc_info=True)
             return "write_failed"
+
+
+def append_dynamic_memory(memory: dict) -> dict:
+    """基于最新 current.json 原子追加单条动态记忆。"""
+    item = dict(memory or {})
+    memory_id = str(item.get("id") or "").strip()
+    if not memory_id:
+        return {"status": "invalid"}
+    client = _s3_client()
+    if not client:
+        return {"status": "write_failed"}
+    with _memory_layer_write_guard("dynamic"):
+        try:
+            data = _read_json(client, R2_KEY_DYNAMIC_MEMORY)
+            memories = data.get("memories") if isinstance(data, dict) else None
+            memories = [dict(x) for x in (memories or []) if isinstance(x, dict)]
+            if any(str(x.get("id") or "").strip() == memory_id for x in memories):
+                return {"status": "exists", "memories": memories}
+            memories.append(item)
+            _write_json(client, R2_KEY_DYNAMIC_MEMORY, {"memories": memories})
+            return {"status": "appended", "memories": memories, "item": item}
+        except Exception as e:
+            logger.error("append_dynamic_memory 失败 memory_id=%s error=%s", memory_id, e, exc_info=True)
+            return {"status": "write_failed"}
+
+
+def replace_memory_item_if_unchanged(
+    layer: str,
+    entry_id: str,
+    *,
+    expected_item: dict,
+    updated_item: dict,
+) -> dict:
+    """按最新完整条目做条件替换，避免审核 apply 覆盖并发字段或候选。"""
+    normalized_layer = _normalize_memory_layer(layer)
+    clean_id = str(entry_id or "").strip()
+    if not normalized_layer or not clean_id:
+        return {"status": "not_found"}
+    client = _s3_client()
+    if not client:
+        return {"status": "write_failed"}
+    key = R2_KEY_DYNAMIC_MEMORY if normalized_layer == "dynamic" else R2_KEY_CORE_CACHE
+    field = "memories" if normalized_layer == "dynamic" else "pending"
+    with _memory_layer_write_guard(normalized_layer):
+        try:
+            data = _read_json(client, key)
+            items = data.get(field) if isinstance(data, dict) else None
+            if not isinstance(items, list):
+                return {"status": "not_found"}
+            for index, raw_item in enumerate(items):
+                if not isinstance(raw_item, dict) or str(raw_item.get("id") or "").strip() != clean_id:
+                    continue
+                current = dict(raw_item)
+                if current != dict(expected_item or {}):
+                    return {"status": "conflict", "item": current}
+                replacement = dict(updated_item or {})
+                updated_items = list(items)
+                updated_items[index] = replacement
+                _write_json(client, key, {field: updated_items})
+                return {"status": "replaced", "item": replacement, "items": updated_items}
+            return {"status": "not_found"}
+        except Exception as e:
+            logger.error(
+                "replace_memory_item_if_unchanged 失败 layer=%s memory_id=%s error=%s",
+                normalized_layer,
+                clean_id,
+                e,
+                exc_info=True,
+            )
+            return {"status": "write_failed"}
 
 
 def touch_dynamic_memory_mentions(memory_ids: list[str]) -> int:
@@ -1077,30 +1170,34 @@ def touch_dynamic_memory_mentions(memory_ids: list[str]) -> int:
     if not ids:
         return 0
 
-    memories = get_dynamic_memory_list()
-    memories, id_changed = ensure_dynamic_memory_ids(memories)
-    if not memories:
-        return 0
-
     id_set = set(ids)
     now = now_beijing_iso()
-    touched = 0
-    for mem in memories:
-        if str((mem or {}).get("id") or "").strip() not in id_set:
-            continue
-        try:
-            mention_count = int((mem or {}).get("mention_count") or 0)
-        except Exception:
-            mention_count = 0
-        mem["mention_count"] = mention_count + 1
-        mem["last_mentioned"] = now
-        touched += 1
-
-    if not touched:
-        if id_changed:
-            save_dynamic_memory_list(memories)
+    client = _s3_client()
+    if not client:
         return 0
-    if not save_dynamic_memory_list(memories):
+    touched = 0
+    try:
+        with _memory_layer_write_guard("dynamic"):
+            data = _read_json(client, R2_KEY_DYNAMIC_MEMORY)
+            memories = data.get("memories") if isinstance(data, dict) else None
+            memories = [dict(x) for x in (memories or []) if isinstance(x, dict)]
+            memories, id_changed = ensure_dynamic_memory_ids(memories)
+            for mem in memories:
+                if str(mem.get("id") or "").strip() not in id_set:
+                    continue
+                try:
+                    mention_count = int(mem.get("mention_count") or 0)
+                except Exception:
+                    mention_count = 0
+                mem["mention_count"] = mention_count + 1
+                mem["last_mentioned"] = now
+                touched += 1
+            if touched or id_changed:
+                _write_json(client, R2_KEY_DYNAMIC_MEMORY, {"memories": memories})
+    except Exception as e:
+        logger.error("动态记忆引用回写失败 ids=%s error=%s", ids[:10], e, exc_info=True)
+        return 0
+    if not touched:
         return 0
     logger.info("动态记忆引用回写完成 touched=%s ids=%s", touched, ids[:10])
     return touched
@@ -1119,7 +1216,7 @@ def retain_dynamic_memory_by_id(memory_id: str) -> dict:
 
     updated_memory = None
     try:
-        with _global_write_lock:
+        with _memory_layer_write_guard("dynamic"):
             data = _read_json(client, R2_KEY_DYNAMIC_MEMORY)
             memories = data.get("memories") if isinstance(data, dict) else None
             if not isinstance(memories, list):
@@ -1325,13 +1422,32 @@ def save_core_cache_pending(pending: list) -> bool:
     client = _s3_client()
     if not client:
         return False
-    with _global_write_lock:
+    with _memory_layer_write_guard("core"):
         try:
             _write_json(client, R2_KEY_CORE_CACHE, {"pending": pending})
             return True
         except Exception as e:
             logger.error("save_core_cache_pending 失败 error=%s", e, exc_info=True)
             return False
+
+
+def save_core_cache_pending_if_unchanged(expected: list, pending: list) -> str:
+    """仅在核心待选列表仍等于读取快照时写回。"""
+    client = _s3_client()
+    if not client:
+        return "write_failed"
+    with _memory_layer_write_guard("core"):
+        try:
+            data = _read_json(client, R2_KEY_CORE_CACHE)
+            latest = data.get("pending") if isinstance(data, dict) else None
+            latest = latest if isinstance(latest, list) else []
+            if latest != list(expected or []):
+                return "conflict"
+            _write_json(client, R2_KEY_CORE_CACHE, {"pending": pending})
+            return "saved"
+        except Exception as e:
+            logger.error("save_core_cache_pending_if_unchanged 失败 error=%s", e, exc_info=True)
+            return "write_failed"
 
 
 def _normalize_memory_layer(layer: str) -> str:
@@ -1360,7 +1476,7 @@ def reject_pending_memory_merge(
     key = R2_KEY_DYNAMIC_MEMORY if normalized_layer == "dynamic" else R2_KEY_CORE_CACHE
     field = "memories" if normalized_layer == "dynamic" else "pending"
     try:
-        with _global_write_lock:
+        with _memory_layer_write_guard(normalized_layer):
             data = _read_json(client, key)
             items = data.get(field) if isinstance(data, dict) else None
             if not isinstance(items, list):
@@ -1518,6 +1634,7 @@ def promote_to_core_cache(
     if not client:
         return set()
     pending = get_core_cache_pending()
+    pending_snapshot = list(pending)
     existing_ids = {p.get("id") for p in pending if p.get("id")}
     existing_source_ids = {
         str(p.get("source_memory_id") or "").strip()
@@ -1605,7 +1722,7 @@ def promote_to_core_cache(
         added = True
 
     if added:
-        if not save_core_cache_pending(pending):
+        if save_core_cache_pending_if_unchanged(pending_snapshot, pending) != "saved":
             return set()
         _upsert_core_cache_pending_index_safe(added_items)
         logger.info("core_cache 提拔 条数=%s", len(pending))
@@ -1630,6 +1747,7 @@ def stage_core_memory_merge(
     if not clean_id or not original or not rewritten or original == rewritten:
         return False
     pending = get_core_cache_pending()
+    source_snapshot = list(pending)
     for index, item in enumerate(pending):
         if not isinstance(item, dict) or str(item.get("id") or "").strip() != clean_id:
             continue
@@ -1653,8 +1771,9 @@ def stage_core_memory_merge(
             "merge_reason": str(merge_reason or "").strip(),
             "field_updates": dict(field_updates or {}),
         }
-        pending[index] = updated
-        return save_core_cache_pending(pending)
+        updated_pending = list(pending)
+        updated_pending[index] = updated
+        return save_core_cache_pending_if_unchanged(source_snapshot, updated_pending) == "saved"
     return False
 
 
@@ -1676,6 +1795,7 @@ def stage_dynamic_memory_merge(
     if not clean_id or not original or not rewritten or original == rewritten:
         return False
     memories = get_dynamic_memory_list()
+    source_snapshot = list(memories)
     for index, item in enumerate(memories):
         if not isinstance(item, dict) or str(item.get("id") or "").strip() != clean_id:
             continue
@@ -1708,8 +1828,9 @@ def stage_dynamic_memory_merge(
             "merge_reason": clean_merge_reason,
             "field_updates": dict(field_updates or {}),
         }
-        memories[index] = updated
-        return save_dynamic_memory_list(memories)
+        updated_memories = list(memories)
+        updated_memories[index] = updated
+        return save_dynamic_memory_list_if_unchanged(source_snapshot, updated_memories) == "saved"
     return False
 
 
@@ -1753,8 +1874,11 @@ def delete_memory_by_id(layer: str, entry_id: str) -> bool:
     if not save_memory_trash(trash):
         return False
 
-    save_active = save_dynamic_memory_list if normalized_layer == "dynamic" else save_core_cache_pending
-    if not save_active(remaining_active):
+    if normalized_layer == "dynamic":
+        active_saved = save_dynamic_memory_list_if_unchanged(active_items, remaining_active) == "saved"
+    else:
+        active_saved = save_core_cache_pending(remaining_active)
+    if not active_saved:
         if not save_memory_trash(trash_before):
             logger.error("记忆删除失败且回收站回滚失败 layer=%s entry_id=%s", normalized_layer, clean_id)
         return False
@@ -1793,8 +1917,11 @@ def restore_memory_by_id(layer: str, entry_id: str) -> bool:
     ):
         return False
     restored = dict(trash_entry["memory"])
-    save_active = save_dynamic_memory_list if normalized_layer == "dynamic" else save_core_cache_pending
-    if not save_active(active_items + [restored]):
+    if normalized_layer == "dynamic":
+        active_saved = save_dynamic_memory_list_if_unchanged(active_items, active_items + [restored]) == "saved"
+    else:
+        active_saved = save_core_cache_pending(active_items + [restored])
+    if not active_saved:
         return False
 
     if normalized_layer == "dynamic":

@@ -3314,7 +3314,7 @@ def _move_promoted_memories_out_of_dynamic(
     current_memories: list,
     promoted_ids: set[str],
     *,
-    expected_snapshot: list | None = None,
+    expected_snapshot: list,
 ) -> bool:
     """核心副本确认落盘后，把对应源记忆从动态层与动态索引移走。"""
     ids = {str(x or "").strip() for x in (promoted_ids or set()) if str(x or "").strip()}
@@ -3323,12 +3323,8 @@ def _move_promoted_memories_out_of_dynamic(
     remaining = [m for m in current_memories if str((m or {}).get("id") or "").strip() not in ids]
     if len(remaining) == len(current_memories):
         return True
-    if expected_snapshot is None:
-        saved = r2_store.save_dynamic_memory_list(remaining)
-        save_status = "saved" if saved else "write_failed"
-    else:
-        save_status = r2_store.save_dynamic_memory_list_if_unchanged(expected_snapshot, remaining)
-        saved = save_status == "saved"
+    save_status = r2_store.save_dynamic_memory_list_if_unchanged(expected_snapshot, remaining)
+    saved = save_status == "saved"
     if not saved:
         logger.error("核心记忆晋升后动态层移出失败 ids=%s status=%s", sorted(ids), save_status)
         return False
@@ -4306,7 +4302,17 @@ def _apply_one_decision(
             "updated_at": now_iso,
             "last_mentioned": now_iso,
         }
-        current_memories.append(new_mem)
+        append_result = r2_store.append_dynamic_memory(new_mem)
+        if str(append_result.get("status") or "") != "appended":
+            logger.warning(
+                "动态层 new 放弃写入 status=%s window_id=%s memory_id=%s",
+                append_result.get("status"),
+                window_id,
+                new_mem["id"],
+            )
+            return None
+        current_memories[:] = list(append_result.get("memories") or [])
+        latest_snapshot = copy.deepcopy(current_memories)
         promoted_ids: set[str] = set()
         if tag != "卧室":
             promoted_ids = r2_store.promote_to_core_cache(
@@ -4317,9 +4323,13 @@ def _apply_one_decision(
                 touched_mem_id=new_mem["id"],
             )
         if promoted_ids:
-            dynamic_saved = _move_promoted_memories_out_of_dynamic(current_memories, promoted_ids)
+            dynamic_saved = _move_promoted_memories_out_of_dynamic(
+                current_memories,
+                promoted_ids,
+                expected_snapshot=latest_snapshot,
+            )
         else:
-            dynamic_saved = r2_store.save_dynamic_memory_list(current_memories)
+            dynamic_saved = True
         if dynamic_saved and new_mem["id"] not in promoted_ids:
             _upsert_dynamic_memory_index(new_mem)
         try:
@@ -4628,9 +4638,21 @@ def _step_dynamic_layer_evolve(
 
     current_memories = r2_store.get_dynamic_memory_list()
     if not skip_dynamic_memory_write:
+        source_snapshot = copy.deepcopy(current_memories)
         current_memories, changed = r2_store.ensure_dynamic_memory_ids(current_memories)
         if changed:
-            r2_store.save_dynamic_memory_list(current_memories)
+            save_status = r2_store.save_dynamic_memory_list_if_unchanged(
+                source_snapshot,
+                current_memories,
+            )
+            if save_status != "saved":
+                logger.info(
+                    "动态层补齐稳定字段放弃旧快照写回 status=%s window_id=%s round_index=%s",
+                    save_status,
+                    window_id,
+                    round_index,
+                )
+                current_memories = r2_store.get_dynamic_memory_list()
 
     decisions = call_dynamic_layer_ds(
         round_messages,
