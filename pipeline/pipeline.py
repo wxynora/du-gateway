@@ -2133,9 +2133,18 @@ def step_inject_stay_with_du(body: dict) -> dict:
     return body
 
 
+def _strip_memory_query_media_placeholders(text: str) -> str:
+    """图片占位只表示本轮带图，不参与关键词和 BM25 匹配。"""
+    cleaned = re.sub(r"(?:\[\s*图片\s*\]|【\s*图片\s*】)", " ", str(text or ""))
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def _extract_keyword_candidates(text: str) -> list[dict]:
     """提取用于匹配动态层的关键词候选，并标注是否来自短语收敛层。"""
     if not text or not isinstance(text, str):
+        return []
+    text = _strip_memory_query_media_placeholders(text)
+    if not text:
         return []
 
     stopwords = {
@@ -2384,13 +2393,13 @@ def _direct_keyword_hit(mem: dict, keyword_candidates: list[dict]) -> str:
 
 def _topic_state_anchor_candidates(topic_state: dict, evidence_text: str) -> list[dict]:
     """只接纳能在既有 state、前四轮或当前消息中找到来源的模型 anchors。"""
-    evidence = _normalize_direct_keyword_text(evidence_text)
+    evidence = _normalize_direct_keyword_text(_strip_memory_query_media_placeholders(evidence_text))
     out: list[dict] = []
     seen: set[str] = set()
     for value in (topic_state or {}).get("anchors") or []:
-        anchor = str(value or "").strip()
+        anchor = _strip_memory_query_media_placeholders(str(value or ""))
         normalized = _normalize_direct_keyword_text(anchor)
-        if len(normalized) < 2 or anchor in seen or normalized not in evidence:
+        if len(normalized) < 2 or normalized == "图片" or anchor in seen or normalized not in evidence:
             continue
         seen.add(anchor)
         out.append({"text": anchor, "is_phrase": True, "source": "topic_state_anchor"})
@@ -2643,14 +2652,16 @@ def _rewrite_memory_query_state_with_ds(
         "规则：\n"
         "1. 根据上轮 session_topic_state、当前消息之前的最近四轮对话和当前消息，更新本轮 topic_state，不得每轮从零猜。\n"
         "2. 当前消息明确切换话题时，按新话题更新 topic_state，不得让旧主题黏住当前消息。\n"
-        "3. 当前消息是简短承接、回答、纠正、指代或省略时，只从最近且直接相关的上下文补全被省略的对象或事件。\n"
-        "4. 当前消息已经有明确动作、对象或状态时，不得擅自把旧话题带进来。\n"
-        "5. active_topic 概括当前持续讨论的主题；current_focus 只描述本轮正在推进、追问或纠正的具体焦点。\n"
-        "6. anchors 只保留当前消息、最近四轮或上轮 topic_state 中已经出现，且能明确区分当前话题的人名、专名、项目名、机制名和核心概念。不得填写“事情、问题、感觉、关系、记忆”等泛词，不得编造新锚点。\n"
-        "7. queries 第一条是消歧后的主查询，其余是围绕同一讨论主题的不同召回角度。保留具体实体、事件、状态、判断和修正关系。\n"
-        "8. 不得补写对话中没有确认的原因、意图、偏好、关系或结果。\n"
-        "9. 保持谁说、谁做，不得交换主语或把对方的称呼改成自称。\n"
-        "10. queries 都是记忆检索陈述，不得写成“如何回复、怎么安慰、怎样处理”等回复生成任务。\n\n"
+        "3. 以当前消息表达的新动作、新问题和新指代为最高优先级；上一轮主题只用于补全省略信息，不得覆盖当前消息。\n"
+        "4. 无法读取图片内容时，不得把“这个、是谁、还记得吗”等指代强行绑定到附近文本名词；保留为待结合图片判断的对象。\n"
+        "5. 当前消息是简短承接、回答、纠正、指代或省略时，只从最近且直接相关的上下文补全被省略的对象或事件。\n"
+        "6. 当前消息已经有明确动作、对象或状态时，不得擅自把旧话题带进来。\n"
+        "7. active_topic 概括当前持续讨论的主题；current_focus 只描述本轮正在推进、追问或纠正的具体焦点。\n"
+        "8. anchors 只保留当前消息、最近四轮或上轮 topic_state 中已经出现，且能明确区分当前话题的人名、专名、项目名、机制名和核心概念。不得填写“事情、问题、感觉、关系、记忆”等泛词，不得编造新锚点。\n"
+        "9. queries 第一条是消歧后的主查询，其余是围绕同一讨论主题的不同召回角度。保留具体实体、事件、状态、判断和修正关系。\n"
+        "10. 不得补写对话中没有确认的原因、意图、偏好、关系或结果。\n"
+        "11. 保持谁说、谁做，不得交换主语或把对方的称呼改成自称。\n"
+        "12. queries 都是记忆检索陈述，不得写成“如何回复、怎么安慰、怎样处理”等回复生成任务。\n\n"
         "上轮 session_topic_state：\n"
         f"{previous_state_json}\n\n"
         "当前消息之前的最近四轮对话：\n"
@@ -3003,6 +3014,71 @@ def _dynamic_memory_rerank_document(mem: dict) -> str:
     return "\n".join(parts).strip()
 
 
+def _select_dynamic_memory_rerank_candidates(
+    recalled: list[dict],
+    keyword_candidates: list[dict],
+    pool_limit: int,
+    input_limit: int = 20,
+) -> tuple[list[dict], list[dict], dict]:
+    """从宽候选池选出 reranker 输入；保留原融合排序，并优先纳入直接关键词命中。"""
+    pool = list(recalled[: max(1, int(pool_limit))])
+    limit = max(1, min(int(input_limit), len(pool))) if pool else 0
+    direct_mems = [mem for mem in pool if _direct_keyword_hit(mem, keyword_candidates)]
+    selected_direct = direct_mems[:limit]
+    selected_ids = {str((mem or {}).get("id") or "") for mem in selected_direct}
+    remaining_slots = max(0, limit - len(selected_direct))
+    for mem in pool:
+        mid = str((mem or {}).get("id") or "")
+        if mid in selected_ids:
+            continue
+        if remaining_slots <= 0:
+            break
+        selected_ids.add(mid)
+        remaining_slots -= 1
+
+    selected = [mem for mem in pool if str((mem or {}).get("id") or "") in selected_ids]
+    unevaluated = [mem for mem in pool if str((mem or {}).get("id") or "") not in selected_ids]
+    unevaluated.extend(recalled[len(pool) :])
+    return selected, unevaluated, {
+        "candidate_pool_count": len(pool),
+        "rerank_input_limit": int(input_limit),
+        "rerank_input_count": len(selected),
+        "direct_keyword_candidate_count": len(direct_mems),
+        "direct_keyword_selected_count": len(selected_direct),
+    }
+
+
+def _filter_dynamic_memory_timeout_fallback(
+    recalled: list[dict],
+    keyword_candidates: list[dict],
+    min_score: float,
+) -> list[dict]:
+    """reranker 超时时复用现有融合分和门槛，不把宽候选直接当最终结果。"""
+    scored: list[tuple[float, float, dict]] = []
+    for mem in recalled or []:
+        old_score = mem.get("_recall_score") if isinstance(mem.get("_recall_score"), dict) else {}
+        fallback_base = _clamp_unit(float(old_score.get("final_total") or old_score.get("total") or 0.0))
+        matched_keyword = _direct_keyword_hit(mem, keyword_candidates)
+        direct_keyword_bonus = 0.15 if matched_keyword else 0.0
+        final_score = _clamp_unit(fallback_base + direct_keyword_bonus)
+        if final_score < float(min_score):
+            continue
+        merged_score = dict(old_score)
+        merged_score.update(
+            {
+                "fallback_base_score": round(fallback_base, 4),
+                "direct_keyword": matched_keyword,
+                "direct_keyword_bonus": round(direct_keyword_bonus, 4),
+                "final_total": round(final_score, 4),
+                "rerank_fallback": "timeout",
+            }
+        )
+        mem["_recall_score"] = merged_score
+        scored.append((final_score, _clamp_unit(float(old_score.get("memory_prior") or 0.0)), mem))
+    scored.sort(key=lambda item: (-item[0], -item[1]))
+    return [mem for _, _, mem in scored]
+
+
 def _apply_external_dynamic_memory_rerank(
     recalled: list[dict],
     last_user_text: str,
@@ -3026,8 +3102,12 @@ def _apply_external_dynamic_memory_rerank(
             return recalled, recall_source, {"enabled": False, "reason": "disabled"}
 
         max_candidates = max(1, int(DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES or 30))
-        candidate_mems = recalled[:max_candidates]
-        tail_mems = recalled[max_candidates:]
+        candidate_mems, tail_mems, selection_debug = _select_dynamic_memory_rerank_candidates(
+            recalled,
+            keyword_candidates or [],
+            max_candidates,
+            input_limit=20,
+        )
         query = _dynamic_memory_rerank_query(
             last_user_text,
             retrieval_query,
@@ -3047,6 +3127,19 @@ def _apply_external_dynamic_memory_rerank(
         ]
         result = rerank_dynamic_memory_documents(query, docs)
         if not result.get("ok"):
+            if str(result.get("reason") or "") == "timeout":
+                fallback = _filter_dynamic_memory_timeout_fallback(
+                    recalled,
+                    keyword_candidates or [],
+                    float(RERANK_MIN_SCORE),
+                )
+                debug = dict(result)
+                debug.update(selection_debug)
+                debug["final_score_threshold"] = float(RERANK_MIN_SCORE)
+                debug["relevant_count"] = len(fallback)
+                debug["rejected_count"] = max(0, len(recalled) - len(fallback))
+                debug["unevaluated_count"] = len(tail_mems)
+                return fallback, recall_source, debug
             return recalled, recall_source, result
 
         score_weights = {
@@ -3111,6 +3204,7 @@ def _apply_external_dynamic_memory_rerank(
         debug["relevant_count"] = len(reranked)
         debug["rejected_count"] = max(0, len(candidate_mems) - len(reranked))
         debug["unevaluated_count"] = len(tail_mems)
+        debug.update(selection_debug)
         return reranked, f"{recall_source}+rerank", debug
     except Exception as e:
         logger.warning("动态记忆外部 rerank 失败，回退原排序 error=%s", e)
@@ -3611,7 +3705,7 @@ def step_inject_dynamic_memory(
         if str((item or {}).get("text") or "").strip()
     ]
     retrieval_query = _build_retrieval_text(last_user_text)
-    bm25_query = resolved_query or last_user_text
+    bm25_query = _strip_memory_query_media_placeholders(resolved_query or last_user_text)
     if not memories and not r2_store.get_core_cache_pending():
         return body
     valid_memory_ids = {str(mem.get("id") or "").strip() for mem in memories if str(mem.get("id") or "").strip()}
