@@ -582,15 +582,22 @@ def _json_list(value: Any) -> list:
     return list(parsed) if isinstance(parsed, list) else []
 
 
-def _append_hot_items_to_prompt_generations(conn, items: list[dict], now: float) -> None:
+def _append_hot_items_to_prompt_generations(
+    conn,
+    items: list[dict],
+    now: float,
+    *,
+    window_id: str,
+) -> None:
     if not items:
         return
     rows = conn.execute(
         """
         SELECT window_id, hot_items_json
         FROM prompt_tool_generation
-        WHERE lifecycle_mode = 'rolling'
-        """
+        WHERE lifecycle_mode = 'rolling' AND window_id = ?
+        """,
+        (str(window_id or ""),),
     ).fetchall()
     for row in rows:
         current = [item for item in _json_list(row["hot_items_json"]) if isinstance(item, dict)]
@@ -712,7 +719,12 @@ def _write_prepared(
                     text = _prompt_line({"summary": summary, "created_at": created_at})
                     if text:
                         inserted_hot_items.append({"id": entry_id, "text": text})
-            _append_hot_items_to_prompt_generations(conn, inserted_hot_items, now)
+            _append_hot_items_to_prompt_generations(
+                conn,
+                inserted_hot_items,
+                now,
+                window_id=str(window_id or ""),
+            )
             _prune(conn, now)
             conn.execute("COMMIT")
         return inserted
