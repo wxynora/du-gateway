@@ -162,6 +162,11 @@ def ensure_schema() -> None:
                     generation_id INTEGER NOT NULL,
                     frozen_text TEXT NOT NULL,
                     cutoff_created_at REAL NOT NULL,
+                    lifecycle_mode TEXT NOT NULL DEFAULT 'rolling',
+                    current_chunk_index INTEGER NOT NULL DEFAULT 0,
+                    sealed_chunk_ids_json TEXT NOT NULL DEFAULT '[]',
+                    hot_items_json TEXT NOT NULL DEFAULT '[]',
+                    recent_tool_batches_json TEXT NOT NULL DEFAULT '[]',
                     updated_at REAL NOT NULL
                 );
 
@@ -865,6 +870,24 @@ def ensure_schema() -> None:
                 conn.execute(
                     "ALTER TABLE dead_letter_events ADD COLUMN consumer TEXT NOT NULL DEFAULT ''"
                 )
+            tool_generation_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(prompt_tool_generation)").fetchall()
+            }
+            tool_generation_column_migrations = {
+                # Existing rows must finish their current legacy Hot rollover before
+                # switching; rows created by the new schema start directly in rolling mode.
+                "lifecycle_mode": "TEXT NOT NULL DEFAULT 'legacy'",
+                "current_chunk_index": "INTEGER NOT NULL DEFAULT 0",
+                "sealed_chunk_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+                "hot_items_json": "TEXT NOT NULL DEFAULT '[]'",
+                "recent_tool_batches_json": "TEXT NOT NULL DEFAULT '[]'",
+            }
+            for column_name, column_sql in tool_generation_column_migrations.items():
+                if column_name not in tool_generation_columns:
+                    conn.execute(
+                        f"ALTER TABLE prompt_tool_generation ADD COLUMN {column_name} {column_sql}"
+                    )
             job_columns = {
                 str(row["name"])
                 for row in conn.execute("PRAGMA table_info(watch_analysis_jobs)").fetchall()

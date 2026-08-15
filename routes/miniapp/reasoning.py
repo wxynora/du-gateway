@@ -12,6 +12,7 @@ from config import (
     DEEPSEEK_API_URL,
     DEEPSEEK_CHAT_MODEL,
     TOOL_RESULT_CACHE_MAX_CHARS,
+    TOOL_RESULT_HOT_MAX_CHARS,
 )
 from services.chat_tool_helpers import collect_tool_trace_from_messages
 from services.dynamic_memory_recall_debug import (
@@ -21,6 +22,7 @@ from services.dynamic_memory_recall_debug import (
     normalize_debug_request_id,
 )
 from services.reasoning_utils import dedupe_reasoning_text_parts
+from services.prompt_cache_debug import build_tool_cache_stats_from_breakdown
 from storage import conversation_sqlite_store, r2_store
 from utils.tokens import estimate_tokens
 
@@ -73,25 +75,11 @@ def _normalize_cache_debug_items(value) -> list[dict]:
 
 def _build_tool_cache_stats(cache_debug_items: list[dict]) -> dict:
     """Rebuild the per-request tool-cache character snapshot from archived prompt debug data."""
-    for entry in reversed(cache_debug_items or []):
-        request_debug = entry.get("request") if isinstance(entry, dict) else None
-        if not isinstance(request_debug, dict):
-            continue
-        breakdown = request_debug.get("static_breakdown")
-        if not isinstance(breakdown, list):
-            continue
-        tool_cache_chars = sum(
-            _positive_int(part.get("chars"))
-            for part in breakdown
-            if isinstance(part, dict) and str(part.get("label") or "") == "工具使用摘要"
-        )
-        if tool_cache_chars <= 0:
-            continue
-        return {
-            "current_chars": tool_cache_chars,
-            "max_chars": int(TOOL_RESULT_CACHE_MAX_CHARS),
-        }
-    return {"current_chars": None, "max_chars": int(TOOL_RESULT_CACHE_MAX_CHARS)}
+    return build_tool_cache_stats_from_breakdown(
+        cache_debug_items,
+        frozen_max_chars=TOOL_RESULT_CACHE_MAX_CHARS,
+        hot_max_chars=TOOL_RESULT_HOT_MAX_CHARS,
+    )
 
 
 def _content_to_text(content) -> str:

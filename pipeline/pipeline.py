@@ -44,6 +44,19 @@ from services.dynamic_memory_weight import dynamic_memory_weight
 from services.memory_bm25 import BM25QueryTerm, bm25_score_documents
 from services.anthropic_model_capabilities import supports_mid_conversation_system
 
+_SUMMARY_WINDOW_LOCKS_GUARD = threading.Lock()
+_SUMMARY_WINDOW_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _summary_window_lock(window_id: str) -> threading.Lock:
+    normalized_window_id = str(window_id or "")
+    with _SUMMARY_WINDOW_LOCKS_GUARD:
+        lock = _SUMMARY_WINDOW_LOCKS.get(normalized_window_id)
+        if lock is None:
+            lock = threading.Lock()
+            _SUMMARY_WINDOW_LOCKS[normalized_window_id] = lock
+        return lock
+
 # ---------------------------------------------------------------------------
 # Prompt-cache 友好：静态 system 在前（可被缓存），动态 system 在后（每轮变化）。
 # 动态注入统一追加到带 _dynamic_system 标记的 system 消息，避免污染静态前缀。
@@ -57,6 +70,7 @@ _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
 _STATIC_CACHE_ANCHOR_SYSTEM_MARKER = "__static_cache_anchor__"
 _FROZEN_TOOL_SUMMARY_SYSTEM_MARKER = "__frozen_tool_summary__"
+_RECENT_TOOL_BATCH_SYSTEM_MARKER = "__recent_tool_batch__"
 _HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__"
 _PROMPT_CACHE_LAYOUT_BODY_KEY = "__prompt_cache_layout__"
 _DRAFT_REMINDER_SYSTEM_MARKER = "__draft_reminder__"
@@ -87,6 +101,7 @@ _SYSTEM_PROMPT_REGION_ORDER = (
     "frozen_tool_summary",
     "summary_cache",
     "summary_recent",
+    "recent_tool_batches",
     "hot_tool_results",
     "du_daily",
     "dynamic",
@@ -101,7 +116,7 @@ _SYSTEM_PROMPT_CACHE_GROUPS = (
     ("voice_rules",),
     ("entry_style",),
     ("frozen_tool_summary", "summary_cache"),
-    ("summary_recent",),
+    ("summary_recent", "recent_tool_batches"),
     ("hot_tool_results",),
     ("du_daily",),
     ("dynamic",),
@@ -474,6 +489,8 @@ def _system_prompt_region(msg: dict) -> str:
         return "voice_rules"
     if msg.get(_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER) or msg.get(_TOOL_RESULT_CACHE_SYSTEM_MARKER):
         return "frozen_tool_summary"
+    if msg.get(_RECENT_TOOL_BATCH_SYSTEM_MARKER):
+        return "recent_tool_batches"
     if msg.get(_HOT_TOOL_RESULT_SYSTEM_MARKER):
         return "hot_tool_results"
     if msg.get(_DRAFT_REMINDER_SYSTEM_MARKER):
@@ -577,6 +594,83 @@ def _upsert_summary_cache_system(body: dict, stable_text: str, recent_texts: lis
     return body
 
 
+def _summary_prompt_chunk_ids(chunks_state: dict) -> tuple[list[str], list[str]]:
+    generation = chunks_state.get("generation") if isinstance(chunks_state.get("generation"), dict) else {}
+    base_recent_ids = {
+        str(value)
+        for value in generation.get("base_recent_ids") or []
+        if str(value or "").strip()
+    }
+    recent_ids: list[str] = []
+    for item in sorted(
+        [row for row in chunks_state.get("chunks") or [] if isinstance(row, dict)],
+        key=lambda row: int(row.get("sequence") or 0),
+    ):
+        if str(item.get("level") or "") != "recent":
+            continue
+        if item.get("summary_pending") or str(item.get("status") or "") == "pending":
+            continue
+        if not str(item.get("text") or "").strip():
+            continue
+        chunk_id = str(item.get("id") or "").strip()
+        if chunk_id:
+            recent_ids.append(chunk_id)
+    generation_chunk_ids = [chunk_id for chunk_id in recent_ids if chunk_id not in base_recent_ids]
+    return recent_ids, generation_chunk_ids
+
+
+def _summary_generation_base_recent_ids(chunks_state: dict) -> list[str]:
+    generation = chunks_state.get("generation") if isinstance(chunks_state.get("generation"), dict) else {}
+    return [
+        str(value).strip()
+        for value in generation.get("base_recent_ids") or []
+        if str(value or "").strip()
+    ]
+
+
+def _summary_prompt_chunk_item_ids(chunks_state: dict) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for item in chunks_state.get("chunks") or []:
+        if not isinstance(item, dict) or "tool_cache_item_ids" not in item:
+            continue
+        chunk_id = str(item.get("id") or "").strip()
+        if not chunk_id:
+            continue
+        out[chunk_id] = [
+            str(value).strip()
+            for value in item.get("tool_cache_item_ids") or []
+            if str(value or "").strip()
+        ]
+    return out
+
+
+def _summary_round_chunk_id(rounds: list[dict]) -> str:
+    indices: list[int] = []
+    for item in rounds or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            value = int(item.get("index") or 0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            indices.append(value)
+    return f"current:{min(indices)}-{max(indices)}" if indices else ""
+
+
+def _with_summary_tool_item_ids(chunks_state: dict, chunk_id: str, item_ids: list[str]) -> dict:
+    updated = copy.deepcopy(chunks_state)
+    for item in updated.get("chunks") or []:
+        if isinstance(item, dict) and str(item.get("id") or "").strip() == str(chunk_id or "").strip():
+            item["tool_cache_item_ids"] = [
+                str(value).strip()
+                for value in item_ids or []
+                if str(value or "").strip()
+            ]
+            break
+    return updated
+
+
 def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
     """Place leading system blocks into the one explicit cache-region order."""
     from services.tool_result_cache import prompt_generation_contents
@@ -586,15 +680,27 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
     if not isinstance(generation_meta, dict):
         current_summary = r2_store.get_summary(window_id) or ""
         chunks_state = r2_store.get_summary_chunks(window_id)
-        generation = deepseek_summary.summary_generation_info(chunks_state, current_summary)
+        _stable, _recent, normalized_state = deepseek_summary.render_summary_prompt_blocks(
+            chunks_state,
+            current_summary,
+        )
+        generation = normalized_state.get("generation") if isinstance(normalized_state.get("generation"), dict) else {}
+        recent_chunk_ids, generation_chunk_ids = _summary_prompt_chunk_ids(normalized_state)
         generation_meta = {
             "window_id": str(window_id or ""),
             "generation_id": int(generation.get("id") or 0),
             "generation_updates_done": int(generation.get("updates_done") or 0),
+            "recent_chunk_ids": recent_chunk_ids,
+            "generation_chunk_ids": generation_chunk_ids,
+            "generation_base_recent_ids": _summary_generation_base_recent_ids(normalized_state),
+            "generation_chunk_item_ids": _summary_prompt_chunk_item_ids(normalized_state),
         }
     tool_generation = prompt_generation_contents(
         window_id=str(window_id or generation_meta.get("window_id") or ""),
         generation_id=int(generation_meta.get("generation_id") or 0),
+        generation_chunk_ids=list(generation_meta.get("generation_chunk_ids") or []),
+        previous_generation_chunk_ids=list(generation_meta.get("generation_base_recent_ids") or []),
+        generation_chunk_item_ids=dict(generation_meta.get("generation_chunk_item_ids") or {}),
     )
     messages = list(body.get("messages") or [])
     leading_systems: list[dict] = []
@@ -610,7 +716,7 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
     region_blocks: dict[str, list[dict]] = {region: [] for region in _SYSTEM_PROMPT_REGION_ORDER}
     for msg in leading_systems:
         region = _system_prompt_region(msg)
-        if region in {"frozen_tool_summary", "hot_tool_results"}:
+        if region in {"frozen_tool_summary", "recent_tool_batches", "hot_tool_results"}:
             continue
         region_blocks[region].append(msg)
     frozen_text = str(tool_generation.get("frozen_text") or "").strip()
@@ -622,6 +728,21 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
                 _FROZEN_TOOL_SUMMARY_SYSTEM_MARKER: True,
             }
         )
+    recent_tool_messages_by_chunk_id: dict[str, dict] = {}
+    for batch in tool_generation.get("recent_batches") or []:
+        if not isinstance(batch, dict):
+            continue
+        content = str(batch.get("text") or "").strip()
+        summary_chunk_id = str(batch.get("summary_chunk_id") or "").strip()
+        if not content or not summary_chunk_id:
+            continue
+        message = {
+            "role": "system",
+            "content": content,
+            _RECENT_TOOL_BATCH_SYSTEM_MARKER: True,
+        }
+        region_blocks["recent_tool_batches"].append(message)
+        recent_tool_messages_by_chunk_id[summary_chunk_id] = message
     for content in tool_generation.get("hot_blocks") or []:
         if str(content or "").strip():
             region_blocks["hot_tool_results"].append(
@@ -640,6 +761,7 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
         "du_daily": _DYNAMIC_SYSTEM_MARKER,
         "summary_cache": _SUMMARY_CACHE_SYSTEM_MARKER,
         "summary_recent": _SUMMARY_RECENT_SYSTEM_MARKER,
+        "recent_tool_batches": _RECENT_TOOL_BATCH_SYSTEM_MARKER,
         "hot_tool_results": _HOT_TOOL_RESULT_SYSTEM_MARKER,
         "dynamic": _DYNAMIC_SYSTEM_MARKER,
         "temporary_dynamic": _DYNAMIC_SYSTEM_MARKER,
@@ -654,7 +776,16 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
             for region in group
             for msg in region_blocks[region]
         ]
-        if group in {("summary_recent",), ("hot_tool_results",)}:
+        if group == ("summary_recent", "recent_tool_batches"):
+            recent_chunk_ids = [str(value or "") for value in generation_meta.get("recent_chunk_ids") or []]
+            for index, message in enumerate(region_blocks["summary_recent"]):
+                ordered_regions.append(copy.deepcopy(message))
+                chunk_id = recent_chunk_ids[index] if index < len(recent_chunk_ids) else ""
+                tool_message = recent_tool_messages_by_chunk_id.get(chunk_id)
+                if tool_message:
+                    ordered_regions.append(copy.deepcopy(tool_message))
+            continue
+        if group == ("hot_tool_results",):
             ordered_regions.extend(copy.deepcopy(group_messages))
             continue
         merged = _merge_system_region(group_messages, cache_group_markers[group[0]])
@@ -691,7 +822,9 @@ def step_inject_tool_result_cache(body: dict, window_id: str = "") -> dict:
         "generation_id": int(generation_meta.get("generation_id") or 0),
         "generation_updates_done": int(generation_meta.get("generation_updates_done") or 0),
         "recent_blocks": len(region_blocks["summary_recent"]),
+        "recent_tool_batches": len(region_blocks["recent_tool_batches"]),
         "hot_tool_blocks": len(region_blocks["hot_tool_results"]),
+        "tool_lifecycle_mode": str(tool_generation.get("lifecycle_mode") or ""),
     }
     return body
 
@@ -1820,11 +1953,16 @@ def step_inject_summary(body: dict, window_id: str, is_user_input: bool = False)
         summary,
     )
     generation = normalized_state.get("generation") if isinstance(normalized_state.get("generation"), dict) else {}
+    recent_chunk_ids, generation_chunk_ids = _summary_prompt_chunk_ids(normalized_state)
     body[_PROMPT_CACHE_LAYOUT_BODY_KEY] = {
         "window_id": str(window_id or ""),
         "generation_id": int(generation.get("id") or 0),
         "generation_updates_done": int(generation.get("updates_done") or 0),
         "recent_blocks": len(recent_summaries),
+        "recent_chunk_ids": recent_chunk_ids,
+        "generation_chunk_ids": generation_chunk_ids,
+        "generation_base_recent_ids": _summary_generation_base_recent_ids(normalized_state),
+        "generation_chunk_item_ids": _summary_prompt_chunk_item_ids(normalized_state),
         "hot_tool_blocks": 0,
     }
     if stable_summary or recent_summaries:
@@ -5009,8 +5147,25 @@ def step_run_post_archive_tasks(
     if round_index % SUMMARY_EVERY_N_ROUNDS == 0:
         logger.info("实时层总结已调度 window_id=%s round_index=%s", window_id, round_index)
 
-        def _summarize():
+        def _run_summary_job():
             from services.deepseek_summary import fetch_new_summary_update
+            from services.tool_result_cache import (
+                sync_prompt_generation_after_summary,
+                tool_cache_item_ids_for_rounds,
+                wait_for_game_tool_loop_summaries,
+            )
+
+            def _sync_tool_prompt(chunks: dict) -> bool:
+                generation = chunks.get("generation") if isinstance(chunks.get("generation"), dict) else {}
+                generation_id = int(generation.get("id") or 0)
+                _recent_ids, generation_chunk_ids = _summary_prompt_chunk_ids(chunks)
+                return sync_prompt_generation_after_summary(
+                    window_id=window_id,
+                    generation_id=generation_id,
+                    generation_chunk_ids=generation_chunk_ids,
+                    previous_generation_chunk_ids=_summary_generation_base_recent_ids(chunks),
+                    generation_chunk_item_ids=_summary_prompt_chunk_item_ids(chunks),
+                )
 
             current = r2_store.get_summary(window_id) or ""
             chunks_state = r2_store.get_summary_chunks(window_id)
@@ -5018,6 +5173,9 @@ def step_run_post_archive_tasks(
             for recent in groups:
                 if not recent:
                     continue
+                wait_for_game_tool_loop_summaries(recent, window_id=window_id)
+                completed_chunk_id = _summary_round_chunk_id(recent)
+                tool_item_ids = tool_cache_item_ids_for_rounds(recent, window_id=window_id)
                 new_summary, new_chunks = fetch_new_summary_update(
                     current,
                     recent,
@@ -5025,12 +5183,20 @@ def step_run_post_archive_tasks(
                     window_id=window_id,
                 )
                 if new_summary and new_chunks:
+                    new_chunks = _with_summary_tool_item_ids(
+                        new_chunks,
+                        completed_chunk_id,
+                        tool_item_ids,
+                    )
                     if r2_store.save_summary(window_id, new_summary):
                         if not r2_store.save_summary_chunks(window_id, new_chunks):
                             logger.warning("Pipeline 保存实时层小段队列失败 window_id=%s", window_id)
                             break
                         current = new_summary
                         chunks_state = new_chunks
+                        if not _sync_tool_prompt(new_chunks):
+                            logger.warning("Pipeline 工具摘要四轮封包失败 window_id=%s", window_id)
+                            break
                         continue
                 indices = [r.get("index") for r in recent if isinstance(r, dict)]
                 logger.warning(
@@ -5056,9 +5222,13 @@ def step_run_post_archive_tasks(
                             window_id,
                             indices,
                         )
-                        continue
+                        break
                     logger.warning("Pipeline 保存实时层 pending 总结失败 window_id=%s indices=%s", window_id, indices)
                 continue
+
+        def _summarize():
+            with _summary_window_lock(window_id):
+                _run_summary_job()
 
         t = threading.Thread(
             target=_summarize,

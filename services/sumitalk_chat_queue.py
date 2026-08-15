@@ -1800,6 +1800,13 @@ def _chat_message_text(message: dict | None) -> str:
     return "".join(parts)
 
 
+def _chat_message_images(message: dict | None) -> list[dict]:
+    images = (message or {}).get("images")
+    if not isinstance(images, list):
+        return []
+    return [dict(item) for item in images if isinstance(item, dict)]
+
+
 def _chat_event_text_chunks(text: str):
     value = str(text or "")
     size = max(1, _SUMITALK_CHAT_EVENT_TEXT_LIMIT - 16)
@@ -2283,10 +2290,22 @@ def run_sumitalk_chat_job(
         _stage("reply_ready", status_code=status_code)
         message, finish_reason = _chat_completion_message(data)
         final_text = _chat_message_text(message)
+        final_images = _chat_message_images(message)
         if final_text:
             _record_watch_reply_visible(job_id, visible_ts=time.time())
         terminal_part = _latest_sumitalk_chat_assistant_part(job_id) if final_text else None
         terminal_part_id, terminal_round = terminal_part or ("assistant-final", 0)
+        terminal_payload = {
+            "part_id": terminal_part_id,
+            "round": terminal_round,
+            "mode": "snapshot",
+            "role": str(message.get("role") or "assistant"),
+            "text": final_text,
+            "finish_reason": finish_reason,
+            "execution_mode": execution_mode,
+        }
+        if final_images:
+            terminal_payload["images"] = final_images
         if not finalize_sumitalk_chat_job(
             job_id,
             "done",
@@ -2294,15 +2313,7 @@ def run_sumitalk_chat_job(
                 "status_code": status_code,
                 "response": data,
             },
-            event_payload={
-                "part_id": terminal_part_id,
-                "round": terminal_round,
-                "mode": "snapshot",
-                "role": str(message.get("role") or "assistant"),
-                "text": final_text,
-                "finish_reason": finish_reason,
-                "execution_mode": execution_mode,
-            },
+            event_payload=terminal_payload,
             live=execution_mode == "stream",
         ):
             state = read_sumitalk_chat_job_state(job_id) or {}

@@ -5,6 +5,44 @@ from services.chat_content import message_content_chars
 from utils.tokens import estimate_tokens
 
 
+def build_tool_cache_stats_from_breakdown(
+    cache_debug_items: list[dict],
+    *,
+    frozen_max_chars: int,
+    hot_max_chars: int,
+) -> dict:
+    legacy_max_chars = max(0, int(frozen_max_chars or 0)) + max(0, int(hot_max_chars or 0))
+    compatible_labels = {"工具使用摘要", "已归档工具摘要", "本段工具摘要", "本代新增工具结果"}
+    latest_max_chars: int | None = legacy_max_chars
+    for entry in reversed(cache_debug_items or []):
+        request_debug = entry.get("request") if isinstance(entry, dict) else None
+        if not isinstance(request_debug, dict):
+            continue
+        breakdown = request_debug.get("static_breakdown")
+        if not isinstance(breakdown, list):
+            continue
+        lifecycle_mode = str(request_debug.get("tool_lifecycle_mode") or "").strip().lower()
+        if not lifecycle_mode and any(
+            isinstance(part, dict) and str(part.get("label") or "") == "本段工具摘要"
+            for part in breakdown
+        ):
+            lifecycle_mode = "rolling"
+        request_max_chars = None if lifecycle_mode == "rolling" else legacy_max_chars
+        latest_max_chars = request_max_chars
+        tool_cache_chars = 0
+        for part in breakdown:
+            if not isinstance(part, dict) or str(part.get("label") or "") not in compatible_labels:
+                continue
+            try:
+                chars = int(part.get("chars") or 0)
+            except (TypeError, ValueError):
+                chars = 0
+            tool_cache_chars += max(0, chars)
+        if tool_cache_chars > 0:
+            return {"current_chars": tool_cache_chars, "max_chars": request_max_chars}
+    return {"current_chars": None, "max_chars": latest_max_chars}
+
+
 def _request_body_chars(body: dict) -> int:
     try:
         return len(json.dumps(body or {}, ensure_ascii=False, default=str))
@@ -20,6 +58,8 @@ def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
         return "固定静态区"
     if msg.get("__frozen_tool_summary__") or stripped.startswith("〖已归档工具摘要〗"):
         return "已归档工具摘要"
+    if msg.get("__recent_tool_batch__") or stripped.startswith("〖本段工具摘要〗"):
+        return "本段工具摘要"
     if msg.get("__hot_tool_result__") or stripped.startswith("〖本代新增工具结果〗"):
         return "本代新增工具结果"
     if msg.get("__tool_result_cache__") or stripped.startswith("【最近24小时工具使用摘要】"):
@@ -77,6 +117,7 @@ def _static_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
     if not content:
         return []
     marker_labels = [
+        ("〖近期记忆·稳定〗", "近期记忆"),
         ("【入口风格：小爱音箱】", "小爱音箱入口风格"),
         ("【核心XP与互动逻辑】", "NSFW规则"),
         ("【你的拟态心跳", "拟态心跳规则"),
@@ -255,6 +296,9 @@ def build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
     except Exception:
         tools_chars = 0
     parsed = urlparse(str(upstream_url or "").strip())
+    prompt_cache_layout = (body or {}).get("__prompt_cache_layout__")
+    if not isinstance(prompt_cache_layout, dict):
+        prompt_cache_layout = {}
     selected_model = str((body or {}).get("model") or "")
     return {
         "upstream_host": parsed.hostname or "",
@@ -280,6 +324,7 @@ def build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
         "dynamic_marker_seen": dynamic_marker_seen,
         "prompt_cache_key": str((body or {}).get("prompt_cache_key") or ""),
         "prompt_cache_retention": str((body or {}).get("prompt_cache_retention") or ""),
+        "tool_lifecycle_mode": str(prompt_cache_layout.get("tool_lifecycle_mode") or ""),
     }
 
 

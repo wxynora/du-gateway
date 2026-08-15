@@ -616,7 +616,24 @@ async function callGatewayChat(windowId, userContent, options = {}) {
     data = null;
   }
   if (!r.ok) throw new Error(`网关返回 ${r.status}: ${(text || "").slice(0, 200)}`);
-  return String(data?.choices?.[0]?.message?.content || "").trim();
+  const message = data?.choices?.[0]?.message || {};
+  const images = Array.isArray(message?.images)
+    ? message.images
+        .map((item) => {
+          const imageValue = item?.image_url;
+          const url = typeof imageValue === "string"
+            ? imageValue
+            : String(imageValue?.url || item?.url || "").trim();
+          if (!url) return "";
+          if (url.startsWith("/")) return gatewayBaseUrl() + url;
+          return url;
+        })
+        .filter((url, index, rows) => Boolean(url) && rows.indexOf(url) === index)
+    : [];
+  return {
+    text: String(message?.content || "").trim(),
+    images,
+  };
 }
 
 async function callGatewayTts(text) {
@@ -985,6 +1002,15 @@ async function sendQqPrivateRichReply(userId, reply, options = {}) {
       break;
     }
   }
+  for (const imageUrl of options.images || []) {
+    try {
+      await sendQqImage(userId, imageUrl);
+      sentAny = true;
+    } catch (e) {
+      console.log(`[qq-onebot] 发送生成图片失败 user=${userId}: ${String(e?.message || e)}`);
+      if (strict && !sentAny) throw e;
+    }
+  }
   if (stickerUrl) {
     try {
       await sendQqImage(userId, stickerUrl);
@@ -1025,7 +1051,7 @@ async function flushUser(userId) {
   try {
     const windowId = resolveSharedWindowId();
     console.log(`[qq-onebot] flush user=${userId} window_id=${windowId} preview=${userContentPreview(merged)}`);
-    let reply = "";
+    let reply = { text: "", images: [] };
     try {
       reply = await callGatewayChat(windowId, merged);
     } catch (e) {
@@ -1034,7 +1060,7 @@ async function flushUser(userId) {
       return;
     }
     try {
-      await sendQqPrivateRichReply(userId, reply);
+      await sendQqPrivateRichReply(userId, reply.text, { images: reply.images });
     } catch (e) {
       console.log(`[qq-onebot] 发送回复失败：${String(e?.message || e)}`);
     }
@@ -1449,6 +1475,10 @@ async function sendQqReplyToGroup(groupId, reply, options = {}) {
     );
     sentAny = true;
   }
+  for (const imageUrl of options.images || []) {
+    await sendQqGroupImage(groupId, imageUrl, takeReplyMessageId(), takeAtUserId());
+    sentAny = true;
+  }
   if (stickerUrl) {
     await sendQqGroupImage(groupId, stickerUrl, takeReplyMessageId(), takeAtUserId());
     sentAny = true;
@@ -1499,7 +1529,7 @@ async function flushGroupMentionBatch(batch) {
   console.log(
     `[qq-onebot] flush group=${groupId} window_id=${windowId} messages=${batch.items.length} preview=${userContentPreview(gatewayTurn.content, 80)}`
   );
-  let reply = "";
+  let reply = { text: "", images: [] };
   try {
     reply = await callGatewayChat(windowId, gatewayTurn.content, {
       replyChannel: "qq",
@@ -1512,9 +1542,10 @@ async function flushGroupMentionBatch(batch) {
     return;
   }
   try {
-    await sendQqReplyToGroup(groupId, reply, {
+    await sendQqReplyToGroup(groupId, reply.text, {
       replyTargets: gatewayTurn.replyTargets,
       atTargets: gatewayTurn.atTargets,
+      images: reply.images,
     });
   } catch (e) {
     console.log(`[qq-onebot] 群聊发送失败 group=${groupId}：${String(e?.message || e)}`);

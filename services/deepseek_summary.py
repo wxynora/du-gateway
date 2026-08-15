@@ -233,6 +233,7 @@ def _sanitize_co_read_du_result_for_summary(text: str) -> str:
 def build_summary_prompt(
     recent_4_rounds: list | None = None,
     *,
+    previous_summary_context: object | None = None,
     chunk_to_compress_to_slightly: object | None = None,
     chunk_to_compress_to_older: object | None = None,
 ) -> str:
@@ -288,9 +289,15 @@ def build_summary_prompt(
         rounds_text += "\n"
     return _REALTIME_LAYER_PROMPT.format(
         latest_4_rounds=rounds_text,
+        previous_summary_context=_format_previous_summary_context(previous_summary_context),
         chunk_to_compress_to_slightly=_format_summary_compression_input(chunk_to_compress_to_slightly),
         chunk_to_compress_to_older=_format_summary_compression_input(chunk_to_compress_to_older),
     )
+
+
+def _format_previous_summary_context(value: object | None) -> str:
+    text = str(value or "").strip()
+    return text or "null"
 
 
 def _format_summary_compression_input(value: object | None) -> str:
@@ -381,6 +388,10 @@ _REALTIME_LAYER_PROMPT = """你是一个对话小段总结助手。
 输入是最新4轮对话。
 输出一个自然小段，适合放入【最近】。
 
+「紧邻的上一段近期总结」只用于理解人物、指代和事件进展，让本轮新小段与前文自然衔接；它不属于本轮待总结素材。
+new_chunk 仍然只能总结「最新4轮对话」中出现的内容。不要因为某件事只出现在上一段，就把它复制进 new_chunk；不要重写、修订或续写上一段本身。
+如果最新4轮明确呈现了上一段事件的后续或状态变化，可以在不补充输入外事实的前提下写清衔接后的进展。
+
 要求：
 - 2到4句话。
 - 可以稍微细一点。
@@ -438,6 +449,9 @@ _REALTIME_LAYER_PROMPT = """你是一个对话小段总结助手。
 如果「需要重压缩的小段」是数组，compress_to_older 返回字符串数组。
 
 ## 输入
+
+紧邻的上一段近期总结（仅供理解衔接，不属于本轮待总结素材）：
+{previous_summary_context}
 
 最新4轮对话：
 {latest_4_rounds}
@@ -767,6 +781,57 @@ def normalize_summary_chunks_state(chunks_state: dict | None, current_summary: s
     )
 
 
+def _previous_summary_chunk_context(
+    chunks_state: dict | None,
+    current_summary: str,
+    current_meta: dict,
+) -> str:
+    """取当前 4 轮分组之前、时间上紧邻的一条正式总结正文。"""
+    state = normalize_summary_chunks_state(chunks_state, current_summary)
+    chunks = sorted(
+        [item for item in state.get("chunks") or [] if isinstance(item, dict)],
+        key=lambda item: int(item.get("sequence") or 0),
+    )
+    current_id = str(current_meta.get("id") or "")
+    current_item = next(
+        (item for item in chunks if str(item.get("id") or "") == current_id),
+        None,
+    )
+    target_sequence = int(current_item.get("sequence") or 0) if current_item else None
+
+    candidates = [
+        item
+        for item in chunks
+        if not _summary_chunk_is_pending(item)
+        and str(item.get("text") or "").strip()
+        and (target_sequence is None or int(item.get("sequence") or 0) < target_sequence)
+    ]
+    try:
+        current_start = int(current_meta.get("round_start") or 0)
+    except Exception:
+        current_start = 0
+
+    if current_start > 0:
+        ranged_candidates: list[tuple[int, int, dict]] = []
+        for item in candidates:
+            try:
+                round_end = int(item.get("round_end") or 0)
+            except Exception:
+                round_end = 0
+            if 0 < round_end < current_start:
+                ranged_candidates.append((round_end, int(item.get("sequence") or 0), item))
+        if ranged_candidates:
+            previous = max(ranged_candidates, key=lambda row: (row[0], row[1]))[2]
+            return str(previous.get("text") or "").strip()
+
+        # 旧版迁移块没有 round 元数据，只在没有可确认的前序范围时按队列顺序承接。
+        candidates = [item for item in candidates if not item.get("round_end")]
+
+    if not candidates:
+        return ""
+    return str(candidates[-1].get("text") or "").strip()
+
+
 def summary_generation_info(chunks_state: dict | None, current_summary: str = "") -> dict:
     state = normalize_summary_chunks_state(chunks_state, current_summary)
     return dict(state.get("generation") or {})
@@ -1086,7 +1151,13 @@ def _build_updated_summary_chunks(
         existing_current.pop("status", None)
         existing_current["pending_filled"] = True
         state["chunks"] = chunks
-        return _normalize_summary_chunks_state(state)
+        filled_state = _normalize_summary_chunks_state(state)
+        if (
+            int(filled_state.get("generation", {}).get("updates_done") or 0) == SUMMARY_GENERATION_UPDATES
+            and not any(_summary_chunk_is_pending(item) for item in filled_state.get("chunks") or [])
+        ):
+            return _commit_summary_generation(filled_state, window_id=window_id)
+        return filled_state
 
     max_sequence = max([int(item.get("sequence") or 0) for item in chunks], default=-1)
     chunks.append(
@@ -1112,7 +1183,10 @@ def _build_updated_summary_chunks(
         slightly_to_older,
         ds_result,
     )
-    if int(state.get("generation", {}).get("updates_done") or 0) == SUMMARY_GENERATION_UPDATES:
+    if (
+        int(state.get("generation", {}).get("updates_done") or 0) == SUMMARY_GENERATION_UPDATES
+        and not any(_summary_chunk_is_pending(item) for item in state.get("chunks") or [])
+    ):
         return _commit_summary_generation(state, window_id=window_id)
     return state
 
@@ -1231,8 +1305,9 @@ def build_pending_summary_update(
     state["generation"] = generation
     state["chunks"] = chunks
     next_state = _normalize_summary_chunks_state(state)
-    if int(next_state.get("generation", {}).get("updates_done") or 0) == SUMMARY_GENERATION_UPDATES:
-        next_state = _commit_summary_generation(next_state, window_id=window_id)
+    # Pending only reserves this chunk window. Even at the eighth slot the
+    # generation must wait until the real summary fills the slot, so R8/T8 and
+    # the memory/tool rollover remain one successful lifecycle transition.
     summary = render_summary_from_chunks(next_state)
     return summary, next_state
 
@@ -1268,6 +1343,11 @@ def fetch_new_summary_update(
     )
     prompt = build_summary_prompt(
         recent_4_rounds=recent_4_rounds,
+        previous_summary_context=_previous_summary_chunk_context(
+            state,
+            current_summary,
+            current_meta,
+        ),
         chunk_to_compress_to_slightly=recent_to_slightly,
         chunk_to_compress_to_older=slightly_to_older,
     )

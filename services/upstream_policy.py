@@ -27,6 +27,7 @@ _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
 _STATIC_CACHE_ANCHOR_SYSTEM_MARKER = "__static_cache_anchor__"
 _FROZEN_TOOL_SUMMARY_SYSTEM_MARKER = "__frozen_tool_summary__"
+_RECENT_TOOL_BATCH_SYSTEM_MARKER = "__recent_tool_batch__"
 _HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__"
 _THINKING_RULES_SYSTEM_MARKER = "__thinking_rules__"
 _ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
@@ -238,6 +239,7 @@ def _append_text_blocks_without_cache(target: list, content) -> None:
         item.pop(_TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
         item.pop(_STATIC_CACHE_ANCHOR_SYSTEM_MARKER, None)
         item.pop(_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER, None)
+        item.pop(_RECENT_TOOL_BATCH_SYSTEM_MARKER, None)
         item.pop(_HOT_TOOL_RESULT_SYSTEM_MARKER, None)
         item.pop(_ENTRY_STYLE_SYSTEM_MARKER, None)
         item.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
@@ -290,6 +292,7 @@ def _strip_gateway_cache_markers(messages: list[dict]) -> None:
         msg.pop(_TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
         msg.pop(_STATIC_CACHE_ANCHOR_SYSTEM_MARKER, None)
         msg.pop(_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER, None)
+        msg.pop(_RECENT_TOOL_BATCH_SYSTEM_MARKER, None)
         msg.pop(_HOT_TOOL_RESULT_SYSTEM_MARKER, None)
         msg.pop(_ENTRY_STYLE_SYSTEM_MARKER, None)
         msg.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
@@ -328,6 +331,7 @@ def _pioneer_clean_volatile_context_blocks(blocks: list[dict]) -> list[dict]:
         item.pop(_TOOL_RESULT_CACHE_SYSTEM_MARKER, None)
         item.pop(_STATIC_CACHE_ANCHOR_SYSTEM_MARKER, None)
         item.pop(_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER, None)
+        item.pop(_RECENT_TOOL_BATCH_SYSTEM_MARKER, None)
         item.pop(_HOT_TOOL_RESULT_SYSTEM_MARKER, None)
         item.pop(_ENTRY_STYLE_SYSTEM_MARKER, None)
         item.pop(_SUMITALK_REAL_MODE_SYSTEM_MARKER, None)
@@ -383,8 +387,16 @@ def _normalize_pioneer_chat_system_cache_messages(messages: list[dict], ttl: str
             _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
             static_mark_idx = _last_text_block_index(stable_blocks)
             continue
-        if msg.get(_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER) or msg.get(_HOT_TOOL_RESULT_SYSTEM_MARKER):
+        if msg.get(_FROZEN_TOOL_SUMMARY_SYSTEM_MARKER):
             _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
+            final_context_mark_idx = _last_text_block_index(stable_blocks)
+            continue
+        if msg.get(_HOT_TOOL_RESULT_SYSTEM_MARKER):
+            _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
+            continue
+        if msg.get(_RECENT_TOOL_BATCH_SYSTEM_MARKER):
+            _append_text_blocks_without_cache(stable_blocks, msg.get("content"))
+            final_context_mark_idx = _last_text_block_index(stable_blocks)
             continue
         if _is_recent_summary_message(msg):
             _append_text_blocks_without_cache(stable_blocks, msg.get("content"))

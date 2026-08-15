@@ -82,6 +82,7 @@ const SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__";
 const TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__";
 const STATIC_CACHE_ANCHOR_SYSTEM_MARKER = "__static_cache_anchor__";
 const FROZEN_TOOL_SUMMARY_SYSTEM_MARKER = "__frozen_tool_summary__";
+const RECENT_TOOL_BATCH_SYSTEM_MARKER = "__recent_tool_batch__";
 const HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__";
 const ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__";
 const SUMITALK_REAL_MODE_SYSTEM_MARKER = "__sumitalk_real_mode__";
@@ -835,6 +836,7 @@ async function openaiToAnthropic(oai) {
         if (msg[TOOL_RESULT_CACHE_SYSTEM_MARKER]) block[TOOL_RESULT_CACHE_SYSTEM_MARKER] = true;
         if (msg[STATIC_CACHE_ANCHOR_SYSTEM_MARKER]) block[STATIC_CACHE_ANCHOR_SYSTEM_MARKER] = true;
         if (msg[FROZEN_TOOL_SUMMARY_SYSTEM_MARKER]) block[FROZEN_TOOL_SUMMARY_SYSTEM_MARKER] = true;
+        if (msg[RECENT_TOOL_BATCH_SYSTEM_MARKER]) block[RECENT_TOOL_BATCH_SYSTEM_MARKER] = true;
         if (msg[HOT_TOOL_RESULT_SYSTEM_MARKER]) block[HOT_TOOL_RESULT_SYSTEM_MARKER] = true;
         if (msg[ENTRY_STYLE_SYSTEM_MARKER]) block[ENTRY_STYLE_SYSTEM_MARKER] = true;
         if (msg[SUMITALK_REAL_MODE_SYSTEM_MARKER]) block[SUMITALK_REAL_MODE_SYSTEM_MARKER] = true;
@@ -1320,7 +1322,7 @@ function processAnthropicBody(body) {
 
 function applyPromptCache(body) {
   const oneHourCacheControl = { type: "ephemeral", ttl: "1h" };
-  const hotCacheControl = { type: "ephemeral", ttl: "1h" };
+  const legacyHotCacheControl = { type: "ephemeral", ttl: "1h" };
   const tools = Array.isArray(body.tools) ? body.tools : [];
   const systemBlocks = Array.isArray(body.system) ? body.system : [];
   const layout = body[PROMPT_CACHE_LAYOUT_BODY_KEY] && typeof body[PROMPT_CACHE_LAYOUT_BODY_KEY] === "object"
@@ -1353,12 +1355,15 @@ function applyPromptCache(body) {
 
   const bp2Idx = lastMarkerIndex(STATIC_CACHE_ANCHOR_SYSTEM_MARKER);
   const recentIdx = lastMarkerIndex(SUMMARY_RECENT_SYSTEM_MARKER);
+  const recentToolBatchIdx = lastMarkerIndex(RECENT_TOOL_BATCH_SYSTEM_MARKER);
   const stableIdx = lastMarkerIndex(SUMMARY_CACHE_SYSTEM_MARKER);
   const frozenIdx = lastMarkerIndex(FROZEN_TOOL_SUMMARY_SYSTEM_MARKER);
   const legacyToolIdx = lastMarkerIndex(TOOL_RESULT_CACHE_SYSTEM_MARKER);
-  let bp3Idx = recentIdx >= 0 ? recentIdx : stableIdx >= 0 ? stableIdx : frozenIdx;
+  const recentBatchIdx = Math.max(recentIdx, recentToolBatchIdx);
+  let bp3Idx = recentBatchIdx >= 0 ? recentBatchIdx : stableIdx >= 0 ? stableIdx : frozenIdx;
   if (bp3Idx < 0) bp3Idx = legacyToolIdx;
   const bp4Idx = lastMarkerIndex(HOT_TOOL_RESULT_SYSTEM_MARKER);
+  const rollingToolLifecycle = String(layout.tool_lifecycle_mode || "legacy") === "rolling";
 
   if (bp2Idx >= 0) {
     systemBlocks[bp2Idx].cache_control = { ...oneHourCacheControl };
@@ -1368,11 +1373,10 @@ function applyPromptCache(body) {
     systemBlocks[bp3Idx].cache_control = { ...oneHourCacheControl };
     bp3Generation = true;
   }
-  if (bp4Idx >= 0 && bp4Idx !== bp2Idx && bp4Idx !== bp3Idx) {
-    systemBlocks[bp4Idx].cache_control = { ...hotCacheControl };
+  if (!rollingToolLifecycle && bp4Idx >= 0 && bp4Idx !== bp2Idx && bp4Idx !== bp3Idx) {
+    systemBlocks[bp4Idx].cache_control = { ...legacyHotCacheControl };
     bp4Hot = true;
   }
-
   const explicitBreakpoints = [];
   let position = 0;
   for (const tool of tools) {
@@ -1418,7 +1422,9 @@ function applyPromptCache(body) {
     `generation_id=${Number(layout.generation_id || 0)} ` +
     `generation_updates_done=${Number(layout.generation_updates_done || 0)} ` +
     `recent_blocks=${Number(layout.recent_blocks || 0)} ` +
+    `recent_tool_batches=${Number(layout.recent_tool_batches || 0)} ` +
     `hot_tool_blocks=${Number(layout.hot_tool_blocks || 0)} ` +
+    `tool_lifecycle_mode=${String(layout.tool_lifecycle_mode || "")} ` +
     `bp1_tools=${Number(bp1Tools)} bp2_static=${Number(bp2Static)} ` +
     `bp3_generation=${Number(bp3Generation)} bp4_hot=${Number(bp4Hot)} ` +
     `bp3_ttl=${bp3Generation ? "1h" : "none"} bp4_ttl=${bp4Hot ? "1h" : "none"}`
@@ -1431,6 +1437,7 @@ function applyPromptCache(body) {
     TOOL_RESULT_CACHE_SYSTEM_MARKER,
     STATIC_CACHE_ANCHOR_SYSTEM_MARKER,
     FROZEN_TOOL_SUMMARY_SYSTEM_MARKER,
+    RECENT_TOOL_BATCH_SYSTEM_MARKER,
     HOT_TOOL_RESULT_SYSTEM_MARKER,
     ENTRY_STYLE_SYSTEM_MARKER,
     SUMITALK_REAL_MODE_SYSTEM_MARKER,

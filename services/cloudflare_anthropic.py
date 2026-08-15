@@ -23,6 +23,7 @@ SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 TOOL_RESULT_CACHE_SYSTEM_MARKER = "__tool_result_cache__"
 STATIC_CACHE_ANCHOR_SYSTEM_MARKER = "__static_cache_anchor__"
 FROZEN_TOOL_SUMMARY_SYSTEM_MARKER = "__frozen_tool_summary__"
+RECENT_TOOL_BATCH_SYSTEM_MARKER = "__recent_tool_batch__"
 HOT_TOOL_RESULT_SYSTEM_MARKER = "__hot_tool_result__"
 ENTRY_STYLE_SYSTEM_MARKER = "__entry_style__"
 VOICE_RULES_SYSTEM_MARKER = "__voice_rules__"
@@ -181,6 +182,8 @@ def _system_blocks_from_message(msg: dict) -> list[dict]:
             block[STATIC_CACHE_ANCHOR_SYSTEM_MARKER] = True
         if msg.get(FROZEN_TOOL_SUMMARY_SYSTEM_MARKER):
             block[FROZEN_TOOL_SUMMARY_SYSTEM_MARKER] = True
+        if msg.get(RECENT_TOOL_BATCH_SYSTEM_MARKER):
+            block[RECENT_TOOL_BATCH_SYSTEM_MARKER] = True
         if msg.get(HOT_TOOL_RESULT_SYSTEM_MARKER):
             block[HOT_TOOL_RESULT_SYSTEM_MARKER] = True
         if msg.get(ENTRY_STYLE_SYSTEM_MARKER):
@@ -334,12 +337,14 @@ def openai_to_anthropic_request(body: dict, url: str, cache_ttl: str | None = No
         layout=src.get("__prompt_cache_layout__") if isinstance(src.get("__prompt_cache_layout__"), dict) else None,
     )
     logger.debug(
-        "prompt_cache_layout window_id=%s generation_id=%s generation_updates_done=%s recent_blocks=%s hot_tool_blocks=%s bp1_tools=%s bp2_static=%s bp3_generation=%s bp4_hot=%s bp3_ttl=%s bp4_ttl=%s",
+        "prompt_cache_layout window_id=%s generation_id=%s generation_updates_done=%s recent_blocks=%s recent_tool_batches=%s hot_tool_blocks=%s tool_lifecycle_mode=%s bp1_tools=%s bp2_static=%s bp3_generation=%s bp4_hot=%s bp3_ttl=%s bp4_ttl=%s",
         cache_layout.get("window_id", ""),
         cache_layout.get("generation_id", 0),
         cache_layout.get("generation_updates_done", 0),
         cache_layout.get("recent_blocks", 0),
+        cache_layout.get("recent_tool_batches", 0),
         cache_layout.get("hot_tool_blocks", 0),
+        cache_layout.get("tool_lifecycle_mode", ""),
         int(bool(cache_layout.get("bp1_tools"))),
         int(bool(cache_layout.get("bp2_static"))),
         int(bool(cache_layout.get("bp3_generation"))),
@@ -363,10 +368,10 @@ def _set_cache_control(item: dict | None, ttl: str) -> None:
 
 
 def apply_prompt_cache(body: dict, ttl: str, *, layout: dict | None = None) -> dict:
-    """Assign the four explicit Anthropic cache breakpoints from region markers."""
-    _ = ttl  # BP1-BP4 are fixed at 1h by the generation-v3 protocol.
+    """Assign the explicit Anthropic cache breakpoints from region markers."""
+    _ = ttl  # BP1-BP3 are fixed at 1h by the unified rolling protocol.
     one_hour_ttl = "1h"
-    hot_ttl = "1h"
+    legacy_hot_ttl = "1h"
     result = dict(layout or {})
     result.update(
         {
@@ -399,13 +404,16 @@ def apply_prompt_cache(body: dict, ttl: str, *, layout: dict | None = None) -> d
 
     bp2_idx = _last_marker_index(STATIC_CACHE_ANCHOR_SYSTEM_MARKER)
     recent_idx = _last_marker_index(SUMMARY_RECENT_SYSTEM_MARKER)
+    recent_tool_batch_idx = _last_marker_index(RECENT_TOOL_BATCH_SYSTEM_MARKER)
     stable_idx = _last_marker_index(SUMMARY_CACHE_SYSTEM_MARKER)
     frozen_idx = _last_marker_index(FROZEN_TOOL_SUMMARY_SYSTEM_MARKER)
     legacy_tool_idx = _last_marker_index(TOOL_RESULT_CACHE_SYSTEM_MARKER)
-    bp3_idx = recent_idx if recent_idx >= 0 else stable_idx if stable_idx >= 0 else frozen_idx
+    recent_batch_idx = max(recent_idx, recent_tool_batch_idx)
+    bp3_idx = recent_batch_idx if recent_batch_idx >= 0 else stable_idx if stable_idx >= 0 else frozen_idx
     if bp3_idx < 0:
         bp3_idx = legacy_tool_idx
     bp4_idx = _last_marker_index(HOT_TOOL_RESULT_SYSTEM_MARKER)
+    rolling_tool_lifecycle = str(result.get("tool_lifecycle_mode") or "legacy") == "rolling"
 
     if bp2_idx >= 0:
         _set_cache_control(system_blocks[bp2_idx], one_hour_ttl)
@@ -413,10 +421,9 @@ def apply_prompt_cache(body: dict, ttl: str, *, layout: dict | None = None) -> d
     if bp3_idx >= 0 and bp3_idx != bp2_idx:
         _set_cache_control(system_blocks[bp3_idx], one_hour_ttl)
         result["bp3_generation"] = True
-    if bp4_idx >= 0 and bp4_idx not in {bp2_idx, bp3_idx}:
-        _set_cache_control(system_blocks[bp4_idx], hot_ttl)
+    if not rolling_tool_lifecycle and bp4_idx >= 0 and bp4_idx not in {bp2_idx, bp3_idx}:
+        _set_cache_control(system_blocks[bp4_idx], legacy_hot_ttl)
         result["bp4_hot"] = True
-
     actual_breakpoints: list[tuple[int, str]] = []
     position = 0
     for tool in tools:
@@ -455,6 +462,7 @@ def apply_prompt_cache(body: dict, ttl: str, *, layout: dict | None = None) -> d
         TOOL_RESULT_CACHE_SYSTEM_MARKER,
         STATIC_CACHE_ANCHOR_SYSTEM_MARKER,
         FROZEN_TOOL_SUMMARY_SYSTEM_MARKER,
+        RECENT_TOOL_BATCH_SYSTEM_MARKER,
         HOT_TOOL_RESULT_SYSTEM_MARKER,
         ENTRY_STYLE_SYSTEM_MARKER,
         VOICE_RULES_SYSTEM_MARKER,

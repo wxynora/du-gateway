@@ -3111,6 +3111,7 @@ def chat_completions():
             msg.pop("__tool_result_cache__", None)
             msg.pop("__static_cache_anchor__", None)
             msg.pop("__frozen_tool_summary__", None)
+            msg.pop("__recent_tool_batch__", None)
             msg.pop("__hot_tool_result__", None)
             msg.pop("__entry_style__", None)
             msg.pop("__sumitalk_real_mode__", None)
