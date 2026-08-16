@@ -203,6 +203,7 @@ def _openrouter_payload(
         "stream": False,
         "temperature": 0.2,
         "max_tokens": 2600,
+        "provider": {"only": ["google-vertex/global"]},
         "response_format": {"type": "json_object"},
         "messages": [
             {

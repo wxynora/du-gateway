@@ -10,6 +10,7 @@ import re
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Optional
 import requests
 
@@ -35,6 +36,8 @@ from config import (
     siliconflow_models_response,
 )
 from pipeline.pipeline import (
+    PipelineRequestContext,
+    recall_dynamic_memory,
     step_clean_images_and_save_desc,
     step_clean_for_forward,
     step_replace_rikka_system,
@@ -66,7 +69,6 @@ from pipeline.pipeline import (
     step_inject_du_midterm_memory,
     step_inject_interaction_candidate,
     step_inject_rikkahub_reminder,
-    step_inject_dynamic_memory,
     step_inject_stay_with_du,
     step_inject_du_notebook,
     step_inject_wenyou_player_tools,
@@ -238,6 +240,22 @@ _QQ_GROUP_DELIVERY_TARGET_BODY_KEY = "__du_qq_group_delivery_target"
 _SUMITALK_STREAM_ARCHIVE_QUEUE: queue.Queue = queue.Queue()
 _SUMITALK_STREAM_ARCHIVE_THREAD: threading.Thread | None = None
 _SUMITALK_STREAM_ARCHIVE_THREAD_LOCK = threading.Lock()
+
+
+@dataclass(slots=True)
+class _PreparedChatRequest:
+    body: dict
+    qq_group_delivery_target: str
+    skip_post_archive_dynamic_memory_write: bool
+    skip_post_archive_body_delta: bool
+    du_daily_maintenance: bool
+    du_daily_trigger: dict
+    dynamic_memory_recall_candidate_ids: list[str]
+    query_topic_state: dict
+    dynamic_memory_citation_map: dict
+    watch_action_context: Optional[dict]
+    prompt_cache_profile: Optional[dict]
+    openrouter_forced_nonstream: bool
 
 
 def _run_sumitalk_stream_archive_queue() -> None:
@@ -2639,6 +2657,203 @@ def _is_real_user_input_request(window_id: str, body: dict, *, reply_channel: st
     )
 
 
+def _prepare_chat_request(
+    body: dict,
+    *,
+    context: PipelineRequestContext,
+    headers: dict,
+    sumitalk_prompt_assembly: bool,
+    sumitalk_real_mode: bool,
+    wenyou_player_tools_enabled: bool,
+) -> _PreparedChatRequest:
+    body = _inject_qq_group_activity_context(body)
+    qq_group_delivery_target = str(body.pop(_QQ_GROUP_DELIVERY_TARGET_BODY_KEY, "") or "").strip()
+    body = step_clean_images_and_save_desc(body, context.window_id)
+    body = step_clean_for_forward(body)
+    body = step_replace_rikka_system(body)
+    body = step_inject_core_behavior_rules(body)
+    body = step_inject_du_non_retreat_rules(body)
+    body = step_inject_common_knowledge(body)
+    body = step_inject_pending_thought_rules(body)
+    body = _inject_entry_style_system(
+        body,
+        reply_channel=context.prompt_reply_channel,
+        is_miniapp=_is_miniapp_request(),
+        speaker=_xiaoai_speaker_from_request(),
+    )
+    body = step_inject_voice_rules(body, reply_channel=context.prompt_reply_channel)
+    body = _inject_million_plan_player_prompt_if_enabled(body)
+    body = _inject_codex_oauth_prompt_system(body, upstream_url=_get_active_upstream_url())
+    body = _inject_channel_nsfw_system(body, reply_channel=context.prompt_reply_channel)
+    body = _inject_static_followup_instruction_for_request(
+        body,
+        prompt_reply_channel=context.prompt_reply_channel,
+    )
+    force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
+    tg_user_input = _is_real_user_input_request(
+        context.window_id,
+        body,
+        reply_channel=context.reply_channel,
+    )
+    slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
+    skip_dynamic_memory = _skip_dynamic_memory_request() or slim_voice_call
+    skip_post_archive_dynamic_memory_write = _skip_post_archive_dynamic_memory_request()
+    skip_post_archive_body_delta = _skip_post_archive_body_delta_request()
+    game_tool_loop = _is_game_tool_loop_request()
+    random_imitator_td_tool_mode = _random_imitator_td_tool_mode_enabled()
+    du_daily_maintenance = _is_du_daily_maintenance_request()
+    du_daily_trigger = build_du_daily_trigger(context.window_id, body, headers)
+    if not du_daily_maintenance and not _is_gateway_wakeup_request() and not game_tool_loop:
+        try:
+            last_user_for_home = _last_user_message(body.get("messages") or [])
+            maybe_update_xinyue_state_from_user_text(_plain_message_text(last_user_for_home))
+        except Exception as e:
+            logger.debug("pixel_home user state inference skipped error=%s", e)
+    body = step_inject_current_base_model(body)
+    body = step_inject_system_alarm_action_result(body, context.window_id)
+    body = step_inject_du_thought(body, context.window_id)
+    body = step_inject_pending_thoughts(body, context.window_id)
+    body = step_inject_secret_drawer(body, context.window_id)
+    body = step_inject_wakeup_frame(body, context.window_id)
+    body = step_inject_du_vitals(body, context.window_id)
+    body = step_inject_du_daily(
+        body,
+        context.window_id,
+        trigger=du_daily_trigger,
+        maintenance_mode=du_daily_maintenance,
+    )
+    body = step_inject_pixel_home(body, context.window_id)
+    dynamic_memory_recall_candidate_ids: list[str] = []
+    query_topic_state: dict = {}
+    if not skip_dynamic_memory:
+        recall_result = recall_dynamic_memory(body, context.window_id)
+        body = recall_result.body
+        dynamic_memory_recall_candidate_ids = recall_result.candidate_ids
+        query_topic_state = recall_result.topic_state
+    body = step_inject_humor_memes(body)
+    body = step_inject_sumitalk_real_mode(
+        body,
+        enabled=sumitalk_real_mode,
+        app_request=sumitalk_prompt_assembly,
+        reply_channel=context.prompt_reply_channel,
+        reply_target=context.reply_target,
+        model=context.model,
+        anthropic_messages=context.anthropic_messages,
+        wakeup_kind=context.wakeup_kind,
+    )
+    body = step_inject_play_note(body)
+    body = step_inject_summary(body, context.window_id, is_user_input=tg_user_input)
+    body = step_inject_sense_snapshot(body, context.window_id)
+    claude_thinking_carryover_enabled = (
+        context.anthropic_messages and not _skip_claude_thinking_carryover_request()
+    )
+    body = step_inject_latest_4_rounds_for_new_window(
+        body,
+        context.window_id,
+        force_last4=force_last4,
+        exclude_claude_carryover_round=claude_thinking_carryover_enabled,
+    )
+    body = step_inject_interaction_candidate(body, context.window_id)
+    if not du_daily_maintenance:
+        body = step_inject_rikkahub_reminder(body, context.window_id)
+    body = step_inject_stay_with_du(body)
+    body = step_inject_du_notebook(body)
+    body = step_inject_wenyou_player_tools(body, enabled=wenyou_player_tools_enabled)
+    body = step_inject_gateway_tools(body)
+    if game_tool_loop or random_imitator_td_tool_mode:
+        body = step_inject_random_imitator_td_tools(body)
+    body = step_inject_chat_tools(body)
+    body = step_inject_forum_tools(body)
+    body = step_inject_amap_mcp_tools(body)
+    body = step_inject_websearch_tools(body)
+    body = step_inject_reference_note(body)
+    from services.du_longterm_memory import inject_into_static_system as inject_du_longterm_memory
+
+    body = inject_du_longterm_memory(body)
+    body = step_inject_du_midterm_memory(body, context.window_id)
+    body = _inject_music_bgm_context(body, reply_channel=context.prompt_reply_channel)
+    body = _inject_listen_invite_protocol(body, reply_channel=context.prompt_reply_channel)
+    body, watch_action_context = _inject_watch_context(
+        body,
+        window_id=context.window_id,
+        reply_channel=context.prompt_reply_channel,
+    )
+    active_upstream_url = _get_active_upstream_url()
+    body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
+    if claude_thinking_carryover_enabled:
+        body = _inject_previous_claude_thinking_blocks(body, context.window_id)
+    active_anthropic_messages = (
+        _is_local_claude_oauth_proxy_url(active_upstream_url)
+        or _should_use_anthropic_format(active_upstream_url)
+    )
+    body = step_inject_draft_reminder(
+        body,
+        model=context.model,
+        anthropic_messages=active_anthropic_messages,
+    )
+    body = step_inject_thinking_block_rules(
+        body,
+        model=context.model,
+        anthropic_messages=active_anthropic_messages,
+    )
+    body = step_inject_custom_static_systems(body)
+    body = _inject_world_layer_prompt_system(body)
+    body = step_inject_tool_result_cache(body, context.window_id)
+    body = step_trim_messages_if_over_limit(body)
+    dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
+    prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
+    _strip_internal_prompt_region_markers(body.get("messages") or [])
+    client_requested_stream = bool(body.get("stream"))
+    openrouter_forced_nonstream = client_requested_stream and is_openrouter_url(active_upstream_url)
+    if openrouter_forced_nonstream:
+        body["stream"] = False
+        logger.info(
+            "OpenRouter 上游强制非流式转发，稍后按 SSE 回给客户端 window_id=%s model=%s",
+            context.window_id,
+            body.get("model") or "",
+        )
+    preserve_dynamic_marker = (
+        _is_local_claude_oauth_proxy_url(active_upstream_url)
+        or is_pioneer_url(active_upstream_url)
+        or _should_use_anthropic_format(active_upstream_url)
+    )
+    for msg in body.get("messages") or []:
+        msg.pop("__draft_reminder__", None)
+        msg.pop("__mid_draft_component__", None)
+        msg.pop("__mid_thinking_component__", None)
+        msg.pop("__mid_mode_component__", None)
+        if not preserve_dynamic_marker:
+            msg.pop("__dynamic__", None)
+            msg.pop("__summary_cache__", None)
+            msg.pop("__summary_recent__", None)
+            msg.pop("__tool_result_cache__", None)
+            msg.pop("__static_cache_anchor__", None)
+            msg.pop("__frozen_tool_summary__", None)
+            msg.pop("__recent_tool_batch__", None)
+            msg.pop("__hot_tool_result__", None)
+            msg.pop("__entry_style__", None)
+            msg.pop("__sumitalk_real_mode__", None)
+            msg.pop("__voice_rules__", None)
+            msg.pop("__mid_conversation_system__", None)
+            msg.pop("__play_note__", None)
+    if not active_anthropic_messages:
+        body.pop("__prompt_cache_layout__", None)
+    return _PreparedChatRequest(
+        body=body,
+        qq_group_delivery_target=qq_group_delivery_target,
+        skip_post_archive_dynamic_memory_write=skip_post_archive_dynamic_memory_write,
+        skip_post_archive_body_delta=skip_post_archive_body_delta,
+        du_daily_maintenance=du_daily_maintenance,
+        du_daily_trigger=du_daily_trigger,
+        dynamic_memory_recall_candidate_ids=dynamic_memory_recall_candidate_ids,
+        query_topic_state=query_topic_state,
+        dynamic_memory_citation_map=dynamic_memory_citation_map,
+        watch_action_context=watch_action_context,
+        prompt_cache_profile=prompt_cache_profile,
+        openrouter_forced_nonstream=openrouter_forced_nonstream,
+    )
+
+
 def _static_models_response():
     """用 GATEWAY_MODELS 拼成 OpenAI 风格的 /v1/models 响应。"""
     if not GATEWAY_MODELS:
@@ -2942,187 +3157,38 @@ def chat_completions():
             reply_target=reply_target,
         )
 
-    # QQ 群活动图片先进入消息体，随后统一走 base64 压缩；该类上下文图不生成图片描述。
-    body = _inject_qq_group_activity_context(body)
-    qq_group_delivery_target = str(body.pop(_QQ_GROUP_DELIVERY_TARGET_BODY_KEY, "") or "").strip()
-    # 走完整管道（清洗、注入记忆/总结、转发、存档）
-    body = step_clean_images_and_save_desc(body, window_id)
-    body = step_clean_for_forward(body)
-    body = step_replace_rikka_system(body)
-    body = step_inject_core_behavior_rules(body)
-    body = step_inject_du_non_retreat_rules(body)
-    body = step_inject_common_knowledge(body)
-    body = step_inject_pending_thought_rules(body)
-    body = _inject_entry_style_system(
-        body,
-        reply_channel=prompt_reply_channel,
-        is_miniapp=_is_miniapp_request(),
-        speaker=_xiaoai_speaker_from_request(),
-    )
-    body = step_inject_voice_rules(body, reply_channel=prompt_reply_channel)
-    body = _inject_million_plan_player_prompt_if_enabled(body)
-    body = _inject_codex_oauth_prompt_system(body, upstream_url=_get_active_upstream_url())
-    body = _inject_channel_nsfw_system(body, reply_channel=prompt_reply_channel)
-    body = _inject_static_followup_instruction_for_request(
-        body,
-        prompt_reply_channel=prompt_reply_channel,
-    )
-    force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
-    tg_user_input = _is_real_user_input_request(
-        window_id,
-        body,
-        reply_channel=reply_channel,
-    )
-    slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
-    skip_dynamic_memory = _skip_dynamic_memory_request() or slim_voice_call
-    skip_post_archive_dynamic_memory_write = _skip_post_archive_dynamic_memory_request()
-    skip_post_archive_body_delta = _skip_post_archive_body_delta_request()
-    game_tool_loop = _is_game_tool_loop_request()
-    random_imitator_td_tool_mode = _random_imitator_td_tool_mode_enabled()
-    du_daily_maintenance = _is_du_daily_maintenance_request()
-    du_daily_trigger = build_du_daily_trigger(window_id, body, headers)
-    if not du_daily_maintenance and not _is_gateway_wakeup_request() and not game_tool_loop:
-        try:
-            last_user_for_home = _last_user_message(body.get("messages") or [])
-            maybe_update_xinyue_state_from_user_text(_plain_message_text(last_user_for_home))
-        except Exception as e:
-            logger.debug("pixel_home user state inference skipped error=%s", e)
-    body = step_inject_current_base_model(body)
-    body = step_inject_system_alarm_action_result(body, window_id)
-    body = step_inject_du_thought(body, window_id)
-    body = step_inject_pending_thoughts(body, window_id)
-    body = step_inject_secret_drawer(body, window_id)
-    body = step_inject_wakeup_frame(body, window_id)
-    body = step_inject_du_vitals(body, window_id)
-    body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
-    body = step_inject_pixel_home(body, window_id)
-    dynamic_memory_recall_candidate_ids: list[str] = []
-    query_topic_state: dict = {}
-    if not skip_dynamic_memory:
-        body = step_inject_dynamic_memory(
-            body,
-            window_id,
-            recall_candidate_ids_out=dynamic_memory_recall_candidate_ids,
-            recall_topic_state_out=query_topic_state,
-        )
-    body = step_inject_humor_memes(body)
-    body = step_inject_sumitalk_real_mode(
-        body,
-        enabled=sumitalk_real_mode,
-        app_request=sumitalk_prompt_assembly,
-        reply_channel=prompt_reply_channel,
-        reply_target=reply_target,
-        model=req_model,
-        anthropic_messages=(
-            _is_local_claude_oauth_proxy_url(active_upstream_url)
-            or _should_use_anthropic_format(active_upstream_url)
-        ),
-        wakeup_kind=_wakeup_kind_for_archive(),
-    )
-    body = step_inject_play_note(body)
-    body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
-    body = step_inject_sense_snapshot(body, window_id)
-    claude_thinking_carryover_enabled = (
-        _is_local_claude_oauth_proxy_url(active_upstream_url)
-        or _should_use_anthropic_format(active_upstream_url)
-    ) and not _skip_claude_thinking_carryover_request()
-    body = step_inject_latest_4_rounds_for_new_window(
-        body,
-        window_id,
-        force_last4=force_last4,
-        exclude_claude_carryover_round=claude_thinking_carryover_enabled,
-    )
-    body = step_inject_interaction_candidate(body, window_id)
-    if not du_daily_maintenance:
-        body = step_inject_rikkahub_reminder(body, window_id)
-    body = step_inject_stay_with_du(body)
-    body = step_inject_du_notebook(body)
-    body = step_inject_wenyou_player_tools(body, enabled=wenyou_player_tools_enabled)
-    body = step_inject_gateway_tools(body)
-    if game_tool_loop or random_imitator_td_tool_mode:
-        body = step_inject_random_imitator_td_tools(body)
-    body = step_inject_chat_tools(body)
-    body = step_inject_forum_tools(body)
-    body = step_inject_amap_mcp_tools(body)
-    body = step_inject_websearch_tools(body)
-    body = step_inject_reference_note(body)
-    from services.du_longterm_memory import inject_into_static_system as inject_du_longterm_memory
-
-    body = inject_du_longterm_memory(body)
-    body = step_inject_du_midterm_memory(body, window_id)
-    body = _inject_music_bgm_context(body, reply_channel=prompt_reply_channel)
-    body = _inject_listen_invite_protocol(body, reply_channel=prompt_reply_channel)
-    body, watch_action_context = _inject_watch_context(
-        body,
+    pipeline_context = PipelineRequestContext(
         window_id=window_id,
-        reply_channel=prompt_reply_channel,
-    )
-    active_upstream_url = _get_active_upstream_url()
-    body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
-    if claude_thinking_carryover_enabled:
-        body = _inject_previous_claude_thinking_blocks(body, window_id)
-    body = step_inject_draft_reminder(
-        body,
         model=req_model,
+        reply_channel=reply_channel,
+        prompt_reply_channel=prompt_reply_channel,
+        reply_target=reply_target,
+        wakeup_kind=_wakeup_kind_for_archive(),
         anthropic_messages=(
             _is_local_claude_oauth_proxy_url(active_upstream_url)
             or _should_use_anthropic_format(active_upstream_url)
         ),
     )
-    body = step_inject_thinking_block_rules(
+    prepared = _prepare_chat_request(
         body,
-        model=req_model,
-        anthropic_messages=(
-            _is_local_claude_oauth_proxy_url(active_upstream_url)
-            or _should_use_anthropic_format(active_upstream_url)
-        ),
+        context=pipeline_context,
+        headers=headers,
+        sumitalk_prompt_assembly=sumitalk_prompt_assembly,
+        sumitalk_real_mode=sumitalk_real_mode,
+        wenyou_player_tools_enabled=wenyou_player_tools_enabled,
     )
-    body = step_inject_custom_static_systems(body)
-    body = _inject_world_layer_prompt_system(body)
-    body = step_inject_tool_result_cache(body, window_id)
-    body = step_trim_messages_if_over_limit(body)
-    dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
-    prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
-    _strip_internal_prompt_region_markers(body.get("messages") or [])
-    client_requested_stream = bool(body.get("stream"))
-    openrouter_forced_nonstream = client_requested_stream and is_openrouter_url(active_upstream_url)
-    if openrouter_forced_nonstream:
-        body["stream"] = False
-        logger.info(
-            "OpenRouter 上游强制非流式转发，稍后按 SSE 回给客户端 window_id=%s model=%s",
-            window_id,
-            body.get("model") or "",
-        )
-    # Claude OAuth / Pioneer / 显式 Anthropic 格式上游会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
-    preserve_dynamic_marker = (
-        _is_local_claude_oauth_proxy_url(active_upstream_url)
-        or is_pioneer_url(active_upstream_url)
-        or _should_use_anthropic_format(active_upstream_url)
-    )
-    for msg in body.get("messages") or []:
-        msg.pop("__draft_reminder__", None)
-        msg.pop("__mid_draft_component__", None)
-        msg.pop("__mid_thinking_component__", None)
-        msg.pop("__mid_mode_component__", None)
-        if not preserve_dynamic_marker:
-            msg.pop("__dynamic__", None)
-            msg.pop("__summary_cache__", None)
-            msg.pop("__summary_recent__", None)
-            msg.pop("__tool_result_cache__", None)
-            msg.pop("__static_cache_anchor__", None)
-            msg.pop("__frozen_tool_summary__", None)
-            msg.pop("__recent_tool_batch__", None)
-            msg.pop("__hot_tool_result__", None)
-            msg.pop("__entry_style__", None)
-            msg.pop("__sumitalk_real_mode__", None)
-            msg.pop("__voice_rules__", None)
-            msg.pop("__mid_conversation_system__", None)
-            msg.pop("__play_note__", None)
-    if not (
-        _is_local_claude_oauth_proxy_url(active_upstream_url)
-        or _should_use_anthropic_format(active_upstream_url)
-    ):
-        body.pop("__prompt_cache_layout__", None)
+    body = prepared.body
+    qq_group_delivery_target = prepared.qq_group_delivery_target
+    skip_post_archive_dynamic_memory_write = prepared.skip_post_archive_dynamic_memory_write
+    skip_post_archive_body_delta = prepared.skip_post_archive_body_delta
+    du_daily_maintenance = prepared.du_daily_maintenance
+    du_daily_trigger = prepared.du_daily_trigger
+    dynamic_memory_recall_candidate_ids = prepared.dynamic_memory_recall_candidate_ids
+    query_topic_state = prepared.query_topic_state
+    dynamic_memory_citation_map = prepared.dynamic_memory_citation_map
+    watch_action_context = prepared.watch_action_context
+    prompt_cache_profile = prepared.prompt_cache_profile
+    openrouter_forced_nonstream = prepared.openrouter_forced_nonstream
     if body.get("stream"):
         if is_sumitalk_request:
             sumitalk_logger.info(

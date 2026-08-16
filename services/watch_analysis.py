@@ -545,9 +545,11 @@ def build_watch_analysis_request(session: dict, job: dict, samples: list[dict]) 
     return {
         "model": WATCH_ANALYSIS_MODEL,
         "stream": False,
-        "temperature": 0,
         "reasoning": {"effort": "none"},
-        "provider": {"require_parameters": True},
+        "provider": {
+            "only": ["google-vertex/global"],
+            "require_parameters": True,
+        },
         "response_format": {
             "type": "json_schema",
             "json_schema": {

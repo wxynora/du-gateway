@@ -369,7 +369,7 @@ def _openrouter_transcribe(audio_bytes: bytes, mime_type: str = "audio/webm", fi
         logger.warning("OpenRouter STT 不支持的音频格式 filename=%s mime=%s", filename, mime_type)
         return None
 
-    models = [_clean_text(VOICE_STT_OPENROUTER_MODEL, limit=120) or "google/gemini-2.5-flash"]
+    models = [_clean_text(VOICE_STT_OPENROUTER_MODEL, limit=120) or "google/gemini-3.7-flash"]
     fallback = _clean_text(VOICE_STT_OPENROUTER_FALLBACK_MODEL, limit=120)
     if fallback and fallback not in models:
         models.append(fallback)
@@ -386,6 +386,7 @@ def _openrouter_transcribe(audio_bytes: bytes, mime_type: str = "audio/webm", fi
             "stream": False,
             "temperature": 0,
             "max_tokens": 900,
+            "provider": {"only": ["google-vertex/global"]},
             "messages": [
                 {
                     "role": "user",

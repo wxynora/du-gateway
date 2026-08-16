@@ -194,7 +194,7 @@ MUSIC_ANALYSIS_API_KEY = _resolve_music_analysis_api_key()
 MUSIC_ANALYSIS_PROVIDER = os.environ.get("MUSIC_ANALYSIS_PROVIDER", "openrouter").strip() or "openrouter"
 MUSIC_ANALYSIS_MODEL = os.environ.get(
     "MUSIC_ANALYSIS_MODEL",
-    "google/gemini-3-flash-preview",
+    "google/gemini-3.7-flash",
 ).strip()
 MUSIC_ANALYSIS_FALLBACK_MODEL = os.environ.get(
     "MUSIC_ANALYSIS_FALLBACK_MODEL",
@@ -216,7 +216,7 @@ WATCH_ANALYSIS_API_URL = os.environ.get(
 WATCH_ANALYSIS_API_KEY = resolve_openrouter_api_key()
 WATCH_ANALYSIS_MODEL = os.environ.get(
     "WATCH_ANALYSIS_MODEL",
-    "google/gemini-2.5-flash",
+    "google/gemini-3.7-flash",
 ).strip()
 WATCH_ANALYSIS_PROMPT_VERSION = os.environ.get("WATCH_ANALYSIS_PROMPT_VERSION", "watch-v9").strip() or "watch-v9"
 WATCH_ANALYSIS_TIMEOUT_SECONDS = _env_int("WATCH_ANALYSIS_TIMEOUT_SECONDS", 120, 20, 600)
@@ -789,7 +789,7 @@ VOICE_STT_OPENROUTER_API_URL = os.environ.get(
     "https://openrouter.ai/api/v1/chat/completions",
 ).strip()
 VOICE_STT_OPENROUTER_API_KEY = os.environ.get("VOICE_STT_OPENROUTER_API_KEY", "").strip() or resolve_openrouter_api_key()
-VOICE_STT_OPENROUTER_MODEL = os.environ.get("VOICE_STT_OPENROUTER_MODEL", "google/gemini-2.5-flash").strip()
+VOICE_STT_OPENROUTER_MODEL = os.environ.get("VOICE_STT_OPENROUTER_MODEL", "google/gemini-3.7-flash").strip()
 VOICE_STT_OPENROUTER_FALLBACK_MODEL = os.environ.get("VOICE_STT_OPENROUTER_FALLBACK_MODEL", "").strip()
 VOICE_STT_TIMEOUT_SECONDS = int(float(os.environ.get("VOICE_STT_TIMEOUT_SECONDS", "120") or "120"))
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "").strip()
