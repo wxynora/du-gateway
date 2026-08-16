@@ -386,7 +386,6 @@ def _openrouter_transcribe(audio_bytes: bytes, mime_type: str = "audio/webm", fi
             "stream": False,
             "temperature": 0,
             "max_tokens": 900,
-            "provider": {"only": ["google-vertex/global"]},
             "messages": [
                 {
                     "role": "user",
@@ -397,6 +396,8 @@ def _openrouter_transcribe(audio_bytes: bytes, mime_type: str = "audio/webm", fi
                 }
             ],
         }
+        if str(model or "").strip().lower().startswith("google/"):
+            payload["provider"] = {"only": ["google-vertex/global"]}
         try:
             resp = requests.post(
                 VOICE_STT_OPENROUTER_API_URL,

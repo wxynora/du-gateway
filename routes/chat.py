@@ -320,26 +320,33 @@ def _get_window_id_from_request(body: dict) -> str:
     return WINDOW_ID_DEFAULT
 
 
-def _is_miniapp_request() -> bool:
-    return bool((request.headers.get("X-Telegram-Init-Data") or "").strip())
+def _request_headers(headers=None):
+    return request.headers if headers is None else headers
+
+
+def _is_miniapp_request(headers=None) -> bool:
+    headers = _request_headers(headers)
+    return bool((headers.get("X-Telegram-Init-Data") or "").strip())
 
 
 def _reply_channel() -> str:
     return str(request.headers.get("X-Reply-Channel") or "").strip().lower()
 
 
-def _xiaoai_speaker_from_request() -> str:
-    raw_b64 = str(request.headers.get("X-XiaoAI-Speaker-B64") or "").strip()
+def _xiaoai_speaker_from_request(headers=None) -> str:
+    headers = _request_headers(headers)
+    raw_b64 = str(headers.get("X-XiaoAI-Speaker-B64") or "").strip()
     if raw_b64:
         try:
             return base64.urlsafe_b64decode(raw_b64.encode("ascii")).decode("utf-8").strip()
         except Exception:
             logger.warning("X-XiaoAI-Speaker-B64 解码失败")
-    return str(request.headers.get("X-XiaoAI-Speaker") or "").strip()
+    return str(headers.get("X-XiaoAI-Speaker") or "").strip()
 
 
-def _reply_target() -> str:
-    return str(request.headers.get("X-Reply-Target") or "").strip()
+def _reply_target(headers=None) -> str:
+    headers = _request_headers(headers)
+    return str(headers.get("X-Reply-Target") or "").strip()
 
 
 def _strip_and_collect_assistant_drafts(message: dict, draft_sink: list[str]) -> dict:
@@ -358,33 +365,36 @@ def _joined_assistant_drafts(draft_parts: list[str]) -> str:
     return _join_assistant_drafts(draft_parts)
 
 
-def _truthy_header(name: str) -> bool:
-    return (request.headers.get(name) or "").strip().lower() in ("1", "true", "yes")
+def _truthy_header(name: str, headers=None) -> bool:
+    headers = _request_headers(headers)
+    return (headers.get(name) or "").strip().lower() in ("1", "true", "yes")
 
 
-def _is_million_plan_request() -> bool:
+def _is_million_plan_request(headers=None) -> bool:
     """百万计划是外部游戏流量，不参与动态记忆召回或动态层沉淀。"""
-    if _truthy_header("X-Million-Plan"):
+    headers = _request_headers(headers)
+    if _truthy_header("X-Million-Plan", headers):
         return True
-    reply_target = _reply_target().lower().replace("_", "-")
+    reply_target = _reply_target(headers).lower().replace("_", "-")
     if reply_target.startswith("million-plan"):
         return True
-    window_id = str(request.headers.get("X-Window-Id") or "").strip().lower().replace("_", "-")
+    window_id = str(headers.get("X-Window-Id") or "").strip().lower().replace("_", "-")
     if window_id.startswith("million-plan"):
         return True
-    referer = str(request.headers.get("Referer") or request.headers.get("Referrer") or "").lower()
+    referer = str(headers.get("Referer") or headers.get("Referrer") or "").lower()
     return "/million-plan" in referer
 
 
-def _is_game_tool_loop_request() -> bool:
+def _is_game_tool_loop_request(headers=None) -> bool:
     """文字游戏工具循环：不参与动态记忆/身体状态等对话侧沉淀。"""
-    if _truthy_header("X-DU-Game-Tool-Loop") or _truthy_header("X-Random-Imitator-TD"):
+    headers = _request_headers(headers)
+    if _truthy_header("X-DU-Game-Tool-Loop", headers) or _truthy_header("X-Random-Imitator-TD", headers):
         return True
-    for value in (_reply_target(), str(request.headers.get("X-Window-Id") or "")):
+    for value in (_reply_target(headers), str(headers.get("X-Window-Id") or "")):
         normalized = str(value or "").strip().lower().replace("_", "-")
         if normalized.startswith(("random-imitator-td", "imitator-pvz")):
             return True
-    referer = str(request.headers.get("Referer") or request.headers.get("Referrer") or "").lower()
+    referer = str(headers.get("Referer") or headers.get("Referrer") or "").lower()
     return "/random-imitator-td" in referer or "/imitator-pvz" in referer
 
 
@@ -415,12 +425,13 @@ def _inject_million_plan_player_prompt_if_enabled(body: dict) -> dict:
     return _inject_million_plan_player_static_system(body)
 
 
-def _skip_dynamic_memory_request() -> bool:
+def _skip_dynamic_memory_request(headers=None) -> bool:
+    headers = _request_headers(headers)
     return (
-        _truthy_header("X-Skip-Dynamic-Memory")
-        or _is_gateway_wakeup_request()
-        or _is_million_plan_request()
-        or _is_game_tool_loop_request()
+        _truthy_header("X-Skip-Dynamic-Memory", headers)
+        or _is_gateway_wakeup_request(headers)
+        or _is_million_plan_request(headers)
+        or _is_game_tool_loop_request(headers)
     )
 
 
@@ -1143,12 +1154,14 @@ def _build_round_cleaned_for_archive(
     return build_round_cleaned_for_r2(archive_user, archive_assistant)
 
 
-def _is_followup_generation_request() -> bool:
-    return (request.headers.get("X-DU-FOLLOWUP-GEN") or "").strip().lower() in ("1", "true", "yes")
+def _is_followup_generation_request(headers=None) -> bool:
+    headers = _request_headers(headers)
+    return (headers.get("X-DU-FOLLOWUP-GEN") or "").strip().lower() in ("1", "true", "yes")
 
 
-def _is_gateway_wakeup_request() -> bool:
+def _is_gateway_wakeup_request(headers=None) -> bool:
     """后端自行唤醒渡的请求：保留完整静态/短程上下文，但不做动态记忆召回。"""
+    headers = _request_headers(headers)
     truthy = ("1", "true", "yes")
     for name in (
         "X-DU-GATEWAY-WAKEUP",
@@ -1156,24 +1169,26 @@ def _is_gateway_wakeup_request() -> bool:
         "X-DU-DAILY-MAINTAIN",
         "X-DU-PROACTIVE-DECISION",
     ):
-        if (request.headers.get(name) or "").strip().lower() in truthy:
+        if (headers.get(name) or "").strip().lower() in truthy:
             return True
     return False
 
 
-def _skip_post_archive_dynamic_memory_request() -> bool:
+def _skip_post_archive_dynamic_memory_request(headers=None) -> bool:
+    headers = _request_headers(headers)
     return (
-        _truthy_header("X-Skip-Post-Archive-Dynamic-Memory")
-        or _is_million_plan_request()
-        or _is_game_tool_loop_request()
+        _truthy_header("X-Skip-Post-Archive-Dynamic-Memory", headers)
+        or _is_million_plan_request(headers)
+        or _is_game_tool_loop_request(headers)
     )
 
 
-def _skip_post_archive_body_delta_request() -> bool:
+def _skip_post_archive_body_delta_request(headers=None) -> bool:
+    headers = _request_headers(headers)
     return (
-        _truthy_header("X-Skip-Post-Archive-Body-Delta")
-        or _is_million_plan_request()
-        or _is_game_tool_loop_request()
+        _truthy_header("X-Skip-Post-Archive-Body-Delta", headers)
+        or _is_million_plan_request(headers)
+        or _is_game_tool_loop_request(headers)
     )
 
 
@@ -1279,8 +1294,9 @@ def _qq_group_activity_context_allowed(headers) -> bool:
     return wakeup_kind in _QQ_GROUP_ACTIVITY_WAKEUP_KINDS
 
 
-def _inject_qq_group_activity_context(body: dict) -> dict:
-    if _is_du_daily_maintenance_request() or not _qq_group_activity_context_allowed(request.headers):
+def _inject_qq_group_activity_context(body: dict, *, headers=None) -> dict:
+    headers = _request_headers(headers)
+    if _is_du_daily_maintenance_request(headers) or not _qq_group_activity_context_allowed(headers):
         return body
     delivery = _build_qq_group_activity_delivery_for_wakeup()
     group_context = delivery.get("content") if isinstance(delivery, dict) else ""
@@ -1432,8 +1448,9 @@ def _maybe_clear_qq_group_activity_context_for_private_reply(
         logger.info("qq_group_activity_context_cleared channel=%s target=%s", reply_channel, reply_target)
 
 
-def _skip_claude_thinking_carryover_request() -> bool:
-    return (request.headers.get("X-Skip-Claude-Thinking-Carryover") or "").strip().lower() in ("1", "true", "yes")
+def _skip_claude_thinking_carryover_request(headers=None) -> bool:
+    headers = _request_headers(headers)
+    return (headers.get("X-Skip-Claude-Thinking-Carryover") or "").strip().lower() in ("1", "true", "yes")
 
 
 def _pioneer_session_component(value: object, limit: int) -> str:
@@ -2632,28 +2649,31 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
     return None, last_status, _build_upstream_error_hint(last_err or ""), None
 
 
-def _is_du_daily_maintenance_request() -> bool:
-    return str(request.headers.get("X-DU-DAILY-MAINTAIN") or "").strip().lower() in ("1", "true", "yes")
+def _is_du_daily_maintenance_request(headers=None) -> bool:
+    headers = _request_headers(headers)
+    return str(headers.get("X-DU-DAILY-MAINTAIN") or "").strip().lower() in ("1", "true", "yes")
 
 
 def _is_proactive_decision_request() -> bool:
     return str(request.headers.get("X-DU-PROACTIVE-DECISION") or "").strip().lower() in ("1", "true", "yes")
 
 
-def _should_record_user_interaction_side_effects() -> bool:
-    return not _is_du_daily_maintenance_request() and not _is_gateway_wakeup_request()
+def _should_record_user_interaction_side_effects(headers=None) -> bool:
+    headers = _request_headers(headers)
+    return not _is_du_daily_maintenance_request(headers) and not _is_gateway_wakeup_request(headers)
 
 
-def _is_real_user_input_request(window_id: str, body: dict, *, reply_channel: str) -> bool:
-    if not _should_record_user_interaction_side_effects():
+def _is_real_user_input_request(window_id: str, body: dict, *, reply_channel: str, headers=None) -> bool:
+    headers = _request_headers(headers)
+    if not _should_record_user_interaction_side_effects(headers):
         return False
-    if (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes"):
+    if (headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes"):
         return True
     return _is_cross_platform_tg_window_user_input(
         window_id,
         body,
         reply_channel=reply_channel,
-        is_followup_generation=_is_followup_generation_request(),
+        is_followup_generation=_is_followup_generation_request(headers),
     )
 
 
@@ -2661,12 +2681,11 @@ def _prepare_chat_request(
     body: dict,
     *,
     context: PipelineRequestContext,
-    headers: dict,
     sumitalk_prompt_assembly: bool,
     sumitalk_real_mode: bool,
     wenyou_player_tools_enabled: bool,
 ) -> _PreparedChatRequest:
-    body = _inject_qq_group_activity_context(body)
+    body = _inject_qq_group_activity_context(body, headers=context.headers)
     qq_group_delivery_target = str(body.pop(_QQ_GROUP_DELIVERY_TARGET_BODY_KEY, "") or "").strip()
     body = step_clean_images_and_save_desc(body, context.window_id)
     body = step_clean_for_forward(body)
@@ -2678,32 +2697,33 @@ def _prepare_chat_request(
     body = _inject_entry_style_system(
         body,
         reply_channel=context.prompt_reply_channel,
-        is_miniapp=_is_miniapp_request(),
-        speaker=_xiaoai_speaker_from_request(),
+        is_miniapp=_is_miniapp_request(context.headers),
+        speaker=_xiaoai_speaker_from_request(context.headers),
     )
     body = step_inject_voice_rules(body, reply_channel=context.prompt_reply_channel)
     body = _inject_million_plan_player_prompt_if_enabled(body)
-    body = _inject_codex_oauth_prompt_system(body, upstream_url=_get_active_upstream_url())
+    body = _inject_codex_oauth_prompt_system(body, upstream_url=context.upstream_url)
     body = _inject_channel_nsfw_system(body, reply_channel=context.prompt_reply_channel)
     body = _inject_static_followup_instruction_for_request(
         body,
         prompt_reply_channel=context.prompt_reply_channel,
     )
-    force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
+    force_last4 = _truthy_header("X-Force-Last4", context.headers)
     tg_user_input = _is_real_user_input_request(
         context.window_id,
         body,
         reply_channel=context.reply_channel,
+        headers=context.headers,
     )
-    slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
-    skip_dynamic_memory = _skip_dynamic_memory_request() or slim_voice_call
-    skip_post_archive_dynamic_memory_write = _skip_post_archive_dynamic_memory_request()
-    skip_post_archive_body_delta = _skip_post_archive_body_delta_request()
-    game_tool_loop = _is_game_tool_loop_request()
+    slim_voice_call = _truthy_header("X-Voice-Call-Slim", context.headers)
+    skip_dynamic_memory = _skip_dynamic_memory_request(context.headers) or slim_voice_call
+    skip_post_archive_dynamic_memory_write = _skip_post_archive_dynamic_memory_request(context.headers)
+    skip_post_archive_body_delta = _skip_post_archive_body_delta_request(context.headers)
+    game_tool_loop = _is_game_tool_loop_request(context.headers)
     random_imitator_td_tool_mode = _random_imitator_td_tool_mode_enabled()
-    du_daily_maintenance = _is_du_daily_maintenance_request()
-    du_daily_trigger = build_du_daily_trigger(context.window_id, body, headers)
-    if not du_daily_maintenance and not _is_gateway_wakeup_request() and not game_tool_loop:
+    du_daily_maintenance = _is_du_daily_maintenance_request(context.headers)
+    du_daily_trigger = build_du_daily_trigger(context.window_id, body, context.headers)
+    if not du_daily_maintenance and not _is_gateway_wakeup_request(context.headers) and not game_tool_loop:
         try:
             last_user_for_home = _last_user_message(body.get("messages") or [])
             maybe_update_xinyue_state_from_user_text(_plain_message_text(last_user_for_home))
@@ -2745,7 +2765,7 @@ def _prepare_chat_request(
     body = step_inject_summary(body, context.window_id, is_user_input=tg_user_input)
     body = step_inject_sense_snapshot(body, context.window_id)
     claude_thinking_carryover_enabled = (
-        context.anthropic_messages and not _skip_claude_thinking_carryover_request()
+        context.anthropic_messages and not _skip_claude_thinking_carryover_request(context.headers)
     )
     body = step_inject_latest_4_rounds_for_new_window(
         body,
@@ -2778,23 +2798,19 @@ def _prepare_chat_request(
         window_id=context.window_id,
         reply_channel=context.prompt_reply_channel,
     )
-    active_upstream_url = _get_active_upstream_url()
+    active_upstream_url = context.upstream_url
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
     if claude_thinking_carryover_enabled:
         body = _inject_previous_claude_thinking_blocks(body, context.window_id)
-    active_anthropic_messages = (
-        _is_local_claude_oauth_proxy_url(active_upstream_url)
-        or _should_use_anthropic_format(active_upstream_url)
-    )
     body = step_inject_draft_reminder(
         body,
         model=context.model,
-        anthropic_messages=active_anthropic_messages,
+        anthropic_messages=context.anthropic_messages,
     )
     body = step_inject_thinking_block_rules(
         body,
         model=context.model,
-        anthropic_messages=active_anthropic_messages,
+        anthropic_messages=context.anthropic_messages,
     )
     body = step_inject_custom_static_systems(body)
     body = _inject_world_layer_prompt_system(body)
@@ -2836,7 +2852,7 @@ def _prepare_chat_request(
             msg.pop("__voice_rules__", None)
             msg.pop("__mid_conversation_system__", None)
             msg.pop("__play_note__", None)
-    if not active_anthropic_messages:
+    if not context.anthropic_messages:
         body.pop("__prompt_cache_layout__", None)
     return _PreparedChatRequest(
         body=body,
@@ -3164,6 +3180,8 @@ def chat_completions():
         prompt_reply_channel=prompt_reply_channel,
         reply_target=reply_target,
         wakeup_kind=_wakeup_kind_for_archive(),
+        headers=headers,
+        upstream_url=active_upstream_url,
         anthropic_messages=(
             _is_local_claude_oauth_proxy_url(active_upstream_url)
             or _should_use_anthropic_format(active_upstream_url)
@@ -3172,7 +3190,6 @@ def chat_completions():
     prepared = _prepare_chat_request(
         body,
         context=pipeline_context,
-        headers=headers,
         sumitalk_prompt_assembly=sumitalk_prompt_assembly,
         sumitalk_real_mode=sumitalk_real_mode,
         wenyou_player_tools_enabled=wenyou_player_tools_enabled,

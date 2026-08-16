@@ -542,14 +542,14 @@ def build_watch_analysis_request(session: dict, job: dict, samples: list[dict]) 
                 continue
             raise WatchAnalysisProviderError("分析样本文件类型不受支持", retryable=False)
         content.append({"type": "text", "text": "\n".join(label_parts)})
+    provider = {"require_parameters": True}
+    if str(WATCH_ANALYSIS_MODEL or "").strip().lower().startswith("google/"):
+        provider["only"] = ["google-vertex/global"]
     return {
         "model": WATCH_ANALYSIS_MODEL,
         "stream": False,
         "reasoning": {"effort": "none"},
-        "provider": {
-            "only": ["google-vertex/global"],
-            "require_parameters": True,
-        },
+        "provider": provider,
         "response_format": {
             "type": "json_schema",
             "json_schema": {

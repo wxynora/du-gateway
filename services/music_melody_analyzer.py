@@ -198,12 +198,11 @@ def _openrouter_payload(
     duration_seconds: float = 0,
     lyrics_text: str = "",
 ) -> dict:
-    return {
+    payload = {
         "model": model,
         "stream": False,
         "temperature": 0.2,
         "max_tokens": 2600,
-        "provider": {"only": ["google-vertex/global"]},
         "response_format": {"type": "json_object"},
         "messages": [
             {
@@ -229,6 +228,9 @@ def _openrouter_payload(
             }
         ],
     }
+    if str(model or "").strip().lower().startswith("google/"):
+        payload["provider"] = {"only": ["google-vertex/global"]}
+    return payload
 
 
 def _call_music_model(
