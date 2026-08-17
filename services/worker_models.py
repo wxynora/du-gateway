@@ -25,7 +25,9 @@ from config import (
 )
 
 
-WORKER_ROLES = frozenset({"translate", "structured", "ocr", "asr", "rerank"})
+WORKER_ROLES = frozenset(
+    {"translate", "structured", "background_reasoning", "ocr", "asr", "rerank"}
+)
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,19 @@ def get_worker_model(role: str, *, provider: str | None = None) -> WorkerModelSp
             api_url=_env_or("WORKER_STRUCTURED_API_URL", WEBSEARCH_COMPRESS_API_URL),
             api_key=_siliconflow_key("WORKER_STRUCTURED_API_KEY"),
             model=_env_or("WORKER_STRUCTURED_MODEL", WEBSEARCH_COMPRESS_MODEL),
+        )
+
+    if normalized_role == "background_reasoning":
+        return WorkerModelSpec(
+            role="background_reasoning",
+            provider=_env_or("WORKER_BACKGROUND_REASONING_PROVIDER", "siliconflow").lower(),
+            protocol="openai_chat",
+            api_url=_env_or("WORKER_BACKGROUND_REASONING_API_URL", _siliconflow_chat_url()),
+            api_key=_siliconflow_key("WORKER_BACKGROUND_REASONING_API_KEY"),
+            model=_env_or(
+                "WORKER_BACKGROUND_REASONING_MODEL",
+                "deepseek-ai/DeepSeek-V4-Flash",
+            ),
         )
 
     if normalized_role == "ocr":
