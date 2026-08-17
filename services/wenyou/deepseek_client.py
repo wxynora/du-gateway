@@ -5,7 +5,8 @@ from typing import Optional
 
 import requests
 
-from config import BASE_DIR, DEEPSEEK_API_KEY, DEEPSEEK_API_URL, WENYOU_DS_MODEL
+from config import BASE_DIR
+from services.worker_models import get_worker_model
 from utils.log import get_logger
 
 
@@ -39,12 +40,12 @@ def call_wenyou_deepseek(
     timeout_seconds: int = 120,
 ) -> Optional[str]:
     """调用 DeepSeek Chat Completions（非流式）。"""
-    if not DEEPSEEK_API_KEY:
-        logger.warning("DEEPSEEK_API_KEY 未配置，无法调用文游 GM")
+    worker = get_worker_model("background_reasoning")
+    if not worker.api_key or not worker.api_url or not worker.model:
+        logger.warning("background_reasoning 未配置完整，无法调用文游 GM")
         return None
-    url = (DEEPSEEK_API_URL or "").strip() or "https://api.deepseek.com/v1/chat/completions"
     body = {
-        "model": WENYOU_DS_MODEL,
+        "model": worker.model,
         "messages": ([{"role": "system", "content": system}] if system else []) + messages,
         "stream": False,
         "temperature": temperature,
@@ -52,8 +53,8 @@ def call_wenyou_deepseek(
     }
     try:
         r = requests.post(
-            url,
-            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+            worker.api_url,
+            headers={"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"},
             json=body,
             timeout=max(10, int(timeout_seconds or 120)),
         )

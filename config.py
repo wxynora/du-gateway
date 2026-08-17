@@ -833,8 +833,6 @@ MIJIA_API_TIMEOUT_SECONDS = int(float(os.environ.get("MIJIA_API_TIMEOUT_SECONDS"
 
 # 文游：App 内独立会话 ID，不再绑定 Telegram 群或 TG 用户。
 WENYOU_SESSION_ID = int(os.environ.get("WENYOU_SESSION_ID", "1") or "1")
-# 文游 GM 使用的 DeepSeek 模型名
-WENYOU_DS_MODEL = os.environ.get("WENYOU_DS_MODEL", DEEPSEEK_CHAT_MODEL).strip()
 
 # -------------------- Telegram Mini App（手机端运维面板） --------------------
 # 静态站点目录：由 Flask 直接托管 /miniapp
