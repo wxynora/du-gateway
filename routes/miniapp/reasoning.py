@@ -8,10 +8,8 @@ import requests
 from flask import jsonify, request
 
 from config import (
-    SILICONFLOW_BASE_HOST,
     TOOL_RESULT_CACHE_MAX_CHARS,
     TOOL_RESULT_HOT_MAX_CHARS,
-    resolve_siliconflow_api_key,
 )
 from services.chat_tool_helpers import collect_tool_trace_from_messages
 from services.dynamic_memory_recall_debug import (
@@ -22,6 +20,7 @@ from services.dynamic_memory_recall_debug import (
 )
 from services.reasoning_utils import dedupe_reasoning_text_parts
 from services.prompt_cache_debug import build_tool_cache_stats_from_breakdown
+from services.worker_models import get_worker_model
 from storage import conversation_sqlite_store, r2_store
 from utils.tokens import estimate_tokens
 
@@ -752,9 +751,10 @@ def _translate_reasoning_text(text: str) -> str:
     if not src:
         return ""
 
-    url = f"https://{str(SILICONFLOW_BASE_HOST or '').strip()}/v1/chat/completions"
-    api_key = str(resolve_siliconflow_api_key() or "").strip()
-    model = "tencent/Hunyuan-MT-7B"
+    worker = get_worker_model("translate")
+    url = worker.api_url
+    api_key = worker.api_key
+    model = worker.model
     if not url or not api_key or not model:
         raise RuntimeError("SiliconFlow 翻译未配置完整，无法翻译")
 

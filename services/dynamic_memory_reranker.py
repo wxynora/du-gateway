@@ -12,19 +12,16 @@ except Exception:  # pragma: no cover - deployment normally has requests
 
 from config import (
     DYNAMIC_MEMORY_RERANK_ALLOW_CUSTOM_URL,
-    DYNAMIC_MEMORY_RERANK_API_URL,
     DYNAMIC_MEMORY_RERANK_BLEND,
     DYNAMIC_MEMORY_RERANK_DOCUMENT_MAX_CHARS,
     DYNAMIC_MEMORY_RERANK_ENABLED,
     DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES,
-    DYNAMIC_MEMORY_RERANK_MODEL,
-    DYNAMIC_MEMORY_RERANK_PROVIDER,
     DYNAMIC_MEMORY_RERANK_QUERY_MAX_CHARS,
     DYNAMIC_MEMORY_RERANK_TIMEOUT_SECONDS,
     DYNAMIC_MEMORY_RERANK_TOP_N,
     is_siliconflow_url,
-    resolve_siliconflow_api_key,
 )
+from services.worker_models import get_worker_model
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -33,7 +30,8 @@ _QWEN_RERANK_PREFIX = "Qwen/Qwen3-Reranker-"
 
 
 def dynamic_memory_rerank_enabled() -> bool:
-    return bool(DYNAMIC_MEMORY_RERANK_ENABLED and DYNAMIC_MEMORY_RERANK_PROVIDER == "siliconflow")
+    worker = get_worker_model("rerank")
+    return bool(DYNAMIC_MEMORY_RERANK_ENABLED and worker.provider == "siliconflow")
 
 
 def _clip_text(text: str, max_chars: int) -> str:
@@ -62,18 +60,18 @@ def rerank_dynamic_memory_documents(query: str, documents: list[dict]) -> dict:
     """
     if not dynamic_memory_rerank_enabled():
         return {"enabled": False, "ok": False, "reason": "disabled"}
+    worker = get_worker_model("rerank")
     if not documents:
         return {"enabled": True, "ok": False, "reason": "empty_documents"}
     if not str(query or "").strip():
-        return {"enabled": True, "ok": False, "reason": "empty_query", "model": DYNAMIC_MEMORY_RERANK_MODEL}
-    if not DYNAMIC_MEMORY_RERANK_ALLOW_CUSTOM_URL and not is_siliconflow_url(DYNAMIC_MEMORY_RERANK_API_URL):
-        return {"enabled": True, "ok": False, "reason": "unsafe_api_url", "model": DYNAMIC_MEMORY_RERANK_MODEL}
+        return {"enabled": True, "ok": False, "reason": "empty_query", "model": worker.model}
+    if not DYNAMIC_MEMORY_RERANK_ALLOW_CUSTOM_URL and not is_siliconflow_url(worker.api_url):
+        return {"enabled": True, "ok": False, "reason": "unsafe_api_url", "model": worker.model}
 
-    api_key = resolve_siliconflow_api_key()
-    if not api_key:
-        return {"enabled": True, "ok": False, "reason": "missing_api_key", "model": DYNAMIC_MEMORY_RERANK_MODEL}
+    if not worker.api_key:
+        return {"enabled": True, "ok": False, "reason": "missing_api_key", "model": worker.model}
     if requests is None:
-        return {"enabled": True, "ok": False, "reason": "missing_requests", "model": DYNAMIC_MEMORY_RERANK_MODEL}
+        return {"enabled": True, "ok": False, "reason": "missing_requests", "model": worker.model}
 
     candidates = [doc for doc in documents[: max(1, int(DYNAMIC_MEMORY_RERANK_MAX_CANDIDATES or 30))] if doc]
     texts = [_clip_text(str(doc.get("text") or ""), int(DYNAMIC_MEMORY_RERANK_DOCUMENT_MAX_CHARS or 900)) for doc in candidates]
@@ -81,23 +79,23 @@ def rerank_dynamic_memory_documents(query: str, documents: list[dict]) -> dict:
     texts = [text if text else "(empty)" for text in texts]
     top_n = min(len(texts), max(1, int(DYNAMIC_MEMORY_RERANK_TOP_N or 12)))
     payload = {
-        "model": DYNAMIC_MEMORY_RERANK_MODEL,
+        "model": worker.model,
         "query": _clip_text(query, int(DYNAMIC_MEMORY_RERANK_QUERY_MAX_CHARS or 1200)),
         "documents": texts,
         "top_n": top_n,
         "return_documents": False,
     }
-    if str(DYNAMIC_MEMORY_RERANK_MODEL or "").startswith(_QWEN_RERANK_PREFIX):
+    if str(worker.model or "").startswith(_QWEN_RERANK_PREFIX):
         payload["instruction"] = "根据当前对话语境，优先选择最能帮助回复小玥的动态记忆。"
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {worker.api_key}",
         "Content-Type": "application/json",
     }
     started = time.time()
     try:
         resp = requests.post(
-            DYNAMIC_MEMORY_RERANK_API_URL,
+            worker.api_url,
             headers=headers,
             json=payload,
             timeout=max(0.3, float(DYNAMIC_MEMORY_RERANK_TIMEOUT_SECONDS or 2.5)),
@@ -114,7 +112,7 @@ def rerank_dynamic_memory_documents(query: str, documents: list[dict]) -> dict:
             logger.warning(
                 "dynamic memory rerank failed status=%s model=%s docs=%s trace_id=%s",
                 resp.status_code,
-                DYNAMIC_MEMORY_RERANK_MODEL,
+                worker.model,
                 len(texts),
                 trace_id,
             )
@@ -123,7 +121,7 @@ def rerank_dynamic_memory_documents(query: str, documents: list[dict]) -> dict:
                 "ok": False,
                 "reason": "http_error",
                 "status": resp.status_code,
-                "model": DYNAMIC_MEMORY_RERANK_MODEL,
+                "model": worker.model,
                 "elapsed_ms": elapsed_ms,
                 "trace_id": str(trace_id or "")[:80],
             }
@@ -133,18 +131,18 @@ def rerank_dynamic_memory_documents(query: str, documents: list[dict]) -> dict:
                 "enabled": True,
                 "ok": False,
                 "reason": "invalid_json_shape",
-                "model": DYNAMIC_MEMORY_RERANK_MODEL,
+                "model": worker.model,
                 "elapsed_ms": elapsed_ms,
             }
     except Exception as e:
         elapsed_ms = int((time.time() - started) * 1000)
-        logger.warning("dynamic memory rerank exception model=%s docs=%s error=%s", DYNAMIC_MEMORY_RERANK_MODEL, len(texts), e)
+        logger.warning("dynamic memory rerank exception model=%s docs=%s error=%s", worker.model, len(texts), e)
         return {
             "enabled": True,
             "ok": False,
             "reason": "exception",
             "error": str(e)[:160],
-            "model": DYNAMIC_MEMORY_RERANK_MODEL,
+            "model": worker.model,
             "elapsed_ms": elapsed_ms,
         }
 
@@ -173,7 +171,7 @@ def rerank_dynamic_memory_documents(query: str, documents: list[dict]) -> dict:
             "enabled": True,
             "ok": False,
             "reason": "empty_results",
-            "model": DYNAMIC_MEMORY_RERANK_MODEL,
+            "model": worker.model,
             "elapsed_ms": int((time.time() - started) * 1000),
             "candidate_count": len(texts),
         }
@@ -181,8 +179,8 @@ def rerank_dynamic_memory_documents(query: str, documents: list[dict]) -> dict:
     return {
         "enabled": True,
         "ok": True,
-        "provider": DYNAMIC_MEMORY_RERANK_PROVIDER,
-        "model": DYNAMIC_MEMORY_RERANK_MODEL,
+        "provider": worker.provider,
+        "model": worker.model,
         "blend": float(DYNAMIC_MEMORY_RERANK_BLEND or 0.78),
         "elapsed_ms": int((time.time() - started) * 1000),
         "candidate_count": len(texts),

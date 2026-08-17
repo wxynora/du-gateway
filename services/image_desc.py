@@ -18,7 +18,7 @@ except Exception:
     Image = None
     ImageOps = None
 
-from config import IMAGE_DESC_API_URL, IMAGE_DESC_API_KEY, IMAGE_DESC_MODEL
+from services.worker_models import get_worker_model
 from utils.log import get_logger
 
 
@@ -40,14 +40,15 @@ def image_to_description(image_base64: str, mime_type: str = "image/jpeg") -> Op
     调用配置的图像描述 API，返回文字描述。
     若未配置 API 或调用失败，返回 None（不阻塞主流程）。
     """
-    if not IMAGE_DESC_API_URL or not IMAGE_DESC_API_KEY:
-        logger.info("image_desc 跳过：未配置 IMAGE_DESC_API_URL/API_KEY")
+    worker = get_worker_model("ocr")
+    if not worker.api_url or not worker.api_key:
+        logger.info("image_desc 跳过：未配置 WORKER_OCR_API_URL/WORKER_OCR_API_KEY")
         return None
     # 通用格式：带 data URL 的 messages，与 OpenAI 格式兼容
-    url = IMAGE_DESC_API_URL.strip().rstrip("/")
+    url = worker.api_url.strip().rstrip("/")
     if "/chat/completions" not in url:
         url = url + "/v1/chat/completions" if "/v1" not in url else url + "/chat/completions"
-    headers = {"Authorization": f"Bearer {IMAGE_DESC_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"}
     # 根据 data URL 解析
     if image_base64.startswith("data:"):
         # data:image/jpeg;base64,xxxx
@@ -55,7 +56,7 @@ def image_to_description(image_base64: str, mime_type: str = "image/jpeg") -> Op
         if len(parts) == 2:
             image_base64 = parts[1]
     payload = {
-        "model": IMAGE_DESC_MODEL,
+        "model": worker.model,
         "messages": [
             {
                 "role": "user",
@@ -87,7 +88,7 @@ def image_to_description(image_base64: str, mime_type: str = "image/jpeg") -> Op
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         logger.info(
             "image_desc 调用完成 model=%s mime=%s elapsed_ms=%s desc_len=%s",
-            IMAGE_DESC_MODEL,
+            worker.model,
             mime_type,
             elapsed_ms,
             len(desc),
@@ -98,7 +99,7 @@ def image_to_description(image_base64: str, mime_type: str = "image/jpeg") -> Op
         status = getattr(getattr(e, "response", None), "status_code", None)
         logger.warning(
             "image_desc 调用失败 model=%s mime=%s elapsed_ms=%s status=%s error=%s",
-            IMAGE_DESC_MODEL,
+            worker.model,
             mime_type,
             elapsed_ms,
             status,

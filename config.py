@@ -378,11 +378,6 @@ CO_READ_CARD_API_KEY = os.environ.get("CO_READ_CARD_API_KEY", "").strip()
 CO_READ_CARD_MODEL = os.environ.get("CO_READ_CARD_MODEL", "qwen-long-latest").strip()
 CO_READ_CARD_TIMEOUT_SECONDS = int(os.environ.get("CO_READ_CARD_TIMEOUT_SECONDS", "120"))
 
-# 图像描述 AI（便宜模型）：图片转文字存 R2，填 .env 里 IMAGE_DESC_API_*
-IMAGE_DESC_API_URL = os.environ.get("IMAGE_DESC_API_URL", "")
-IMAGE_DESC_API_KEY = os.environ.get("IMAGE_DESC_API_KEY", "")
-IMAGE_DESC_MODEL = os.environ.get("IMAGE_DESC_MODEL", "gpt-4o-mini")  # 当前默认 gpt-4o-mini
-
 # 天气 API（聚合数据等；默认聚合 simpleWeather）
 WEATHER_API_URL = os.environ.get("WEATHER_API_URL", "http://apis.juhe.cn/simpleWeather/query").strip()
 WEATHER_API_KEY = os.environ.get("WEATHER_API_KEY", "").strip()
@@ -404,6 +399,11 @@ WEBSEARCH_MAX_RESULTS = int(os.environ.get("WEBSEARCH_MAX_RESULTS", "5"))
 WEBSEARCH_FETCH_ENABLED = os.environ.get("WEBSEARCH_FETCH_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 WEBSEARCH_FETCH_TOP_K = int(os.environ.get("WEBSEARCH_FETCH_TOP_K", "2"))
 WEBSEARCH_MAX_PAGE_CHARS = int(os.environ.get("WEBSEARCH_MAX_PAGE_CHARS", "12000"))
+WEBSEARCH_COMPRESS_API_URL = os.environ.get(
+    "WEBSEARCH_COMPRESS_API_URL",
+    "https://api.siliconflow.cn/v1/chat/completions",
+).strip()
+WEBSEARCH_COMPRESS_MODEL = os.environ.get("WEBSEARCH_COMPRESS_MODEL", "Qwen/Qwen3-8B").strip() or "Qwen/Qwen3-8B"
 
 # Du Surf：和 web_search 区分开的随机冲浪素材工具。
 # 不用于精确查资料；只抽话题、轻搜摘要、清洗成可聊卡片。

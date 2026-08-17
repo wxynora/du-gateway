@@ -17,13 +17,12 @@ import requests
 
 from config import (
     CHAT_RESPONSE_TIMEOUT_SECONDS,
-    SILICONFLOW_BASE_HOST,
     TOOL_RESULT_CACHE_MAX_CHARS,
     TOOL_RESULT_CACHE_TRIM_TO_CHARS,
     TOOL_RESULT_CACHE_TTL_SECONDS,
     TOOL_RESULT_HOT_MAX_CHARS,
-    resolve_siliconflow_api_key,
 )
+from services.worker_models import get_worker_model
 from storage import runtime_sqlite
 from utils.log import get_logger
 
@@ -53,7 +52,6 @@ _HOT_PROMPT_HEADER = (
     "同一事项存在冲突时，以这里时间更晚的结果为准。"
 )
 _RECENT_TOOL_BATCH_HEADER = "〖本段工具摘要〗"
-_GAME_LOOP_SUMMARY_MODEL = "Qwen/Qwen3-8B"
 _GAME_LOOP_SUMMARY_TOOLS = frozenset({"random_imitator_td", "farm", "cedareco", "travel"})
 _GAME_LOOP_SUMMARY_SYSTEM_PROMPT = """你负责把同一轮单机游戏中的连续工具调用记录融合成一条准确、自然的中文历史摘要。
 
@@ -896,18 +894,18 @@ def _game_loop_summary_user_prompt(tool_name: str, entries: list[dict]) -> str:
 
 
 def _request_game_tool_loop_summary(tool_name: str, entries: list[dict]) -> str:
-    api_key = resolve_siliconflow_api_key()
-    if not api_key:
+    worker = get_worker_model("structured")
+    if not worker.api_key:
         raise RuntimeError("SiliconFlow API key 未配置")
 
     response = requests.post(
-        f"https://{SILICONFLOW_BASE_HOST}/v1/chat/completions",
+        worker.api_url,
         headers={
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {worker.api_key}",
             "Content-Type": "application/json",
         },
         json={
-            "model": _GAME_LOOP_SUMMARY_MODEL,
+            "model": worker.model,
             "messages": [
                 {"role": "system", "content": _GAME_LOOP_SUMMARY_SYSTEM_PROMPT},
                 {"role": "user", "content": _game_loop_summary_user_prompt(tool_name, entries)},

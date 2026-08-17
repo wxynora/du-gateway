@@ -12,19 +12,11 @@ from typing import Any, Optional
 import requests
 
 from config import (
-    DEEPGRAM_API_KEY,
     DEEPGRAM_STT_LANGUAGE,
-    DEEPGRAM_STT_MODEL,
     DEEPGRAM_STT_SMART_FORMAT,
-    DEEPGRAM_STT_URL,
-    VOICE_STT_FALLBACK_PROVIDER,
-    VOICE_STT_OPENROUTER_API_KEY,
-    VOICE_STT_OPENROUTER_API_URL,
-    VOICE_STT_OPENROUTER_FALLBACK_MODEL,
-    VOICE_STT_OPENROUTER_MODEL,
-    VOICE_STT_PROVIDER,
     VOICE_STT_TIMEOUT_SECONDS,
 )
+from services.worker_models import get_worker_model
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -313,14 +305,15 @@ def _normalize_transcription_payload(data: dict, provider: str) -> Optional[dict
 
 def _deepgram_transcribe(audio_bytes: bytes, mime_type: str = "audio/webm", filename: str = "voice.webm") -> Optional[dict]:
     """调用 Deepgram 预录音接口做语音转文字。"""
-    if not DEEPGRAM_API_KEY:
+    worker = get_worker_model("asr", provider="deepgram")
+    if not worker.api_key:
         logger.warning("DEEPGRAM_API_KEY 未配置，跳过 STT")
         return None
     if not audio_bytes:
         return None
 
     params = {
-        "model": str(DEEPGRAM_STT_MODEL or "nova-3").strip() or "nova-3",
+        "model": str(worker.model or "nova-3").strip() or "nova-3",
         "smart_format": "true" if DEEPGRAM_STT_SMART_FORMAT else "false",
         "punctuate": "true",
         "detect_language": "false",
@@ -330,12 +323,12 @@ def _deepgram_transcribe(audio_bytes: bytes, mime_type: str = "audio/webm", file
         params["language"] = language
 
     headers = {
-        "Authorization": f"Token {DEEPGRAM_API_KEY}",
+        "Authorization": f"Token {worker.api_key}",
         "Content-Type": (mime_type or "application/octet-stream").strip() or "application/octet-stream",
     }
     try:
         r = requests.post(
-            DEEPGRAM_STT_URL,
+            worker.api_url,
             params=params,
             headers=headers,
             data=audio_bytes,
@@ -359,7 +352,8 @@ def _deepgram_transcribe(audio_bytes: bytes, mime_type: str = "audio/webm", file
 
 
 def _openrouter_transcribe(audio_bytes: bytes, mime_type: str = "audio/webm", filename: str = "voice.webm") -> Optional[dict]:
-    if not VOICE_STT_OPENROUTER_API_KEY:
+    worker = get_worker_model("asr", provider="openrouter")
+    if not worker.api_key:
         logger.warning("VOICE_STT_OPENROUTER_API_KEY/OPENROUTER_API_KEY 未配置，跳过 OpenRouter STT")
         return None
     if not audio_bytes:
@@ -369,14 +363,15 @@ def _openrouter_transcribe(audio_bytes: bytes, mime_type: str = "audio/webm", fi
         logger.warning("OpenRouter STT 不支持的音频格式 filename=%s mime=%s", filename, mime_type)
         return None
 
-    models = [_clean_text(VOICE_STT_OPENROUTER_MODEL, limit=120) or "google/gemini-3.7-flash"]
-    fallback = _clean_text(VOICE_STT_OPENROUTER_FALLBACK_MODEL, limit=120)
-    if fallback and fallback not in models:
-        models.append(fallback)
+    models = [_clean_text(worker.model, limit=120) or "google/gemini-3.7-flash"]
+    for fallback_model in worker.fallback_models:
+        fallback = _clean_text(fallback_model, limit=120)
+        if fallback and fallback not in models:
+            models.append(fallback)
 
     audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
     headers = {
-        "Authorization": f"Bearer {VOICE_STT_OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {worker.api_key}",
         "Content-Type": "application/json",
     }
     last_error = ""
@@ -400,7 +395,7 @@ def _openrouter_transcribe(audio_bytes: bytes, mime_type: str = "audio/webm", fi
             payload["provider"] = {"only": ["google-vertex/global"]}
         try:
             resp = requests.post(
-                VOICE_STT_OPENROUTER_API_URL,
+                worker.api_url,
                 headers=headers,
                 json=payload,
                 timeout=max(20, int(VOICE_STT_TIMEOUT_SECONDS or 120)),
@@ -446,11 +441,12 @@ def transcribe_speech(audio_bytes: bytes, mime_type: str = "audio/webm", filenam
         mime_type=mime_type,
         filename=filename,
     )
-    provider = _normalize_provider(VOICE_STT_PROVIDER)
-    fallback_provider = _normalize_provider(VOICE_STT_FALLBACK_PROVIDER)
-    ordered = [provider]
-    if fallback_provider and fallback_provider not in ordered:
-        ordered.append(fallback_provider)
+    worker = get_worker_model("asr")
+    ordered = [_normalize_provider(worker.provider)]
+    for fallback_provider in worker.fallback_providers:
+        normalized_fallback = _normalize_provider(fallback_provider)
+        if normalized_fallback and normalized_fallback not in ordered:
+            ordered.append(normalized_fallback)
 
     for item in ordered:
         if item == "openrouter":

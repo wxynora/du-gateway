@@ -7,9 +7,6 @@ from typing import Any
 import requests
 
 from config import (
-    DEEPSEEK_API_KEY,
-    DEEPSEEK_API_URL,
-    DEEPSEEK_CHAT_MODEL,
     TAVILY_API_KEY,
     TAVILY_SEARCH_ENDPOINT,
     WEBSEARCH_FETCH_ENABLED,
@@ -19,11 +16,11 @@ from config import (
     WEBSEARCH_PROVIDER_ORDER,
     WEBSEARCH_TIMEOUT_SECONDS,
 )
+from services.worker_models import get_worker_model
 from utils.log import get_logger
 
 logger = get_logger(__name__)
 
-_WEBSEARCH_COMPRESS_MODEL = DEEPSEEK_CHAT_MODEL
 _WEBSEARCH_COMPRESS_MAX_INPUT_CHARS = 6000
 _WEBSEARCH_COMPRESS_MAX_TOKENS = 900
 _WEBSEARCH_COMPRESS_TIMEOUT_SECONDS = 25
@@ -381,7 +378,7 @@ def _build_fetched_pages(items: list[dict], timeout_seconds: int) -> list[dict]:
     return pages
 
 
-def _compress_page_with_deepseek(query: str, page: dict) -> dict:
+def _compress_page_with_structured_worker(query: str, page: dict) -> dict:
     result = {
         "url": str((page or {}).get("url") or "").strip(),
         "title": str((page or {}).get("title") or "").strip(),
@@ -392,7 +389,8 @@ def _compress_page_with_deepseek(query: str, page: dict) -> dict:
     source_text = _post_clean_text(str((page or {}).get("content") or ""))
     if not source_text:
         return result
-    if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
+    worker = get_worker_model("structured")
+    if not worker.api_key or not worker.api_url:
         result["status"] = "config_error"
         return result
 
@@ -411,15 +409,16 @@ def _compress_page_with_deepseek(query: str, page: dict) -> dict:
         f"网页正文：\n{source_text}"
     )
     payload = {
-        "model": _WEBSEARCH_COMPRESS_MODEL,
+        "model": worker.model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": _WEBSEARCH_COMPRESS_MAX_TOKENS,
         "temperature": 0.2,
+        "enable_thinking": False,
     }
-    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"}
     try:
         r = requests.post(
-            DEEPSEEK_API_URL,
+            worker.api_url,
             headers=headers,
             json=payload,
             timeout=_WEBSEARCH_COMPRESS_TIMEOUT_SECONDS,
@@ -460,7 +459,7 @@ def _build_compressed_pages(query: str, fetched_pages: list[dict]) -> list[dict]
                 }
             )
             continue
-        out.append(_compress_page_with_deepseek(query, page))
+        out.append(_compress_page_with_structured_worker(query, page))
     return out
 
 
