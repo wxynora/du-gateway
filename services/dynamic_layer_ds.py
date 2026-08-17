@@ -13,8 +13,8 @@ from typing import Any, Optional
 
 import requests
 
-from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL
 from services.memory_merge_rules import MERGE_ITERATION_RULES
+from services.worker_models import get_worker_model
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 
@@ -972,7 +972,8 @@ def call_dynamic_layer_ds(
     }
 
     decision_round_messages = _memory_decision_round_messages(round_messages)
-    if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
+    worker = get_worker_model("structured")
+    if not worker.api_key or not worker.api_url:
         return [default]
 
     # 直接复用主聊天本轮 reranker 前宽候选池，不再执行第二套向量召回。
@@ -1004,12 +1005,13 @@ def call_dynamic_layer_ds(
             "当前没有可用的旧记忆候选，因此 ACTION 只能是 new 或 skip，禁止 merge，"
             "FUSED_WITH_ID 与 MERGE_REASON 必须留空。"
         )
-    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"}
     payload: dict[str, Any] = {
-        "model": DEEPSEEK_CHAT_MODEL,
+        "model": worker.model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
         "max_tokens": 2048,
+        "enable_thinking": False,
     }
     attempts: list[dict] = []
     try:
@@ -1041,7 +1043,7 @@ def call_dynamic_layer_ds(
                         }
                     ],
                 }
-            r = requests.post(DEEPSEEK_API_URL, headers=headers, json=request_payload, timeout=60)
+            r = requests.post(worker.api_url, headers=headers, json=request_payload, timeout=60)
             if r.status_code >= 400:
                 logger.error(
                     "动态层 DS API 错误 status=%s body=%s",
@@ -1305,7 +1307,8 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
     """
     if not batch_rounds:
         return []
-    if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
+    worker = get_worker_model("structured")
+    if not worker.api_key or not worker.api_url:
         return [_normalize_single_decision(None) for _ in batch_rounds]
 
     prompt_memories, _ref_to_id, _valid_ids = _build_memory_ref_prompt_items(current_memories or [])
@@ -1314,11 +1317,12 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
         current_memories_json=json.dumps(prompt_memories or [], ensure_ascii=False),
         rounds_batch_json=rounds_batch_json,
     )
-    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"}
     payload: dict[str, Any] = {
-        "model": DEEPSEEK_CHAT_MODEL,
+        "model": worker.model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 2048,
+        "enable_thinking": False,
     }
     attempts: list[dict] = []
     try:
@@ -1337,7 +1341,7 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
                         }
                     ],
                 }
-            r = requests.post(DEEPSEEK_API_URL, headers=headers, json=request_payload, timeout=120)
+            r = requests.post(worker.api_url, headers=headers, json=request_payload, timeout=120)
             r.raise_for_status()
             data = r.json()
             content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
@@ -1429,7 +1433,8 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
     """
     if not batch_rounds:
         return []
-    if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
+    worker = get_worker_model("structured")
+    if not worker.api_key or not worker.api_url:
         return [_normalize_single_decision(None) for _ in batch_rounds]
 
     template = _load_archive_batch_prompt_template()
@@ -1464,11 +1469,12 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
     ).replace(
         "{rounds_batch_json}", json.dumps(rounds_for_prompt, ensure_ascii=False)
     )
-    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"}
     payload: dict[str, Any] = {
-        "model": DEEPSEEK_CHAT_MODEL,
+        "model": worker.model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 2048,
+        "enable_thinking": False,
     }
     last_err: Exception | None = None
     attempts: list[dict] = []
@@ -1491,7 +1497,7 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
                         }
                     ],
                 }
-            r = requests.post(DEEPSEEK_API_URL, headers=headers, json=request_payload, timeout=120)
+            r = requests.post(worker.api_url, headers=headers, json=request_payload, timeout=120)
             if r.status_code >= 400:
                 logger.error(
                     "归档 DS API 错误 status=%s body=%s",
