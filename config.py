@@ -286,10 +286,17 @@ WATCH_RECALL_EMBEDDING_MODEL = os.environ.get(
 WATCH_KNOWLEDGE_ENABLED = os.environ.get("WATCH_KNOWLEDGE_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 WATCH_KNOWLEDGE_API_URL = os.environ.get(
     "WATCH_KNOWLEDGE_API_URL",
-    "https://api.deepseek.com/anthropic/v1/messages",
+    "https://api.siliconflow.cn/v1/chat/completions",
 ).strip()
-WATCH_KNOWLEDGE_API_KEY = os.environ.get("WATCH_KNOWLEDGE_API_KEY", "").strip() or os.environ.get("DEEPSEEK_API_KEY", "").strip()
-WATCH_KNOWLEDGE_MODEL = os.environ.get("WATCH_KNOWLEDGE_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
+WATCH_KNOWLEDGE_API_KEY = (
+    os.environ.get("WATCH_KNOWLEDGE_API_KEY", "").strip()
+    or os.environ.get("DYNAMIC_MEMORY_RERANK_API_KEY", "").strip()
+    or os.environ.get("SILICONFLOW_API_KEY", "").strip()
+)
+WATCH_KNOWLEDGE_MODEL = (
+    os.environ.get("WATCH_KNOWLEDGE_MODEL", "deepseek-ai/DeepSeek-V4-Flash").strip()
+    or "deepseek-ai/DeepSeek-V4-Flash"
+)
 WATCH_KNOWLEDGE_PROMPT_VERSION = os.environ.get("WATCH_KNOWLEDGE_PROMPT_VERSION", "watch-knowledge-v13").strip() or "watch-knowledge-v13"
 WATCH_KNOWLEDGE_TIMEOUT_SECONDS = _env_int("WATCH_KNOWLEDGE_TIMEOUT_SECONDS", 120, 20, 600)
 WATCH_KNOWLEDGE_SEARCH_API_URL = os.environ.get(
@@ -329,19 +336,23 @@ if not WATCH_VISUAL_CACHE_DIR.is_absolute():
     WATCH_VISUAL_CACHE_DIR = BASE_DIR / WATCH_VISUAL_CACHE_DIR
 
 
-# DeepSeek：窗口总结
+# 窗口总结：硅基流动主路由，现有 DeepSeek 兜底
 DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_CHAT_MODEL = os.environ.get("DEEPSEEK_CHAT_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
 RECENT_SUMMARY_PRIMARY_API_URL = os.environ.get(
     "RECENT_SUMMARY_PRIMARY_API_URL",
-    "https://opencode.ai/zen/v1/chat/completions",
+    "https://api.siliconflow.cn/v1/chat/completions",
 ).strip()
-RECENT_SUMMARY_PRIMARY_API_KEY = os.environ.get("RECENT_SUMMARY_PRIMARY_API_KEY", "").strip()
+RECENT_SUMMARY_PRIMARY_API_KEY = (
+    os.environ.get("RECENT_SUMMARY_PRIMARY_API_KEY", "").strip()
+    or os.environ.get("DYNAMIC_MEMORY_RERANK_API_KEY", "").strip()
+    or os.environ.get("SILICONFLOW_API_KEY", "").strip()
+)
 RECENT_SUMMARY_PRIMARY_MODEL = os.environ.get(
     "RECENT_SUMMARY_PRIMARY_MODEL",
-    "deepseek-v4-flash-free",
-).strip() or "deepseek-v4-flash-free"
+    "deepseek-ai/DeepSeek-V4-Flash",
+).strip() or "deepseek-ai/DeepSeek-V4-Flash"
 
 # 渡的身体状态：独立四轮 DS evaluator，不参与动态记忆和实时总结计数。
 DU_BODY_EVALUATOR_ENABLED = os.environ.get("DU_BODY_EVALUATOR_ENABLED", "1").strip().lower() in ("1", "true", "yes")

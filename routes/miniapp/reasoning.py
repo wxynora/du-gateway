@@ -8,11 +8,10 @@ import requests
 from flask import jsonify, request
 
 from config import (
-    DEEPSEEK_API_KEY,
-    DEEPSEEK_API_URL,
-    DEEPSEEK_CHAT_MODEL,
+    SILICONFLOW_BASE_HOST,
     TOOL_RESULT_CACHE_MAX_CHARS,
     TOOL_RESULT_HOT_MAX_CHARS,
+    resolve_siliconflow_api_key,
 )
 from services.chat_tool_helpers import collect_tool_trace_from_messages
 from services.dynamic_memory_recall_debug import (
@@ -725,7 +724,6 @@ def _translate_reasoning_chunk(src: str, url: str, api_key: str, model: str, ind
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "thinking": {"type": "disabled"},
         "stream": False,
         "temperature": 0,
         "max_tokens": max(1024, min(8192, len(src) * 3)),
@@ -754,11 +752,11 @@ def _translate_reasoning_text(text: str) -> str:
     if not src:
         return ""
 
-    url = str(DEEPSEEK_API_URL or "").strip()
-    api_key = str(DEEPSEEK_API_KEY or "").strip()
-    model = str(DEEPSEEK_CHAT_MODEL or "").strip()
+    url = f"https://{str(SILICONFLOW_BASE_HOST or '').strip()}/v1/chat/completions"
+    api_key = str(resolve_siliconflow_api_key() or "").strip()
+    model = "tencent/Hunyuan-MT-7B"
     if not url or not api_key or not model:
-        raise RuntimeError("DeepSeek 翻译未配置完整，无法翻译")
+        raise RuntimeError("SiliconFlow 翻译未配置完整，无法翻译")
 
     chunks = _split_reasoning_translate_chunks(src)
     if not chunks:

@@ -235,8 +235,11 @@ def build_knowledge_request(session: dict, sources: list[dict]) -> dict:
         "model": WATCH_KNOWLEDGE_MODEL,
         "temperature": 0,
         "thinking": {"type": "disabled"},
-        "system": KNOWLEDGE_SYSTEM_PROMPT,
         "messages": [
+            {
+                "role": "system",
+                "content": KNOWLEDGE_SYSTEM_PROMPT,
+            },
             {
                 "role": "user",
                 "content": "请根据给定来源整理这个目标作品的开播前背景卡。只给 3 到 5 条无结局、无反转的粗剧情大纲。\n"
@@ -252,13 +255,13 @@ def build_knowledge_request(session: dict, sources: list[dict]) -> dict:
 
 
 def _extract_response_text(data: dict) -> str:
-    chunks: list[str] = []
-    for block in data.get("content") if isinstance(data.get("content"), list) else []:
-        if isinstance(block, dict) and block.get("type") == "text":
-            text = str(block.get("text") or "").strip()
-            if text:
-                chunks.append(text)
-    return "\n".join(chunks).strip()
+    choices = data.get("choices") if isinstance(data.get("choices"), list) else []
+    if not choices or not isinstance(choices[0], dict):
+        return ""
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        return ""
+    return str(message.get("content") or "").strip()
 
 
 def _extract_card_content(data: dict) -> dict:
@@ -508,7 +511,10 @@ def build_work_knowledge_card(
     on_provider_usage: Callable[[str, dict], None] | None = None,
 ) -> tuple[dict, list[dict], dict]:
     if not WATCH_KNOWLEDGE_API_KEY:
-        raise WatchAnalysisProviderError("WATCH_KNOWLEDGE_API_KEY/DEEPSEEK_API_KEY 未配置", retryable=False)
+        raise WatchAnalysisProviderError(
+            "WATCH_KNOWLEDGE_API_KEY/DYNAMIC_MEMORY_RERANK_API_KEY/SILICONFLOW_API_KEY 未配置",
+            retryable=False,
+        )
     if not WATCH_KNOWLEDGE_SEARCH_API_KEY:
         raise WatchAnalysisProviderError("WATCH_KNOWLEDGE_SEARCH_API_KEY/TAVILY_API_KEY 未配置", retryable=False)
     started = time.perf_counter()
@@ -566,8 +572,7 @@ def build_work_knowledge_card(
         response = model_post(
             WATCH_KNOWLEDGE_API_URL,
             headers={
-                "x-api-key": WATCH_KNOWLEDGE_API_KEY,
-                "anthropic-version": "2023-06-01",
+                "Authorization": f"Bearer {WATCH_KNOWLEDGE_API_KEY}",
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -605,8 +610,8 @@ def build_work_knowledge_card(
             on_provider_usage("model", unpriced_model_usage)
         raise
     usage_raw = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-    input_tokens = max(0, int(usage_raw.get("input_tokens") or 0))
-    output_tokens = max(0, int(usage_raw.get("output_tokens") or 0))
+    input_tokens = max(0, int(usage_raw.get("prompt_tokens") or 0))
+    output_tokens = max(0, int(usage_raw.get("completion_tokens") or 0))
     cost_reported = "cost" in usage_raw or "cost_usd" in usage_raw
     try:
         model_cost_usd = max(

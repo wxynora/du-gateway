@@ -41,7 +41,7 @@ def _summary_request_targets() -> list[dict[str, str]]:
     if RECENT_SUMMARY_PRIMARY_API_KEY and RECENT_SUMMARY_PRIMARY_API_URL:
         targets.append(
             {
-                "name": "opencode_zen",
+                "name": "siliconflow_v4_flash",
                 "url": RECENT_SUMMARY_PRIMARY_API_URL,
                 "api_key": RECENT_SUMMARY_PRIMARY_API_KEY,
                 "model": RECENT_SUMMARY_PRIMARY_MODEL,
