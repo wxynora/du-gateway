@@ -972,7 +972,7 @@ def call_dynamic_layer_ds(
     }
 
     decision_round_messages = _memory_decision_round_messages(round_messages)
-    worker = get_worker_model("structured")
+    worker = get_worker_model("background_reasoning")
     if not worker.api_key or not worker.api_url:
         return [default]
 
@@ -1011,7 +1011,6 @@ def call_dynamic_layer_ds(
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
         "max_tokens": 2048,
-        "enable_thinking": False,
     }
     attempts: list[dict] = []
     try:
@@ -1307,7 +1306,7 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
     """
     if not batch_rounds:
         return []
-    worker = get_worker_model("structured")
+    worker = get_worker_model("background_reasoning")
     if not worker.api_key or not worker.api_url:
         return [_normalize_single_decision(None) for _ in batch_rounds]
 
@@ -1322,7 +1321,6 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
         "model": worker.model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 2048,
-        "enable_thinking": False,
     }
     attempts: list[dict] = []
     try:
@@ -1433,7 +1431,7 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
     """
     if not batch_rounds:
         return []
-    worker = get_worker_model("structured")
+    worker = get_worker_model("background_reasoning")
     if not worker.api_key or not worker.api_url:
         return [_normalize_single_decision(None) for _ in batch_rounds]
 
@@ -1474,7 +1472,6 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
         "model": worker.model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 2048,
-        "enable_thinking": False,
     }
     last_err: Exception | None = None
     attempts: list[dict] = []

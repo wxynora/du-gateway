@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 import requests
 
-from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL
+from services.worker_models import get_worker_model
 from storage import du_state_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing, today_beijing
@@ -392,18 +392,19 @@ def _has_rule_tone(content: str) -> bool:
 
 
 def _call_ds(prompt: str) -> Optional[dict]:
-    if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
+    worker = get_worker_model("background_reasoning")
+    if not worker.api_key or not worker.api_url or not worker.model:
         logger.warning("du_midterm 生成跳过：DeepSeek 未配置")
         return None
     payload = {
-        "model": DEEPSEEK_CHAT_MODEL,
+        "model": worker.model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
         "max_tokens": 16384,
     }
     resp = requests.post(
-        DEEPSEEK_API_URL,
-        headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+        worker.api_url,
+        headers={"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"},
         json=payload,
         timeout=120,
     )
@@ -481,7 +482,7 @@ def generate_midterm_memory(*, save: bool = False, force: bool = False) -> dict:
         "content": str(obj.get("content") or "").strip(),
         "generated_at": now,
         "updated_at": now,
-        "model": DEEPSEEK_CHAT_MODEL,
+        "model": get_worker_model("background_reasoning").model,
         "schema_version": SCHEMA_VERSION,
     }
     if not save:

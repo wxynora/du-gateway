@@ -8,7 +8,7 @@ from typing import Any
 
 import requests
 
-from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL
+from services.worker_models import get_worker_model
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import _now_beijing, now_beijing_iso
@@ -75,7 +75,8 @@ def _extract_json_obj(text: str) -> dict | None:
 def _resolve_duplicate_group_with_ds(group: list[dict]) -> dict | None:
     if not group or len(group) < 2:
         return None
-    if not (DEEPSEEK_API_KEY and DEEPSEEK_API_URL):
+    worker = get_worker_model("background_reasoning")
+    if not (worker.api_key and worker.api_url and worker.model):
         return None
     prompt = _DUPLICATE_RESOLVE_PROMPT.format(
         group_json=json.dumps(
@@ -94,14 +95,14 @@ def _resolve_duplicate_group_with_ds(group: list[dict]) -> dict | None:
             ensure_ascii=False,
         )
     )
-    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"}
     payload: dict[str, Any] = {
-        "model": DEEPSEEK_CHAT_MODEL,
+        "model": worker.model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 300,
     }
     try:
-        resp = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=25)
+        resp = requests.post(worker.api_url, headers=headers, json=payload, timeout=25)
         resp.raise_for_status()
         data = resp.json()
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""

@@ -6,8 +6,8 @@ from typing import Any
 
 import requests
 
-from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL
 from services.memory_merge_rules import MERGE_ITERATION_RULES
+from services.worker_models import get_worker_model
 from storage import r2_store
 from utils.time_aware import now_beijing_iso
 
@@ -191,17 +191,18 @@ def _request_deepseek_rewrite(
     item: dict[str, Any],
     rewrite_instructions: str = "",
 ) -> tuple[str, str]:
-    if not (DEEPSEEK_API_KEY and DEEPSEEK_API_URL and DEEPSEEK_CHAT_MODEL):
+    worker = get_worker_model("background_reasoning")
+    if not (worker.api_key and worker.api_url and worker.model):
         raise MemoryRewriteUpstreamError("DeepSeek 未配置完整")
     headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Authorization": f"Bearer {worker.api_key}",
         "Content-Type": "application/json",
     }
     original = _normalize_content(item.get("content"), field="original_content")
     invalid_reason = ""
     for attempt in range(2):
         payload = {
-            "model": DEEPSEEK_CHAT_MODEL,
+            "model": worker.model,
             "messages": [
                 {
                     "role": "user",
@@ -218,7 +219,7 @@ def _request_deepseek_rewrite(
         }
         try:
             response = requests.post(
-                DEEPSEEK_API_URL,
+                worker.api_url,
                 headers=headers,
                 json=payload,
                 timeout=30,

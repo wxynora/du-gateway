@@ -9,9 +9,6 @@ from config import (
     DEEPSEEK_API_URL,
     DEEPSEEK_API_KEY,
     DEEPSEEK_CHAT_MODEL,
-    RECENT_SUMMARY_PRIMARY_API_KEY,
-    RECENT_SUMMARY_PRIMARY_API_URL,
-    RECENT_SUMMARY_PRIMARY_MODEL,
     SUMMARY_EVERY_N_ROUNDS,
     SUMMARY_GENERATION_UPDATES,
     SUMMARY_OLDER_MAX_CHUNKS,
@@ -20,6 +17,7 @@ from config import (
     SUMMARY_STAGE_BATCH_SIZE,
     SUMMARY_STAGE_EVERY_UPDATES,
 )
+from services.worker_models import get_worker_model
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -37,29 +35,17 @@ _SUMMARY_DS_RETRY_SLEEP_SECONDS = 3
 
 
 def _summary_request_targets() -> list[dict[str, str]]:
-    targets: list[dict[str, str]] = []
-    if RECENT_SUMMARY_PRIMARY_API_KEY and RECENT_SUMMARY_PRIMARY_API_URL:
-        targets.append(
-            {
-                "name": "siliconflow_v4_flash",
-                "url": RECENT_SUMMARY_PRIMARY_API_URL,
-                "api_key": RECENT_SUMMARY_PRIMARY_API_KEY,
-                "model": RECENT_SUMMARY_PRIMARY_MODEL,
-            }
-        )
-    if DEEPSEEK_API_KEY and DEEPSEEK_API_URL:
-        fallback = {
-            "name": "existing_deepseek",
-            "url": DEEPSEEK_API_URL,
-            "api_key": DEEPSEEK_API_KEY,
-            "model": DEEPSEEK_CHAT_MODEL,
+    worker = get_worker_model("background_reasoning")
+    if not worker.api_key or not worker.api_url or not worker.model:
+        return []
+    return [
+        {
+            "name": "siliconflow_v4_flash",
+            "url": worker.api_url,
+            "api_key": worker.api_key,
+            "model": worker.model,
         }
-        if not targets or any(
-            fallback[key] != targets[-1][key]
-            for key in ("url", "api_key", "model")
-        ):
-            targets.append(fallback)
-    return targets
+    ]
 
 _SUMMARY_RETRY_INSTRUCTION = """
 

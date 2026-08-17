@@ -11,16 +11,14 @@ from typing import Any
 import requests
 
 from config import (
-    DEEPSEEK_API_KEY,
-    DEEPSEEK_API_URL,
     DU_BODY_EVAL_MAX_PENDING,
-    DU_BODY_EVAL_MODEL,
     DU_BODY_EVAL_PROMPT_VERSION,
     DU_BODY_EVAL_STALE_SECONDS,
     DU_BODY_EVAL_TIMEOUT_SECONDS,
     DU_BODY_EVALUATOR_APPLY,
     DU_BODY_EVALUATOR_ENABLED,
 )
+from services.worker_models import get_worker_model
 from storage import du_body_eval_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
@@ -113,7 +111,8 @@ def _prompt_rounds(rows: list[dict]) -> list[dict]:
 
 
 def _call_ds(rows: list[dict], current_state: dict) -> tuple[dict[int, dict], int]:
-    if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL or not DU_BODY_EVAL_MODEL:
+    worker = get_worker_model("background_reasoning")
+    if not worker.api_key or not worker.api_url or not worker.model:
         raise RuntimeError("body evaluator DeepSeek config missing")
     input_data = {"current_body_state": current_state, "rounds": _prompt_rounds(rows)}
     attempt = max((int(row.get("attempts") or 1) for row in rows), default=1)
@@ -124,7 +123,7 @@ def _call_ds(rows: list[dict], current_state: dict) -> tuple[dict[int, dict], in
             "请直接输出包含 items 数组的紧凑 JSON；没有变化也输出 {\"items\":[]}。"
         )
     payload = {
-        "model": DU_BODY_EVAL_MODEL,
+        "model": worker.model,
         "messages": [
             {"role": "system", "content": _PROMPT},
             {"role": "user", "content": user_content},
@@ -136,8 +135,8 @@ def _call_ds(rows: list[dict], current_state: dict) -> tuple[dict[int, dict], in
     }
     started = time.monotonic()
     response = requests.post(
-        DEEPSEEK_API_URL,
-        headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+        worker.api_url,
+        headers={"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"},
         json=payload,
         timeout=int(DU_BODY_EVAL_TIMEOUT_SECONDS),
     )
@@ -192,6 +191,7 @@ def _process_batch(batch: dict) -> bool:
 
         current_state = get_du_body_state_snapshot()
         items, latency_ms = _call_ds(rows, current_state)
+        worker_model = get_worker_model("background_reasoning").model
         now_ts = time.time()
         for row in rows:
             idx = int(row.get("round_index") or 0)
@@ -200,7 +200,7 @@ def _process_batch(batch: dict) -> bool:
                 "timestamp": now_beijing_iso(),
                 "subsystem": "body_state_delta",
                 "source": "body_ds_batch",
-                "model": DU_BODY_EVAL_MODEL,
+                "model": worker_model,
                 "prompt_version": str(row.get("prompt_version") or DU_BODY_EVAL_PROMPT_VERSION),
                 "window_id": str(row.get("window_id") or ""),
                 "round_index": idx,
