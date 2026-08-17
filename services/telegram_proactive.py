@@ -6,6 +6,7 @@ import os
 import random
 import re
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
@@ -61,6 +62,8 @@ from services.spring_dream import (
 from services.proactive_prompt_templates import (
     RANDOM_PROACTIVE_DECISION_SECTION_ID,
     RANDOM_PROACTIVE_DECISION_TEMPLATE,
+    build_proactive_decision_xml_contract,
+    enforce_proactive_decision_xml_contract,
 )
 from services.qq_group_delivery import (
     qq_group_delivery_at_owner,
@@ -148,7 +151,7 @@ class ProactiveDecision:
     text: str = ""
     reason: str = ""      # 技术向：contact / no_contact / gateway_status / …
     action: str = ""      # 业务向：send_message / no_contact / diary / forum / surf / drawer / game / other / error / …
-    du_reason: str = ""   # 渡在 JSON 里写的理由
+    du_reason: str = ""   # 渡在当前决策控制结构里写的理由
     channel: str = ""           # 发送入口：wechat / qq；SumiTalk 暂不参与主动消息
     game: str = ""              # action=game 时选择的渡单机游戏 id
     executed_tools: tuple[str, ...] = ()
@@ -330,7 +333,7 @@ def _render_random_proactive_decision_prompt(
         )
     except Exception:
         template = RANDOM_PROACTIVE_DECISION_TEMPLATE
-    text = str(template or RANDOM_PROACTIVE_DECISION_TEMPLATE)
+    text = enforce_proactive_decision_xml_contract(str(template or RANDOM_PROACTIVE_DECISION_TEMPLATE))
     hours_text = f"{hours_since_last:.1f}"
     replacements = {
         "{{recent_exchange}}": str(recent_exchange or "").strip(),
@@ -494,6 +497,39 @@ def _extract_json_object_text(text: str) -> str:
     return ""
 
 
+def _extract_xml_decision_text(text: str) -> str:
+    """从裸 XML、代码块或前后带说明的回复里提取 decision 节点。"""
+    t = _strip_json_fence(text)
+    match = re.search(r"<decision(?:\s[^>]*)?>[\s\S]*?</decision\s*>", t, flags=re.IGNORECASE)
+    return match.group(0).strip() if match else ""
+
+
+def _load_proactive_control_xml(text: str) -> Optional[dict]:
+    raw = _extract_xml_decision_text(text)
+    if not raw:
+        return None
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return None
+    root_name = str(root.tag or "").rsplit("}", 1)[-1].strip().lower()
+    if root_name != "decision":
+        return None
+    result: dict[str, str] = {}
+    allowed = {"action", "reason", "message", "game", "game_id", "channel"}
+    for child in list(root):
+        name = str(child.tag or "").rsplit("}", 1)[-1].strip().lower()
+        if name in allowed:
+            result[name] = "".join(child.itertext()).strip()
+    if not result.get("action") and not result.get("message"):
+        return None
+    return result
+
+
+def _looks_like_control_xml_reply(text: str) -> bool:
+    return bool(re.search(r"<\s*/?\s*decision(?:\s|>)", str(text or ""), flags=re.IGNORECASE))
+
+
 def _load_proactive_control_object(text: str) -> Optional[dict]:
     """
     解析主动决策 JSON。兼容几类模型/兼容层偶发格式：
@@ -595,13 +631,13 @@ def _looks_like_control_json_reply(text: str) -> bool:
 
 def _sanitize_control_reply_for_delivery(text: str) -> str:
     """
-    最后一层外发保险：控制 JSON 不能作为用户可见正文发出去。
+    最后一层外发保险：决策控制结构不能作为用户可见正文发出去。
     send_message 只取 message；diary/forum/no_contact/surf/drawer/game/other 说明本轮不该发。
     """
     raw = str(text or "").strip()
     if not raw:
         return ""
-    obj = _load_proactive_control_object(raw) or _load_loose_proactive_control_object(raw)
+    obj = _load_proactive_control_xml(raw) or _load_proactive_control_object(raw) or _load_loose_proactive_control_object(raw)
     if isinstance(obj, dict) and ("action" in obj or "message" in obj or "channel" in obj):
         action = str(obj.get("action") or "").strip().lower()
         alias = {"send": "send_message", "msg": "send_message", "text": "send_message", "chat": "send_message"}
@@ -610,15 +646,15 @@ def _sanitize_control_reply_for_delivery(text: str) -> str:
         if action == "send_message" and message:
             return message
         logger.warning(
-            "主动/唤醒外发拦截控制 JSON action=%s channel=%s reason=%s raw_preview=%s",
+            "主动/唤醒外发拦截决策控制结构 action=%s channel=%s reason=%s raw_preview=%s",
             action or "unknown",
             str(obj.get("channel") or "").strip(),
             str(obj.get("reason") or "").strip()[:120],
             raw[:300],
         )
         return ""
-    if _looks_like_control_json_reply(raw):
-        logger.warning("主动/唤醒外发拦截疑似控制 JSON raw_preview=%s", raw[:300])
+    if _looks_like_control_xml_reply(raw) or _looks_like_control_json_reply(raw):
+        logger.warning("主动/唤醒外发拦截疑似决策控制结构 raw_preview=%s", raw[:300])
         return ""
     return raw
 
@@ -638,7 +674,7 @@ def _normalize_reply_channel(value: str, default: str = "", allowed: list[str] |
 
 def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str = "", channels: list[str] | None = None) -> ProactiveDecision:
     """
-    解析渡的回复：优先 JSON；兼容仅输出 NO_CONTACT；再兼容旧版「整段即正文」。
+    解析渡的回复：现行协议优先 XML；兼容历史 JSON、NO_CONTACT 和旧版整段正文。
     """
     t = (raw or "").strip()
     if not t:
@@ -648,17 +684,17 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
             False, "", "no_contact", action="no_contact", du_reason="（使用 NO_CONTACT 标记，未给理由）", channel=default_channel
         )
 
-    obj = _load_proactive_control_object(t) or _load_loose_proactive_control_object(t)
+    obj = _load_proactive_control_xml(t) or _load_proactive_control_object(t) or _load_loose_proactive_control_object(t)
 
     if not isinstance(obj, dict):
-        if _looks_like_control_json_reply(t):
-            logger.warning("主动决策返回疑似控制 JSON 但解析失败，已拦截 raw_preview=%s", t[:300])
+        if _looks_like_control_xml_reply(t) or _looks_like_control_json_reply(t):
+            logger.warning("主动决策返回疑似控制结构但解析失败，已拦截 raw_preview=%s", t[:300])
             return ProactiveDecision(
                 False,
                 "",
                 "structured_parse_failed",
                 action="error",
-                du_reason="模型返回了疑似控制 JSON，但解析失败；为避免原样泄漏，已拦截。",
+                du_reason="模型返回了疑似决策控制结构，但解析失败；为避免原样泄漏，已拦截。",
                 channel=default_channel,
             )
         return ProactiveDecision(
@@ -666,7 +702,7 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
             t,
             "contact",
             action="send_message",
-            du_reason="（未输出 JSON，整段视为要发的正文）",
+            du_reason="（未输出 XML，整段视为要发的正文）",
             channel=default_channel,
         )
 
@@ -1069,7 +1105,7 @@ def handle_galatea_garden_wake(reason: str, message: str) -> dict:
 
 def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Optional[datetime] = None) -> ProactiveDecision:
     """
-    让渡做一轮主动决策。要求渡用 JSON 回复（见 user 说明）；
+    让渡做一轮主动决策。要求渡用 XML 回复（见 user 说明）；
     兼容旧版 NO_CONTACT 或纯文本即正文。
     """
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
@@ -1087,12 +1123,12 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
     )
     if channels and default_channel:
         channel_field_desc = (
-            f'- channel：固定填 "{default_channel}"。本轮主动唤醒固定使用这个入口生成和发送，'
+            f'- <channel>：固定填 "{default_channel}"。本轮主动唤醒固定使用这个入口生成和发送，'
             "不要在其它入口之间切换。\n"
             f"{channel_lines}\n"
         )
     else:
-        channel_field_desc = '- channel：当前没有可用发送入口；不要选择 "send_message"。\n'
+        channel_field_desc = '- <channel>：当前没有可用发送入口；不要选择 "send_message"。\n'
     now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso())
     if not now_ref:
         now_ref = datetime.now()
@@ -2204,12 +2240,12 @@ def _ask_du_after_surf_result(
     channel_lines = "\n".join(f'  - "{ch}"' for ch in channels)
     if channels and default_channel:
         channel_field_desc = (
-            f'- channel：固定填 "{default_channel}"。本轮主动唤醒固定使用这个入口生成和发送，'
+            f'- <channel>：固定填 "{default_channel}"。本轮主动唤醒固定使用这个入口生成和发送，'
             "不要在其它入口之间切换。\n"
             f"{channel_lines}\n"
         )
     else:
-        channel_field_desc = '- channel：当前没有可用发送入口；不要选择 "send_message"。\n'
+        channel_field_desc = '- <channel>：当前没有可用发送入口；不要选择 "send_message"。\n'
     now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso()) or datetime.now()
     user_prompt = (
         "你刚才在随机唤醒里选择了随机冲浪。\n"
@@ -2217,16 +2253,11 @@ def _ask_du_after_surf_result(
         "后端已经实际调用 du_surf，并把结果交给你。\n"
         "现在需要基于这些素材做最终决定。不要再调用 du_surf，也不要只说“我去冲浪”。\n\n"
         f"{_format_proactive_surf_result_for_du(surf_result)}\n\n"
-        "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
-        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "forum" | "drawer" | "game" | "other" 之一。不要再填 "surf"。\n'
-        '- reason：字符串，简短说明你为什么这么选（必填）。\n'
-        '- message：字符串；当 action 为 send_message 时，填要发给她的正文；其它 action 时可为空或填补充说明。\n'
-        '- game：字符串；当 action 为 game 时，按下方单机游戏列表填写；其它 action 时留空。\n'
         + channel_field_desc
-        + (
-            f'示例：{{"action":"no_contact","reason":"素材只是自己看过就好，暂时不打扰她","message":"","channel":"{default_channel}"}}\n'
-            if default_channel
-            else f'示例：{{"action":"no_contact","reason":"当前没有可用发送入口","message":"","channel":""}}\n'
+        + "\n"
+        + build_proactive_decision_xml_contract(
+            allowed_actions="send_message|no_contact|diary|forum|drawer|game|other",
+            default_channel=default_channel,
         )
     )
     user_prompt = (

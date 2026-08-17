@@ -15,6 +15,7 @@ from typing import Optional
 import requests
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context
+from werkzeug.datastructures import Headers
 
 from config import (
     GATEWAY_MODELS,
@@ -321,7 +322,11 @@ def _get_window_id_from_request(body: dict) -> str:
 
 
 def _request_headers(headers=None):
-    return request.headers if headers is None else headers
+    if headers is None:
+        return request.headers
+    if isinstance(headers, Headers):
+        return headers
+    return Headers(headers)
 
 
 def _is_miniapp_request(headers=None) -> bool:
