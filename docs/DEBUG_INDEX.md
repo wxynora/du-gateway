@@ -228,6 +228,8 @@ QQ 群 @ 入站黑名单位于 `connectors/qq_onebot/src/group_mention_blacklist
 
 | 待审核候选锁与拒绝 | `services/memory_rewrite.py`、`storage/r2_store.py`、`pipeline/pipeline.py`、`services/memory_maintenance.py` | apply 仍要求当前正式正文等于候选基底，旧候选返回 409 且不写入；reject 只按当前线上 `pending_merge.original_content/rewritten_content` 精确匹配并原子移除候选，不要求正式正文仍等于旧基底，正式正文及其他字段保持现值，审核学习的 `final_content` 使用当前正式正文。带 `pending_merge` 的动态记忆禁止普通 merge、重复整理和物理淘汰；在线 merge、在线 prune 与离线维护写回前均重新核验最新快照，冲突时放弃旧快照写回，不覆盖新候选或新正文 |
 
+| 记忆维护去重 Prompt | `services/memory_maintenance.py::_resolve_duplicate_group_with_ds` | Prompt 中的 JSON 输出示例花括号保持普通正文，只对唯一 `{group_json}` 占位执行字面替换；不再用 `str.format()` 解析整段 Prompt，因此不会在模型请求前把 JSON 示例字段误当格式槽位并触发 `KeyError`。模型、Prompt 文字、merge/keep 语义、请求预算和写入边界不变 |
+
 ## 6. 当前存储边界
 
 - R2 客户端：`storage/r2_client.py`

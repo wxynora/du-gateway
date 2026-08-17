@@ -78,8 +78,9 @@ def _resolve_duplicate_group_with_ds(group: list[dict]) -> dict | None:
     worker = get_worker_model("background_reasoning")
     if not (worker.api_key and worker.api_url and worker.model):
         return None
-    prompt = _DUPLICATE_RESOLVE_PROMPT.format(
-        group_json=json.dumps(
+    prompt = _DUPLICATE_RESOLVE_PROMPT.replace(
+        "{group_json}",
+        json.dumps(
             [
                 {
                     "id": str((m or {}).get("id") or ""),
@@ -93,7 +94,7 @@ def _resolve_duplicate_group_with_ds(group: list[dict]) -> dict | None:
                 for m in group
             ],
             ensure_ascii=False,
-        )
+        ),
     )
     headers = {"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"}
     payload: dict[str, Any] = {
