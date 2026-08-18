@@ -19,7 +19,12 @@ _BUCKETS = (
     ("gemini_3_7_flash", "Gemini 3.7 Flash", "openrouter", "USD"),
     ("qwen3_reranker_8b", "Qwen3-Reranker-8B", "siliconflow", "CNY"),
     ("google_ai_studio", "Google AI Studio", "google_ai_studio", ""),
+    ("gemini_3_5_flash_lite", "Gemini 3.5 Flash Lite", "google_ai_studio", ""),
 )
+
+_AI_STUDIO_BUCKET = "google_ai_studio"
+_OCR_BUCKET = "gemini_3_5_flash_lite"
+_OCR_MODEL_FRAGMENT = "gemini-3.5-flash-lite"
 
 
 def _quota(name: str, default: int) -> int:
@@ -81,20 +86,48 @@ def record_usage(
 
 def _aggregate(bucket_key: str, since: datetime) -> dict[str, Any]:
     with connect() as conn:
-        row = conn.execute(
-            """
-            SELECT
-                COALESCE(SUM(request_count), 0) AS request_count,
-                COALESCE(SUM(input_tokens), 0) AS input_tokens,
-                COALESCE(SUM(output_tokens), 0) AS output_tokens,
-                COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-                COALESCE(SUM(cost_value), 0) AS cost_value,
-                COALESCE(MAX(currency), '') AS currency
-            FROM worker_model_usage
-            WHERE bucket_key = ? AND occurred_at >= ?
-            """,
-            (bucket_key, _iso(since)),
-        ).fetchone()
+        select_sql = """
+        SELECT
+            COALESCE(SUM(request_count), 0) AS request_count,
+            COALESCE(SUM(input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+            COALESCE(SUM(cost_value), 0) AS cost_value,
+            COALESCE(MAX(currency), '') AS currency
+        FROM worker_model_usage
+        """
+        if bucket_key == _OCR_BUCKET:
+            row = conn.execute(
+                select_sql
+                + """
+                WHERE occurred_at >= ?
+                  AND (
+                      bucket_key = ?
+                      OR (bucket_key = ? AND LOWER(model) LIKE ?)
+                  )
+                """,
+                (
+                    _iso(since),
+                    _OCR_BUCKET,
+                    _AI_STUDIO_BUCKET,
+                    f"%{_OCR_MODEL_FRAGMENT}%",
+                ),
+            ).fetchone()
+        elif bucket_key == _AI_STUDIO_BUCKET:
+            row = conn.execute(
+                select_sql
+                + """
+                WHERE occurred_at >= ?
+                  AND bucket_key = ?
+                  AND LOWER(model) NOT LIKE ?
+                """,
+                (_iso(since), _AI_STUDIO_BUCKET, f"%{_OCR_MODEL_FRAGMENT}%"),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                select_sql + "WHERE bucket_key = ? AND occurred_at >= ?",
+                (bucket_key, _iso(since)),
+            ).fetchone()
     return dict(row or {})
 
 
@@ -109,7 +142,7 @@ def dashboard_snapshot(*, now: datetime | None = None) -> dict[str, Any]:
 
     models: list[dict[str, Any]] = []
     for bucket_key, name, default_provider, default_currency in _BUCKETS:
-        since = quota_day_start if bucket_key == "google_ai_studio" else paid_day_start
+        since = quota_day_start if bucket_key in {_AI_STUDIO_BUCKET, _OCR_BUCKET} else paid_day_start
         usage = _aggregate(bucket_key, since)
         currency = str(usage.get("currency") or default_currency)
         item = {
@@ -125,7 +158,7 @@ def dashboard_snapshot(*, now: datetime | None = None) -> dict[str, Any]:
                 "currency": currency,
             },
         }
-        if bucket_key == "google_ai_studio":
+        if bucket_key == _AI_STUDIO_BUCKET:
             minute_usage = _aggregate(bucket_key, minute_start)
             rpm_limit = _quota("WORKER_USAGE_AI_STUDIO_RPM", 5)
             tpm_limit = _quota("WORKER_USAGE_AI_STUDIO_TPM", 250_000)
@@ -137,6 +170,34 @@ def dashboard_snapshot(*, now: datetime | None = None) -> dict[str, Any]:
                 "rpm": {"limit": rpm_limit, "used": rpm_used, "remaining": max(0, rpm_limit - rpm_used)},
                 "tpm": {"limit": tpm_limit, "used": tpm_used, "remaining": max(0, tpm_limit - tpm_used)},
                 "rpd": {"limit": rpd_limit, "used": rpd_used, "remaining": max(0, rpd_limit - rpd_used)},
+                "resets_at": (
+                    pacific_now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                ).astimezone(_UTC).isoformat(timespec="seconds"),
+            }
+        elif bucket_key == _OCR_BUCKET:
+            minute_usage = _aggregate(bucket_key, minute_start)
+            rpm_limit = _quota("WORKER_USAGE_AI_STUDIO_OCR_RPM", 15)
+            tpm_limit = _quota("WORKER_USAGE_AI_STUDIO_OCR_TPM", 250_000)
+            rpd_limit = _quota("WORKER_USAGE_AI_STUDIO_OCR_RPD", 500)
+            rpm_used = int(minute_usage.get("request_count") or 0)
+            tpm_used = int(minute_usage.get("input_tokens") or 0)
+            rpd_used = int(usage.get("request_count") or 0)
+            item["quota"] = {
+                "rpm": {
+                    "limit": rpm_limit,
+                    "used": rpm_used,
+                    "remaining": max(0, rpm_limit - rpm_used),
+                },
+                "tpm": {
+                    "limit": tpm_limit,
+                    "used": tpm_used,
+                    "remaining": max(0, tpm_limit - tpm_used),
+                },
+                "rpd": {
+                    "limit": rpd_limit,
+                    "used": rpd_used,
+                    "remaining": max(0, rpd_limit - rpd_used),
+                },
                 "resets_at": (
                     pacific_now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
                 ).astimezone(_UTC).isoformat(timespec="seconds"),

@@ -30,7 +30,9 @@ def _env_price(name: str, default: float) -> float:
 def _bucket_for(provider: str, model: str) -> str:
     normalized_provider = str(provider or "").strip().lower()
     normalized_model = str(model or "").strip().lower()
-    if normalized_provider == "google_ai_studio" or "gemini-3.5-flash-lite" in normalized_model:
+    if "gemini-3.5-flash-lite" in normalized_model:
+        return "gemini_3_5_flash_lite"
+    if normalized_provider == "google_ai_studio":
         return "google_ai_studio"
     if "deepseek-v4-flash" in normalized_model:
         return "deepseek_v4_flash"
