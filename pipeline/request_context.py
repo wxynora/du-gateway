@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
+from requests.structures import CaseInsensitiveDict
+
 
 @dataclass(frozen=True, slots=True)
 class PipelineRequestContext:
@@ -18,7 +20,8 @@ class PipelineRequestContext:
     anthropic_messages: bool
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "headers", MappingProxyType(dict(self.headers or {})))
+        header_snapshot = CaseInsensitiveDict(self.headers or {})
+        object.__setattr__(self, "headers", MappingProxyType(header_snapshot))
 
 
 __all__ = ("PipelineRequestContext",)

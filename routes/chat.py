@@ -2980,7 +2980,7 @@ def chat_completions():
         return jsonify({"error": "当前未设置全局模型"}), 400
     body["model"] = req_model
     body = _apply_openrouter_request_policy(body, active_upstream_url)
-    headers = dict(request.headers) if request.headers else {}
+    headers = Headers(request.headers) if request.headers else Headers()
     window_id = _get_window_id_from_request(body)
     # 未传 id 的客户端（如 RikkaHub）与 R2 主存 __default__ 对齐，否则轮次恒为 1、总结永不触发
     window_id = r2_store.normalize_window_id(window_id)
