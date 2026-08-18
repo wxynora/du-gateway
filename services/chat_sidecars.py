@@ -151,6 +151,7 @@ def extract_and_store_hidden_sidecars(
     reply_channel: str = "",
     du_request_id: str = "",
     draft_sink: Optional[list[str]] = None,
+    du_daily_save_status_out: Optional[dict[str, bool]] = None,
 ) -> str:
     visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_text or "")
     visible, draft_blocks = split_all_assistant_drafts(visible_after_pcmd)
@@ -186,14 +187,26 @@ def extract_and_store_hidden_sidecars(
             logger.warning("append_interaction_candidate 失败 error=%s", e)
     if du_daily:
         try:
-            save_du_daily_hidden_block(du_daily, trigger=du_daily_trigger)
+            saved = bool(save_du_daily_hidden_block(du_daily, trigger=du_daily_trigger))
+            if du_daily_save_status_out is not None:
+                du_daily_save_status_out["seen"] = True
+                du_daily_save_status_out["saved"] = saved
         except Exception as e:
+            if du_daily_save_status_out is not None:
+                du_daily_save_status_out["seen"] = True
+                du_daily_save_status_out["saved"] = False
             logger.warning("save_du_daily_hidden_block 失败 error=%s", e)
     elif looks_like_plain_maintenance_daily(visible, du_daily_trigger):
         try:
-            save_du_daily_hidden_block(visible, trigger=du_daily_trigger)
+            saved = bool(save_du_daily_hidden_block(visible, trigger=du_daily_trigger))
+            if du_daily_save_status_out is not None:
+                du_daily_save_status_out["seen"] = True
+                du_daily_save_status_out["saved"] = saved
             visible = ""
         except Exception as e:
+            if du_daily_save_status_out is not None:
+                du_daily_save_status_out["seen"] = True
+                du_daily_save_status_out["saved"] = False
             logger.warning("save_du_daily_hidden_block plain 失败 error=%s", e)
     if pixel_home:
         try:
@@ -235,6 +248,7 @@ def apply_hidden_sidecars_to_assistant_response(
     reply_channel: str = "",
     du_request_id: str = "",
     draft_sink: Optional[list[str]] = None,
+    du_daily_save_status_out: Optional[dict[str, bool]] = None,
 ) -> dict:
     """
     剥离助手回复中的隐藏块（老婆侧不可见）；若存在闭合块则写入 R2。
@@ -260,6 +274,7 @@ def apply_hidden_sidecars_to_assistant_response(
         reply_channel=reply_channel,
         du_request_id=du_request_id,
         draft_sink=draft_sink,
+        du_daily_save_status_out=du_daily_save_status_out,
     )
     if visible != content_text:
         msg["content"] = visible

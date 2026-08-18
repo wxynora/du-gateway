@@ -707,6 +707,12 @@ def request_gateway_maintenance(window_id: str, trigger: dict) -> bool:
             return False
         try:
             data = resp.json()
+            if not isinstance(data, dict) or data.get("du_daily_saved") is not True:
+                logger.warning(
+                    "du_daily maintenance 未获得真实保存成功回执 saved=%r",
+                    data.get("du_daily_saved") if isinstance(data, dict) else None,
+                )
+                return False
             msg = ((data.get("choices") or [{}])[0].get("message") or {}) if isinstance(data, dict) else {}
             leftover = _content_to_text(msg.get("content")) if isinstance(msg, dict) else ""
             if leftover.strip():

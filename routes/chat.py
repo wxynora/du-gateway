@@ -3205,6 +3205,7 @@ def chat_completions():
     skip_post_archive_body_delta = prepared.skip_post_archive_body_delta
     du_daily_maintenance = prepared.du_daily_maintenance
     du_daily_trigger = prepared.du_daily_trigger
+    du_daily_save_status: dict[str, bool] = {}
     dynamic_memory_recall_candidate_ids = prepared.dynamic_memory_recall_candidate_ids
     query_topic_state = prepared.query_topic_state
     dynamic_memory_citation_map = prepared.dynamic_memory_citation_map
@@ -3529,7 +3530,19 @@ def chat_completions():
             reply_channel=reply_channel,
             du_request_id=du_request_id,
             draft_sink=draft_parts,
+            du_daily_save_status_out=du_daily_save_status if du_daily_maintenance else None,
         )
+        if du_daily_maintenance:
+            du_daily_saved = bool(
+                du_daily_save_status.get("seen")
+                and du_daily_save_status.get("saved")
+            )
+            resp_json["du_daily_saved"] = du_daily_saved
+            logger.info(
+                "du_daily maintenance 保存回执 seen=%s saved=%s",
+                bool(du_daily_save_status.get("seen")),
+                du_daily_saved,
+            )
         if is_sumitalk_request:
             resp_json = _merge_sumitalk_card_into_nonstream_response(resp_json, body.get("messages") or [])
         sumitalk_final_reasoning_text = ""
