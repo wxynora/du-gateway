@@ -332,7 +332,11 @@ _RECALL_CACHE: dict[str, dict] = {}  # {window_id: {"keywords": [...], "results"
 _RECALL_CACHE_TTL = 120  # 秒
 
 
-def _recall_cache_hit(window_id: str, keywords: list[str]) -> dict | None:
+def _recall_cache_hit(
+    window_id: str,
+    keywords: list[str],
+    excluded_source_ids: set[str] | None = None,
+) -> dict | None:
     """关键词重叠 >= 70% 且未过期则命中缓存。"""
     import time as _time
     cache = _RECALL_CACHE.get(window_id)
@@ -340,6 +344,18 @@ def _recall_cache_hit(window_id: str, keywords: list[str]) -> dict | None:
         return None
     if _time.time() - cache.get("ts", 0) > _RECALL_CACHE_TTL:
         _RECALL_CACHE.pop(window_id, None)
+        return None
+    cached_excluded = {
+        str(value or "").strip()
+        for value in cache.get("excluded_source_ids") or []
+        if str(value or "").strip()
+    }
+    current_excluded = {
+        str(value or "").strip()
+        for value in excluded_source_ids or set()
+        if str(value or "").strip()
+    }
+    if cached_excluded != current_excluded:
         return None
     old_kw = set(cache.get("keywords") or [])
     new_kw = set(keywords)
@@ -351,9 +367,25 @@ def _recall_cache_hit(window_id: str, keywords: list[str]) -> dict | None:
     return None
 
 
-def _recall_cache_set(window_id: str, keywords: list[str], results: list[dict], source: str = "") -> None:
+def _recall_cache_set(
+    window_id: str,
+    keywords: list[str],
+    results: list[dict],
+    source: str = "",
+    excluded_source_ids: set[str] | None = None,
+) -> None:
     import time as _time
-    _RECALL_CACHE[window_id] = {"keywords": keywords, "results": results, "source": source, "ts": _time.time()}
+    _RECALL_CACHE[window_id] = {
+        "keywords": keywords,
+        "results": results,
+        "source": source,
+        "excluded_source_ids": sorted(
+            str(value or "").strip()
+            for value in excluded_source_ids or set()
+            if str(value or "").strip()
+        ),
+        "ts": _time.time(),
+    }
 
 
 def _invalidate_recall_cache() -> None:
@@ -405,6 +437,24 @@ def _last_4_turns_text_for_rewrite(messages: list[dict]) -> str:
     return "\n".join([f"[{who}] {txt}" for who, txt in recent])
 
 
+class _PreviousFourRoundsText(str):
+    def __new__(cls, value: str, round_indexes: list[int] | tuple[int, ...] = ()):
+        obj = super().__new__(cls, value or "")
+        obj.round_indexes = tuple(
+            index
+            for raw in round_indexes or ()
+            if (index := _positive_round_index(raw)) > 0
+        )
+        return obj
+
+
+def _positive_round_index(value) -> int:
+    try:
+        return max(0, int(value or 0))
+    except Exception:
+        return 0
+
+
 def _previous_4_rounds_text_for_rewrite(
     window_id: str,
     *,
@@ -414,16 +464,75 @@ def _previous_4_rounds_text_for_rewrite(
 ) -> str:
     """读取当前消息之前已经归档的四轮；不依赖尚未注入的 last4 system。"""
     if not str(window_id or "").strip():
-        return ""
+        return _PreviousFourRoundsText("")
     rounds = filter_rounds(
         r2_store_module.get_conversation_rounds(window_id, last_n=12) or []
     )[-4:]
     messages: list[dict] = []
+    round_indexes: list[int] = []
     for round_obj in rounds:
+        round_index = _positive_round_index(
+            (round_obj or {}).get("index") or (round_obj or {}).get("round_index")
+        )
+        if round_index > 0:
+            round_indexes.append(round_index)
         for message in (round_obj or {}).get("messages") or []:
             if isinstance(message, dict):
                 messages.append(message)
-    return last_4_turns_text(messages)
+    return _PreviousFourRoundsText(last_4_turns_text(messages), round_indexes)
+
+
+def _memory_source_ids(mem: dict) -> set[str]:
+    if not isinstance(mem, dict):
+        return set()
+    out: set[str] = set()
+    source_mid = str(mem.get("source_memory_id") or "").strip()
+    if source_mid:
+        out.add(source_mid)
+    mid = str(mem.get("id") or "").strip()
+    if mid:
+        out.add(mid[len("core::") :] if mid.startswith("core::") else mid)
+    return out
+
+
+def _memory_has_excluded_source(mem: dict, excluded_source_ids: set[str]) -> bool:
+    return bool(_memory_source_ids(mem) & (excluded_source_ids or set()))
+
+
+def _exclude_memories_written_in_recent_rounds(
+    memories: list[dict],
+    excluded_source_ids: set[str],
+) -> list[dict]:
+    if not excluded_source_ids:
+        return list(memories or [])
+    return [
+        mem
+        for mem in memories or []
+        if isinstance(mem, dict) and not _memory_has_excluded_source(mem, excluded_source_ids)
+    ]
+
+
+def _recent_round_written_memory_ids(
+    window_id: str,
+    previous_four_rounds: str,
+    *,
+    logger_instance=logger,
+) -> set[str]:
+    round_indexes = tuple(getattr(previous_four_rounds, "round_indexes", ()) or ())
+    if not str(window_id or "").strip() or not round_indexes:
+        return set()
+    try:
+        from services.dynamic_memory_provenance import memory_ids_written_in_rounds
+
+        return memory_ids_written_in_rounds(window_id, round_indexes)
+    except Exception as e:
+        logger_instance.warning(
+            "动态记忆 last4 来源轮查询失败 window_id=%s rounds=%s error=%s",
+            window_id,
+            list(round_indexes),
+            e,
+        )
+        return set()
 
 
 def _parse_memory_query_rewrite_output(content: str) -> list[str]:
@@ -1348,8 +1457,8 @@ def step_inject_dynamic_memory(
     topic_anchor_candidates: Callable[[dict, str], list[dict]],
     build_retrieval_text: Callable[[str], str],
     strip_memory_query_media_placeholders: Callable[[str], str],
-    recall_cache_hit: Callable[[str, list[str]], dict | None],
-    recall_cache_set: Callable[[str, list[str], list[dict], str], None],
+    recall_cache_hit: Callable[[str, list[str], set[str]], dict | None],
+    recall_cache_set: Callable[[str, list[str], list[dict], str, set[str]], None],
     dedupe_recalled_memories: Callable[[list[dict]], list[dict]],
     multi_query_recall_and_rerank: Callable[[str, list[str]], list[dict]],
     bm25_recall_scores: Callable[[str, list[dict], list[dict]], dict[str, dict]],
@@ -1403,6 +1512,22 @@ def step_inject_dynamic_memory(
         return body
     original_keyword_candidates = extract_keyword_candidates(last_user_text)
     previous_four_rounds = previous_four_rounds_text(window_id)
+    excluded_source_ids = _recent_round_written_memory_ids(
+        window_id,
+        previous_four_rounds,
+        logger_instance=logger_instance,
+    )
+    if excluded_source_ids:
+        memories = _exclude_memories_written_in_recent_rounds(memories, excluded_source_ids)
+        core_pending = _exclude_memories_written_in_recent_rounds(core_pending, excluded_source_ids)
+        logger_instance.info(
+            "动态记忆召回排除 last4 来源 window_id=%s rounds=%s memory_count=%s",
+            window_id,
+            list(getattr(previous_four_rounds, "round_indexes", ()) or ()),
+            len(excluded_source_ids),
+        )
+    if not memories and not core_pending:
+        return body
     from storage import query_topic_state_store
 
     previous_topic_state = query_topic_state_store.get_topic_state(window_id)
@@ -1452,16 +1577,14 @@ def step_inject_dynamic_memory(
     ]
     retrieval_query = build_retrieval_text(last_user_text)
     bm25_query = strip_memory_query_media_placeholders(resolved_query or last_user_text)
-    if not memories and not r2_store_module.get_core_cache_pending():
-        return body
     valid_memory_ids = {str(mem.get("id") or "").strip() for mem in memories if str(mem.get("id") or "").strip()}
 
     # query rewrite 每轮先更新 topic state；缓存只复用召回结果，不再跳过话题理解。
-    cached = recall_cache_hit(window_id, keywords) if use_recall_cache else None
+    cached = recall_cache_hit(window_id, keywords, excluded_source_ids) if use_recall_cache else None
     if cached is not None:
         active_core_by_id = {
             f"core::{str((item or {}).get('id') or '').strip()}": item
-            for item in (r2_store_module.get_core_cache_pending() or [])
+            for item in core_pending
             if str((item or {}).get("id") or "").strip()
         }
         active_core_ids = set(active_core_by_id)
@@ -1513,7 +1636,8 @@ def step_inject_dynamic_memory(
                 valid_ids = {str(mem.get("id")) for mem in memories if mem.get("id")}
                 vector_recalled = [
                     mem for mem in vector_recalled
-                    if (
+                    if not _memory_has_excluded_source(mem, excluded_source_ids)
+                    and (
                         # 动态层：只要求条目仍存在，不再按独立天数二次过滤。
                         str(mem.get("id") or "") in valid_ids
                         # 核心缓存层：dynamic_vector_retriever 产出的临时 id 形如 core::<entry_id>。
@@ -1569,7 +1693,13 @@ def step_inject_dynamic_memory(
             "empty_query",
         )
         if use_recall_cache and cacheable_recall:
-            recall_cache_set(window_id, keywords, recalled, recall_source)
+            recall_cache_set(
+                window_id,
+                keywords,
+                recalled,
+                recall_source,
+                excluded_source_ids,
+            )
 
         if not recalled:
             event = {

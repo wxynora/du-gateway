@@ -607,12 +607,17 @@ def recall_dynamic_memory(
         topic_anchor_candidates=lambda state, evidence: _topic_state_anchor_candidates(state, evidence),
         build_retrieval_text=lambda text: _build_retrieval_text(text),
         strip_memory_query_media_placeholders=lambda text: _strip_memory_query_media_placeholders(text),
-        recall_cache_hit=lambda target_window_id, keywords: _recall_cache_hit(target_window_id, keywords),
-        recall_cache_set=lambda target_window_id, keywords, results, source: _recall_cache_set(
+        recall_cache_hit=lambda target_window_id, keywords, excluded_source_ids: _recall_cache_hit(
+            target_window_id,
+            keywords,
+            excluded_source_ids=excluded_source_ids,
+        ),
+        recall_cache_set=lambda target_window_id, keywords, results, source, excluded_source_ids: _recall_cache_set(
             target_window_id,
             keywords,
             results,
             source=source,
+            excluded_source_ids=excluded_source_ids,
         ),
         dedupe_recalled_memories=lambda memories: _dedupe_recalled_memories(memories),
         multi_query_recall_and_rerank=lambda query, expansions: _multi_query_recall_and_rerank(
