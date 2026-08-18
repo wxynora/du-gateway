@@ -18,6 +18,7 @@ from config import (
     SUMMARY_STAGE_EVERY_UPDATES,
 )
 from services.worker_models import get_worker_model
+from services.worker_usage import record_response_usage
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -44,6 +45,8 @@ def _summary_request_targets() -> list[dict[str, str]]:
             "url": worker.api_url,
             "api_key": worker.api_key,
             "model": worker.model,
+            "provider": worker.provider,
+            "role": worker.role,
         }
     ]
 
@@ -1352,6 +1355,12 @@ def fetch_new_summary_update(
             r = requests.post(target["url"], headers=headers, json=payload, timeout=60)
             r.raise_for_status()
             data = r.json()
+            record_response_usage(
+                role=target["role"],
+                provider=target["provider"],
+                model=target["model"],
+                data=data,
+            )
         except Exception as e:
             logger.warning(
                 "近期记忆小段总结请求失败 provider=%s attempt=%s/%s error=%s",

@@ -7,6 +7,7 @@ import requests
 
 from config import BASE_DIR
 from services.worker_models import get_worker_model
+from services.worker_usage import record_response_usage
 from utils.log import get_logger
 
 
@@ -62,6 +63,7 @@ def call_wenyou_deepseek(
             logger.warning("文游 DeepSeek 非 200 status=%s body=%s", r.status_code, (r.text or "")[:400])
             return None
         data = r.json() if r.content else {}
+        record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
         ch0 = (data.get("choices") or [{}])[0] or {}
         msg = ch0.get("message") or {}
         content = msg.get("content")

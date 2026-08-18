@@ -22,6 +22,7 @@ from config import (
     is_siliconflow_url,
 )
 from services.worker_models import get_worker_model
+from services.worker_usage import record_response_usage
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -134,6 +135,7 @@ def rerank_dynamic_memory_documents(query: str, documents: list[dict]) -> dict:
                 "model": worker.model,
                 "elapsed_ms": elapsed_ms,
             }
+        record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
     except Exception as e:
         elapsed_ms = int((time.time() - started) * 1000)
         logger.warning("dynamic memory rerank exception model=%s docs=%s error=%s", worker.model, len(texts), e)

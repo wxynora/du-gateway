@@ -56,6 +56,7 @@ _RUNTIME_TABLES = (
     "watch_ticket_frame_captures",
     "event_runtime_heartbeats",
     "dead_letter_events",
+    "worker_model_usage",
 )
 
 
@@ -860,6 +861,24 @@ def ensure_schema() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_dead_letter_events_failed_at
                     ON dead_letter_events(failed_at DESC);
+
+                CREATE TABLE IF NOT EXISTS worker_model_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    occurred_at TEXT NOT NULL,
+                    bucket_key TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT '',
+                    provider TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL DEFAULT '',
+                    request_count INTEGER NOT NULL DEFAULT 1,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+                    cost_value REAL NOT NULL DEFAULT 0,
+                    currency TEXT NOT NULL DEFAULT '',
+                    success INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE INDEX IF NOT EXISTS idx_worker_model_usage_bucket_time
+                    ON worker_model_usage(bucket_key, occurred_at DESC);
                 """
             )
             dead_letter_columns = {

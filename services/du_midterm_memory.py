@@ -9,6 +9,7 @@ from typing import Any, Optional
 import requests
 
 from services.worker_models import get_worker_model
+from services.worker_usage import record_response_usage
 from storage import du_state_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing, today_beijing
@@ -412,6 +413,7 @@ def _call_ds(prompt: str) -> Optional[dict]:
         logger.warning("du_midterm DS API 错误 status=%s body=%s", resp.status_code, (resp.text or "")[:500])
     resp.raise_for_status()
     data = resp.json()
+    record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
     message = (data.get("choices") or [{}])[0].get("message") or {}
     content = str(message.get("content") or "").strip()
     return _extract_json_object(content)

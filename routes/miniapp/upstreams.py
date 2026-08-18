@@ -16,6 +16,7 @@ from config import (
 )
 from services.cloudflare_anthropic import anthropic_headers, openai_to_anthropic_request
 from services.upstream_policy import anthropic_messages_url
+from services.worker_usage import dashboard_snapshot as worker_usage_dashboard_snapshot
 from storage import upstream_store
 
 
@@ -332,6 +333,10 @@ def _probe_upstream_item(it: dict, index: int) -> dict:
 
 
 def register_routes(bp) -> None:
+    @bp.route("/upstreams/worker-usage", methods=["GET"])
+    def miniapp_get_worker_usage():
+        return jsonify(worker_usage_dashboard_snapshot())
+
     @bp.route("/upstreams", methods=["GET"])
     def miniapp_get_upstreams():
         data = upstream_store.load_upstreams()

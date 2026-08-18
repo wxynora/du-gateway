@@ -19,6 +19,7 @@ from config import (
     DU_BODY_EVALUATOR_ENABLED,
 )
 from services.worker_models import get_worker_model
+from services.worker_usage import record_response_usage
 from storage import du_body_eval_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
@@ -142,6 +143,7 @@ def _call_ds(rows: list[dict], current_state: dict) -> tuple[dict[int, dict], in
     )
     response.raise_for_status()
     data = response.json()
+    record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
     choice = (data.get("choices") or [{}])[0]
     message = choice.get("message") if isinstance(choice, dict) else {}
     message = message if isinstance(message, dict) else {}

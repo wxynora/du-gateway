@@ -15,6 +15,7 @@ from config import (
     WATCH_ANALYSIS_PROMPT_VERSION,
     WATCH_ANALYSIS_TIMEOUT_SECONDS,
 )
+from services.worker_usage import record_response_usage
 from storage import watch_knowledge_store, watch_runtime_store
 from utils.log import get_logger
 
@@ -794,6 +795,12 @@ def analyze_watch_samples(
                 "model": WATCH_ANALYSIS_MODEL,
             },
         )
+    record_response_usage(
+        role="watch_analysis",
+        provider="openrouter",
+        model=WATCH_ANALYSIS_MODEL,
+        data=data,
+    )
     usage = _usage_from_response(data, elapsed_ms=elapsed_ms)
     message = (((data.get("choices") or [{}])[0] or {}).get("message") or {})
     try:

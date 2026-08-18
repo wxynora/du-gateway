@@ -15,6 +15,7 @@ import requests
 
 from services.memory_merge_rules import MERGE_ITERATION_RULES
 from services.worker_models import get_worker_model
+from services.worker_usage import record_response_usage
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 
@@ -1051,6 +1052,7 @@ def call_dynamic_layer_ds(
                 )
             r.raise_for_status()
             data = r.json()
+            record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
             content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
             content = (content or "").strip()
             arr = _extract_json_array_from_ds_response(content)
@@ -1342,6 +1344,7 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
             r = requests.post(worker.api_url, headers=headers, json=request_payload, timeout=(120, 180))
             r.raise_for_status()
             data = r.json()
+            record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
             content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
             content = (content or "").strip()
             arr = _extract_json_array_from_ds_response(content)
@@ -1503,6 +1506,7 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
                 )
             r.raise_for_status()
             data = r.json()
+            record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
             content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
             content = (content or "").strip()
             arr = _extract_json_array_from_ds_response(content)

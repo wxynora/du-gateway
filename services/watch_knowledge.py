@@ -20,6 +20,7 @@ from config import (
     WATCH_KNOWLEDGE_SEARCH_TIMEOUT_SECONDS,
     WATCH_KNOWLEDGE_TIMEOUT_SECONDS,
 )
+from services.worker_usage import record_response_usage
 from services.watch_analysis import WatchAnalysisProviderError
 
 
@@ -609,6 +610,12 @@ def build_work_knowledge_card(
         if on_provider_usage is not None:
             on_provider_usage("model", unpriced_model_usage)
         raise
+    record_response_usage(
+        role="watch_knowledge",
+        provider="siliconflow",
+        model=WATCH_KNOWLEDGE_MODEL,
+        data=data,
+    )
     usage_raw = data.get("usage") if isinstance(data.get("usage"), dict) else {}
     input_tokens = max(0, int(usage_raw.get("prompt_tokens") or 0))
     output_tokens = max(0, int(usage_raw.get("completion_tokens") or 0))

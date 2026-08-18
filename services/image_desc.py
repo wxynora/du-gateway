@@ -19,6 +19,7 @@ except Exception:
     ImageOps = None
 
 from services.worker_models import get_worker_model
+from services.worker_usage import record_response_usage
 from utils.log import get_logger
 
 
@@ -83,6 +84,7 @@ def image_to_description(image_base64: str, mime_type: str = "image/jpeg") -> Op
         r = requests.post(url, headers=headers, json=payload, timeout=15)
         r.raise_for_status()
         data = r.json()
+        record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
         desc = content.strip() if content else ""
         elapsed_ms = int((time.perf_counter() - started) * 1000)

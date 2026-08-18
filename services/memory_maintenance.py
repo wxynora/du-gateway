@@ -9,6 +9,7 @@ from typing import Any
 import requests
 
 from services.worker_models import get_worker_model
+from services.worker_usage import record_response_usage
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import _now_beijing, now_beijing_iso
@@ -106,6 +107,7 @@ def _resolve_duplicate_group_with_ds(group: list[dict]) -> dict | None:
         resp = requests.post(worker.api_url, headers=headers, json=payload, timeout=25)
         resp.raise_for_status()
         data = resp.json()
+        record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
         obj = _extract_json_obj(content)
         if not isinstance(obj, dict):

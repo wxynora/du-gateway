@@ -17,6 +17,7 @@ from config import (
     VOICE_STT_TIMEOUT_SECONDS,
 )
 from services.worker_models import get_worker_model
+from services.worker_usage import record_response_usage
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -414,6 +415,7 @@ def _openrouter_transcribe(audio_bytes: bytes, mime_type: str = "audio/webm", fi
             last_error = str(e)
             logger.warning("OpenRouter STT 响应不是 JSON model=%s err=%s", model, e)
             continue
+        record_response_usage(role=worker.role, provider=worker.provider, model=model, data=data)
         content = str((((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         if not content:
             last_error = "empty content"

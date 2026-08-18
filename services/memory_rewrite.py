@@ -8,6 +8,7 @@ import requests
 
 from services.memory_merge_rules import MERGE_ITERATION_RULES
 from services.worker_models import get_worker_model
+from services.worker_usage import record_response_usage
 from storage import r2_store
 from utils.time_aware import now_beijing_iso
 
@@ -226,6 +227,7 @@ def _request_deepseek_rewrite(
             )
             response.raise_for_status()
             data = response.json()
+            record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
             raw = str((((data.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or "")
         except Exception as error:
             logger.warning("memory rewrite DeepSeek request failed: %s", error)
