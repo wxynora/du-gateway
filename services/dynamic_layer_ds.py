@@ -973,7 +973,7 @@ def call_dynamic_layer_ds(
     }
 
     decision_round_messages = _memory_decision_round_messages(round_messages)
-    worker = get_worker_model("background_reasoning")
+    worker = get_worker_model("background_reasoning", provider="deepseek")
     if not worker.api_key or not worker.api_url:
         return [default]
 
@@ -1308,7 +1308,7 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
     """
     if not batch_rounds:
         return []
-    worker = get_worker_model("background_reasoning")
+    worker = get_worker_model("background_reasoning", provider="deepseek")
     if not worker.api_key or not worker.api_url:
         return [_normalize_single_decision(None) for _ in batch_rounds]
 
@@ -1434,7 +1434,7 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
     """
     if not batch_rounds:
         return []
-    worker = get_worker_model("background_reasoning")
+    worker = get_worker_model("background_reasoning", provider="deepseek")
     if not worker.api_key or not worker.api_url:
         return [_normalize_single_decision(None) for _ in batch_rounds]
 
