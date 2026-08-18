@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import os
 import random
@@ -504,6 +505,31 @@ def _extract_xml_decision_text(text: str) -> str:
     return match.group(0).strip() if match else ""
 
 
+_PROACTIVE_CONTROL_XML_FIELDS = ("action", "reason", "message", "game_id", "game", "channel")
+_PROACTIVE_CONTROL_XML_FIELD_START_RE = re.compile(
+    r"<\s*(?P<name>action|reason|message|game_id|game|channel)\b(?:\s[^<>]*)?/?>?",
+    flags=re.IGNORECASE,
+)
+
+
+def _strip_proactive_control_xml_markup(value: object) -> str:
+    """Remove XML/CDATA wrappers from a control field before it can become visible text."""
+    text = html.unescape(str(value or ""))
+    text = re.sub(r"<!--[\s\S]*?-->", "", text)
+    text = re.sub(r"<\?[\s\S]*?\?>", "", text)
+    text = re.sub(r"<!\[CDATA\[", "", text, flags=re.IGNORECASE)
+    text = text.replace("]]>", "")
+    text = re.sub(r"<![A-Za-z][^<>]*>", "", text)
+    text = re.sub(r"</?[A-Za-z_][\w:.-]*(?:\s[^<>]*?)?\s*/?>", "", text)
+    text = re.sub(
+        r"<\s*/?\s*(?:decision|action|reason|message|game_id|game|channel)\b[^>\r\n]*>?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text.strip()
+
+
 def _load_proactive_control_xml(text: str) -> Optional[dict]:
     raw = _extract_xml_decision_text(text)
     if not raw:
@@ -520,7 +546,44 @@ def _load_proactive_control_xml(text: str) -> Optional[dict]:
     for child in list(root):
         name = str(child.tag or "").rsplit("}", 1)[-1].strip().lower()
         if name in allowed:
-            result[name] = "".join(child.itertext()).strip()
+            result[name] = _strip_proactive_control_xml_markup("".join(child.itertext()))
+    if not result.get("action") and not result.get("message"):
+        return None
+    return result
+
+
+def _load_loose_proactive_control_xml(text: str) -> Optional[dict]:
+    """Recover control fields from a decision block whose XML is not fully well-formed."""
+    raw = _strip_json_fence(text)
+    decision_start = re.search(r"<\s*decision\b(?:\s[^<>]*)?>?", raw, flags=re.IGNORECASE)
+    if not decision_start:
+        return None
+
+    body = raw[decision_start.end() :]
+    decision_end = re.search(r"<\s*/\s*decision\s*>?", body, flags=re.IGNORECASE)
+    nested_decision = re.search(r"<\s*decision\b(?:\s[^<>]*)?>?", body, flags=re.IGNORECASE)
+    cutoffs = [match.start() for match in (decision_end, nested_decision) if match]
+    if cutoffs:
+        body = body[: min(cutoffs)]
+
+    starts = list(_PROACTIVE_CONTROL_XML_FIELD_START_RE.finditer(body))
+    if not starts:
+        return None
+
+    result: dict[str, str] = {}
+    for index, match in enumerate(starts):
+        name = str(match.group("name") or "").strip().lower()
+        if name not in _PROACTIVE_CONTROL_XML_FIELDS:
+            continue
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(body)
+        chunk = body[match.end() : end]
+        closing = re.search(rf"<\s*/\s*{re.escape(name)}\s*>?", chunk, flags=re.IGNORECASE)
+        if closing:
+            chunk = chunk[: closing.start()]
+        value = _strip_proactive_control_xml_markup(chunk)
+        if name not in result or value:
+            result[name] = value
+
     if not result.get("action") and not result.get("message"):
         return None
     return result
@@ -637,12 +700,17 @@ def _sanitize_control_reply_for_delivery(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
         return ""
-    obj = _load_proactive_control_xml(raw) or _load_proactive_control_object(raw) or _load_loose_proactive_control_object(raw)
+    obj = (
+        _load_proactive_control_xml(raw)
+        or _load_loose_proactive_control_xml(raw)
+        or _load_proactive_control_object(raw)
+        or _load_loose_proactive_control_object(raw)
+    )
     if isinstance(obj, dict) and ("action" in obj or "message" in obj or "channel" in obj):
         action = str(obj.get("action") or "").strip().lower()
         alias = {"send": "send_message", "msg": "send_message", "text": "send_message", "chat": "send_message"}
         action = alias.get(action, action)
-        message = str(obj.get("message") or "").strip()
+        message = _strip_proactive_control_xml_markup(obj.get("message"))
         if action == "send_message" and message:
             return message
         logger.warning(
@@ -656,7 +724,7 @@ def _sanitize_control_reply_for_delivery(text: str) -> str:
     if _looks_like_control_xml_reply(raw) or _looks_like_control_json_reply(raw):
         logger.warning("主动/唤醒外发拦截疑似决策控制结构 raw_preview=%s", raw[:300])
         return ""
-    return raw
+    return _strip_proactive_control_xml_markup(raw)
 
 
 def _normalize_reply_channel(value: str, default: str = "", allowed: list[str] | None = None) -> str:
@@ -684,7 +752,12 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
             False, "", "no_contact", action="no_contact", du_reason="（使用 NO_CONTACT 标记，未给理由）", channel=default_channel
         )
 
-    obj = _load_proactive_control_xml(t) or _load_proactive_control_object(t) or _load_loose_proactive_control_object(t)
+    obj = (
+        _load_proactive_control_xml(t)
+        or _load_loose_proactive_control_xml(t)
+        or _load_proactive_control_object(t)
+        or _load_loose_proactive_control_object(t)
+    )
 
     if not isinstance(obj, dict):
         if _looks_like_control_xml_reply(t) or _looks_like_control_json_reply(t):
@@ -708,7 +781,7 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
 
     action = str(obj.get("action") or "").strip().lower()
     du_reason = str(obj.get("reason") or "").strip()
-    message = str(obj.get("message") or "").strip()
+    message = _strip_proactive_control_xml_markup(obj.get("message"))
     requested_game = str(obj.get("game") or obj.get("game_id") or "").strip()
     channel = _normalize_reply_channel(str(obj.get("channel") or default_channel), default=default_channel, allowed=channels)
     alias = {
