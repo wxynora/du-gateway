@@ -1042,7 +1042,7 @@ def call_dynamic_layer_ds(
                         }
                     ],
                 }
-            r = requests.post(worker.api_url, headers=headers, json=request_payload, timeout=60)
+            r = requests.post(worker.api_url, headers=headers, json=request_payload, timeout=(60, 180))
             if r.status_code >= 400:
                 logger.error(
                     "动态层 DS API 错误 status=%s body=%s",
@@ -1339,7 +1339,7 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
                         }
                     ],
                 }
-            r = requests.post(worker.api_url, headers=headers, json=request_payload, timeout=120)
+            r = requests.post(worker.api_url, headers=headers, json=request_payload, timeout=(120, 180))
             r.raise_for_status()
             data = r.json()
             content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
@@ -1494,7 +1494,7 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
                         }
                     ],
                 }
-            r = requests.post(worker.api_url, headers=headers, json=request_payload, timeout=120)
+            r = requests.post(worker.api_url, headers=headers, json=request_payload, timeout=(120, 180))
             if r.status_code >= 400:
                 logger.error(
                     "归档 DS API 错误 status=%s body=%s",
