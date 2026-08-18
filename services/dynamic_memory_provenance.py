@@ -289,6 +289,38 @@ def memory_ids_written_in_rounds(window_id: str, round_indexes: Any) -> set[str]
     }
 
 
+def memory_ids_created_in_rounds(window_id: str, round_indexes: Any) -> set[str]:
+    """返回指定会话轮中成功新建、可安全整条 anti-echo 的动态记忆 ID。"""
+    wid = str(window_id or "").strip()
+    indexes = sorted(
+        {
+            index
+            for raw in (round_indexes or [])
+            if (index := _coerce_round_index(raw)) > 0
+        }
+    )
+    if not wid or not indexes:
+        return set()
+    ensure_schema()
+    placeholders = ",".join("?" for _ in indexes)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT memory_id
+            FROM dynamic_memory_provenance_events
+            WHERE window_id = ?
+              AND round_index IN ({placeholders})
+              AND action = 'new'
+            """,
+            [wid, *indexes],
+        ).fetchall()
+    return {
+        str(row["memory_id"] or "").strip()
+        for row in rows
+        if str(row["memory_id"] or "").strip()
+    }
+
+
 def record_merge_review(
     *,
     layer: str,

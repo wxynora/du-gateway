@@ -59,7 +59,7 @@ def _append_block_notice_to_global_context(created_at: str, content: str, reason
         )
         if ok:
             latest = r2_store.get_conversation_rounds(window_id, last_n=4)
-            r2_store.update_latest_4_rounds_global(latest)
+            r2_store.update_latest_4_rounds_global(latest, source_window_id=window_id)
             logger.info("block_mode_notice_archive_ok window_id=%s round_index=%s reason=%s", window_id, round_index, reason)
         else:
             logger.warning("block_mode_notice_archive_failed window_id=%s round_index=%s reason=%s", window_id, round_index, reason)

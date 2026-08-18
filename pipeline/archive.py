@@ -159,7 +159,7 @@ def _step_archive_round(
         return None
     # 全局 Last4 只需最近四轮：append 后读即可，不必拉 last_n=1000 再拼（省内存、也避免误用 len 当总轮数）
     tail4 = r2_store_module.get_conversation_rounds(window_id, last_n=4)
-    r2_store_module.update_latest_4_rounds_global(tail4)
+    r2_store_module.update_latest_4_rounds_global(tail4, source_window_id=window_id)
     return {"round_index": round_index, "round_messages": round_messages}
 
 

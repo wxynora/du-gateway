@@ -438,13 +438,29 @@ def _last_4_turns_text_for_rewrite(messages: list[dict]) -> str:
 
 
 class _PreviousFourRoundsText(str):
-    def __new__(cls, value: str, round_indexes: list[int] | tuple[int, ...] = ()):
+    def __new__(
+        cls,
+        value: str,
+        round_indexes: list[int] | tuple[int, ...] = (),
+        round_refs: list[tuple[str, int]] | tuple[tuple[str, int], ...] = (),
+        used_global_last4: bool = False,
+    ):
         obj = super().__new__(cls, value or "")
         obj.round_indexes = tuple(
             index
             for raw in round_indexes or ()
             if (index := _positive_round_index(raw)) > 0
         )
+        normalized_refs: list[tuple[str, int]] = []
+        for raw in round_refs or ():
+            if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+                continue
+            source_window_id = str(raw[0] or "").strip()
+            round_index = _positive_round_index(raw[1])
+            if source_window_id and round_index > 0:
+                normalized_refs.append((source_window_id, round_index))
+        obj.round_refs = tuple(normalized_refs)
+        obj.used_global_last4 = bool(used_global_last4)
         return obj
 
 
@@ -462,24 +478,47 @@ def _previous_4_rounds_text_for_rewrite(
     filter_rounds: Callable[[list[dict]], list[dict]] = _filter_rounds_for_recent_context,
     last_4_turns_text: Callable[[list[dict]], str] = _last_4_turns_text_for_rewrite,
 ) -> str:
-    """读取当前消息之前已经归档的四轮；不依赖尚未注入的 last4 system。"""
-    if not str(window_id or "").strip():
+    """读取与本轮可见 Last4 一致的已归档四轮；不依赖尚未注入的 system。"""
+    target_window_id = str(window_id or "").strip()
+    if not target_window_id:
         return _PreviousFourRoundsText("")
-    rounds = filter_rounds(
-        r2_store_module.get_conversation_rounds(window_id, last_n=12) or []
-    )[-4:]
+    use_global_last4 = (
+        not target_window_id.startswith("tg_")
+        and not r2_store_module.has_window_history(target_window_id)
+    )
+    if use_global_last4:
+        source_rounds = r2_store_module.get_latest_4_rounds_global() or []
+    else:
+        source_rounds = r2_store_module.get_conversation_rounds(
+            target_window_id,
+            last_n=12,
+        ) or []
+    rounds = filter_rounds(source_rounds)[-4:]
     messages: list[dict] = []
     round_indexes: list[int] = []
+    round_refs: list[tuple[str, int]] = []
     for round_obj in rounds:
         round_index = _positive_round_index(
             (round_obj or {}).get("index") or (round_obj or {}).get("round_index")
         )
         if round_index > 0:
             round_indexes.append(round_index)
+            source_window_id = (
+                str((round_obj or {}).get("_source_window_id") or "").strip()
+                if use_global_last4
+                else target_window_id
+            )
+            if source_window_id:
+                round_refs.append((source_window_id, round_index))
         for message in (round_obj or {}).get("messages") or []:
             if isinstance(message, dict):
                 messages.append(message)
-    return _PreviousFourRoundsText(last_4_turns_text(messages), round_indexes)
+    return _PreviousFourRoundsText(
+        last_4_turns_text(messages),
+        round_indexes,
+        round_refs,
+        use_global_last4,
+    )
 
 
 def _memory_source_ids(mem: dict) -> set[str]:
@@ -499,7 +538,7 @@ def _memory_has_excluded_source(mem: dict, excluded_source_ids: set[str]) -> boo
     return bool(_memory_source_ids(mem) & (excluded_source_ids or set()))
 
 
-def _exclude_memories_written_in_recent_rounds(
+def _exclude_memories_created_in_recent_rounds(
     memories: list[dict],
     excluded_source_ids: set[str],
 ) -> list[dict]:
@@ -512,24 +551,40 @@ def _exclude_memories_written_in_recent_rounds(
     ]
 
 
-def _recent_round_written_memory_ids(
+def _recent_round_created_memory_ids(
     window_id: str,
     previous_four_rounds: str,
     *,
     logger_instance=logger,
 ) -> set[str]:
     round_indexes = tuple(getattr(previous_four_rounds, "round_indexes", ()) or ())
-    if not str(window_id or "").strip() or not round_indexes:
+    round_refs = tuple(getattr(previous_four_rounds, "round_refs", ()) or ())
+    target_window_id = str(window_id or "").strip()
+    if (
+        not round_refs
+        and target_window_id
+        and not bool(getattr(previous_four_rounds, "used_global_last4", False))
+    ):
+        round_refs = tuple((target_window_id, index) for index in round_indexes)
+    if not round_refs:
         return set()
     try:
-        from services.dynamic_memory_provenance import memory_ids_written_in_rounds
+        from services.dynamic_memory_provenance import memory_ids_created_in_rounds
 
-        return memory_ids_written_in_rounds(window_id, round_indexes)
+        grouped_indexes: dict[str, list[int]] = {}
+        for source_window_id, round_index in round_refs:
+            grouped_indexes.setdefault(str(source_window_id), []).append(int(round_index))
+        created_ids: set[str] = set()
+        for source_window_id, source_indexes in grouped_indexes.items():
+            created_ids.update(
+                memory_ids_created_in_rounds(source_window_id, source_indexes)
+            )
+        return created_ids
     except Exception as e:
         logger_instance.warning(
-            "动态记忆 last4 来源轮查询失败 window_id=%s rounds=%s error=%s",
-            window_id,
-            list(round_indexes),
+            "动态记忆 last4 新建来源轮查询失败 window_id=%s refs=%s error=%s",
+            target_window_id,
+            list(round_refs),
             e,
         )
         return set()
@@ -1512,16 +1567,16 @@ def step_inject_dynamic_memory(
         return body
     original_keyword_candidates = extract_keyword_candidates(last_user_text)
     previous_four_rounds = previous_four_rounds_text(window_id)
-    excluded_source_ids = _recent_round_written_memory_ids(
+    excluded_source_ids = _recent_round_created_memory_ids(
         window_id,
         previous_four_rounds,
         logger_instance=logger_instance,
     )
     if excluded_source_ids:
-        memories = _exclude_memories_written_in_recent_rounds(memories, excluded_source_ids)
-        core_pending = _exclude_memories_written_in_recent_rounds(core_pending, excluded_source_ids)
+        memories = _exclude_memories_created_in_recent_rounds(memories, excluded_source_ids)
+        core_pending = _exclude_memories_created_in_recent_rounds(core_pending, excluded_source_ids)
         logger_instance.info(
-            "动态记忆召回排除 last4 来源 window_id=%s rounds=%s memory_count=%s",
+            "动态记忆召回排除 last4 新建来源 window_id=%s rounds=%s memory_count=%s",
             window_id,
             list(getattr(previous_four_rounds, "round_indexes", ()) or ()),
             len(excluded_source_ids),

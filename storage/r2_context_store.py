@@ -121,12 +121,21 @@ def get_latest_4_rounds_global() -> list:
     return data.get("rounds", [])
 
 
-def update_latest_4_rounds_global(rounds: list) -> bool:
+def update_latest_4_rounds_global(rounds: list, source_window_id: str = "") -> bool:
     """更新全局最近四轮（每次存档后由网关调用）。多窗口写同一 key 时加锁。"""
     client = _s3_client()
     if not client:
         return False
-    payload = {"rounds": rounds[-4:]}
+    source_wid = str(source_window_id or "").strip()
+    payload_rounds = []
+    for item in (rounds or [])[-4:]:
+        if not isinstance(item, dict):
+            continue
+        round_copy = dict(item)
+        if source_wid:
+            round_copy["_source_window_id"] = source_wid
+        payload_rounds.append(round_copy)
+    payload = {"rounds": payload_rounds}
     with _global_write_lock:
         try:
             _write_json(client, R2_KEY_LATEST_4_ROUNDS, payload)

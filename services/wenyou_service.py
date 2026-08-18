@@ -5764,7 +5764,10 @@ def _archive_wenyou_round_for_recent_memory(user_id: int, session: dict, p1_text
         if not ok:
             return
         tail4 = r2_store.get_conversation_rounds(_WENYOU_MEMORY_WINDOW_ID, last_n=4)
-        r2_store.update_latest_4_rounds_global(tail4)
+        r2_store.update_latest_4_rounds_global(
+            tail4,
+            source_window_id=_WENYOU_MEMORY_WINDOW_ID,
+        )
         if round_index % _WENYOU_SUMMARY_EVERY_N_ROUNDS != 0:
             return
         recent = r2_store.get_conversation_rounds(_WENYOU_MEMORY_WINDOW_ID, last_n=4)
