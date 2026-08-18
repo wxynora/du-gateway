@@ -6,6 +6,9 @@ import os
 from dataclasses import dataclass, field
 
 from config import (
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_API_URL,
+    DEEPSEEK_CHAT_MODEL,
     DEEPGRAM_API_KEY,
     DEEPGRAM_STT_MODEL,
     DEEPGRAM_STT_URL,
@@ -88,6 +91,15 @@ def get_worker_model(role: str, *, provider: str | None = None) -> WorkerModelSp
         )
 
     if normalized_role == "background_reasoning":
+        if str(provider or "").strip().lower() == "deepseek":
+            return WorkerModelSpec(
+                role="background_reasoning",
+                provider="deepseek",
+                protocol="openai_chat",
+                api_url=str(DEEPSEEK_API_URL or "").strip(),
+                api_key=str(DEEPSEEK_API_KEY or "").strip(),
+                model=str(DEEPSEEK_CHAT_MODEL or "").strip(),
+            )
         return WorkerModelSpec(
             role="background_reasoning",
             provider=_env_or("WORKER_BACKGROUND_REASONING_PROVIDER", "siliconflow").lower(),
