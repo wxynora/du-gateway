@@ -303,7 +303,7 @@ def build_group_activity_delivery_for_wakeup() -> dict:
             "后面紧接你想在群里说的话；网关会去掉标记并把正文发到这段上下文对应的群。"
             f"如果还想真正 @ 小玥，在 {QQ_GROUP_CONTENT_MARKER} 后紧接 {QQ_GROUP_AT_ME_MARKER}；"
             "后端会删除两个标记，并用小玥的 QQ 号发送原生 @。不需要 @ 小玥时不要写这个标记，也不要手写 @名字。"
-            "如果本轮要求用 JSON 返回，就把这个标记写在 message 字段正文的开头。"
+            "如果本轮要求用 XML 返回，就把这个标记写在 <message> 的 CDATA 正文开头。"
             "想继续私下找她时不要写这个标记，也不要输出群号。"
         ),
         "",
