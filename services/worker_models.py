@@ -73,11 +73,14 @@ def get_worker_model(role: str, *, provider: str | None = None) -> WorkerModelSp
     if normalized_role == "translate":
         return WorkerModelSpec(
             role="translate",
-            provider=_env_or("WORKER_TRANSLATE_PROVIDER", "siliconflow").lower(),
+            provider=_env_or("WORKER_TRANSLATE_PROVIDER", "google_ai_studio").lower(),
             protocol="openai_chat",
-            api_url=_env_or("WORKER_TRANSLATE_API_URL", _siliconflow_chat_url()),
-            api_key=_siliconflow_key("WORKER_TRANSLATE_API_KEY"),
-            model=_env_or("WORKER_TRANSLATE_MODEL", "tencent/Hunyuan-MT-7B"),
+            api_url=_env_or(
+                "WORKER_TRANSLATE_API_URL",
+                "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            ),
+            api_key=_env("WORKER_TRANSLATE_API_KEY") or _env("WORKER_OCR_API_KEY"),
+            model=_env_or("WORKER_TRANSLATE_MODEL", "gemini-3.5-flash-lite"),
         )
 
     if normalized_role == "structured":
