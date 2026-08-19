@@ -1239,18 +1239,73 @@ function createOpenaiStreamConverter(model) {
 function pipeAnthropicStreamToOpenAI(proxyRes, res, requestModel) {
   let buffer = "";
   let streamFailed = false;
+  let upstreamMessageId = "";
+  let terminalMetadataLogged = false;
+  const fallbackMetadata = [];
+  const upstreamRequestId = String(
+    proxyRes.headers?.["request-id"] || proxyRes.headers?.["x-request-id"] || ""
+  ).trim();
   const decoder = new StringDecoder("utf8");
   const streamConverter = createOpenaiStreamConverter(requestModel);
 
+  const safeMetadataValue = (value, limit = 160) =>
+    String(value ?? "")
+      .replace(/[\r\n\t]+/g, " ")
+      .trim()
+      .slice(0, limit) || "-";
+
+  const logTerminalMetadata = (event) => {
+    if (terminalMetadataLogged) return;
+    terminalMetadataLogged = true;
+    const usage = event?.usage && typeof event.usage === "object" ? event.usage : {};
+    const outputTokens = usage.output_tokens != null && Number.isFinite(Number(usage.output_tokens))
+      ? Number(usage.output_tokens)
+      : "-";
+    const thinkingTokens = usage.output_tokens_details?.thinking_tokens != null &&
+      Number.isFinite(Number(usage.output_tokens_details.thinking_tokens))
+      ? Number(usage.output_tokens_details.thinking_tokens)
+      : "-";
+    const fallbackTypes = fallbackMetadata.map((item) => item.type).join(",") || "-";
+    const fallbackModels = fallbackMetadata
+      .map((item) => `${item.fromModel}->${item.toModel}`)
+      .join(",") || "-";
+    log(
+      `Anthropic stream terminal request_id=${safeMetadataValue(upstreamRequestId)} ` +
+        `message_id=${safeMetadataValue(upstreamMessageId)} ` +
+        `stop_reason=${safeMetadataValue(event?.delta?.stop_reason)} ` +
+        `output_tokens=${outputTokens} thinking_tokens=${thinkingTokens} ` +
+        `fallback_count=${fallbackMetadata.length} fallback_types=${fallbackTypes} ` +
+        `fallback_models=${fallbackModels}`
+    );
+  };
+
   const forwardEvent = (event) => {
     if (streamFailed) return;
+    if (event?.type === "message_start") {
+      upstreamMessageId = String(event.message?.id || "").trim();
+    } else if (event?.type === "content_block_start" && event.content_block?.type === "fallback") {
+      const block = event.content_block;
+      fallbackMetadata.push({
+        type: safeMetadataValue(block.fallback_type || block.reason || block.cause || block.type),
+        fromModel: safeMetadataValue(block.from?.model || block.from_model),
+        toModel: safeMetadataValue(block.to?.model || block.to_model),
+      });
+    } else if (event?.type === "message_delta") {
+      logTerminalMetadata(event);
+    }
     const converted = streamConverter(event);
     if (!converted) return;
     if (converted.error) {
       streamFailed = true;
       const errorType = String(converted.error.type || "api_error");
-      const requestId = String(converted.error.request_id || "");
-      log(`Anthropic stream error type=${errorType}${requestId ? ` request_id=${requestId}` : ""}`);
+      const requestId = String(converted.error.request_id || upstreamRequestId || "");
+      terminalMetadataLogged = true;
+      log(
+        `Anthropic stream error type=${safeMetadataValue(errorType)} ` +
+          `request_id=${safeMetadataValue(requestId)} ` +
+          `message_id=${safeMetadataValue(upstreamMessageId)} ` +
+          `fallback_count=${fallbackMetadata.length}`
+      );
     }
     res.write(`data: ${JSON.stringify(converted)}\n\n`);
   };
@@ -1274,6 +1329,12 @@ function pipeAnthropicStreamToOpenAI(proxyRes, res, requestModel) {
     buffer += decoder.end();
     if (!streamFailed && buffer.trim()) {
       for (const line of buffer.split("\n")) consumeLine(line);
+    }
+    if (!streamFailed && !terminalMetadataLogged) {
+      log(
+        `Anthropic stream ended_without_terminal request_id=${safeMetadataValue(upstreamRequestId)} ` +
+          `message_id=${safeMetadataValue(upstreamMessageId)} fallback_count=${fallbackMetadata.length}`
+      );
     }
     if (!streamFailed) {
       res.write("data: [DONE]\n\n");
