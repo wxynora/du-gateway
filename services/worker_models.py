@@ -94,7 +94,8 @@ def get_worker_model(role: str, *, provider: str | None = None) -> WorkerModelSp
         )
 
     if normalized_role == "background_reasoning":
-        if str(provider or "").strip().lower() == "deepseek":
+        selected_provider = str(provider or "").strip().lower()
+        if selected_provider == "deepseek":
             return WorkerModelSpec(
                 role="background_reasoning",
                 provider="deepseek",
@@ -102,6 +103,18 @@ def get_worker_model(role: str, *, provider: str | None = None) -> WorkerModelSp
                 api_url=str(DEEPSEEK_API_URL or "").strip(),
                 api_key=str(DEEPSEEK_API_KEY or "").strip(),
                 model=str(DEEPSEEK_CHAT_MODEL or "").strip(),
+            )
+        if selected_provider in {"opencode_go", "opencode-go", "go"}:
+            return WorkerModelSpec(
+                role="background_reasoning",
+                provider="opencode_go",
+                protocol="openai_chat",
+                api_url=_env_or(
+                    "OPENCODE_GO_API_URL",
+                    "https://opencode.ai/zen/go/v1/chat/completions",
+                ),
+                api_key=_env("OPENCODE_GO_API_KEY"),
+                model=_env_or("OPENCODE_GO_MODEL", "deepseek-v4-flash"),
             )
         return WorkerModelSpec(
             role="background_reasoning",
