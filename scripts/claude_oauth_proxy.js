@@ -7,7 +7,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { StringDecoder } = require("string_decoder");
 const { execFileSync, spawn } = require("child_process");
-const { Readable } = require("stream");
+const { PassThrough, Readable } = require("stream");
 
 const PORT = parseInt(process.env.PORT || "8082");
 const HOST = process.env.HOST || "127.0.0.1";
@@ -34,6 +34,12 @@ const CLAUDE_REQUEST_SNAPSHOT_DIR =
     ? path.join(path.dirname(CLAUDE_OAUTH_FILE), "claude-request-snapshots")
     : path.join(process.cwd(), "claude-request-snapshots"));
 const CLAUDE_REQUEST_SNAPSHOT_LIMIT = 10;
+const CLAUDE_RESPONSE_SNAPSHOT_DIR =
+  process.env.CLAUDE_RESPONSE_SNAPSHOT_DIR ||
+  (CLAUDE_OAUTH_FILE
+    ? path.join(path.dirname(CLAUDE_OAUTH_FILE), "claude-response-snapshots")
+    : path.join(process.cwd(), "claude-response-snapshots"));
+const CLAUDE_RESPONSE_SNAPSHOT_TTL_MS = 12 * 60 * 60 * 1000;
 const CLAUDE_OAUTH_JSON = process.env.CLAUDE_OAUTH_JSON || "";
 const CLAUDE_OAUTH_KEYCHAIN_SERVICE =
   process.env.CLAUDE_OAUTH_KEYCHAIN_SERVICE || "Claude Code-credentials";
@@ -110,6 +116,7 @@ let lastRateLimitSnapshot = null;
 let rateLimitSnapshotLoaded = false;
 let refreshInFlight = null;
 let requestSnapshotSequence = 0;
+let responseSnapshotSequence = 0;
 
 function log(msg) {
   console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
@@ -1666,6 +1673,121 @@ function persistRequestSnapshot(data) {
   }
 }
 
+function responseSnapshotTimestamp(filename) {
+  const match = /^response-(\d{13})-/.exec(filename);
+  return match ? Number(match[1]) : 0;
+}
+
+function scheduleResponseSnapshotExpiry(target, timestamp) {
+  const delay = timestamp + CLAUDE_RESPONSE_SNAPSHOT_TTL_MS - Date.now();
+  if (delay <= 0) {
+    try {
+      fs.unlinkSync(target);
+    } catch (e) {
+      if (e?.code !== "ENOENT") log(`Response snapshot expiry failed: ${e.message}`);
+    }
+    return;
+  }
+  const timer = setTimeout(() => {
+    fs.unlink(target, (e) => {
+      if (e && e.code !== "ENOENT") log(`Response snapshot expiry failed: ${e.message}`);
+    });
+  }, delay);
+  timer.unref();
+}
+
+function initializeResponseSnapshotRetention() {
+  try {
+    fs.mkdirSync(CLAUDE_RESPONSE_SNAPSHOT_DIR, { recursive: true, mode: 0o700 });
+    for (const filename of fs.readdirSync(CLAUDE_RESPONSE_SNAPSHOT_DIR)) {
+      const target = path.join(CLAUDE_RESPONSE_SNAPSHOT_DIR, filename);
+      if (filename.endsWith(".tmp")) {
+        fs.unlinkSync(target);
+        continue;
+      }
+      const timestamp = responseSnapshotTimestamp(filename);
+      if (timestamp) scheduleResponseSnapshotExpiry(target, timestamp);
+    }
+  } catch (e) {
+    log(`Response snapshot retention init failed: ${e.message}`);
+  }
+}
+
+function responseSnapshotHeader(proxyRes) {
+  const statusCode = Number(proxyRes?.statusCode || 0);
+  const statusMessage = String(proxyRes?.statusMessage || "").trim();
+  const lines = [`HTTP/${proxyRes?.httpVersion || "1.1"} ${statusCode}${statusMessage ? ` ${statusMessage}` : ""}`];
+  const rawHeaders = Array.isArray(proxyRes?.rawHeaders) ? proxyRes.rawHeaders : [];
+  if (rawHeaders.length >= 2) {
+    for (let index = 0; index + 1 < rawHeaders.length; index += 2) {
+      lines.push(`${rawHeaders[index]}: ${rawHeaders[index + 1]}`);
+    }
+  } else {
+    for (const [name, value] of Object.entries(proxyRes?.headers || {})) {
+      if (Array.isArray(value)) {
+        for (const item of value) lines.push(`${name}: ${item}`);
+      } else if (value !== undefined) {
+        lines.push(`${name}: ${value}`);
+      }
+    }
+  }
+  return `${lines.join("\r\n")}\r\n\r\n`;
+}
+
+function captureAnthropicResponse(proxyRes, method, requestPath) {
+  const timestamp = Date.now();
+  responseSnapshotSequence += 1;
+  const route = `${method || "REQUEST"}-${requestPath || "/"}`
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "response";
+  const filename =
+    `response-${String(timestamp).padStart(13, "0")}-` +
+    `${process.pid}-${String(responseSnapshotSequence).padStart(8, "0")}-${route}.http`;
+  const target = path.join(CLAUDE_RESPONSE_SNAPSHOT_DIR, filename);
+  const tmp = `${target}.tmp`;
+  const captured = new PassThrough();
+  captured.statusCode = proxyRes.statusCode;
+  captured.statusMessage = proxyRes.statusMessage;
+  captured.headers = proxyRes.headers;
+  captured.rawHeaders = proxyRes.rawHeaders;
+  captured.httpVersion = proxyRes.httpVersion;
+
+  try {
+    fs.mkdirSync(CLAUDE_RESPONSE_SNAPSHOT_DIR, { recursive: true, mode: 0o700 });
+    const output = fs.createWriteStream(tmp, { flags: "wx", mode: 0o600 });
+    let failed = false;
+    output.on("error", (e) => {
+      if (failed) return;
+      failed = true;
+      proxyRes.unpipe(output);
+      try {
+        fs.unlinkSync(tmp);
+      } catch {}
+      log(`Response snapshot persist failed: ${e.message}`);
+    });
+    output.on("finish", () => {
+      if (failed) return;
+      try {
+        fs.renameSync(tmp, target);
+        fs.chmodSync(target, 0o600);
+        scheduleResponseSnapshotExpiry(target, timestamp);
+      } catch (e) {
+        try {
+          fs.unlinkSync(tmp);
+        } catch {}
+        log(`Response snapshot persist failed: ${e.message}`);
+      }
+    });
+    output.write(responseSnapshotHeader(proxyRes));
+    proxyRes.pipe(output);
+  } catch (e) {
+    log(`Response snapshot persist failed: ${e.message}`);
+  }
+
+  proxyRes.pipe(captured);
+  return captured;
+}
+
 function proxyToAnthropic(token, path, payload) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(payload);
@@ -1685,7 +1807,7 @@ function proxyToAnthropic(token, path, payload) {
           "Content-Length": Buffer.byteLength(data),
         },
       },
-      (proxyRes) => resolve(proxyRes)
+      (proxyRes) => resolve(captureAnthropicResponse(proxyRes, "POST", path))
     );
     req.on("error", reject);
     req.write(data);
@@ -1708,7 +1830,7 @@ function proxyGetAnthropic(token, path) {
           "User-Agent": `claude-code/${CLAUDE_CODE_VERSION} (external, cli)`,
         },
       },
-      (proxyRes) => resolve(proxyRes)
+      (proxyRes) => resolve(captureAnthropicResponse(proxyRes, "GET", path))
     );
     req.on("error", reject);
     req.end();
@@ -1965,9 +2087,11 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   loadRateLimitSnapshot();
+  initializeResponseSnapshotRetention();
   log(`Claude OAuth Proxy running on http://${HOST}:${PORT}`);
   log("Auth: PROXY_KEY required");
   log(`Request snapshots: ${CLAUDE_REQUEST_SNAPSHOT_DIR} (latest ${CLAUDE_REQUEST_SNAPSHOT_LIMIT})`);
+  log(`Response snapshots: ${CLAUDE_RESPONSE_SNAPSHOT_DIR} (TTL 12h)`);
   log("");
   log("Endpoints:");
   log(`  POST http://localhost:${PORT}/v1/chat/completions  (OpenAI format)`);
