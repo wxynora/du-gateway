@@ -23,8 +23,8 @@ from services.worker_usage import record_response_usage
 from utils.log import get_logger
 
 
-ANTHROPIC_IMAGE_MAX_LONG_EDGE = 1568
-ANTHROPIC_IMAGE_MAX_PIXELS = 1_150_000
+ANTHROPIC_IMAGE_MAX_LONG_EDGE = 1024
+ANTHROPIC_IMAGE_MAX_PIXELS = 589_824
 REMOTE_IMAGE_CONNECT_TIMEOUT_SECONDS = 5
 REMOTE_IMAGE_READ_TIMEOUT_SECONDS = 30
 _RESIZABLE_MIME_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
@@ -336,7 +336,7 @@ def _encode_resized_image(img) -> tuple[str, str]:
 
 def compress_base64_image_for_anthropic(image_base64: str, mime_type: str) -> tuple[str, str, dict]:
     """
-    按 Anthropic vision 建议压缩：长边 <= 1568px，且总像素 <= 1.15MP。
+    为控制 Anthropic vision token 成本压缩：长边 <= 1024px，且总像素 <= 589824（768x768）。
     只处理 JPEG/PNG/WebP；GIF 等动图保持原样，避免破坏语义。
     返回 (base64, mime_type, meta)。
     """
