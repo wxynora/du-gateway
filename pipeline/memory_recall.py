@@ -61,9 +61,18 @@ class RecallCacheIdentity:
         )
 
 
+def _strip_memory_query_envelope_markers(text: str) -> str:
+    """引用回复的纯文本边界只负责分段，不作为动态记忆检索语义。"""
+    cleaned = re.sub(r"【\s*(?:引用消息|当前消息)\s*】", " ", str(text or ""))
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
 def _strip_memory_query_media_placeholders(text: str) -> str:
     """图片占位只表示本轮带图，不参与关键词和 BM25 匹配。"""
-    cleaned = re.sub(r"(?:\[\s*图片\s*\]|【\s*图片\s*】)", " ", str(text or ""))
+    cleaned = _strip_memory_query_envelope_markers(text)
+    cleaned = re.sub(r"(?:\[\s*图片\s*\]|【\s*图片\s*】)", " ", cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
@@ -472,6 +481,8 @@ def _last_4_turns_text_for_rewrite(messages: list[dict]) -> str:
             text = " ".join(parts).strip()
         else:
             text = ""
+        if role == "user":
+            text = _strip_memory_query_envelope_markers(text)
         if not text:
             continue
         who = "老婆" if role == "user" else "渡"
@@ -1642,18 +1653,24 @@ def step_inject_dynamic_memory(
                     if isinstance(c, dict) and c.get("type") == "text"
                 ).strip()
             break
+    last_user_query_text = _strip_memory_query_envelope_markers(last_user_text)
     previous_four_rounds = previous_four_rounds_text(window_id)
+    previous_four_rounds_query_text = _strip_memory_query_envelope_markers(previous_four_rounds)
     from storage import query_topic_state_store
 
     topic_state_record = query_topic_state_store.get_topic_state_record(window_id)
     previous_topic_state = dict(topic_state_record.get("state") or {})
     topic_state_observed_at = time.time()
     rewrite_result = rewrite_query_state(
-        previous_four_rounds,
-        last_user_text,
+        previous_four_rounds_query_text,
+        last_user_query_text,
         previous_topic_state,
     )
-    rewritten_queries = list(rewrite_result.get("queries") or [])
+    rewritten_queries = [
+        clean_query
+        for raw_query in (rewrite_result.get("queries") or [])
+        if (clean_query := _strip_memory_query_envelope_markers(str(raw_query or "")))
+    ]
     resolved_query = rewritten_queries[0] if rewritten_queries else ""
     expanded_queries = rewritten_queries[1:3]
     clear_topic = bool(rewrite_result.get("clear_topic"))
@@ -1684,9 +1701,9 @@ def step_inject_dynamic_memory(
 
     memories = prune_dynamic_memories(memories, core_pending)
     # 元问题和短回应仍更新 topic state，但不进入记忆检索。
-    if is_memory_meta_query(last_user_text) or is_trivial_user_message(last_user_text):
+    if is_memory_meta_query(last_user_query_text) or is_trivial_user_message(last_user_query_text):
         return body
-    original_keyword_candidates = extract_keyword_candidates(last_user_text)
+    original_keyword_candidates = extract_keyword_candidates(last_user_query_text)
     excluded_source_ids = _recent_round_created_memory_ids(
         window_id,
         previous_four_rounds,
@@ -1703,8 +1720,8 @@ def step_inject_dynamic_memory(
     topic_anchor_evidence = "\n".join(
         [
             "" if clear_topic else json.dumps(previous_topic_state or {}, ensure_ascii=False),
-            previous_four_rounds,
-            last_user_text,
+            previous_four_rounds_query_text,
+            last_user_query_text,
         ]
     )
     anchor_candidates = topic_anchor_candidates(topic_state, topic_anchor_evidence)
@@ -1726,12 +1743,12 @@ def step_inject_dynamic_memory(
         for item in keyword_candidates
         if str((item or {}).get("text") or "").strip()
     ]
-    retrieval_query = build_retrieval_text(last_user_text)
-    bm25_query = strip_memory_query_media_placeholders(resolved_query or last_user_text)
+    retrieval_query = build_retrieval_text(last_user_query_text)
+    bm25_query = strip_memory_query_media_placeholders(resolved_query or last_user_query_text)
     valid_memory_ids = {str(mem.get("id") or "").strip() for mem in memories if str(mem.get("id") or "").strip()}
     cache_identity = RecallCacheIdentity(
         keywords=tuple(keywords),
-        base_query=str(last_user_text or "").strip(),
+        base_query=str(last_user_query_text or "").strip(),
         retrieval_query=str(retrieval_query or "").strip(),
         resolved_query=str(resolved_query or "").strip(),
         expanded_queries=tuple(str(query or "").strip() for query in expanded_queries),
@@ -1812,7 +1829,7 @@ def step_inject_dynamic_memory(
         vector_error = ""
         try:
             vector_queries = [query for query in [resolved_query, *expanded_queries] if query]
-            vector_recalled = multi_query_recall_and_rerank(last_user_text, vector_queries)
+            vector_recalled = multi_query_recall_and_rerank(last_user_query_text, vector_queries)
             if vector_recalled:
                 valid_ids = {str(mem.get("id")) for mem in memories if mem.get("id")}
                 vector_recalled = [
@@ -1859,14 +1876,14 @@ def step_inject_dynamic_memory(
 
         recalled, recall_source, rerank_debug = external_rerank(
             recalled,
-            last_user_text,
+            last_user_query_text,
             retrieval_query,
             messages,
             resolved_query,
             expanded_queries,
             recall_source,
             bm25_keyword_candidates,
-            previous_four_rounds,
+            previous_four_rounds_query_text,
             topic_state,
         )
         rerank_reason = str((rerank_debug or {}).get("reason") or "")
@@ -1896,7 +1913,7 @@ def step_inject_dynamic_memory(
             event = {
                 "timestamp": now_beijing_iso(),
                 "window_id": (window_id or "").strip() or "__default__",
-                "query": (last_user_text or "").strip(),
+                "query": (last_user_query_text or "").strip(),
                 "keywords": keywords,
                 "keyword_debug": keyword_debug,
                 "retrieval_query": retrieval_query,
@@ -1905,7 +1922,7 @@ def step_inject_dynamic_memory(
                 "source": recall_source,
                 "expanded_queries": expanded_queries,
                 "topic_state": topic_state,
-                "previous_four_rounds": previous_four_rounds,
+                "previous_four_rounds": previous_four_rounds_query_text,
                 "query_rewrite_format": str(rewrite_result.get("format") or ""),
                 "recalled_lines": [],
                 "recalled_count": 0,
@@ -1913,7 +1930,7 @@ def step_inject_dynamic_memory(
                 "vector_error": vector_error,
                 "rerank": rerank_debug,
                 "sqlite_shadow": build_sqlite_shadow_compare(
-                    query=last_user_text,
+                    query=last_user_query_text,
                     retrieval_query=retrieval_query,
                     keywords=keywords,
                     actual_ids=[],
@@ -2004,7 +2021,7 @@ def step_inject_dynamic_memory(
         event = {
             "timestamp": now_beijing_iso(),
             "window_id": (window_id or "").strip() or "__default__",
-            "query": (last_user_text or "").strip(),
+            "query": (last_user_query_text or "").strip(),
             "keywords": keywords,
             "keyword_debug": keyword_debug,
             "retrieval_query": retrieval_query,
@@ -2013,7 +2030,7 @@ def step_inject_dynamic_memory(
             "source": recall_source,
             "expanded_queries": expanded_queries,
             "topic_state": topic_state,
-            "previous_four_rounds": previous_four_rounds,
+            "previous_four_rounds": previous_four_rounds_query_text,
             "query_rewrite_format": str(rewrite_result.get("format") or ""),
             "recalled_lines": [],
             "recalled_count": 0,
@@ -2021,7 +2038,7 @@ def step_inject_dynamic_memory(
             "vector_error": vector_error,
             "rerank": rerank_debug,
             "sqlite_shadow": build_sqlite_shadow_compare(
-                query=last_user_text,
+                query=last_user_query_text,
                 retrieval_query=retrieval_query,
                 keywords=keywords,
                 actual_ids=[],
@@ -2049,7 +2066,7 @@ def step_inject_dynamic_memory(
     event = {
         "timestamp": now_beijing_iso(),
         "window_id": (window_id or "").strip() or "__default__",
-        "query": (last_user_text or "").strip(),
+        "query": (last_user_query_text or "").strip(),
         "keywords": keywords,
         "keyword_debug": keyword_debug,
         "retrieval_query": retrieval_query,
@@ -2058,7 +2075,7 @@ def step_inject_dynamic_memory(
         "source": recall_source,
         "expanded_queries": expanded_queries,
         "topic_state": topic_state,
-        "previous_four_rounds": previous_four_rounds,
+        "previous_four_rounds": previous_four_rounds_query_text,
         "query_rewrite_format": str(rewrite_result.get("format") or ""),
         "recalled_lines": lines,
         "recalled_items": recalled_items,
@@ -2067,7 +2084,7 @@ def step_inject_dynamic_memory(
         "rerank": rerank_debug,
         "citation_map": citation_map,
         "sqlite_shadow": build_sqlite_shadow_compare(
-            query=last_user_text,
+            query=last_user_query_text,
             retrieval_query=retrieval_query,
             keywords=keywords,
             actual_ids=[str((item or {}).get("memory_id") or "") for item in recalled_items],
