@@ -356,10 +356,8 @@ def _apply_one_decision(
     round_ts = decision.get("timestamp") or decision.get("last_mentioned")
     now_iso = round_ts if isinstance(round_ts, str) and round_ts else now_beijing_iso()
     mention_init = decision.get("mention_count")
-    if mention_init is not None and isinstance(mention_init, int):
-        pass
-    else:
-        mention_init = 0
+    if not isinstance(mention_init, int) or isinstance(mention_init, bool):
+        mention_init = 1
 
     def _record_provenance_safe(
         *,
@@ -409,7 +407,7 @@ def _apply_one_decision(
             "emotion_label": emotion_label,
             "scene_type": scene_type,
             "target_type": target_type,
-            "mention_count": mention_init if mention_init is not None else 1,
+            "mention_count": mention_init,
             "created_at": now_iso,
             "updated_at": now_iso,
             "last_mentioned": now_iso,

@@ -13,17 +13,29 @@ logger = get_logger(__name__)
 
 def normalize_topic_state(state: dict | None) -> dict:
     raw = state if isinstance(state, dict) else {}
+    raw_anchors = raw.get("anchors")
+    anchor_values = raw_anchors if isinstance(raw_anchors, list) else []
     anchors: list[str] = []
     seen: set[str] = set()
-    for value in raw.get("anchors") or []:
-        anchor = str(value or "").strip()
+    for value in anchor_values:
+        if not isinstance(value, str):
+            continue
+        anchor = value.strip()
         if not anchor or anchor in seen:
             continue
         seen.add(anchor)
         anchors.append(anchor)
     normalized = {
-        "active_topic": str(raw.get("active_topic") or "").strip(),
-        "current_focus": str(raw.get("current_focus") or "").strip(),
+        "active_topic": (
+            raw.get("active_topic", "").strip()
+            if isinstance(raw.get("active_topic", ""), str)
+            else ""
+        ),
+        "current_focus": (
+            raw.get("current_focus", "").strip()
+            if isinstance(raw.get("current_focus", ""), str)
+            else ""
+        ),
         "anchors": anchors,
     }
     if not any((normalized["active_topic"], normalized["current_focus"], normalized["anchors"])):

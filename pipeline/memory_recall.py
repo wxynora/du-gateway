@@ -37,6 +37,30 @@ class RecallResult:
     topic_state: dict
 
 
+@dataclass(frozen=True, slots=True)
+class RecallCacheIdentity:
+    keywords: tuple[str, ...]
+    base_query: str
+    retrieval_query: str
+    resolved_query: str
+    expanded_queries: tuple[str, ...]
+    active_topic: str
+    current_focus: str
+    anchors: tuple[str, ...]
+
+    @property
+    def context_key(self) -> tuple:
+        return (
+            self.base_query,
+            self.retrieval_query,
+            self.resolved_query,
+            self.expanded_queries,
+            self.active_topic,
+            self.current_focus,
+            self.anchors,
+        )
+
+
 def _strip_memory_query_media_placeholders(text: str) -> str:
     """图片占位只表示本轮带图，不参与关键词和 BM25 匹配。"""
     cleaned = re.sub(r"(?:\[\s*图片\s*\]|【\s*图片\s*】)", " ", str(text or ""))
@@ -332,13 +356,23 @@ _RECALL_CACHE: dict[str, dict] = {}  # {window_id: {"keywords": [...], "results"
 _RECALL_CACHE_TTL = 120  # 秒
 
 
+def _recall_cache_identity_parts(
+    identity: list[str] | RecallCacheIdentity,
+) -> tuple[list[str], tuple | None]:
+    if isinstance(identity, RecallCacheIdentity):
+        return list(identity.keywords), identity.context_key
+    return list(identity or []), None
+
+
 def _recall_cache_hit(
     window_id: str,
-    keywords: list[str],
+    identity: list[str] | RecallCacheIdentity,
     excluded_source_ids: set[str] | None = None,
 ) -> dict | None:
-    """关键词重叠 >= 70% 且未过期则命中缓存。"""
+    """完整检索上下文一致、关键词重叠 >= 70% 且未过期时命中缓存。"""
     import time as _time
+
+    keywords, context_key = _recall_cache_identity_parts(identity)
     cache = _RECALL_CACHE.get(window_id)
     if not cache:
         return None
@@ -357,6 +391,8 @@ def _recall_cache_hit(
     }
     if cached_excluded != current_excluded:
         return None
+    if cache.get("context_key") != context_key:
+        return None
     old_kw = set(cache.get("keywords") or [])
     new_kw = set(keywords)
     if not old_kw or not new_kw:
@@ -369,15 +405,18 @@ def _recall_cache_hit(
 
 def _recall_cache_set(
     window_id: str,
-    keywords: list[str],
+    identity: list[str] | RecallCacheIdentity,
     results: list[dict],
     source: str = "",
     excluded_source_ids: set[str] | None = None,
     candidate_ids: list[str] | None = None,
 ) -> None:
     import time as _time
+
+    keywords, context_key = _recall_cache_identity_parts(identity)
     _RECALL_CACHE[window_id] = {
         "keywords": keywords,
+        "context_key": context_key,
         "results": results,
         "source": source,
         "candidate_ids": [
@@ -632,6 +671,37 @@ def _parse_memory_query_rewrite_output(content: str) -> list[str]:
     return out
 
 
+def _topic_state_payload_is_valid(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if not value:
+        return True
+    known_keys = {"active_topic", "current_focus", "anchors"}
+    if not any(key in value for key in known_keys):
+        return False
+    for key in ("active_topic", "current_focus"):
+        if key in value and value.get(key) is not None and not isinstance(value.get(key), str):
+            return False
+    if "anchors" in value:
+        anchors = value.get("anchors")
+        if anchors is not None and (
+            not isinstance(anchors, list)
+            or any(not isinstance(item, str) for item in anchors)
+        ):
+            return False
+    return True
+
+
+def _memory_query_values(value: object) -> list[str]:
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, list):
+        values = [item for item in value if isinstance(item, str)]
+    else:
+        values = []
+    return values
+
+
 def _parse_memory_query_state_output(content: str, previous_topic_state: dict | None = None) -> dict:
     """解析 query LLM 的 JSON；旧三行格式仅保留 queries 兼容，不覆盖 topic state。"""
     from storage.query_topic_state_store import normalize_topic_state
@@ -647,20 +717,24 @@ def _parse_memory_query_state_output(content: str, previous_topic_state: dict | 
     if isinstance(parsed, dict):
         queries: list[str] = []
         seen: set[str] = set()
-        for value in parsed.get("queries") or []:
+        for value in _memory_query_values(parsed.get("queries")):
             query = str(value or "").strip()
             if len(query) < 2 or query in seen:
                 continue
             seen.add(query)
             queries.append(query)
         raw_state = parsed.get("topic_state")
-        state = normalize_topic_state(raw_state)
-        clear_topic = bool(
-            parsed.get("clear_topic") is True
-            or ("topic_state" in parsed and isinstance(raw_state, dict) and not state)
+        state_payload_valid = _topic_state_payload_is_valid(raw_state)
+        state = normalize_topic_state(raw_state) if state_payload_valid else {}
+        clear_topic = parsed.get("clear_topic") is True or bool(
+            "topic_state" in parsed and state_payload_valid and not state
         )
         return {
-            "topic_state": {} if clear_topic else state or normalize_topic_state(previous_topic_state),
+            "topic_state": (
+                {}
+                if clear_topic
+                else state or normalize_topic_state(previous_topic_state)
+            ),
             "clear_topic": clear_topic,
             "queries": queries,
             "format": "json",
@@ -1526,8 +1600,11 @@ def step_inject_dynamic_memory(
     topic_anchor_candidates: Callable[[dict, str], list[dict]],
     build_retrieval_text: Callable[[str], str],
     strip_memory_query_media_placeholders: Callable[[str], str],
-    recall_cache_hit: Callable[[str, list[str], set[str]], dict | None],
-    recall_cache_set: Callable[[str, list[str], list[dict], str, set[str]], None],
+    recall_cache_hit: Callable[[str, list[str] | RecallCacheIdentity, set[str]], dict | None],
+    recall_cache_set: Callable[
+        [str, list[str] | RecallCacheIdentity, list[dict], str, set[str]],
+        None,
+    ],
     dedupe_recalled_memories: Callable[[list[dict]], list[dict]],
     multi_query_recall_and_rerank: Callable[[str, list[str]], list[dict]],
     bm25_recall_scores: Callable[[str, list[dict], list[dict]], dict[str, dict]],
@@ -1551,15 +1628,7 @@ def step_inject_dynamic_memory(
     if dynamic_memory_top_n <= 0:
         return body
     du_request_id = normalize_debug_request_id((body or {}).get(DU_REQUEST_ID_BODY_KEY))
-    memories = r2_store_module.get_dynamic_memory_list()
-    core_pending = r2_store_module.get_core_cache_pending() or []
-    if not memories and not core_pending:
-        return body
-    from utils.time_aware import now_beijing_iso
-
-    memories = prune_dynamic_memories(memories, core_pending)
     messages = body.get("messages") or []
-    # 取最后一条 user 内容做关键词
     last_user_text = ""
     for m in reversed(messages):
         if (m.get("role") or "").lower() == "user":
@@ -1573,26 +1642,7 @@ def step_inject_dynamic_memory(
                     if isinstance(c, dict) and c.get("type") == "text"
                 ).strip()
             break
-    # 元问题：不要触发动态记忆（避免”问记忆→召回一堆含记忆字样的记忆”）
-    if is_memory_meta_query(last_user_text):
-        return body
-    # 短消息 / 日常闲聊跳过检索，省 token
-    if is_trivial_user_message(last_user_text):
-        return body
-    original_keyword_candidates = extract_keyword_candidates(last_user_text)
     previous_four_rounds = previous_four_rounds_text(window_id)
-    excluded_source_ids = _recent_round_created_memory_ids(
-        window_id,
-        previous_four_rounds,
-        logger_instance=logger_instance,
-    )
-    if excluded_source_ids:
-        logger_instance.info(
-            "动态记忆 last4 新建来源仅从模型可见注入排除 window_id=%s rounds=%s memory_count=%s",
-            window_id,
-            list(getattr(previous_four_rounds, "round_indexes", ()) or ()),
-            len(excluded_source_ids),
-        )
     from storage import query_topic_state_store
 
     topic_state_record = query_topic_state_store.get_topic_state_record(window_id)
@@ -1626,6 +1676,30 @@ def step_inject_dynamic_memory(
             )
     _replace_recall_topic_state(recall_topic_state_out, topic_state)
 
+    memories = r2_store_module.get_dynamic_memory_list()
+    core_pending = r2_store_module.get_core_cache_pending() or []
+    if not memories and not core_pending:
+        return body
+    from utils.time_aware import now_beijing_iso
+
+    memories = prune_dynamic_memories(memories, core_pending)
+    # 元问题和短回应仍更新 topic state，但不进入记忆检索。
+    if is_memory_meta_query(last_user_text) or is_trivial_user_message(last_user_text):
+        return body
+    original_keyword_candidates = extract_keyword_candidates(last_user_text)
+    excluded_source_ids = _recent_round_created_memory_ids(
+        window_id,
+        previous_four_rounds,
+        logger_instance=logger_instance,
+    )
+    if excluded_source_ids:
+        logger_instance.info(
+            "动态记忆 last4 新建来源仅从模型可见注入排除 window_id=%s rounds=%s memory_count=%s",
+            window_id,
+            list(getattr(previous_four_rounds, "round_indexes", ()) or ()),
+            len(excluded_source_ids),
+        )
+
     topic_anchor_evidence = "\n".join(
         [
             "" if clear_topic else json.dumps(previous_topic_state or {}, ensure_ascii=False),
@@ -1655,9 +1729,23 @@ def step_inject_dynamic_memory(
     retrieval_query = build_retrieval_text(last_user_text)
     bm25_query = strip_memory_query_media_placeholders(resolved_query or last_user_text)
     valid_memory_ids = {str(mem.get("id") or "").strip() for mem in memories if str(mem.get("id") or "").strip()}
+    cache_identity = RecallCacheIdentity(
+        keywords=tuple(keywords),
+        base_query=str(last_user_text or "").strip(),
+        retrieval_query=str(retrieval_query or "").strip(),
+        resolved_query=str(resolved_query or "").strip(),
+        expanded_queries=tuple(str(query or "").strip() for query in expanded_queries),
+        active_topic=str(topic_state.get("active_topic") or "").strip(),
+        current_focus=str(topic_state.get("current_focus") or "").strip(),
+        anchors=tuple(str(anchor or "").strip() for anchor in topic_state.get("anchors") or []),
+    )
 
     # query rewrite 每轮先更新 topic state；缓存只复用召回结果，不再跳过话题理解。
-    cached = recall_cache_hit(window_id, keywords, excluded_source_ids) if use_recall_cache else None
+    cached = (
+        recall_cache_hit(window_id, cache_identity, excluded_source_ids)
+        if use_recall_cache
+        else None
+    )
     if cached is not None:
         active_core_by_id = {
             f"core::{str((item or {}).get('id') or '').strip()}": item
@@ -1793,7 +1881,7 @@ def step_inject_dynamic_memory(
         if use_recall_cache and cacheable_recall:
             recall_cache_set(
                 window_id,
-                keywords,
+                cache_identity,
                 recalled,
                 recall_source,
                 excluded_source_ids,
