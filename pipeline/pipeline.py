@@ -612,12 +612,13 @@ def recall_dynamic_memory(
             keywords,
             excluded_source_ids=excluded_source_ids,
         ),
-        recall_cache_set=lambda target_window_id, keywords, results, source, excluded_source_ids: _recall_cache_set(
+        recall_cache_set=lambda target_window_id, keywords, results, source, excluded_source_ids, candidate_ids=None: _recall_cache_set(
             target_window_id,
             keywords,
             results,
             source=source,
             excluded_source_ids=excluded_source_ids,
+            candidate_ids=candidate_ids,
         ),
         dedupe_recalled_memories=lambda memories: _dedupe_recalled_memories(memories),
         multi_query_recall_and_rerank=lambda query, expansions: _multi_query_recall_and_rerank(

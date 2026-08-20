@@ -373,12 +373,18 @@ def _recall_cache_set(
     results: list[dict],
     source: str = "",
     excluded_source_ids: set[str] | None = None,
+    candidate_ids: list[str] | None = None,
 ) -> None:
     import time as _time
     _RECALL_CACHE[window_id] = {
         "keywords": keywords,
         "results": results,
         "source": source,
+        "candidate_ids": [
+            str(value or "").strip()
+            for value in candidate_ids or []
+            if str(value or "").strip()
+        ],
         "excluded_source_ids": sorted(
             str(value or "").strip()
             for value in excluded_source_ids or set()
@@ -1573,16 +1579,12 @@ def step_inject_dynamic_memory(
         logger_instance=logger_instance,
     )
     if excluded_source_ids:
-        memories = _exclude_memories_created_in_recent_rounds(memories, excluded_source_ids)
-        core_pending = _exclude_memories_created_in_recent_rounds(core_pending, excluded_source_ids)
         logger_instance.info(
-            "动态记忆召回排除 last4 新建来源 window_id=%s rounds=%s memory_count=%s",
+            "动态记忆 last4 新建来源仅从模型可见注入排除 window_id=%s rounds=%s memory_count=%s",
             window_id,
             list(getattr(previous_four_rounds, "round_indexes", ()) or ()),
             len(excluded_source_ids),
         )
-    if not memories and not core_pending:
-        return body
     from storage import query_topic_state_store
 
     previous_topic_state = query_topic_state_store.get_topic_state(window_id)
@@ -1674,7 +1676,23 @@ def step_inject_dynamic_memory(
             cached = None
     if cached is not None:
         recalled = dedupe_recalled_memories(cached_results)
-        _replace_recall_candidate_ids(recall_candidate_ids_out, recalled)
+        cached_candidate_ids = [
+            memory_id
+            for value in cached.get("candidate_ids") or []
+            if (memory_id := str(value or "").strip())
+            and (
+                memory_id in valid_memory_ids
+                or memory_id in active_core_ids
+            )
+        ]
+        if not cached_candidate_ids:
+            cached_candidate_ids = [
+                str((memory or {}).get("id") or "").strip()
+                for memory in recalled
+                if str((memory or {}).get("id") or "").strip()
+            ]
+        if recall_candidate_ids_out is not None:
+            recall_candidate_ids_out[:] = cached_candidate_ids
         recall_source = str(cached.get("source") or "hybrid")
         vector_error = ""
         rerank_cache_hit = "+rerank" in recall_source
@@ -1691,8 +1709,7 @@ def step_inject_dynamic_memory(
                 valid_ids = {str(mem.get("id")) for mem in memories if mem.get("id")}
                 vector_recalled = [
                     mem for mem in vector_recalled
-                    if not _memory_has_excluded_source(mem, excluded_source_ids)
-                    and (
+                    if (
                         # 动态层：只要求条目仍存在，不再按独立天数二次过滤。
                         str(mem.get("id") or "") in valid_ids
                         # 核心缓存层：dynamic_vector_retriever 产出的临时 id 形如 core::<entry_id>。
@@ -1713,8 +1730,14 @@ def step_inject_dynamic_memory(
             seen_bm25_keywords.add(text)
             bm25_keyword_candidates.append(item)
         bm25_scores = bm25_recall_scores(bm25_query, bm25_keyword_candidates, memories)
-        recalled = dedupe_recalled_memories(merge_vector_and_bm25_recall(vector_recalled, bm25_scores))
-        _replace_recall_candidate_ids(recall_candidate_ids_out, recalled)
+        evolution_candidates = dedupe_recalled_memories(
+            merge_vector_and_bm25_recall(vector_recalled, bm25_scores)
+        )
+        _replace_recall_candidate_ids(recall_candidate_ids_out, evolution_candidates)
+        recalled = _exclude_memories_created_in_recent_rounds(
+            evolution_candidates,
+            excluded_source_ids,
+        )
         has_vector = any(float(((m.get("_recall_score") or {}).get("sem_user") or 0.0)) > 0 for m in recalled)
         has_bm25 = any(float(((m.get("_recall_score") or {}).get("bm25") or 0.0)) > 0 for m in recalled)
         if has_vector and has_bm25:
@@ -1754,6 +1777,11 @@ def step_inject_dynamic_memory(
                 recalled,
                 recall_source,
                 excluded_source_ids,
+                candidate_ids=[
+                    str((memory or {}).get("id") or "").strip()
+                    for memory in evolution_candidates
+                    if str((memory or {}).get("id") or "").strip()
+                ],
             )
 
         if not recalled:
