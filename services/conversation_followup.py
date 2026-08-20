@@ -1601,10 +1601,6 @@ def send_post_spring_dream_wakeup(window_id: str, target: str, event_text: str, 
         dynamic_system_event=True,
         allow_followup=False,
         archive_after_delivery=True,
-        extra_instruction=(
-            "这是睡眠期随机唤醒在上一轮春梦后的延续触发，不是小玥在聊天框里发来的消息。"
-            "请直接以你此刻对小玥说话的口吻自然发出；不要解释系统流程，不要输出 JSON 或工具说明。"
-        ),
     )
 
 

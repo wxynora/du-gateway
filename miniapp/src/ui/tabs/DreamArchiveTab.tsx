@@ -49,6 +49,13 @@ type DreamFragmentLibraryResp = {
   count?: number;
 };
 
+type DreamMaterialMutationResp = {
+  ok?: boolean;
+  material?: FragmentStar;
+  deleted_theme_id?: string;
+  inspiration?: DreamInspirationResp;
+};
+
 type DreamView = "dreams" | "fragments" | "inspiration";
 
 type FragmentStar = {
@@ -67,6 +74,7 @@ type FragmentPack = {
 type PanelState =
   | { type: "dream"; item: DreamArchiveItem }
   | { type: "fragment"; star: FragmentStar }
+  | { type: "material-edit"; star: FragmentStar }
   | { type: "fold" }
   | { type: "write" }
   | { type: "fish"; stars: FragmentStar[] };
@@ -1076,6 +1084,7 @@ export function DreamArchiveTab({
   const [localFragments, setLocalFragments] = useState<FragmentStar[]>(() => readStoredStars(DREAM_LOCAL_FRAGMENTS_KEY));
   const [libraryPacks, setLibraryPacks] = useState<FragmentPack[]>([]);
   const [libraryLoaded, setLibraryLoaded] = useState(false);
+  const [materialSaving, setMaterialSaving] = useState(false);
   const [inspirationStars, setInspirationStars] = useState<FragmentStar[]>(() => readStoredStars(DREAM_INSPIRATION_KEY));
   const [inspirationReady, setInspirationReady] = useState(false);
   const inspirationEditVersionRef = useRef(0);
@@ -1277,6 +1286,67 @@ export function DreamArchiveTab({
     setView("inspiration");
   }
 
+  function applySyncedInspiration(payload?: DreamInspirationResp) {
+    if (!payload) return;
+    const synced = normalizeStars(payload.stars || payload.fragments || [], "saved-inspiration");
+    setInspirationStars(synced);
+    lastSyncedInspirationJsonRef.current = JSON.stringify(synced);
+    inspirationDirtyRef.current = false;
+    inspirationSaveErrorShownRef.current = false;
+  }
+
+  async function saveLibraryMaterial(star: FragmentStar) {
+    const themeId = String(star.theme_id || "").trim();
+    const text = draftText.trim();
+    if (!themeId || !text || materialSaving) return;
+    setMaterialSaving(true);
+    try {
+      const res = await apiJson<DreamMaterialMutationResp>(
+        `/miniapp-api/spring-dream-materials/${encodeURIComponent(themeId)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        },
+      );
+      const saved = normalizeStars([res.material || { ...star, text }], themeId, 1)[0];
+      if (saved) {
+        setLibraryPacks((prev) => prev.map((pack) => (
+          pack.id === themeId ? { ...pack, stars: [{ ...saved, theme_id: themeId }] } : pack
+        )));
+      }
+      applySyncedInspiration(res.inspiration);
+      setDraftText("");
+      setPanel(null);
+      toast("素材已保存");
+    } catch (e: any) {
+      toast(`素材保存失败：${e?.message || e}`);
+    } finally {
+      setMaterialSaving(false);
+    }
+  }
+
+  async function deleteLibraryMaterial(star: FragmentStar) {
+    const themeId = String(star.theme_id || "").trim();
+    if (!themeId || materialSaving) return;
+    if (!window.confirm(`删除“${star.label || themeId}”这条春梦素材？`)) return;
+    setMaterialSaving(true);
+    try {
+      const res = await apiJson<DreamMaterialMutationResp>(
+        `/miniapp-api/spring-dream-materials/${encodeURIComponent(themeId)}`,
+        { method: "DELETE" },
+      );
+      setLibraryPacks((prev) => prev.filter((pack) => pack.id !== themeId));
+      applySyncedInspiration(res.inspiration);
+      setPanel(null);
+      toast("素材已删除");
+    } catch (e: any) {
+      toast(`素材删除失败：${e?.message || e}`);
+    } finally {
+      setMaterialSaving(false);
+    }
+  }
+
   function saveDraftAsFragment(target: "fragment" | "inspiration") {
     const text = draftText.trim();
     if (!text) return;
@@ -1342,22 +1412,64 @@ export function DreamArchiveTab({
       );
     }
     if (panel.type === "fragment") {
+      const themeId = String(panel.star.theme_id || "").trim();
+      const isLibraryMaterial = Boolean(
+        themeId && libraryPacks.some((pack) => pack.id === themeId && pack.stars.some((star) => star.id === panel.star.id)),
+      );
       return (
         <>
           <p className="dreamArchivePanelMuted">{panel.star.text}</p>
           <div className="dreamArchivePanelActions">
             <button className="dreamArchiveGhost" type="button" onClick={() => addStarsToBottle([panel.star])}>放进瓶子</button>
-            <button
-              className="dreamArchiveGhost"
-              type="button"
-              onClick={() => {
-                setDraftText(panel.star.text);
-                setPanel({ type: "fold" });
-              }}
-            >
-              编辑
-            </button>
+            {isLibraryMaterial ? (
+              <>
+                <button
+                  className="dreamArchiveGhost"
+                  type="button"
+                  onClick={() => {
+                    setDraftText(panel.star.text);
+                    setPanel({ type: "material-edit", star: panel.star });
+                  }}
+                >
+                  编辑素材
+                </button>
+                <button className="dreamArchiveGhost" type="button" onClick={() => void deleteLibraryMaterial(panel.star)}>
+                  删除素材
+                </button>
+              </>
+            ) : (
+              <button
+                className="dreamArchiveGhost"
+                type="button"
+                onClick={() => {
+                  setDraftText(panel.star.text);
+                  setPanel({ type: "fold" });
+                }}
+              >
+                编辑
+              </button>
+            )}
           </div>
+        </>
+      );
+    }
+    if (panel.type === "material-edit") {
+      return (
+        <>
+          <div className="dreamArchivePanelTitle">编辑主题素材</div>
+          <textarea
+            className="dreamArchiveTextarea"
+            value={draftText}
+            onChange={(event) => setDraftText(event.target.value)}
+          />
+          <button
+            className="dreamArchiveGhost dreamArchivePrimary"
+            type="button"
+            disabled={materialSaving || !draftText.trim()}
+            onClick={() => void saveLibraryMaterial(panel.star)}
+          >
+            {materialSaving ? "保存中" : "保存素材"}
+          </button>
         </>
       );
     }

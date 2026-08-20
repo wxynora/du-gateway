@@ -18,6 +18,7 @@ from services.pixel_home import (
     save_du_body_state,
 )
 from services.spring_dream import (
+    delete_spring_dream_material,
     delete_spring_dream_archive,
     draw_spring_dream_inspiration_pack,
     get_spring_dream_archive,
@@ -25,6 +26,7 @@ from services.spring_dream import (
     list_spring_dream_fragment_library,
     list_spring_dream_archives,
     save_spring_dream_inspiration,
+    update_spring_dream_material,
 )
 from storage import r2_store
 from utils.log import get_logger
@@ -486,6 +488,33 @@ def register_routes(bp) -> None:
         data = list_spring_dream_fragment_library(limit=limit)
         return jsonify({"ok": True, **data})
 
+    @bp.route("/spring-dream-materials/<path:theme_id>", methods=["PUT"])
+    def miniapp_spring_dream_material_put(theme_id: str):
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            data = {}
+        result = update_spring_dream_material(theme_id, str(data.get("text") or ""))
+        if bool(result.get("ok")):
+            return jsonify(result)
+        error = str(result.get("error") or "save_failed")
+        if error == "not_found":
+            return jsonify(result), 404
+        if error in {"invalid_theme_id", "empty_material"}:
+            return jsonify(result), 400
+        return jsonify(result), 500
+
+    @bp.route("/spring-dream-materials/<path:theme_id>", methods=["DELETE"])
+    def miniapp_spring_dream_material_delete(theme_id: str):
+        result = delete_spring_dream_material(theme_id)
+        if bool(result.get("ok")):
+            return jsonify(result)
+        error = str(result.get("error") or "delete_failed")
+        if error == "not_found":
+            return jsonify(result), 404
+        if error == "invalid_theme_id":
+            return jsonify(result), 400
+        return jsonify(result), 500
+
     @bp.route("/spring-dream-inspiration/draw", methods=["POST"])
     def miniapp_spring_dream_inspiration_draw():
         data = request.get_json(silent=True) or {}
@@ -495,10 +524,15 @@ def register_routes(bp) -> None:
             data.get("client_request_id") or data.get("idempotency_key") or ""
         ).strip()
         source = str(data.get("source") or "manual").strip() or "manual"
-        saved = draw_spring_dream_inspiration_pack(
-            source=source,
-            client_request_id=client_request_id,
-        )
+        try:
+            saved = draw_spring_dream_inspiration_pack(
+                source=source,
+                client_request_id=client_request_id,
+            )
+        except RuntimeError as exc:
+            if str(exc) == "spring_dream_materials_empty":
+                return jsonify({"ok": False, "error": "spring_dream_materials_empty"}), 409
+            raise
         return jsonify({"ok": True, **saved})
 
     @bp.route("/spring-dream-inspiration", methods=["PUT"])
