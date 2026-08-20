@@ -31,28 +31,41 @@ def normalize_topic_state(state: dict | None) -> dict:
     return normalized
 
 
-def get_topic_state(window_id: str) -> dict:
+def get_topic_state_record(window_id: str) -> dict:
     wid = str(window_id or "").strip()
     if not wid:
-        return {}
+        return {"state": {}, "observed_at": None}
     try:
         with runtime_sqlite.connect() as conn:
             row = conn.execute(
-                "SELECT state_json FROM query_topic_states WHERE window_id = ?",
+                "SELECT state_json, observed_at FROM query_topic_states WHERE window_id = ?",
                 (wid,),
             ).fetchone()
         if row is None:
-            return {}
-        return normalize_topic_state(runtime_sqlite.json_loads(row["state_json"], {}))
+            return {"state": {}, "observed_at": None}
+        return {
+            "state": normalize_topic_state(runtime_sqlite.json_loads(row["state_json"], {})),
+            "observed_at": float(row["observed_at"]),
+        }
     except Exception as exc:
         logger.warning("query topic state read failed window_id=%s error=%s", wid, exc)
-        return {}
+        return {"state": {}, "observed_at": None}
 
 
-def save_topic_state(window_id: str, state: dict, *, observed_at: float | None = None) -> bool:
+def get_topic_state(window_id: str) -> dict:
+    return dict(get_topic_state_record(window_id).get("state") or {})
+
+
+def _save_topic_state_value(
+    window_id: str,
+    state: dict,
+    *,
+    observed_at: float | None,
+    allow_empty: bool,
+) -> bool:
     wid = str(window_id or "").strip()
     normalized = normalize_topic_state(state)
-    if not wid or not normalized:
+    if not wid or (not normalized and not allow_empty):
         return False
     observed = float(observed_at if observed_at is not None else time.time())
     try:
@@ -78,3 +91,21 @@ def save_topic_state(window_id: str, state: dict, *, observed_at: float | None =
     except Exception as exc:
         logger.warning("query topic state save failed window_id=%s error=%s", wid, exc)
         return False
+
+
+def save_topic_state(window_id: str, state: dict, *, observed_at: float | None = None) -> bool:
+    return _save_topic_state_value(
+        window_id,
+        state,
+        observed_at=observed_at,
+        allow_empty=False,
+    )
+
+
+def clear_topic_state(window_id: str, *, observed_at: float | None = None) -> bool:
+    return _save_topic_state_value(
+        window_id,
+        {},
+        observed_at=observed_at,
+        allow_empty=True,
+    )

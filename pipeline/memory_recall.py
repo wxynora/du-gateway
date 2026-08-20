@@ -653,14 +653,21 @@ def _parse_memory_query_state_output(content: str, previous_topic_state: dict | 
                 continue
             seen.add(query)
             queries.append(query)
-        state = normalize_topic_state(parsed.get("topic_state"))
+        raw_state = parsed.get("topic_state")
+        state = normalize_topic_state(raw_state)
+        clear_topic = bool(
+            parsed.get("clear_topic") is True
+            or ("topic_state" in parsed and isinstance(raw_state, dict) and not state)
+        )
         return {
-            "topic_state": state or normalize_topic_state(previous_topic_state),
+            "topic_state": {} if clear_topic else state or normalize_topic_state(previous_topic_state),
+            "clear_topic": clear_topic,
             "queries": queries,
             "format": "json",
         }
     return {
         "topic_state": normalize_topic_state(previous_topic_state),
+        "clear_topic": False,
         "queries": _parse_memory_query_rewrite_output(raw),
         "format": "legacy" if raw else "empty",
     }
@@ -686,6 +693,7 @@ def _rewrite_memory_query_state_with_ds(
 
     fallback = {
         "topic_state": normalize_topic_state(previous_topic_state),
+        "clear_topic": False,
         "queries": [],
         "format": "fallback",
     }
@@ -1587,7 +1595,8 @@ def step_inject_dynamic_memory(
         )
     from storage import query_topic_state_store
 
-    previous_topic_state = query_topic_state_store.get_topic_state(window_id)
+    topic_state_record = query_topic_state_store.get_topic_state_record(window_id)
+    previous_topic_state = dict(topic_state_record.get("state") or {})
     topic_state_observed_at = time.time()
     rewrite_result = rewrite_query_state(
         previous_four_rounds,
@@ -1597,18 +1606,29 @@ def step_inject_dynamic_memory(
     rewritten_queries = list(rewrite_result.get("queries") or [])
     resolved_query = rewritten_queries[0] if rewritten_queries else ""
     expanded_queries = rewritten_queries[1:3]
-    topic_state = dict(rewrite_result.get("topic_state") or previous_topic_state or {})
-    if rewrite_result.get("format") == "json" and topic_state:
-        query_topic_state_store.save_topic_state(
-            window_id,
-            topic_state,
-            observed_at=topic_state_observed_at,
-        )
+    clear_topic = bool(rewrite_result.get("clear_topic"))
+    topic_state = (
+        {}
+        if clear_topic
+        else dict(rewrite_result.get("topic_state") or previous_topic_state or {})
+    )
+    if rewrite_result.get("format") == "json":
+        if clear_topic:
+            query_topic_state_store.clear_topic_state(
+                window_id,
+                observed_at=topic_state_observed_at,
+            )
+        elif topic_state:
+            query_topic_state_store.save_topic_state(
+                window_id,
+                topic_state,
+                observed_at=topic_state_observed_at,
+            )
     _replace_recall_topic_state(recall_topic_state_out, topic_state)
 
     topic_anchor_evidence = "\n".join(
         [
-            json.dumps(previous_topic_state or {}, ensure_ascii=False),
+            "" if clear_topic else json.dumps(previous_topic_state or {}, ensure_ascii=False),
             previous_four_rounds,
             last_user_text,
         ]
