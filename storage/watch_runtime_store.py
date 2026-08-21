@@ -21,12 +21,7 @@ from config import (
     WATCH_CONTEXT_REPLY_LEAD_MS,
 )
 from runtime.wakeup_bus import publish_runtime_wakeup
-from storage import (
-    runtime_sqlite,
-    watch_analysis_store,
-    watch_preanalysis_store,
-    watch_viewing_store,
-)
+from storage import runtime_sqlite, watch_viewing_store
 
 
 ACTIVE_TTL = timedelta(hours=24)
@@ -722,6 +717,8 @@ def create_session(
     mode: dict,
     viewing_id: str = "",
 ) -> dict:
+    from storage import watch_preanalysis_store
+
     media_id = _text(media.get("id"), 240)
     if not media_id:
         raise ValueError("media.id 不能为空")
@@ -1134,6 +1131,8 @@ def create_session(
 
 
 def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
+    from storage import watch_analysis_store, watch_preanalysis_store
+
     now = _now()
     now_iso = _iso(now)
     with runtime_sqlite.connect() as conn:
