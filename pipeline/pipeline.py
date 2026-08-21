@@ -945,16 +945,19 @@ def step_inject_amap_mcp_tools(body: dict) -> dict:
 
 def step_inject_websearch_tools(body: dict) -> dict:
     """
-    当 WEBSEARCH_ENABLED=1 时，向 body 注入 web_search 工具。
+    按独立开关注入联网搜索与 GitHub 公共仓库工具。
     """
-    from config import WEBSEARCH_ENABLED
+    from config import PUBLIC_REPO_ENABLED, WEBSEARCH_ENABLED
 
-    if not WEBSEARCH_ENABLED:
-        return body
+    tools: list[dict] = []
+    if WEBSEARCH_ENABLED:
+        from services.web_search_tools import get_web_search_tools_for_inject
 
-    from services.web_search_tools import get_web_search_tools_for_inject
+        tools.extend(get_web_search_tools_for_inject())
+    if PUBLIC_REPO_ENABLED:
+        from services.public_repo_tool import get_public_repo_tools_for_inject
 
-    tools = get_web_search_tools_for_inject()
+        tools.extend(get_public_repo_tools_for_inject())
     if not tools:
         return body
 

@@ -215,6 +215,38 @@ def _emit_tool_event(on_tool_event, kind: str, payload: dict) -> None:
         logger.debug("工具事件回调失败 kind=%s", kind, exc_info=True)
 
 
+def _last_user_tool_focus(messages: list) -> str:
+    for message in reversed(messages or []):
+        if not isinstance(message, dict) or str(message.get("role") or "").strip().lower() != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if not isinstance(item, dict) or str(item.get("type") or "").strip().lower() not in {"text", "input_text"}:
+                    continue
+                text = str(item.get("text") or item.get("content") or "").strip()
+                if text:
+                    parts.append(text)
+            return "\n".join(parts).strip()
+        return str(content or "").strip()
+    return ""
+
+
+def _json_dict(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return {}
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def append_tool_results_and_continue(
     body: dict,
     assistant_message: dict,
@@ -226,6 +258,14 @@ def append_tool_results_and_continue(
     """执行 tool_calls，将 assistant 消息与各 tool 结果追加到 body["messages"]，返回新 body 供继续请求。"""
     body = copy.deepcopy(body)
     messages = body.get("messages") or []
+    tool_focus = _last_user_tool_focus(messages)
+    from config import PUBLIC_REPO_READ_MAX_CHARS
+
+    public_repo_source_limit = int(PUBLIC_REPO_READ_MAX_CHARS)
+    public_repo_source_chars = 0
+    public_repo_source_items: list[dict] = []
+    public_repo_rows: list[dict] = []
+    tool_limit_reached = False
     # 保留 assistant 消息（含 tool_calls）
     assistant_trace = {
         "role": "assistant",
@@ -252,27 +292,95 @@ def append_tool_results_and_continue(
             "arguments": _tool_event_text(raw_arguments),
         }
         _emit_tool_event(on_tool_event, "tool_call_started", base_event)
-        try:
-            result = execute_tool(name, args)
-        except Exception as _tool_exc:
-            logger.warning("execute_tool 异常 name=%s error=%s", name, _tool_exc)
-            result = json.dumps({"ok": False, "error": f"工具执行异常: {_tool_exc}"}, ensure_ascii=False)
+        deferred_public_repo_event = False
+        public_repo_row: dict | None = None
+        if tool_limit_reached:
+            result = json.dumps(
+                {
+                    "ok": False,
+                    "action": str(args.get("action") or ""),
+                    "repo": str(args.get("repo") or ""),
+                    "path": str(args.get("path") or ""),
+                    "error_code": "tool_token_limit_reached",
+                    "error": f"未执行：本轮仓库工具内容已达到 {public_repo_source_limit} 字符上限",
+                    "tool_content_limit_reached": True,
+                    "tool_content_limit_chars": public_repo_source_limit,
+                    "continue_in_next_user_turn": True,
+                },
+                ensure_ascii=False,
+            )
             _emit_tool_event(on_tool_event, "tool_call_failed", {
                 **base_event,
                 "ok": False,
                 "duration_ms": int((time.time() - started_at) * 1000),
-                "error": _tool_event_text(_tool_exc, 500),
+                "error": f"本轮仓库工具内容已达到 {public_repo_source_limit} 字符上限",
                 "result_preview": _tool_event_text(result),
             })
         else:
-            _emit_tool_event(on_tool_event, "tool_call_finished", {
-                **base_event,
-                "ok": True,
-                "duration_ms": int((time.time() - started_at) * 1000),
-                "result_preview": _tool_event_text(result),
-                "result_chars": len(str(result or "")),
-            })
+            execution_args = args
+            is_public_repo_read = name == "public_repo" and str(args.get("action") or "").strip().lower() == "read"
+            if is_public_repo_read:
+                execution_args = dict(args)
+                execution_args["__du_public_repo_read_max_chars"] = max(
+                    1,
+                    public_repo_source_limit - public_repo_source_chars,
+                )
+            try:
+                result = execute_tool(name, execution_args)
+            except Exception as _tool_exc:
+                logger.warning("execute_tool 异常 name=%s error=%s", name, _tool_exc)
+                result = json.dumps({"ok": False, "error": f"工具执行异常: {_tool_exc}"}, ensure_ascii=False)
+                _emit_tool_event(on_tool_event, "tool_call_failed", {
+                    **base_event,
+                    "ok": False,
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                    "error": _tool_event_text(_tool_exc, 500),
+                    "result_preview": _tool_event_text(result),
+                })
+            else:
+                result_data = _json_dict(result) if is_public_repo_read else {}
+                source_content = result_data.get("content") if result_data.get("ok") is True else None
+                if isinstance(source_content, str):
+                    visible_data = dict(result_data)
+                    visible_data.pop("content", None)
+                    visible_data.pop("content_chars", None)
+                    visible_data["source_chars"] = len(source_content)
+                    result = json.dumps(visible_data, ensure_ascii=False)
+                    if source_content:
+                        public_repo_source_chars += len(source_content)
+                        public_repo_source_items.append(
+                            {
+                                "repo": str(visible_data.get("repo") or args.get("repo") or ""),
+                                "resolved_sha": str(visible_data.get("resolved_sha") or ""),
+                                "path": str(visible_data.get("path") or args.get("path") or ""),
+                                "line_range": visible_data.get("line_range") if isinstance(visible_data.get("line_range"), dict) else {},
+                                "column_range": visible_data.get("column_range") if isinstance(visible_data.get("column_range"), dict) else {},
+                                "content": source_content,
+                            }
+                        )
+                        public_repo_row = {
+                            "data": visible_data,
+                            "base_event": base_event,
+                            "started_at": started_at,
+                        }
+                        deferred_public_repo_event = True
+                        if public_repo_source_chars >= public_repo_source_limit:
+                            tool_limit_reached = True
+                    else:
+                        visible_data["source_summary_status"] = "not_needed"
+                        visible_data["source_summary"] = "文件内容为空"
+                        result = json.dumps(visible_data, ensure_ascii=False)
+                if not deferred_public_repo_event:
+                    _emit_tool_event(on_tool_event, "tool_call_finished", {
+                        **base_event,
+                        "ok": True,
+                        "duration_ms": int((time.time() - started_at) * 1000),
+                        "result_preview": _tool_event_text(result),
+                        "result_chars": len(str(result or "")),
+                    })
+        completed_index = None
         if completed_tool_results is not None:
+            completed_index = len(completed_tool_results)
             completed_tool_results.append(
                 {
                     "tool_call_id": tid,
@@ -281,7 +389,66 @@ def append_tool_results_and_continue(
                     "result": result,
                 }
             )
+        message_index = len(messages)
         messages.append({"role": "tool", "tool_call_id": tid, "content": result})
+        if public_repo_row is not None:
+            public_repo_row.update(
+                {
+                    "tool_call_id": tid,
+                    "message_index": message_index,
+                    "completed_index": completed_index,
+                }
+            )
+            public_repo_rows.append(public_repo_row)
+
+    if public_repo_source_items:
+        from services.public_repo_tool import summarize_public_repo_read_results
+
+        summary_result = summarize_public_repo_read_results(public_repo_source_items, focus=tool_focus)
+        first_tool_call_id = str(public_repo_rows[0].get("tool_call_id") or "") if public_repo_rows else ""
+        for index, row in enumerate(public_repo_rows):
+            visible_data = dict(row.get("data") or {})
+            visible_data["source_summary_status"] = "ok" if summary_result.get("ok") else "error"
+            visible_data["source_summary_chars"] = int(summary_result.get("source_chars") or public_repo_source_chars)
+            visible_data["source_summary_items"] = len(public_repo_rows)
+            if tool_limit_reached:
+                visible_data["tool_content_limit_reached"] = True
+                visible_data["tool_content_limit_chars"] = public_repo_source_limit
+                visible_data["continue_in_next_user_turn"] = True
+            if summary_result.get("ok"):
+                if index == 0:
+                    visible_data["source_summary"] = str(summary_result.get("summary") or "")
+                    visible_data["source_summary_model"] = str(summary_result.get("model") or "")
+                    visible_data["source_summary_finish_reason"] = str(summary_result.get("finish_reason") or "")
+                    visible_data["source_summary_output_limit_reached"] = bool(summary_result.get("output_limit_reached"))
+                else:
+                    visible_data["source_summary_in_tool_call_id"] = first_tool_call_id
+            else:
+                visible_data["ok"] = False
+                visible_data["error_code"] = str(summary_result.get("error_code") or "source_summary_failed")
+                visible_data["error"] = str(summary_result.get("error") or "仓库工具摘要失败")
+            visible_result = json.dumps(visible_data, ensure_ascii=False)
+            message_index = int(row["message_index"])
+            messages[message_index]["content"] = visible_result
+            completed_index = row.get("completed_index")
+            if completed_tool_results is not None and isinstance(completed_index, int):
+                completed_tool_results[completed_index]["result"] = visible_result
+            event_ok = bool(visible_data.get("ok"))
+            _emit_tool_event(
+                on_tool_event,
+                "tool_call_finished" if event_ok else "tool_call_failed",
+                {
+                    **dict(row.get("base_event") or {}),
+                    "ok": event_ok,
+                    "duration_ms": int((time.time() - float(row.get("started_at") or time.time())) * 1000),
+                    "result_preview": _tool_event_text(visible_result),
+                    "result_chars": len(visible_result),
+                    **({} if event_ok else {"error": _tool_event_text(visible_data.get("error"), 500)}),
+                },
+            )
+        public_repo_source_items.clear()
+    if tool_limit_reached:
+        body["tool_choice"] = "none"
     body["messages"] = messages
     return body
 

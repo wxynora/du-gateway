@@ -456,6 +456,12 @@ def execute_tool(name: str, arguments: dict, context: dict | None = None) -> str
     if name == "read_url":
         from services.web_search_tools import execute_read_url
         return execute_read_url(arguments if isinstance(arguments, dict) else {})
+    if name == "public_repo":
+        from services.public_repo_tool import execute_public_repo
+
+        public_repo_args = dict(arguments) if isinstance(arguments, dict) else {}
+        internal_read_max_chars = public_repo_args.pop("__du_public_repo_read_max_chars", None)
+        return execute_public_repo(public_repo_args, read_max_chars=internal_read_max_chars)
     try:
         from services.random_imitator_td_tool import RANDOM_IMITATOR_TD_TOOL_NAMES, execute_random_imitator_td_tool
     except Exception:

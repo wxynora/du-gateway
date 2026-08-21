@@ -361,6 +361,39 @@ def _web_search_detail(arguments: dict, data: dict) -> str:
     return detail
 
 
+def _public_repo_detail(arguments: dict, data: dict) -> str:
+    action = _text(data.get("action") or arguments.get("action"), 40)
+    repo = _text(data.get("repo") or arguments.get("repo"), 180)
+    if not data.get("ok", True):
+        target = f"{repo} {action}".strip()
+        return f"查看公共仓库{f' {target}' if target else ''}失败：{_failure_detail(data)}"
+
+    resolved_sha = _text(data.get("resolved_sha"), 40)
+    sha_label = resolved_sha[:12] if resolved_sha else ""
+    path = _text(data.get("path") or arguments.get("path"), 240)
+    query = _text(data.get("query") or arguments.get("query"), 160)
+    locator = f"{repo}{f'@{sha_label}' if sha_label else ''}"
+    if action == "overview":
+        return f"查看了公共仓库 {locator} 的概览"
+    if action == "list":
+        entries = data.get("entries") if isinstance(data.get("entries"), list) else []
+        return f"列出了公共仓库 {locator} 的目录 {path or '/'}，本页 {len(entries)} 项"
+    if action == "read":
+        line_range = data.get("line_range") if isinstance(data.get("line_range"), dict) else {}
+        start = _text(line_range.get("start"), 20)
+        end = _text(line_range.get("end"), 20)
+        lines = f"第{start}-{end}行" if start and end else "指定区间"
+        return f"读取了公共仓库 {locator} 的 {path or '文件'}（{lines}）"
+    if action in {"search_path", "search_code"}:
+        matches = data.get("matches") if isinstance(data.get("matches"), list) else []
+        label = "路径" if action == "search_path" else "代码"
+        if action == "search_code":
+            followup = f"；后续读取基准为 @{sha_label}" if sha_label else ""
+            return f"在公共仓库 {repo} 搜索{label}“{query}”，本页 {len(matches)} 项{followup}"
+        return f"在公共仓库 {locator} 搜索{label}“{query}”，本页 {len(matches)} 项"
+    return f"查看了公共仓库 {locator}"
+
+
 def _game_detail(name: str, arguments: dict, data: dict) -> str:
     command = _text(arguments.get("command") or arguments.get("action"), 120)
     if not data.get("ok", True):
@@ -528,6 +561,8 @@ def summarize_tool_result(
         detail = _forum_detail(tool_name, args, data)
     elif tool_name == "web_search":
         detail = _web_search_detail(args, data)
+    elif tool_name == "public_repo":
+        detail = _public_repo_detail(args, data)
     elif tool_name == "search_memory":
         detail = _memory_search_detail(args, data)
     elif tool_name in _GAME_LOOP_SUMMARY_TOOLS or data.get("game_tool_loop") is True or (data.get("game_id") and data.get("skip_dynamic_memory_write")):
