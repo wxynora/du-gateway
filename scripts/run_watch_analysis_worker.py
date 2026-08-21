@@ -31,6 +31,7 @@ from config import (  # noqa: E402
     WATCH_ANALYSIS_SOURCE_ENABLED,
     WATCH_ANALYSIS_WORKER_IDLE_SECONDS,
     WATCH_KNOWLEDGE_ENABLED,
+    WATCH_PREANALYSIS_ENABLED,
 )
 from runtime.wakeup_bus import RuntimeWakeSubscriber  # noqa: E402
 from services.watch_analysis import (  # noqa: E402
@@ -52,10 +53,15 @@ from services.watch_knowledge import (  # noqa: E402
     source_digest,
 )
 from services.watch_visual_context import cache_analysis_frames  # noqa: E402
+from services.watch_preanalysis import (  # noqa: E402
+    WatchPreanalysisError,
+    WatchPreanalysisProvider,
+)
 from storage import (  # noqa: E402
     watch_analysis_store,
     watch_knowledge_store,
     watch_runtime_store,
+    watch_preanalysis_store,
     watch_subtitle_store,
     watch_visual_store,
 )
@@ -640,6 +646,230 @@ def process_next_job(
     return outcome
 
 
+def _delete_preanalysis_provider_file(
+    provider: WatchPreanalysisProvider,
+    *,
+    cache_key: str,
+    file_name: str,
+) -> None:
+    if not file_name:
+        return
+    try:
+        provider.delete_file(file_name)
+    except Exception as exc:
+        logger.warning(
+            "清理整集预解析 provider 文件失败 cache_key=%s error=%s",
+            cache_key,
+            exc,
+        )
+        return
+    watch_preanalysis_store.clear_provider_file(
+        cache_key,
+        expected_provider_file_name=file_name,
+    )
+
+
+def process_next_preanalysis(
+    *,
+    provider: WatchPreanalysisProvider | None = None,
+) -> dict | None:
+    if not WATCH_PREANALYSIS_ENABLED:
+        return None
+    active_provider = provider or WatchPreanalysisProvider()
+    processing = watch_preanalysis_store.next_processing_cache()
+    if processing is not None:
+        cache_key = str(processing.get("cache_key") or "")
+        file_name = str(processing.get("provider_file_name") or "")
+        try:
+            file_payload = active_provider.get_file(file_name)
+            state_value = file_payload.get("state")
+            state = (
+                str(state_value.get("name") or "").strip().upper()
+                if isinstance(state_value, dict)
+                else str(state_value or "").strip().upper()
+            )
+            bound = watch_preanalysis_store.bind_uploaded_file(
+                cache_key,
+                owner_device_id=str(processing.get("owner_device_id") or ""),
+                file_payload=file_payload,
+            )
+            if bound.get("status") == "cancelled":
+                _delete_preanalysis_provider_file(
+                    active_provider,
+                    cache_key=cache_key,
+                    file_name=file_name,
+                )
+                return {"kind": "preanalysis_file", "status": "cancelled"}
+            if state == "ACTIVE":
+                result = watch_preanalysis_store.activate_file(
+                    cache_key,
+                    provider=active_provider,
+                )
+                if result.get("status") in {"cancelled", "needs_user_action"}:
+                    _delete_preanalysis_provider_file(
+                        active_provider,
+                        cache_key=cache_key,
+                        file_name=file_name,
+                    )
+                return {"kind": "preanalysis_file", "status": result.get("status")}
+            if state == "FAILED":
+                _delete_preanalysis_provider_file(
+                    active_provider,
+                    cache_key=cache_key,
+                    file_name=file_name,
+                )
+                return {"kind": "preanalysis_file", "status": "failed"}
+            return {"kind": "preanalysis_file", "status": "provider_processing"}
+        except WatchPreanalysisError as exc:
+            if exc.uncertain:
+                watch_preanalysis_store.defer_processing_check(
+                    cache_key,
+                    expected_provider_file_name=file_name,
+                )
+                return {"kind": "preanalysis_file", "status": "provider_processing"}
+            watch_preanalysis_store.mark_file_failed(
+                cache_key,
+                str(exc),
+                expected_provider_file_name=file_name,
+            )
+            _delete_preanalysis_provider_file(
+                active_provider,
+                cache_key=cache_key,
+                file_name=file_name,
+            )
+            return {"kind": "preanalysis_file", "status": "failed"}
+        except Exception:
+            watch_preanalysis_store.mark_file_failed(
+                cache_key,
+                "整集预解析文件状态或 token 预检失败",
+                expected_provider_file_name=file_name,
+            )
+            _delete_preanalysis_provider_file(
+                active_provider,
+                cache_key=cache_key,
+                file_name=file_name,
+            )
+            return {"kind": "preanalysis_file", "status": "failed"}
+
+    second_part = watch_preanalysis_store.next_second_part_token_check()
+    if second_part is not None:
+        cache_key = str(second_part.get("cache_key") or "")
+        try:
+            count = active_provider.count_tokens(
+                file_uri=str(second_part.get("provider_file_uri") or ""),
+                mime_type=str(second_part.get("upload_mime_type") or ""),
+                part=second_part,
+                previous_context=(
+                    second_part.get("previous_context")
+                    if isinstance(second_part.get("previous_context"), dict)
+                    else None
+                ),
+                subtitle_cues=(
+                    second_part.get("subtitle_cues")
+                    if isinstance(second_part.get("subtitle_cues"), list)
+                    else None
+                ),
+            )
+            state = watch_preanalysis_store.finish_second_part_token_check(
+                cache_key,
+                input_token_count=count,
+            )
+            if state.get("status") == "needs_user_action":
+                _delete_preanalysis_provider_file(
+                    active_provider,
+                    cache_key=cache_key,
+                    file_name=str(second_part.get("provider_file_name") or ""),
+                )
+            return {"kind": "preanalysis_token_check", "status": state.get("status")}
+        except WatchPreanalysisError as exc:
+            if exc.uncertain:
+                watch_preanalysis_store.defer_processing_check(
+                    cache_key,
+                    expected_provider_file_name=str(second_part.get("provider_file_name") or ""),
+                )
+                return {"kind": "preanalysis_token_check", "status": "pending"}
+            watch_preanalysis_store.mark_file_failed(
+                cache_key,
+                str(exc),
+                expected_provider_file_name=str(second_part.get("provider_file_name") or ""),
+            )
+        except Exception:
+            watch_preanalysis_store.mark_file_failed(
+                cache_key,
+                "整集预解析 part 2 token 预检失败",
+                expected_provider_file_name=str(second_part.get("provider_file_name") or ""),
+            )
+        _delete_preanalysis_provider_file(
+            active_provider,
+            cache_key=cache_key,
+            file_name=str(second_part.get("provider_file_name") or ""),
+        )
+        return {"kind": "preanalysis_token_check", "status": "failed"}
+
+    job = watch_preanalysis_store.claim_next_part()
+    if job is None:
+        return None
+    cache_key = str(job.get("cache_key") or "")
+    try:
+        result, usage = active_provider.generate_part(
+            file_uri=str(job.get("provider_file_uri") or ""),
+            mime_type=str(job.get("upload_mime_type") or ""),
+            part=job,
+            previous_context=(
+                job.get("previous_context")
+                if isinstance(job.get("previous_context"), dict)
+                else None
+            ),
+            subtitle_cues=(
+                job.get("subtitle_cues")
+                if isinstance(job.get("subtitle_cues"), list)
+                else None
+            ),
+        )
+        committed = watch_preanalysis_store.commit_part(job, result=result, usage=usage)
+        if committed.get("ready"):
+            _delete_preanalysis_provider_file(
+                active_provider,
+                cache_key=cache_key,
+                file_name=str(job.get("provider_file_name") or ""),
+            )
+        return {
+            "kind": "preanalysis_part",
+            "status": "ready" if committed.get("ready") else "done",
+            "part_index": int(job.get("part_index") or 0),
+        }
+    except WatchPreanalysisError as exc:
+        status = watch_preanalysis_store.fail_part(
+            job,
+            error=str(exc),
+            uncertain=exc.uncertain,
+        )
+    except Exception as exc:
+        status = watch_preanalysis_store.fail_part(
+            job,
+            error=str(exc),
+            uncertain=False,
+        )
+    _delete_preanalysis_provider_file(
+        active_provider,
+        cache_key=cache_key,
+        file_name=str(job.get("provider_file_name") or ""),
+    )
+    return {
+        "kind": "preanalysis_part",
+        "status": status,
+        "part_index": int(job.get("part_index") or 0),
+    }
+
+
+def process_available_analysis_steps(
+    *,
+    preanalysis_step: Callable[[], dict | None] = process_next_preanalysis,
+    rolling_step: Callable[[], dict | None] = process_next_job,
+) -> tuple[dict | None, dict | None]:
+    return preanalysis_step(), rolling_step()
+
+
 def run_worker_loop() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     idle = max(float(WATCH_ANALYSIS_WORKER_IDLE_SECONDS or 0.5), 0.1)
@@ -690,8 +920,10 @@ def run_worker_loop() -> None:
             scheduled = schedule_source_jobs()
             if scheduled.get("jobs_created"):
                 logger.info("一起看后端取材任务已入队 stats=%s", scheduled)
-            outcome = process_next_job()
-            if outcome is not None:
+            preanalysis_outcome, outcome = process_available_analysis_steps()
+            if preanalysis_outcome is not None:
+                logger.info("完成一起看整集预解析步骤 outcome=%s", preanalysis_outcome)
+            if preanalysis_outcome is not None or outcome is not None:
                 continue
             if not subscriber.available:
                 subscriber.wait(idle)

@@ -1012,7 +1012,13 @@ def mark_job_cancelled(job_id: str, *, reason: str = "") -> bool:
     return bool(result.rowcount)
 
 
-def cancel_stale_jobs(session_id: str, *, current_epoch: int | None = None, reason: str) -> int:
+def cancel_stale_jobs_in_transaction(
+    conn,
+    session_id: str,
+    *,
+    current_epoch: int | None = None,
+    reason: str,
+) -> int:
     clauses = ["session_id = ?", "status IN ('queued', 'running')"]
     where_params: list[Any] = [_text(session_id, 160)]
     if current_epoch is not None:
@@ -1020,75 +1026,84 @@ def cancel_stale_jobs(session_id: str, *, current_epoch: int | None = None, reas
         where_params.append(_int(current_epoch, 0))
         clauses.append("purpose != 'knowledge_card'")
     now_iso = _iso(_now())
-    with runtime_sqlite.connect() as conn:
-        rows = conn.execute(
-            f"SELECT sample_ids_json FROM watch_analysis_jobs WHERE {' AND '.join(clauses)}",
-            where_params,
+    rows = conn.execute(
+        f"SELECT sample_ids_json FROM watch_analysis_jobs WHERE {' AND '.join(clauses)}",
+        where_params,
+    ).fetchall()
+    sample_ids: list[str] = []
+    for row in rows:
+        for value in runtime_sqlite.json_loads(row["sample_ids_json"], []):
+            sample_id = str(value or "").strip()
+            if sample_id and sample_id not in sample_ids:
+                sample_ids.append(sample_id)
+    result = conn.execute(
+        f"""
+        UPDATE watch_analysis_jobs
+           SET status = 'cancelled', cancel_requested = 1,
+               cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END,
+               cancel_reason = ?, error = ?, finished_at = ?, updated_at = ?,
+               leased_until = '', lease_token = ''
+         WHERE {' AND '.join(clauses)}
+        """,
+        (
+            now_iso,
+            _text(reason, 1000),
+            _text(reason, 1000),
+            now_iso,
+            now_iso,
+            *where_params,
+        ),
+    )
+    if sample_ids:
+        placeholders = ",".join("?" for _ in sample_ids)
+        sample_rows = conn.execute(
+            f"SELECT id, file_path FROM watch_analysis_samples WHERE id IN ({placeholders})",
+            sample_ids,
         ).fetchall()
-        sample_ids: list[str] = []
-        for row in rows:
-            for value in runtime_sqlite.json_loads(row["sample_ids_json"], []):
-                sample_id = str(value or "").strip()
-                if sample_id and sample_id not in sample_ids:
-                    sample_ids.append(sample_id)
-        result = conn.execute(
+        for sample_row in sample_rows:
+            file_path = str(sample_row["file_path"] or "").strip()
+            if file_path:
+                try:
+                    Path(file_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+        conn.execute(
             f"""
-            UPDATE watch_analysis_jobs
-               SET status = 'cancelled', cancel_requested = 1,
-                   cancel_requested_at = CASE WHEN cancel_requested_at = '' THEN ? ELSE cancel_requested_at END,
-                   cancel_reason = ?, error = ?, finished_at = ?, updated_at = ?,
-                   leased_until = '', lease_token = ''
-             WHERE {' AND '.join(clauses)}
+            UPDATE watch_analysis_samples
+               SET file_path = '', purged_at = ?
+             WHERE id IN ({placeholders})
             """,
-            (
-                now_iso,
-                _text(reason, 1000),
-                _text(reason, 1000),
-                now_iso,
-                now_iso,
-                *where_params,
-            ),
+            (now_iso, *sample_ids),
         )
-        if sample_ids:
-            placeholders = ",".join("?" for _ in sample_ids)
-            sample_rows = conn.execute(
-                f"SELECT id, file_path FROM watch_analysis_samples WHERE id IN ({placeholders})",
-                sample_ids,
-            ).fetchall()
-            for sample_row in sample_rows:
-                file_path = str(sample_row["file_path"] or "").strip()
-                if file_path:
-                    try:
-                        Path(file_path).unlink(missing_ok=True)
-                    except Exception:
-                        pass
-            conn.execute(
-                f"""
-                UPDATE watch_analysis_samples
-                   SET file_path = '', purged_at = ?
-                 WHERE id IN ({placeholders})
-                """,
-                (now_iso, *sample_ids),
-            )
-        if current_epoch is None:
-            conn.execute(
-                """
-                UPDATE watch_client_sample_plans
-                   SET status = 'cancelled', cancelled_at = ?
-                 WHERE session_id = ? AND status = 'open'
-                """,
-                (now_iso, _text(session_id, 160)),
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE watch_client_sample_plans
-                   SET status = 'cancelled', cancelled_at = ?
-                 WHERE session_id = ? AND timeline_epoch != ? AND status = 'open'
-                """,
-                (now_iso, _text(session_id, 160), _int(current_epoch, 0)),
-            )
+    if current_epoch is None:
+        conn.execute(
+            """
+            UPDATE watch_client_sample_plans
+               SET status = 'cancelled', cancelled_at = ?
+             WHERE session_id = ? AND status = 'open'
+            """,
+            (now_iso, _text(session_id, 160)),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE watch_client_sample_plans
+               SET status = 'cancelled', cancelled_at = ?
+             WHERE session_id = ? AND timeline_epoch != ? AND status = 'open'
+            """,
+            (now_iso, _text(session_id, 160), _int(current_epoch, 0)),
+        )
     return int(result.rowcount or 0)
+
+
+def cancel_stale_jobs(session_id: str, *, current_epoch: int | None = None, reason: str) -> int:
+    with runtime_sqlite.connect() as conn:
+        return cancel_stale_jobs_in_transaction(
+            conn,
+            session_id,
+            current_epoch=current_epoch,
+            reason=reason,
+        )
 
 
 def fail_job(
@@ -1237,100 +1252,104 @@ def fail_job(
     return status
 
 
-def reset_for_epoch(session_id: str, *, timeline_epoch: int) -> None:
+def reset_for_epoch_in_transaction(conn, session_id: str, *, timeline_epoch: int) -> None:
     now_iso = _iso(_now())
+    prior_epoch_row = conn.execute(
+        """
+        SELECT timeline_epoch
+          FROM watch_timeline_sections
+         WHERE session_id = ? AND timeline_epoch != ?
+         ORDER BY updated_at DESC, timeline_epoch DESC
+         LIMIT 1
+        """,
+        (_text(session_id, 160), _int(timeline_epoch, 0)),
+    ).fetchone()
+    if prior_epoch_row is not None:
+        prior_epoch = int(prior_epoch_row["timeline_epoch"] or 0)
+        prior_sections = conn.execute(
+            """
+            SELECT kind, start_ms, end_ms, source, confidence
+              FROM watch_timeline_sections
+             WHERE session_id = ? AND timeline_epoch = ?
+             ORDER BY start_ms, end_ms, id
+            """,
+            (_text(session_id, 160), prior_epoch),
+        ).fetchall()
+        existing_sections = {
+            (
+                str(row["kind"] or ""),
+                int(row["start_ms"] or 0),
+                int(row["end_ms"] or 0),
+                str(row["source"] or ""),
+            )
+            for row in conn.execute(
+                """
+                SELECT kind, start_ms, end_ms, source
+                  FROM watch_timeline_sections
+                 WHERE session_id = ? AND timeline_epoch = ?
+                """,
+                (_text(session_id, 160), _int(timeline_epoch, 0)),
+            ).fetchall()
+        }
+        for row in prior_sections:
+            signature = (
+                str(row["kind"] or ""),
+                int(row["start_ms"] or 0),
+                int(row["end_ms"] or 0),
+                str(row["source"] or ""),
+            )
+            if signature in existing_sections:
+                continue
+            digest = hashlib.sha256(
+                f"{session_id}:{timeline_epoch}:{signature}".encode("utf-8")
+            ).hexdigest()[:20]
+            conn.execute(
+                """
+                INSERT INTO watch_timeline_sections (
+                    id, session_id, timeline_epoch, kind, start_ms, end_ms,
+                    source, confidence, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"watch_section_{digest}",
+                    _text(session_id, 160),
+                    _int(timeline_epoch, 0),
+                    signature[0],
+                    signature[1],
+                    signature[2],
+                    signature[3],
+                    float(row["confidence"] or 0),
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            existing_sections.add(signature)
+    conn.execute(
+        """
+        UPDATE watch_sessions
+           SET analysis_status = 'pending', analysis_covered_from_ms = 0,
+               analysis_covered_until_ms = 0, analysis_error = '',
+               story_so_far_json = '{}', analysis_story_state_json = '{}',
+               updated_at = ?
+         WHERE id = ? AND timeline_epoch = ? AND status != 'ended'
+        """,
+        (now_iso, _text(session_id, 160), _int(timeline_epoch, 0)),
+    )
+    conn.execute(
+        """
+        UPDATE watch_client_sample_plans
+           SET status = 'cancelled', cancelled_at = ?
+         WHERE session_id = ? AND timeline_epoch != ? AND status = 'open'
+        """,
+        (now_iso, _text(session_id, 160), _int(timeline_epoch, 0)),
+    )
+
+
+def reset_for_epoch(session_id: str, *, timeline_epoch: int) -> None:
     with runtime_sqlite.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            prior_epoch_row = conn.execute(
-                """
-                SELECT timeline_epoch
-                  FROM watch_timeline_sections
-                 WHERE session_id = ? AND timeline_epoch != ?
-                 ORDER BY updated_at DESC, timeline_epoch DESC
-                 LIMIT 1
-                """,
-                (_text(session_id, 160), _int(timeline_epoch, 0)),
-            ).fetchone()
-            if prior_epoch_row is not None:
-                prior_epoch = int(prior_epoch_row["timeline_epoch"] or 0)
-                prior_sections = conn.execute(
-                    """
-                    SELECT kind, start_ms, end_ms, source, confidence
-                      FROM watch_timeline_sections
-                     WHERE session_id = ? AND timeline_epoch = ?
-                     ORDER BY start_ms, end_ms, id
-                    """,
-                    (_text(session_id, 160), prior_epoch),
-                ).fetchall()
-                existing_sections = {
-                    (
-                        str(row["kind"] or ""),
-                        int(row["start_ms"] or 0),
-                        int(row["end_ms"] or 0),
-                        str(row["source"] or ""),
-                    )
-                    for row in conn.execute(
-                        """
-                        SELECT kind, start_ms, end_ms, source
-                          FROM watch_timeline_sections
-                         WHERE session_id = ? AND timeline_epoch = ?
-                        """,
-                        (_text(session_id, 160), _int(timeline_epoch, 0)),
-                    ).fetchall()
-                }
-                for row in prior_sections:
-                    signature = (
-                        str(row["kind"] or ""),
-                        int(row["start_ms"] or 0),
-                        int(row["end_ms"] or 0),
-                        str(row["source"] or ""),
-                    )
-                    if signature in existing_sections:
-                        continue
-                    digest = hashlib.sha256(
-                        f"{session_id}:{timeline_epoch}:{signature}".encode("utf-8")
-                    ).hexdigest()[:20]
-                    conn.execute(
-                        """
-                        INSERT INTO watch_timeline_sections (
-                            id, session_id, timeline_epoch, kind, start_ms, end_ms,
-                            source, confidence, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            f"watch_section_{digest}",
-                            _text(session_id, 160),
-                            _int(timeline_epoch, 0),
-                            signature[0],
-                            signature[1],
-                            signature[2],
-                            signature[3],
-                            float(row["confidence"] or 0),
-                            now_iso,
-                            now_iso,
-                        ),
-                    )
-                    existing_sections.add(signature)
-            conn.execute(
-                """
-                UPDATE watch_sessions
-                   SET analysis_status = 'pending', analysis_covered_from_ms = 0,
-                       analysis_covered_until_ms = 0, analysis_error = '',
-                       story_so_far_json = '{}', analysis_story_state_json = '{}',
-                       updated_at = ?
-                 WHERE id = ? AND timeline_epoch = ? AND status != 'ended'
-                """,
-                (now_iso, _text(session_id, 160), _int(timeline_epoch, 0)),
-            )
-            conn.execute(
-                """
-                UPDATE watch_client_sample_plans
-                   SET status = 'cancelled', cancelled_at = ?
-                 WHERE session_id = ? AND timeline_epoch != ? AND status = 'open'
-                """,
-                (now_iso, _text(session_id, 160), _int(timeline_epoch, 0)),
-            )
+            reset_for_epoch_in_transaction(conn, session_id, timeline_epoch=timeline_epoch)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -1681,6 +1700,8 @@ def reuse_cached_epoch_coverage(session: dict) -> dict:
     media = session.get("media") if isinstance(session.get("media"), dict) else {}
     playback = session.get("playback") if isinstance(session.get("playback"), dict) else {}
     analysis = session.get("analysis") if isinstance(session.get("analysis"), dict) else {}
+    if str(analysis.get("preanalysis_cache_key") or "").strip():
+        return {"applied": False, "reason": "canonical_preanalysis_bound"}
     media_id = str(media.get("id") or "")
     timeline_epoch = _int(playback.get("timeline_epoch"), 0)
     if not session_id or not media_id or timeline_epoch <= 0 or session.get("ended_at"):

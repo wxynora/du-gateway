@@ -21,7 +21,12 @@ from config import (
     WATCH_CONTEXT_REPLY_LEAD_MS,
 )
 from runtime.wakeup_bus import publish_runtime_wakeup
-from storage import runtime_sqlite, watch_viewing_store
+from storage import (
+    runtime_sqlite,
+    watch_analysis_store,
+    watch_preanalysis_store,
+    watch_viewing_store,
+)
 
 
 ACTIVE_TTL = timedelta(hours=24)
@@ -455,6 +460,10 @@ def _row_to_session(row: Any) -> dict:
                 else None
             ),
             "local_media": local_media,
+            "preanalysis_cache_key": str(row["preanalysis_cache_key"] or ""),
+            "subtitle_content_digest": str(row["preanalysis_subtitle_digest"] or ""),
+            "selected_audio_digest": str(row["preanalysis_audio_digest"] or ""),
+            "analysis_profile_digest": str(row["preanalysis_profile_digest"] or ""),
         },
         "mode": {
             "knowledge_mode": str(row["knowledge_mode"] or "known"),
@@ -507,6 +516,8 @@ def _row_to_session(row: Any) -> dict:
             "error": str(row["analysis_error"] or ""),
             "story_so_far": runtime_sqlite.json_loads(row["story_so_far_json"], {}),
             "story_state": runtime_sqlite.json_loads(row["analysis_story_state_json"], {}),
+            "preanalysis_cache_key": str(row["preanalysis_cache_key"] or ""),
+            "preanalysis_profile_digest": str(row["preanalysis_profile_digest"] or ""),
         },
         "client_lease": {
             "client_seen_at": str(row["client_seen_at"] or ""),
@@ -756,6 +767,20 @@ def create_session(
     part = watch_viewing_store.normalize_part(media)
     analysis_model = _text(mode.get("analysis_model"), 160) or DEFAULT_ANALYSIS_MODEL
     analysis_prompt_version = _text(mode.get("analysis_prompt_version"), 80) or DEFAULT_PROMPT_VERSION
+    preanalysis_cache_key = _text(media.get("preanalysis_cache_key"), 160)
+    preanalysis_subtitle_digest = _text(media.get("subtitle_content_digest"), 160)
+    preanalysis_audio_digest = _text(media.get("selected_audio_digest"), 160)
+    preanalysis_profile_digest = _text(media.get("analysis_profile_digest"), 160)
+    if preanalysis_cache_key and (
+        not preanalysis_subtitle_digest
+        or not preanalysis_audio_digest
+        or not preanalysis_profile_digest
+    ):
+        raise ValueError(
+            "绑定整集缓存时必须同时提供 subtitle_content_digest、selected_audio_digest 和 analysis_profile_digest"
+        )
+    preanalysis_media = dict(media)
+    preanalysis_media["local_media"] = local_media
     creation_payload = {
         "viewing_id": requested_viewing_id,
         "companion": {"id": companion_id, "name": companion_name},
@@ -773,6 +798,10 @@ def create_session(
             "content_start_ms": content_start_ms,
             "content_end_ms": content_end_ms,
             "local_media": local_media,
+            "preanalysis_cache_key": preanalysis_cache_key,
+            "subtitle_content_digest": preanalysis_subtitle_digest,
+            "selected_audio_digest": preanalysis_audio_digest,
+            "analysis_profile_digest": preanalysis_profile_digest,
         },
         "mode": {
             "knowledge_mode": knowledge_mode,
@@ -888,6 +917,17 @@ def create_session(
                         saved_local.get("media_revision"), 240
                     ) != _text(local_media.get("media_revision"), 240):
                         raise ValueError("本地文件版本已变化，不能复用旧剧情分析")
+                    retained_preanalysis_cache_key = str(
+                        retained["preanalysis_cache_key"] or ""
+                    ).strip()
+                    if retained_preanalysis_cache_key and not preanalysis_cache_key:
+                        watch_preanalysis_store.clear_hydrated_cache(
+                            conn,
+                            cache_key=retained_preanalysis_cache_key,
+                            session_id=retained_session_id,
+                            timeline_epoch=int(retained["timeline_epoch"] or 0),
+                            now_iso=now_iso,
+                        )
                     conn.execute(
                         """
                         UPDATE watch_sessions
@@ -895,7 +935,9 @@ def create_session(
                                companion_id = ?, companion_name = ?, source_url = ?,
                                title = ?, part_title = ?, duration_ms = ?,
                                content_start_ms = ?, content_end_ms = ?,
-                               local_media_json = ?, knowledge_mode = ?,
+                               local_media_json = ?, preanalysis_cache_key = ?,
+                               preanalysis_subtitle_digest = ?, preanalysis_audio_digest = ?,
+                               preanalysis_profile_digest = ?, knowledge_mode = ?,
                                analysis_model = ?, analysis_prompt_version = ?,
                                force_unknown_analysis = ?, fear_mode = ?, fear_action = ?,
                                reduce_volume = ?, danmaku_enabled = ?, reply_lead_ms = ?,
@@ -918,6 +960,10 @@ def create_session(
                             content_start_ms,
                             content_end_ms,
                             runtime_sqlite.json_dumps(local_media),
+                            preanalysis_cache_key,
+                            preanalysis_subtitle_digest,
+                            preanalysis_audio_digest,
+                            preanalysis_profile_digest,
                             knowledge_mode,
                             analysis_model,
                             analysis_prompt_version,
@@ -938,6 +984,17 @@ def create_session(
                             retained_session_id,
                         ),
                     )
+                    if preanalysis_cache_key:
+                        watch_preanalysis_store.hydrate_ready_cache(
+                            conn,
+                            cache_key=preanalysis_cache_key,
+                            owner_device_id=_text(device_id, 160),
+                            media=preanalysis_media,
+                            session_id=retained_session_id,
+                            media_id=media_id,
+                            timeline_epoch=int(retained["timeline_epoch"] or 0),
+                            now_iso=now_iso,
+                        )
                     resumed = _get_session_row(conn, retained_session_id)
                     conn.execute("COMMIT")
                     session = _row_to_session(resumed)
@@ -976,6 +1033,10 @@ def create_session(
                 duration_ms,
                 content_start_ms,
                 content_end_ms,
+                preanalysis_cache_key,
+                preanalysis_subtitle_digest,
+                preanalysis_audio_digest,
+                preanalysis_profile_digest,
                 knowledge_mode,
                 analysis_model,
                 analysis_prompt_version,
@@ -997,11 +1058,13 @@ def create_session(
                     device_id, window_id, companion_id, companion_name,
                     media_id, source, source_url, title, part_title, duration_ms,
                     content_start_ms, content_end_ms,
+                    preanalysis_cache_key, preanalysis_subtitle_digest,
+                    preanalysis_audio_digest, preanalysis_profile_digest,
                     knowledge_mode, analysis_model, analysis_prompt_version,
                     force_unknown_analysis, fear_mode, fear_action, reduce_volume,
                     danmaku_enabled, reply_lead_ms, visual_context_mode,
                     created_at, updated_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values,
             )
@@ -1048,6 +1111,17 @@ def create_session(
                 content_end_ms=content_end_ms,
                 now_iso=now_iso,
             )
+            if preanalysis_cache_key:
+                watch_preanalysis_store.hydrate_ready_cache(
+                    conn,
+                    cache_key=preanalysis_cache_key,
+                    owner_device_id=_text(device_id, 160),
+                    media=preanalysis_media,
+                    session_id=session_id,
+                    media_id=media_id,
+                    timeline_epoch=0,
+                    now_iso=now_iso,
+                )
             row = _get_session_row(conn, session_id)
             conn.execute("COMMIT")
         except Exception:
@@ -1175,6 +1249,17 @@ def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
                 ),
             )
             if incoming_epoch > current_epoch:
+                watch_analysis_store.cancel_stale_jobs_in_transaction(
+                    conn,
+                    session_id,
+                    current_epoch=incoming_epoch,
+                    reason="timeline_epoch_changed",
+                )
+                watch_analysis_store.reset_for_epoch_in_transaction(
+                    conn,
+                    session_id,
+                    timeline_epoch=incoming_epoch,
+                )
                 _ensure_content_bound_sections(
                     conn,
                     session_id=session_id,
@@ -1184,6 +1269,37 @@ def update_playback(session_id: str, snapshot: dict) -> tuple[dict, bool, str]:
                     content_end_ms=int(row["content_end_ms"]),
                     now_iso=now_iso,
                 )
+                preanalysis_cache_key = str(row["preanalysis_cache_key"] or "").strip()
+                if preanalysis_cache_key:
+                    watch_preanalysis_store.hydrate_ready_cache(
+                        conn,
+                        cache_key=preanalysis_cache_key,
+                        owner_device_id=str(row["device_id"] or ""),
+                        media={
+                            "id": str(row["media_id"] or ""),
+                            "source": str(row["source"] or ""),
+                            "duration_ms": duration_ms,
+                            "content_start_ms": int(row["content_start_ms"]),
+                            "content_end_ms": int(row["content_end_ms"]),
+                            "local_media": runtime_sqlite.json_loads(
+                                row["local_media_json"], {}
+                            ),
+                            "preanalysis_cache_key": preanalysis_cache_key,
+                            "subtitle_content_digest": str(
+                                row["preanalysis_subtitle_digest"] or ""
+                            ),
+                            "selected_audio_digest": str(
+                                row["preanalysis_audio_digest"] or ""
+                            ),
+                            "analysis_profile_digest": str(
+                                row["preanalysis_profile_digest"] or ""
+                            ),
+                        },
+                        session_id=session_id,
+                        media_id=str(row["media_id"] or ""),
+                        timeline_epoch=incoming_epoch,
+                        now_iso=now_iso,
+                    )
             updated = _get_session_row(conn, session_id)
             watch_viewing_store.record_session_progress(
                 conn,

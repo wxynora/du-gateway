@@ -278,6 +278,35 @@ WATCH_ANALYSIS_SOURCE_USER_AGENT = os.environ.get(
 WATCH_ANALYSIS_PREPASS_EDGE_MS = _env_int("WATCH_ANALYSIS_PREPASS_EDGE_MS", 600_000, 60_000, 1_800_000)
 WATCH_ANALYSIS_RECOGNIZED_INTERVAL_MS = _env_int("WATCH_ANALYSIS_RECOGNIZED_INTERVAL_MS", 20_000, 3_000, 60_000)
 WATCH_ANALYSIS_UNKNOWN_INTERVAL_MS = _env_int("WATCH_ANALYSIS_UNKNOWN_INTERVAL_MS", 20_000, 3_000, 60_000)
+
+# 一起看整集预解析：仅由使用者主动发起，复用 AI Studio Files API；普通滚动分析不走此链路。
+WATCH_PREANALYSIS_ENABLED = os.environ.get("WATCH_PREANALYSIS_ENABLED", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+WATCH_PREANALYSIS_API_BASE = os.environ.get(
+    "WATCH_PREANALYSIS_API_BASE",
+    "https://generativelanguage.googleapis.com",
+).strip().rstrip("/")
+WATCH_PREANALYSIS_API_KEY = (
+    os.environ.get("WATCH_PREANALYSIS_API_KEY", "").strip()
+    or os.environ.get("WORKER_OCR_API_KEY", "").strip()
+)
+WATCH_PREANALYSIS_MODEL = os.environ.get(
+    "WATCH_PREANALYSIS_MODEL",
+    "gemini-3.7-flash",
+).strip() or "gemini-3.7-flash"
+WATCH_PREANALYSIS_PROMPT_VERSION = (
+    os.environ.get("WATCH_PREANALYSIS_PROMPT_VERSION", "watch-preanalysis-v1").strip()
+    or "watch-preanalysis-v1"
+)
+WATCH_PREANALYSIS_TIMEOUT_SECONDS = _env_int(
+    "WATCH_PREANALYSIS_TIMEOUT_SECONDS", 300, 20, 900
+)
+WATCH_PREANALYSIS_INPUT_TOKENS_PER_MINUTE = _env_int(
+    "WATCH_PREANALYSIS_INPUT_TOKENS_PER_MINUTE", 250_000, 1
+)
 WATCH_CONTEXT_REPLY_LEAD_MS = _env_int("WATCH_CONTEXT_REPLY_LEAD_MS", 30_000, 0, 120_000)
 WATCH_RECALL_EMBEDDING_MODEL = os.environ.get(
     "WATCH_RECALL_EMBEDDING_MODEL",

@@ -19,8 +19,12 @@ from config import (
     WATCH_KNOWLEDGE_ENABLED,
     WATCH_KNOWLEDGE_MODEL,
     WATCH_KNOWLEDGE_SEARCH_API_KEY,
+    WATCH_PREANALYSIS_API_KEY,
+    WATCH_PREANALYSIS_ENABLED,
+    WATCH_PREANALYSIS_MODEL,
     WATCH_VISUAL_CONTEXT_ENABLED,
 )
+from services.watch_preanalysis import WatchPreanalysisProvider
 from services.watch_analysis_samples import (
     WatchAnalysisSampleError,
     prepare_samples,
@@ -36,6 +40,7 @@ from storage import (
     stay_with_du_store,
     watch_analysis_store,
     watch_knowledge_store,
+    watch_preanalysis_store,
     watch_runtime_store,
     watch_subtitle_store,
     watch_viewing_store,
@@ -239,6 +244,180 @@ def _ticket_frame_capture_upload() -> tuple[dict | None, bytes | None, Any | Non
 
 
 def register_routes(bp):
+    @bp.route("/watch/preanalysis", methods=["POST"])
+    def miniapp_watch_preanalysis_create():
+        if not WATCH_PREANALYSIS_ENABLED:
+            return _json_error("整集预解析未启用", "watch_preanalysis_disabled", 503)
+        body, error = _json_body()
+        if error is not None:
+            return error
+        media = body.get("media")
+        if not isinstance(media, dict):
+            return _json_error("media 必须是对象", "watch_media_required", 400)
+        subtitle = body.get("subtitle") if isinstance(body.get("subtitle"), dict) else {}
+        try:
+            cache = watch_preanalysis_store.create_or_get(
+                owner_device_id=_panel_device_id(),
+                media=media,
+                subtitle_content_digest=str(body.get("subtitle_content_digest") or "").strip(),
+                subtitle_kind=str(subtitle.get("kind") or "none").strip(),
+                subtitle_format=str(subtitle.get("format") or "").strip(),
+                subtitle_offset_ms=int(subtitle.get("offset_ms") or 0),
+                subtitle_text=str(subtitle.get("text") or ""),
+                selected_audio_digest=str(body.get("selected_audio_digest") or "").strip(),
+            )
+        except PermissionError as exc:
+            return _json_error(str(exc), "watch_preanalysis_forbidden", 403)
+        except (TypeError, ValueError) as exc:
+            return _json_error(str(exc), "watch_preanalysis_invalid", 400)
+        return jsonify({"ok": True, "preanalysis": cache}), 201
+
+    @bp.route("/watch/preanalysis/<cache_key>/upload-session", methods=["POST"])
+    def miniapp_watch_preanalysis_upload_session(cache_key: str):
+        if not WATCH_PREANALYSIS_ENABLED or not WATCH_PREANALYSIS_API_KEY:
+            return _json_error("整集预解析未配置 AI Studio", "watch_preanalysis_unconfigured", 503)
+        body, error = _json_body()
+        if error is not None:
+            return error
+        try:
+            upload = watch_preanalysis_store.upload_request_data(
+                cache_key,
+                owner_device_id=_panel_device_id(),
+                mime_type=str(body.get("upload_mime_type") or "").strip(),
+                size_bytes=int(body.get("upload_size_bytes") or 0),
+                display_name=str(body.get("upload_display_name") or "").strip(),
+            )
+            upload_url = WatchPreanalysisProvider().create_upload_session(
+                display_name=upload["display_name"],
+                mime_type=upload["mime_type"],
+                size_bytes=upload["size_bytes"],
+            )
+            watch_preanalysis_store.mark_upload_session_created(
+                cache_key,
+                upload_session_id=upload["session_id"],
+            )
+        except PermissionError as exc:
+            return _json_error(str(exc), "watch_preanalysis_forbidden", 403)
+        except KeyError:
+            return _json_error("整集预解析不存在", "watch_preanalysis_not_found", 404)
+        except (ValueError, RuntimeError) as exc:
+            return _json_error(str(exc), "watch_preanalysis_upload_session_failed", 409)
+        return jsonify(
+            {
+                "ok": True,
+                "upload": {
+                    "url": upload_url,
+                    "mime_type": upload["mime_type"],
+                    "size_bytes": upload["size_bytes"],
+                    "session_id": upload["session_id"],
+                },
+            }
+        )
+
+    @bp.route("/watch/preanalysis/<cache_key>/upload-complete", methods=["POST"])
+    def miniapp_watch_preanalysis_upload_complete(cache_key: str):
+        body, error = _json_body()
+        if error is not None:
+            return error
+        file_name = str(body.get("file_name") or "").strip()
+        upload_session_id = str(body.get("upload_session_id") or "").strip()
+        if not file_name.startswith("files/"):
+            return _json_error("file_name 无效", "watch_preanalysis_file_invalid", 400)
+        if not upload_session_id:
+            return _json_error("upload_session_id 无效", "watch_preanalysis_upload_session_invalid", 400)
+        try:
+            provider = WatchPreanalysisProvider()
+            file_payload = provider.get_file(file_name)
+            cache = watch_preanalysis_store.bind_uploaded_file(
+                cache_key,
+                owner_device_id=_panel_device_id(),
+                file_payload=file_payload,
+                upload_session_id=upload_session_id,
+            )
+            if cache.get("status") == "cancelled":
+                provider.delete_file(file_name)
+            cache.pop("provider_state", "")
+            watch_analysis_store.notify_watch_analysis_worker(
+                "preanalysis_upload_complete",
+                cache_key=cache_key,
+            )
+        except PermissionError as exc:
+            return _json_error(str(exc), "watch_preanalysis_forbidden", 403)
+        except KeyError:
+            return _json_error("整集预解析不存在", "watch_preanalysis_not_found", 404)
+        except (ValueError, RuntimeError) as exc:
+            return _json_error(str(exc), "watch_preanalysis_upload_complete_failed", 409)
+        return jsonify({"ok": True, "preanalysis": cache})
+
+    @bp.route("/watch/preanalysis/<cache_key>", methods=["GET"])
+    def miniapp_watch_preanalysis_status(cache_key: str):
+        try:
+            cache = watch_preanalysis_store.get_owned(
+                cache_key,
+                owner_device_id=_panel_device_id(),
+            )
+        except PermissionError as exc:
+            return _json_error(str(exc), "watch_preanalysis_forbidden", 403)
+        if cache is None:
+            return _json_error("整集预解析不存在", "watch_preanalysis_not_found", 404)
+        return jsonify({"ok": True, "preanalysis": cache})
+
+    @bp.route("/watch/preanalysis/<cache_key>/retry", methods=["POST"])
+    def miniapp_watch_preanalysis_retry(cache_key: str):
+        body, error = _json_body()
+        if error is not None:
+            return error
+        subtitle = body.get("subtitle") if isinstance(body.get("subtitle"), dict) else {}
+        try:
+            part_index = int(body.get("part_index"))
+            cache = watch_preanalysis_store.retry_part(
+                cache_key,
+                owner_device_id=_panel_device_id(),
+                part_index=part_index,
+                subtitle_content_digest=str(body.get("subtitle_content_digest") or "").strip(),
+                subtitle_kind=str(subtitle.get("kind") or "").strip(),
+                subtitle_format=str(subtitle.get("format") or "").strip(),
+                subtitle_offset_ms=int(subtitle.get("offset_ms") or 0),
+                subtitle_text=str(subtitle.get("text") or ""),
+            )
+            watch_analysis_store.notify_watch_analysis_worker(
+                "preanalysis_manual_retry",
+                cache_key=cache_key,
+                part_index=part_index,
+            )
+        except PermissionError as exc:
+            return _json_error(str(exc), "watch_preanalysis_forbidden", 403)
+        except KeyError:
+            return _json_error("整集预解析不存在", "watch_preanalysis_not_found", 404)
+        except (TypeError, ValueError) as exc:
+            return _json_error(str(exc), "watch_preanalysis_retry_invalid", 409)
+        return jsonify({"ok": True, "preanalysis": cache})
+
+    @bp.route("/watch/preanalysis/<cache_key>/cancel", methods=["POST"])
+    def miniapp_watch_preanalysis_cancel(cache_key: str):
+        try:
+            file_name = watch_preanalysis_store.cancel(
+                cache_key,
+                owner_device_id=_panel_device_id(),
+            )
+            if file_name:
+                WatchPreanalysisProvider().delete_file(file_name)
+                watch_preanalysis_store.clear_provider_file(
+                    cache_key,
+                    expected_provider_file_name=file_name,
+                )
+            cache = watch_preanalysis_store.get_owned(
+                cache_key,
+                owner_device_id=_panel_device_id(),
+            )
+        except PermissionError as exc:
+            return _json_error(str(exc), "watch_preanalysis_forbidden", 403)
+        except KeyError:
+            return _json_error("整集预解析不存在", "watch_preanalysis_not_found", 404)
+        except RuntimeError as exc:
+            return _json_error(str(exc), "watch_preanalysis_cancel_failed", 502)
+        return jsonify({"ok": True, "preanalysis": cache})
+
     @bp.route("/watch/bilibili/parts", methods=["GET"])
     def miniapp_watch_bilibili_parts():
         bvid = str(request.args.get("bvid") or "").strip()
@@ -798,16 +977,7 @@ def register_routes(bp):
                 )
                 current_epoch = int((session.get("playback") or {}).get("timeline_epoch") or 0)
                 if current_epoch != previous_epoch:
-                    watch_analysis_store.reset_for_epoch(
-                        session_id,
-                        timeline_epoch=current_epoch,
-                    )
                     watch_visual_store.delete_session_frames(session_id)
-                watch_analysis_store.cancel_stale_jobs(
-                    session_id,
-                    current_epoch=current_epoch,
-                    reason="timeline_epoch_changed",
-                )
             viewing_summary = watch_viewing_store.get_for_session(session_id)
             return jsonify(
                 {
@@ -1284,6 +1454,11 @@ def register_routes(bp):
                 "enabled": bool(WATCH_ANALYSIS_ENABLED),
                 "configured": bool(WATCH_ANALYSIS_API_KEY),
                 "model": WATCH_ANALYSIS_MODEL,
+                "preanalysis": {
+                    "enabled": bool(WATCH_PREANALYSIS_ENABLED),
+                    "configured": bool(WATCH_PREANALYSIS_API_KEY),
+                    "model": WATCH_PREANALYSIS_MODEL,
+                },
                 "knowledge": {
                     "enabled": bool(WATCH_KNOWLEDGE_ENABLED),
                     "configured": bool(WATCH_KNOWLEDGE_API_KEY and WATCH_KNOWLEDGE_SEARCH_API_KEY),

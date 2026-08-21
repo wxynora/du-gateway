@@ -50,6 +50,8 @@ _RUNTIME_TABLES = (
     "watch_client_sample_plans",
     "watch_timeline_fingerprints",
     "watch_story_checkpoints",
+    "watch_preanalysis_caches",
+    "watch_preanalysis_parts",
     "watch_knowledge_cards",
     "watch_subtitle_assets",
     "watch_visual_frames",
@@ -231,6 +233,10 @@ def ensure_schema() -> None:
                     content_start_ms INTEGER NOT NULL DEFAULT -1,
                     content_end_ms INTEGER NOT NULL DEFAULT -1,
                     local_media_json TEXT NOT NULL DEFAULT '{}',
+                    preanalysis_cache_key TEXT NOT NULL DEFAULT '',
+                    preanalysis_subtitle_digest TEXT NOT NULL DEFAULT '',
+                    preanalysis_audio_digest TEXT NOT NULL DEFAULT '',
+                    preanalysis_profile_digest TEXT NOT NULL DEFAULT '',
                     knowledge_mode TEXT NOT NULL DEFAULT 'known',
                     analysis_familiarity TEXT NOT NULL DEFAULT 'pending',
                     analysis_identity TEXT NOT NULL DEFAULT '',
@@ -545,6 +551,64 @@ def ensure_schema() -> None:
                     ON watch_story_checkpoints(session_id, timeline_epoch, through_ms, analysis_version);
                 CREATE INDEX IF NOT EXISTS idx_watch_story_checkpoint_lookup
                     ON watch_story_checkpoints(session_id, timeline_epoch, through_ms DESC);
+
+                CREATE TABLE IF NOT EXISTS watch_preanalysis_caches (
+                    cache_key TEXT PRIMARY KEY,
+                    owner_device_id TEXT NOT NULL DEFAULT '',
+                    media_identity_json TEXT NOT NULL DEFAULT '{}',
+                    content_start_ms INTEGER NOT NULL DEFAULT -1,
+                    content_end_ms INTEGER NOT NULL DEFAULT -1,
+                    split_ms INTEGER NOT NULL DEFAULT -1,
+                    analysis_profile_json TEXT NOT NULL DEFAULT '{}',
+                    analysis_profile_digest TEXT NOT NULL DEFAULT '',
+                    subtitle_cues_json TEXT NOT NULL DEFAULT '[]',
+                    status TEXT NOT NULL DEFAULT 'waiting_upload',
+                    canonical_result_json TEXT NOT NULL DEFAULT '{}',
+                    upload_mime_type TEXT NOT NULL DEFAULT '',
+                    upload_size_bytes INTEGER NOT NULL DEFAULT 0,
+                    upload_display_name TEXT NOT NULL DEFAULT '',
+                    provider_file_name TEXT NOT NULL DEFAULT '',
+                    provider_file_uri TEXT NOT NULL DEFAULT '',
+                    provider_file_expires_at TEXT NOT NULL DEFAULT '',
+                    provider_check_after TEXT NOT NULL DEFAULT '',
+                    usage_json TEXT NOT NULL DEFAULT '{}',
+                    generation_count INTEGER NOT NULL DEFAULT 0,
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    ready_at TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_preanalysis_caches_owner_updated
+                    ON watch_preanalysis_caches(owner_device_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_watch_preanalysis_caches_provider_check
+                    ON watch_preanalysis_caches(status, provider_check_after);
+
+                CREATE TABLE IF NOT EXISTS watch_preanalysis_parts (
+                    id TEXT PRIMARY KEY,
+                    cache_key TEXT NOT NULL,
+                    part_index INTEGER NOT NULL,
+                    clip_input_start_ms INTEGER NOT NULL,
+                    clip_input_end_ms INTEGER NOT NULL,
+                    authoritative_start_ms INTEGER NOT NULL,
+                    authoritative_end_ms INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'blocked',
+                    available_at TEXT NOT NULL DEFAULT '',
+                    lease_token TEXT NOT NULL DEFAULT '',
+                    leased_until TEXT NOT NULL DEFAULT '',
+                    provider_request_started_at TEXT NOT NULL DEFAULT '',
+                    input_token_count INTEGER NOT NULL DEFAULT 0,
+                    result_json TEXT NOT NULL DEFAULT '{}',
+                    usage_json TEXT NOT NULL DEFAULT '{}',
+                    error TEXT NOT NULL DEFAULT '',
+                    manual_retry_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    finished_at TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY(cache_key) REFERENCES watch_preanalysis_caches(cache_key) ON DELETE CASCADE,
+                    UNIQUE(cache_key, part_index)
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_preanalysis_parts_claim
+                    ON watch_preanalysis_parts(status, available_at, part_index, created_at);
 
                 CREATE TABLE IF NOT EXISTS watch_knowledge_cards (
                     cache_key TEXT PRIMARY KEY,
@@ -948,6 +1012,10 @@ def ensure_schema() -> None:
                 "content_start_ms": "INTEGER NOT NULL DEFAULT -1",
                 "content_end_ms": "INTEGER NOT NULL DEFAULT -1",
                 "local_media_json": "TEXT NOT NULL DEFAULT '{}'",
+                "preanalysis_cache_key": "TEXT NOT NULL DEFAULT ''",
+                "preanalysis_subtitle_digest": "TEXT NOT NULL DEFAULT ''",
+                "preanalysis_audio_digest": "TEXT NOT NULL DEFAULT ''",
+                "preanalysis_profile_digest": "TEXT NOT NULL DEFAULT ''",
                 "preparation_status": "TEXT NOT NULL DEFAULT 'identifying'",
                 "knowledge_card_key": "TEXT NOT NULL DEFAULT ''",
                 "knowledge_card_status": "TEXT NOT NULL DEFAULT 'pending'",
@@ -983,6 +1051,15 @@ def ensure_schema() -> None:
                     conn.execute(
                         f"ALTER TABLE watch_sessions ADD COLUMN {column_name} {column_sql}"
                     )
+            preanalysis_cache_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(watch_preanalysis_caches)").fetchall()
+            }
+            if "subtitle_cues_json" not in preanalysis_cache_columns:
+                conn.execute(
+                    "ALTER TABLE watch_preanalysis_caches "
+                    "ADD COLUMN subtitle_cues_json TEXT NOT NULL DEFAULT '[]'"
+                )
             plot_chunk_columns = {
                 str(row["name"])
                 for row in conn.execute("PRAGMA table_info(watch_plot_chunks)").fetchall()
