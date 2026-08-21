@@ -53,6 +53,28 @@ _HOT_PROMPT_HEADER = (
 )
 _RECENT_TOOL_BATCH_HEADER = "〖本段工具摘要〗"
 _GAME_LOOP_SUMMARY_TOOLS = frozenset({"random_imitator_td", "farm", "cedareco", "travel"})
+_FARM_READ_ONLY_ACTIONS = frozenset(
+    {
+        "bag",
+        "encyclopedia",
+        "expedition",
+        "help",
+        "leaderboard",
+        "ledger",
+        "market",
+        "shop",
+        "status",
+    }
+)
+_FARM_TRAILING_PANEL_PREFIXES = (
+    "🌾 你站在",
+    "🌟 流光时刻：",
+    "🏪 商店：",
+    "🎯 任务：",
+    "🎈 小贴士：",
+    "📣 此刻谁家菜熟了：",
+    "🥷 你今天已偷过：",
+)
 _GAME_LOOP_SUMMARY_SYSTEM_PROMPT = """你负责把同一轮单机游戏中的连续工具调用记录融合成一条准确、自然的中文历史摘要。
 
 严格按照记录顺序整理，只写记录中实际发生的内容。
@@ -392,6 +414,166 @@ def _public_repo_detail(arguments: dict, data: dict) -> str:
             return f"在公共仓库 {repo} 搜索{label}“{query}”，本页 {len(matches)} 项{followup}"
         return f"在公共仓库 {locator} 搜索{label}“{query}”，本页 {len(matches)} 项"
     return f"查看了公共仓库 {locator}"
+
+
+def _farm_entry_arguments(entry: dict) -> dict:
+    function = entry.get("function") if isinstance(entry.get("function"), dict) else {}
+    raw = entry.get("arguments")
+    if raw in (None, ""):
+        raw = function.get("arguments")
+    return _dict(raw)
+
+
+def _farm_result_text(entry: dict) -> tuple[str, bool]:
+    raw_result = entry.get("result")
+    data = _dict(raw_result)
+    is_error = data.get("isError") is True or data.get("ok") is False
+    texts: list[str] = []
+    content = data.get("content") if isinstance(data.get("content"), list) else []
+    for item in content:
+        if not isinstance(item, dict) or item.get("type") != "text":
+            continue
+        text = str(item.get("text") or "").strip()
+        if text:
+            texts.append(text)
+    if not texts:
+        fallback = data.get("text") or data.get("result") or data.get("message")
+        if fallback:
+            texts.append(str(fallback).strip())
+        elif isinstance(raw_result, str) and not data:
+            texts.append(raw_result.strip())
+    return "\n".join(text for text in texts if text).strip(), is_error
+
+
+def _farm_is_read_only(arguments: dict) -> bool:
+    action = str(arguments.get("action") or "").strip().lower()
+    if action in _FARM_READ_ONLY_ACTIONS:
+        return True
+    if action == "kitchen":
+        return not str(arguments.get("op") or "").strip()
+    if action == "glimmer":
+        return not str(arguments.get("op") or "").strip()
+    if action == "fish":
+        return bool(arguments.get("view")) and not any(
+            key in arguments for key in ("buy", "leave", "open", "sell", "times")
+        )
+    if action == "guestbook":
+        return "on" not in arguments
+    if action == "together":
+        return not str(arguments.get("option") or "").strip()
+    return False
+
+
+def _farm_action_label(arguments: dict) -> str:
+    action = str(arguments.get("action") or "").strip().lower()
+    if action == "kitchen":
+        op = str(arguments.get("op") or "").strip().lower()
+        if op == "cook":
+            return f"制作{_text_without_limit(arguments.get('recipe') or '料理')}"
+        if op == "buy":
+            kind = "食谱" if str(arguments.get("kind") or "").strip().lower() == "recipe" else "食材"
+            return f"购买{kind}"
+        if op == "use":
+            return f"使用料理{_text_without_limit(arguments.get('dishId'))}"
+        if op == "sell":
+            return f"出售{_text_without_limit(arguments.get('itemId'))}"
+        return f"料理台{op or '操作'}"
+    if action == "glimmer" and str(arguments.get("op") or "").strip().lower() == "catch":
+        animal = _text_without_limit(arguments.get("animal"))
+        dish = _text_without_limit(arguments.get("dish"))
+        return f"用{dish}诱捕{animal}" if dish and animal else "诱捕异色动物"
+    if action == "use":
+        item = _text_without_limit(arguments.get("item"))
+        if item == "speed_potion":
+            return "使用加速药水"
+        return f"使用{item}" if item else "使用物品"
+    return {
+        "harvest": "收获",
+        "plant": "种植",
+        "run": "完成一轮农活",
+        "water": "浇水",
+    }.get(action, action or "农场操作")
+
+
+def _farm_read_only_summary(arguments: dict) -> str:
+    action = str(arguments.get("action") or "").strip().lower()
+    if action == "kitchen":
+        return "查看了已解锁食谱" if arguments.get("view") == "recipes" else "查看了料理台"
+    if action == "fish":
+        view = _text_without_limit(arguments.get("view"))
+        return f"查看了钓鱼{view}" if view else "查看了钓鱼状态"
+    if action == "glimmer":
+        return "查看了流光原野"
+    if action == "guestbook":
+        return "查看了留言板"
+    if action == "together":
+        return "查看了铃野共行完整前情" if arguments.get("view") == "history" else "查看了铃野共行当前剧情"
+    if action == "encyclopedia":
+        item_id = _text_without_limit(arguments.get("id"))
+        return f"查看了图鉴{item_id}" if item_id else "查看了图鉴"
+    return {
+        "bag": "查看了素材库",
+        "expedition": "查看了探险进度",
+        "help": "查看了农场帮助",
+        "leaderboard": "查看了排行榜",
+        "ledger": "查看了账本",
+        "market": "查看了自己的摊位",
+        "shop": "查看了商店",
+        "status": "查看了农场状态",
+    }.get(action, f"查看了{action or '农场状态'}")
+
+
+def _farm_operation_result(raw_text: str, arguments: dict) -> str:
+    action = str(arguments.get("action") or "").strip().lower()
+    lines: list[str] = []
+    for raw_line in str(raw_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        is_farm_status = bool(re.match(r"^🌾【[^】]+】熟\d+·长\d+·空\d+", line))
+        is_action_panel = any(
+            line.startswith(prefix) and (action != owner or bool(lines))
+            for prefix, owner in (
+                ("🎣 月光池塘", "fish"),
+                ("✨ 流光原野开放中", "glimmer"),
+                ("🧭 铃野共行：", "together"),
+            )
+        )
+        if (
+            is_farm_status
+            or is_action_panel
+            or line.startswith(_FARM_TRAILING_PANEL_PREFIXES)
+            or line.startswith('{"farm":')
+        ):
+            break
+        lines.append(line)
+
+    if action == "plant":
+        for line in lines:
+            if "种下" in line and line.startswith(("（", "(")):
+                return _text_without_limit(line)
+    return _text_without_limit(" ".join(lines))
+
+
+def _summarize_farm_tool_loop(entries: list[dict]) -> str:
+    changes: list[str] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        arguments = _farm_entry_arguments(entry)
+        if _farm_is_read_only(arguments):
+            changes.append(_farm_read_only_summary(arguments))
+            continue
+        raw_text, is_error = _farm_result_text(entry)
+        outcome = _farm_operation_result(raw_text, arguments)
+        label = _farm_action_label(arguments)
+        if is_error:
+            changes.append(f"{label}失败：{outcome or '工具未返回错误详情'}")
+        elif outcome:
+            changes.append(f"{label}：{outcome}")
+        else:
+            changes.append(f"尝试{label}，工具未返回可读结果")
+    return "；".join(changes)
 
 
 def _game_detail(name: str, arguments: dict, data: dict) -> str:
@@ -970,16 +1152,22 @@ def _record_game_tool_loop_summary(
     reply_channel: str = "",
 ) -> int:
     tool_name = _tool_entry_name(entries[0])
-    try:
-        summary = _request_game_tool_loop_summary(tool_name, entries)
-    except Exception:
-        logger.warning(
-            "游戏工具整轮模型摘要失败，回退逐条摘要 tool=%s calls=%s",
-            tool_name,
-            len(entries),
-            exc_info=True,
-        )
-        return record_tool_loop(entries, window_id=window_id, reply_channel=reply_channel)
+    if tool_name == "farm":
+        summary = _summarize_farm_tool_loop(entries)
+        if not summary:
+            logger.info("农场工具整轮无可摘要调用，跳过摘要 calls=%s", len(entries))
+            return 0
+    else:
+        try:
+            summary = _request_game_tool_loop_summary(tool_name, entries)
+        except Exception:
+            logger.warning(
+                "游戏工具整轮模型摘要失败，回退逐条摘要 tool=%s calls=%s",
+                tool_name,
+                len(entries),
+                exc_info=True,
+            )
+            return record_tool_loop(entries, window_id=window_id, reply_channel=reply_channel)
 
     task_key = _game_loop_summary_task_key(entries, window_id=window_id)
     fingerprint = task_key.rsplit(":", 1)[-1]
@@ -996,10 +1184,11 @@ def _record_game_tool_loop_summary(
         reply_channel=reply_channel,
     )
     logger.info(
-        "游戏工具整轮模型摘要写入 tool=%s calls=%s inserted=%s",
+        "游戏工具整轮摘要写入 tool=%s calls=%s inserted=%s mode=%s",
         tool_name,
         len(entries),
         inserted,
+        "deterministic" if tool_name == "farm" else "model",
     )
     return inserted
 
