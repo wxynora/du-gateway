@@ -427,6 +427,7 @@ WEBSEARCH_TIMEOUT_SECONDS = int(os.environ.get("WEBSEARCH_TIMEOUT_SECONDS", "8")
 WEBSEARCH_MAX_RESULTS = int(os.environ.get("WEBSEARCH_MAX_RESULTS", "5"))
 PUBLIC_REPO_ENABLED = os.environ.get("PUBLIC_REPO_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 GITHUB_PUBLIC_REPO_TOKEN = os.environ.get("GITHUB_PUBLIC_REPO_TOKEN", "").strip()
+GITHUB_MCP_URL = os.environ.get("GITHUB_MCP_URL", "https://api.githubcopilot.com/mcp/").strip()
 PUBLIC_REPO_TIMEOUT_SECONDS = _env_int("PUBLIC_REPO_TIMEOUT_SECONDS", 15, 2, 60)
 PUBLIC_REPO_READ_MAX_CHARS = 12000
 PUBLIC_REPO_PAGE_SIZE = 100

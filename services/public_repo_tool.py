@@ -3,23 +3,26 @@
 from __future__ import annotations
 
 import bisect
+import base64
 import json
 import re
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 import requests
 
 from config import (
-    GITHUB_PUBLIC_REPO_TOKEN,
     PUBLIC_REPO_PAGE_SIZE,
     PUBLIC_REPO_READ_MAX_CHARS,
-    PUBLIC_REPO_TIMEOUT_SECONDS,
+)
+from services.github_mcp_client import (
+    GitHubMcpError,
+    call_tool_with_session as call_github_mcp_tool_with_session,
+    run_in_session as run_in_github_mcp_session,
 )
 from services.worker_models import get_worker_model
 
 
-_API_ROOT = "https://api.github.com"
 _REPO_PART_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _FULL_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _SOURCE_SUMMARY_MAX_TOKENS = 900
@@ -121,78 +124,168 @@ def _parse_repo(value: Any) -> tuple[str, str]:
     return owner, repo
 
 
-def _headers(*, raw: bool = False) -> dict[str, str]:
-    headers = {
-        "Accept": "application/vnd.github.raw+json" if raw else "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "du-gateway-public-repo-tool",
-    }
-    if GITHUB_PUBLIC_REPO_TOKEN:
-        headers["Authorization"] = f"Bearer {GITHUB_PUBLIC_REPO_TOKEN}"
-    return headers
+def _dict_value(data: dict, *names: str, default: Any = None) -> Any:
+    for name in names:
+        if name in data:
+            return data.get(name)
+    return default
 
 
-def _request(path: str, *, params: dict | None = None, raw: bool = False) -> requests.Response:
-    response = requests.get(
-        f"{_API_ROOT}{path}",
-        params=params or None,
-        headers=_headers(raw=raw),
-        timeout=max(2, int(PUBLIC_REPO_TIMEOUT_SECONDS)),
-        allow_redirects=False,
-    )
-    if 300 <= response.status_code < 400:
-        raise PublicRepoError("upstream_redirect_refused", "GitHub API 返回了重定向，已拒绝跟随", status=response.status_code)
-    if response.status_code >= 400:
-        if response.status_code == 404:
-            message = "仓库或资源不存在，或当前凭据不可访问"
-        elif response.status_code in {403, 429}:
-            message = "GitHub API 已限流或拒绝本次请求"
-        else:
-            message = f"GitHub API 请求失败（HTTP {response.status_code}）"
-        raise PublicRepoError("github_http_error", message, status=response.status_code)
-    return response
+def _unwrap_payload(payload: Any) -> Any:
+    current = payload
+    for _ in range(3):
+        if not isinstance(current, dict):
+            break
+        next_value = None
+        for key in ("result", "data"):
+            if key in current and len(current) == 1:
+                next_value = current.get(key)
+                break
+        if next_value is None:
+            break
+        current = next_value
+    return current
 
 
-def _json(response: requests.Response) -> Any:
+async def _mcp_payload(
+    session: Any,
+    tool_name: str,
+    arguments: dict,
+    *,
+    allow_text: bool = False,
+) -> Any:
+    result = await call_github_mcp_tool_with_session(session, tool_name, arguments)
+    if not isinstance(result, dict):
+        raise PublicRepoError("invalid_github_mcp_response", "GitHub 官方 MCP 返回格式异常")
+    if not result.get("ok"):
+        message = str(result.get("content") or "GitHub 官方 MCP 工具调用失败").strip()
+        raise PublicRepoError("github_mcp_tool_error", message[:500])
+
+    content_blocks = result.get("content_blocks")
+    if allow_text and isinstance(content_blocks, list):
+        for block in content_blocks:
+            if not isinstance(block, dict) or str(block.get("type") or "").lower() != "resource":
+                continue
+            resource = block.get("resource")
+            if not isinstance(resource, dict):
+                continue
+            if "text" in resource:
+                return str(resource.get("text") or "")
+            if "blob" in resource:
+                return {
+                    "content": str(resource.get("blob") or ""),
+                    "encoding": "base64",
+                }
+
+    structured = result.get("structured_content")
+    if isinstance(structured, list):
+        return _unwrap_payload(structured)
+    if isinstance(structured, dict) and structured:
+        return _unwrap_payload(structured)
+    if isinstance(structured, str) and structured.strip():
+        try:
+            return _unwrap_payload(json.loads(structured))
+        except Exception:
+            if allow_text:
+                return structured
+
+    if isinstance(content_blocks, list):
+        for block in content_blocks:
+            if not isinstance(block, dict) or str(block.get("type") or "").lower() != "text":
+                continue
+            block_text = str(block.get("text") or "").strip()
+            if not block_text:
+                continue
+            try:
+                return _unwrap_payload(json.loads(block_text))
+            except Exception:
+                continue
+
+    content = str(result.get("content") or "").strip()
+    if not content:
+        raise PublicRepoError("invalid_github_mcp_response", "GitHub 官方 MCP 未返回工具数据")
     try:
-        return response.json()
+        return _unwrap_payload(json.loads(content))
     except Exception as exc:
-        raise PublicRepoError("invalid_github_response", "GitHub API 返回了无法解析的数据") from exc
+        if allow_text:
+            return content
+        raise PublicRepoError("invalid_github_mcp_response", "GitHub 官方 MCP 返回了无法解析的数据") from exc
 
 
-def _rate_meta(response: requests.Response | None) -> dict:
-    headers = response.headers if response is not None else {}
-    result = {
-        "authenticated": bool(GITHUB_PUBLIC_REPO_TOKEN),
-        "limit": str(headers.get("x-ratelimit-limit") or ""),
-        "remaining": str(headers.get("x-ratelimit-remaining") or ""),
-        "reset": str(headers.get("x-ratelimit-reset") or ""),
-        "resource": str(headers.get("x-ratelimit-resource") or ""),
-    }
-    return {key: value for key, value in result.items() if value != ""}
+def _rows(payload: Any, *keys: str) -> list[dict] | None:
+    value = _unwrap_payload(payload)
+    if isinstance(value, list):
+        return [row for row in value if isinstance(row, dict)]
+    if not isinstance(value, dict):
+        return None
+    for key in keys:
+        candidate = value.get(key)
+        if isinstance(candidate, list):
+            return [row for row in candidate if isinstance(row, dict)]
+    return None
 
 
-def _repo_context(owner: str, repo: str, ref: str) -> tuple[dict, str, requests.Response]:
-    repo_response = _request(f"/repos/{quote(owner, safe='')}/{quote(repo, safe='')}")
-    metadata = _json(repo_response)
-    if not isinstance(metadata, dict):
-        raise PublicRepoError("invalid_github_response", "GitHub 仓库信息格式异常")
-    if metadata.get("private") is True:
+def _repo_full_name(metadata: dict) -> str:
+    return str(_dict_value(metadata, "full_name", "nameWithOwner", "name_with_owner", default="") or "").strip()
+
+
+async def _repo_context(session: Any, owner: str, repo: str, ref: str) -> tuple[dict, str]:
+    payload = await _mcp_payload(
+        session,
+        "search_repositories",
+        {
+            "query": f"{repo} in:name user:{owner} OR {repo} in:name org:{owner}",
+            "minimal_output": False,
+            "page": 1,
+            "perPage": int(PUBLIC_REPO_PAGE_SIZE),
+        },
+    )
+    repositories = _rows(payload, "items", "repositories")
+    if repositories is None and isinstance(payload, dict) and _repo_full_name(payload):
+        repositories = [payload]
+    expected = f"{owner}/{repo}".casefold()
+    metadata = next(
+        (row for row in repositories or [] if _repo_full_name(row).casefold() == expected),
+        None,
+    )
+    if metadata is None:
+        raise PublicRepoError("repository_not_found", "公共仓库不存在，或当前凭据不可访问")
+    if bool(_dict_value(metadata, "private", "isPrivate", "is_private", default=False)):
         raise PublicRepoError("private_repository_forbidden", "该工具只允许读取公共仓库")
-    if str(metadata.get("visibility") or "public").lower() not in {"", "public"}:
+    visibility = str(_dict_value(metadata, "visibility", default="public") or "public").lower()
+    if visibility not in {"", "public"}:
         raise PublicRepoError("private_repository_forbidden", "该工具只允许读取公共仓库")
 
-    selected_ref = str(ref or metadata.get("default_branch") or "").strip()
+    default_branch = str(_dict_value(metadata, "default_branch", "defaultBranch", default="") or "").strip()
+    selected_ref = str(ref or default_branch).strip()
     if not selected_ref:
         raise PublicRepoError("missing_ref", "仓库没有可读取的默认分支，请显式提供 ref")
-    commit_response = _request(
-        f"/repos/{quote(owner, safe='')}/{quote(repo, safe='')}/commits/{quote(selected_ref, safe='')}"
+    commit_payload = await _mcp_payload(
+        session,
+        "get_commit",
+        {"owner": owner, "repo": repo, "sha": selected_ref, "detail": "none"},
     )
-    commit = _json(commit_response)
-    resolved_sha = str(commit.get("sha") or "").strip() if isinstance(commit, dict) else ""
+    if isinstance(commit_payload, list):
+        commit = next((row for row in commit_payload if isinstance(row, dict)), {})
+    elif isinstance(commit_payload, dict):
+        commit = commit_payload
+        nested = commit.get("commit")
+        if not commit.get("sha") and isinstance(nested, dict):
+            commit = nested
+    else:
+        commit = {}
+    resolved_sha = str(_dict_value(commit, "sha", "oid", default="") or "").strip()
     if not _FULL_SHA_RE.fullmatch(resolved_sha):
-        raise PublicRepoError("invalid_github_response", "GitHub 未返回有效 commit SHA")
-    return metadata, resolved_sha.lower(), commit_response
+        raise PublicRepoError("invalid_github_mcp_response", "GitHub 官方 MCP 未返回有效 commit SHA")
+    return metadata, resolved_sha.lower()
+
+
+def _rate_limit_meta() -> dict:
+    return {
+        "available": False,
+        "authenticated": True,
+        "source": "github_official_mcp",
+    }
 
 
 def _base_result(owner: str, repo: str, resolved_sha: str) -> dict:
@@ -304,38 +397,49 @@ def _read_slice(
     return result
 
 
-def _overview(metadata: dict, owner: str, repo: str, resolved_sha: str, response: requests.Response) -> dict:
+def _overview(metadata: dict, owner: str, repo: str, resolved_sha: str) -> dict:
     result = _base_result(owner, repo, resolved_sha)
-    license_info = metadata.get("license") if isinstance(metadata.get("license"), dict) else {}
+    license_value = metadata.get("license")
+    license_info = license_value if isinstance(license_value, dict) else {}
     result.update(
         {
             "action": "overview",
-            "default_branch": str(metadata.get("default_branch") or ""),
+            "default_branch": str(_dict_value(metadata, "default_branch", "defaultBranch", default="") or ""),
             "description": str(metadata.get("description") or ""),
             "homepage": str(metadata.get("homepage") or ""),
-            "language": str(metadata.get("language") or ""),
-            "license": str(license_info.get("spdx_id") or license_info.get("name") or ""),
+            "language": str(_dict_value(metadata, "language", "primaryLanguage", default="") or ""),
+            "license": str(
+                _dict_value(license_info, "spdx_id", "spdxId", "name", default="")
+                or (license_value if isinstance(license_value, str) else "")
+            ),
             "topics": [str(item) for item in (metadata.get("topics") or []) if str(item)],
-            "stars": int(metadata.get("stargazers_count") or 0),
-            "forks": int(metadata.get("forks_count") or 0),
-            "open_issues": int(metadata.get("open_issues_count") or 0),
-            "archived": bool(metadata.get("archived")),
-            "html_url": str(metadata.get("html_url") or ""),
-            "rate_limit": _rate_meta(response),
+            "stars": int(_dict_value(metadata, "stargazers_count", "stargazerCount", "stars", default=0) or 0),
+            "forks": int(_dict_value(metadata, "forks_count", "forkCount", "forks", default=0) or 0),
+            "open_issues": int(_dict_value(metadata, "open_issues_count", "openIssuesCount", default=0) or 0),
+            "archived": bool(_dict_value(metadata, "archived", "isArchived", default=False)),
+            "html_url": str(_dict_value(metadata, "html_url", "url", default="") or ""),
+            "rate_limit": _rate_limit_meta(),
         }
     )
     return result
 
 
-def _list_directory(owner: str, repo: str, resolved_sha: str, path: str, page: int) -> dict:
-    safe_path = quote(path.strip("/"), safe="/")
-    suffix = f"/contents/{safe_path}" if safe_path else "/contents"
-    response = _request(
-        f"/repos/{quote(owner, safe='')}/{quote(repo, safe='')}{suffix}",
-        params={"ref": resolved_sha},
+async def _list_directory(
+    session: Any,
+    owner: str,
+    repo: str,
+    resolved_sha: str,
+    path: str,
+    page: int,
+) -> dict:
+    clean_path = path.strip("/")
+    payload = await _mcp_payload(
+        session,
+        "get_file_contents",
+        {"owner": owner, "repo": repo, "path": clean_path, "ref": resolved_sha},
     )
-    payload = _json(response)
-    if not isinstance(payload, list):
+    rows = _rows(payload, "entries", "items", "files", "content")
+    if rows is None:
         raise PublicRepoError("not_a_directory", "指定 path 不是目录")
     entries = [
         {
@@ -344,23 +448,22 @@ def _list_directory(owner: str, repo: str, resolved_sha: str, path: str, page: i
             "type": str(row.get("type") or ""),
             "size": int(row.get("size") or 0),
             "sha": str(row.get("sha") or ""),
-            "html_url": str(row.get("html_url") or ""),
+            "html_url": str(_dict_value(row, "html_url", "url", default="") or ""),
         }
-        for row in payload
-        if isinstance(row, dict)
+        for row in rows
     ]
     selected, has_more, next_page = _paged(entries, page)
     result = _base_result(owner, repo, resolved_sha)
     result.update(
         {
             "action": "list",
-            "path": path.strip("/"),
+            "path": clean_path,
             "page": page,
             "page_size": int(PUBLIC_REPO_PAGE_SIZE),
             "total_entries": len(entries),
             "entries": selected,
             "has_more": has_more,
-            "rate_limit": _rate_meta(response),
+            "rate_limit": _rate_limit_meta(),
         }
     )
     if next_page is not None:
@@ -368,7 +471,8 @@ def _list_directory(owner: str, repo: str, resolved_sha: str, path: str, page: i
     return result
 
 
-def _read_file(
+async def _read_file(
+    session: Any,
     owner: str,
     repo: str,
     resolved_sha: str,
@@ -381,12 +485,36 @@ def _read_file(
     clean_path = path.strip("/")
     if not clean_path:
         raise PublicRepoError("missing_path", "read 必须提供文件 path")
-    response = _request(
-        f"/repos/{quote(owner, safe='')}/{quote(repo, safe='')}/contents/{quote(clean_path, safe='/')}",
-        params={"ref": resolved_sha},
-        raw=True,
+    payload = await _mcp_payload(
+        session,
+        "get_file_contents",
+        {"owner": owner, "repo": repo, "path": clean_path, "ref": resolved_sha},
+        allow_text=True,
     )
-    raw_bytes = response.content or b""
+    file_data: Any = payload
+    if isinstance(file_data, list):
+        file_data = next(
+            (row for row in file_data if isinstance(row, dict) and str(row.get("path") or "") == clean_path),
+            None,
+        )
+    if isinstance(file_data, dict) and isinstance(file_data.get("file"), dict):
+        file_data = file_data["file"]
+    if isinstance(file_data, dict):
+        raw_content = _dict_value(file_data, "decoded_content", "text", "content", default="")
+        encoding = str(file_data.get("encoding") or "").strip().lower()
+        if isinstance(raw_content, dict):
+            raw_content = _dict_value(raw_content, "text", "content", default="")
+        if encoding == "base64":
+            try:
+                raw_bytes = base64.b64decode(str(raw_content or ""), validate=False)
+            except Exception as exc:
+                raise PublicRepoError("invalid_github_mcp_response", "GitHub 文件内容无法解码") from exc
+        else:
+            raw_bytes = str(raw_content or "").encode("utf-8")
+    elif isinstance(file_data, str):
+        raw_bytes = file_data.encode("utf-8")
+    else:
+        raise PublicRepoError("not_a_file", "指定 path 不是可读取的文本文件")
     if b"\x00" in raw_bytes:
         raise PublicRepoError("binary_file", "该路径是二进制文件，不能作为源码文本读取")
     text = raw_bytes.decode("utf-8", errors="replace")
@@ -403,7 +531,7 @@ def _read_file(
             "action": "read",
             "path": clean_path,
             **sliced,
-            "rate_limit": _rate_meta(response),
+            "rate_limit": _rate_limit_meta(),
         }
     )
     if isinstance(result.get("next"), dict):
@@ -411,17 +539,29 @@ def _read_file(
     return result
 
 
-def _search_path(owner: str, repo: str, resolved_sha: str, query: str, page: int) -> dict:
+async def _search_path(
+    session: Any,
+    owner: str,
+    repo: str,
+    resolved_sha: str,
+    query: str,
+    page: int,
+) -> dict:
     if not query:
         raise PublicRepoError("missing_query", "search_path 必须提供 query")
-    response = _request(
-        f"/repos/{quote(owner, safe='')}/{quote(repo, safe='')}/git/trees/{quote(resolved_sha, safe='')}",
-        params={"recursive": "1"},
+    payload = await _mcp_payload(
+        session,
+        "get_repository_tree",
+        {
+            "owner": owner,
+            "repo": repo,
+            "tree_sha": resolved_sha,
+            "recursive": True,
+        },
     )
-    payload = _json(response)
-    rows = payload.get("tree") if isinstance(payload, dict) else None
-    if not isinstance(rows, list):
-        raise PublicRepoError("invalid_github_response", "GitHub tree 返回格式异常")
+    rows = _rows(payload, "tree", "items", "entries")
+    if rows is None:
+        raise PublicRepoError("invalid_github_mcp_response", "GitHub 路径搜索返回格式异常")
     needle = query.casefold()
     matches = [
         {
@@ -431,10 +571,11 @@ def _search_path(owner: str, repo: str, resolved_sha: str, query: str, page: int
             "sha": str(row.get("sha") or ""),
         }
         for row in rows
-        if isinstance(row, dict) and needle in str(row.get("path") or "").casefold()
+        if needle in str(row.get("path") or "").casefold()
     ]
     selected, has_more, next_page = _paged(matches, page)
-    upstream_truncated = bool(payload.get("truncated"))
+    payload_dict = payload if isinstance(payload, dict) else {}
+    upstream_truncated = bool(payload_dict.get("truncated"))
     result = _base_result(owner, repo, resolved_sha)
     result.update(
         {
@@ -447,7 +588,7 @@ def _search_path(owner: str, repo: str, resolved_sha: str, query: str, page: int
             "has_more": has_more,
             "upstream_truncated": upstream_truncated,
             "complete": not upstream_truncated,
-            "rate_limit": _rate_meta(response),
+            "rate_limit": _rate_limit_meta(),
         }
     )
     if next_page is not None:
@@ -455,40 +596,45 @@ def _search_path(owner: str, repo: str, resolved_sha: str, query: str, page: int
     return result
 
 
-def _search_code(owner: str, repo: str, resolved_sha: str, query: str, page: int) -> dict:
-    if not GITHUB_PUBLIC_REPO_TOKEN:
-        raise PublicRepoError("missing_token", "search_code 需要配置 GitHub token")
+async def _search_code(
+    session: Any,
+    owner: str,
+    repo: str,
+    resolved_sha: str,
+    query: str,
+    page: int,
+) -> dict:
     if not query:
         raise PublicRepoError("missing_query", "search_code 必须提供 query")
-    response = _request(
-        "/search/code",
-        params={
-            "q": f"{query} repo:{owner}/{repo}",
+    payload = await _mcp_payload(
+        session,
+        "search_code",
+        {
+            "query": f"{query} repo:{owner}/{repo}",
             "page": page,
-            "per_page": int(PUBLIC_REPO_PAGE_SIZE),
+            "perPage": int(PUBLIC_REPO_PAGE_SIZE),
         },
     )
-    payload = _json(response)
-    rows = payload.get("items") if isinstance(payload, dict) else None
-    if not isinstance(rows, list):
-        raise PublicRepoError("invalid_github_response", "GitHub code search 返回格式异常")
+    rows = _rows(payload, "items", "matches", "results")
+    if rows is None:
+        raise PublicRepoError("invalid_github_mcp_response", "GitHub 代码搜索返回格式异常")
     expected_repo = f"{owner}/{repo}".casefold()
     matches = []
     for row in rows:
-        if not isinstance(row, dict):
-            continue
         repository = row.get("repository") if isinstance(row.get("repository"), dict) else {}
-        if str(repository.get("full_name") or "").casefold() != expected_repo:
+        repository_name = _repo_full_name(repository).casefold()
+        if repository_name != expected_repo:
             continue
         matches.append(
             {
                 "name": str(row.get("name") or ""),
                 "path": str(row.get("path") or ""),
                 "sha": str(row.get("sha") or ""),
-                "html_url": str(row.get("html_url") or ""),
+                "html_url": str(_dict_value(row, "html_url", "url", default="") or ""),
             }
         )
-    total_count = int(payload.get("total_count") or 0)
+    payload_dict = payload if isinstance(payload, dict) else {}
+    total_count = int(_dict_value(payload_dict, "total_count", "totalCount", default=len(matches)) or 0)
     visible_total = min(total_count, 1000)
     has_more = page * int(PUBLIC_REPO_PAGE_SIZE) < visible_total
     result = _base_result(owner, repo, resolved_sha)
@@ -501,11 +647,11 @@ def _search_code(owner: str, repo: str, resolved_sha: str, query: str, page: int
             "matches": matches,
             "total_count": total_count,
             "upstream_result_cap": 1000,
-            "incomplete_results": bool(payload.get("incomplete_results")),
+            "incomplete_results": bool(_dict_value(payload_dict, "incomplete_results", "incompleteResults", default=False)),
             "search_pinned_to_resolved_sha": False,
             "resolved_sha_applies_to_followup_reads": True,
             "has_more": has_more,
-            "rate_limit": _rate_meta(response),
+            "rate_limit": _rate_limit_meta(),
         }
     )
     if has_more:
@@ -645,50 +791,69 @@ def execute_public_repo(arguments: dict, *, read_max_chars: int | None = None) -
         if action not in {"overview", "list", "read", "search_path", "search_code"}:
             raise PublicRepoError("invalid_action", "action 必须是 overview/list/read/search_path/search_code")
         owner, repo = _parse_repo(args.get("repo"))
-        metadata, resolved_sha, context_response = _repo_context(owner, repo, str(args.get("ref") or ""))
-        if action == "overview":
-            result = _overview(metadata, owner, repo, resolved_sha, context_response)
-        elif action == "list":
-            result = _list_directory(
+
+        async def _operation(session: Any) -> dict:
+            metadata, resolved_sha = await _repo_context(
+                session,
                 owner,
                 repo,
-                resolved_sha,
-                str(args.get("path") or ""),
-                _positive_int(args.get("page"), 1),
+                str(args.get("ref") or ""),
             )
-        elif action == "read":
-            end_line = args.get("end_line")
-            try:
-                effective_read_max_chars = int(read_max_chars) if read_max_chars is not None else int(PUBLIC_REPO_READ_MAX_CHARS)
-            except Exception:
-                effective_read_max_chars = int(PUBLIC_REPO_READ_MAX_CHARS)
-            effective_read_max_chars = max(1, min(int(PUBLIC_REPO_READ_MAX_CHARS), effective_read_max_chars))
-            result = _read_file(
-                owner,
-                repo,
-                resolved_sha,
-                str(args.get("path") or ""),
-                _positive_int(args.get("start_line"), 1),
-                _positive_int(end_line, 1) if end_line is not None else None,
-                _nonnegative_int(args.get("start_column"), 0),
-                effective_read_max_chars,
-            )
-        elif action == "search_path":
-            result = _search_path(
+            if action == "overview":
+                return _overview(metadata, owner, repo, resolved_sha)
+            if action == "list":
+                return await _list_directory(
+                    session,
+                    owner,
+                    repo,
+                    resolved_sha,
+                    str(args.get("path") or ""),
+                    _positive_int(args.get("page"), 1),
+                )
+            if action == "read":
+                end_line = args.get("end_line")
+                try:
+                    effective_read_max_chars = (
+                        int(read_max_chars)
+                        if read_max_chars is not None
+                        else int(PUBLIC_REPO_READ_MAX_CHARS)
+                    )
+                except Exception:
+                    effective_read_max_chars = int(PUBLIC_REPO_READ_MAX_CHARS)
+                effective_read_max_chars = max(
+                    1,
+                    min(int(PUBLIC_REPO_READ_MAX_CHARS), effective_read_max_chars),
+                )
+                return await _read_file(
+                    session,
+                    owner,
+                    repo,
+                    resolved_sha,
+                    str(args.get("path") or ""),
+                    _positive_int(args.get("start_line"), 1),
+                    _positive_int(end_line, 1) if end_line is not None else None,
+                    _nonnegative_int(args.get("start_column"), 0),
+                    effective_read_max_chars,
+                )
+            if action == "search_path":
+                return await _search_path(
+                    session,
+                    owner,
+                    repo,
+                    resolved_sha,
+                    str(args.get("query") or "").strip(),
+                    _positive_int(args.get("page"), 1),
+                )
+            return await _search_code(
+                session,
                 owner,
                 repo,
                 resolved_sha,
                 str(args.get("query") or "").strip(),
                 _positive_int(args.get("page"), 1),
             )
-        else:
-            result = _search_code(
-                owner,
-                repo,
-                resolved_sha,
-                str(args.get("query") or "").strip(),
-                _positive_int(args.get("page"), 1),
-            )
+
+        result = run_in_github_mcp_session(_operation)
         return json.dumps(result, ensure_ascii=False)
     except PublicRepoError as exc:
         payload = {
@@ -700,13 +865,10 @@ def execute_public_repo(arguments: dict, *, read_max_chars: int | None = None) -
         if exc.status is not None:
             payload["http_status"] = exc.status
         return json.dumps(payload, ensure_ascii=False)
-    except requests.Timeout:
-        return json.dumps(
-            {"ok": False, "action": action, "error_code": "github_timeout", "error": "GitHub API 请求超时"},
-            ensure_ascii=False,
-        )
-    except requests.RequestException:
-        return json.dumps(
-            {"ok": False, "action": action, "error_code": "github_request_failed", "error": "GitHub API 请求失败"},
-            ensure_ascii=False,
-        )
+    except GitHubMcpError as exc:
+        payload = {"ok": False, "action": action, "error_code": exc.code, "error": exc.message}
+        if exc.status is not None:
+            payload["http_status"] = exc.status
+        if exc.stage:
+            payload["error_stage"] = exc.stage
+        return json.dumps(payload, ensure_ascii=False)
