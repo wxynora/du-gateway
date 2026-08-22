@@ -1787,6 +1787,7 @@ def stage_dynamic_memory_merge(
     round_index: int,
     field_updates: dict,
     merge_reason: str = "",
+    expected_pending_rewritten_content: str | None = None,
 ) -> bool:
     """暂存动态记忆 merge 候选；正式正文保持不变，等待人工审核。"""
     clean_id = str(entry_id or "").strip()
@@ -1803,11 +1804,28 @@ def stage_dynamic_memory_merge(
             return False
         existing_pending = item.get("pending_merge")
         if isinstance(existing_pending, dict):
-            return bool(
-                str(existing_pending.get("original_content") or "").strip() == original
-                and str(existing_pending.get("rewritten_content") or "").strip() == rewritten
-                and str(existing_pending.get("merge_reason") or "").strip() == str(merge_reason or "").strip()
+            existing_original = str(existing_pending.get("original_content") or "").strip()
+            existing_rewritten = str(existing_pending.get("rewritten_content") or "").strip()
+            expected_pending = (
+                str(expected_pending_rewritten_content or "").strip()
+                if expected_pending_rewritten_content is not None
+                else None
             )
+            if expected_pending is None:
+                return bool(
+                    existing_original == original
+                    and existing_rewritten == rewritten
+                    and str(existing_pending.get("merge_reason") or "").strip()
+                    == str(merge_reason or "").strip()
+                )
+            if existing_original != original or existing_rewritten != expected_pending:
+                return False
+            if existing_rewritten == rewritten and str(existing_pending.get("merge_reason") or "").strip() == str(
+                merge_reason or ""
+            ).strip():
+                return True
+        elif expected_pending_rewritten_content is not None:
+            return False
         reason_by_type = {
             "consolidate": "同一具体事项的补充或延续，等待人工审核",
             "correction": "旧记忆中的事实或判断被明确纠正，等待人工审核",

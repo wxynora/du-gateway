@@ -1586,6 +1586,23 @@ def _replace_recall_candidate_ids(target: Optional[list[str]], candidates: list[
     ]
 
 
+def _append_recent_decision_candidate_ids(
+    target: Optional[list[str]],
+    recent_source_ids: set[str],
+    memories: list[dict],
+) -> None:
+    """把 last4 新建记忆补给动态层 decision；不改变主聊天可见召回结果。"""
+    if target is None or not recent_source_ids:
+        return
+    seen = {str(value or "").strip() for value in target if str(value or "").strip()}
+    for memory in memories or []:
+        memory_id = str((memory or {}).get("id") or "").strip()
+        if not memory_id or memory_id not in recent_source_ids or memory_id in seen:
+            continue
+        target.append(memory_id)
+        seen.add(memory_id)
+
+
 def _replace_recall_topic_state(target: Optional[dict], topic_state: dict) -> None:
     if target is None:
         return
@@ -1700,10 +1717,6 @@ def step_inject_dynamic_memory(
     from utils.time_aware import now_beijing_iso
 
     memories = prune_dynamic_memories(memories, core_pending)
-    # 元问题和短回应仍更新 topic state，但不进入记忆检索。
-    if is_memory_meta_query(last_user_query_text) or is_trivial_user_message(last_user_query_text):
-        return body
-    original_keyword_candidates = extract_keyword_candidates(last_user_query_text)
     excluded_source_ids = _recent_round_created_memory_ids(
         window_id,
         previous_four_rounds,
@@ -1716,6 +1729,19 @@ def step_inject_dynamic_memory(
             list(getattr(previous_four_rounds, "round_indexes", ()) or ()),
             len(excluded_source_ids),
         )
+
+    # 元问题和短回应仍不进入主聊天检索；短回应需保留 last4 新建记忆给
+    # 动态层 decision，避免同一连续事项只因本轮太短而失去可 merge 目标。
+    if is_memory_meta_query(last_user_query_text):
+        return body
+    if is_trivial_user_message(last_user_query_text):
+        _append_recent_decision_candidate_ids(
+            recall_candidate_ids_out,
+            excluded_source_ids,
+            memories,
+        )
+        return body
+    original_keyword_candidates = extract_keyword_candidates(last_user_query_text)
 
     topic_anchor_evidence = "\n".join(
         [
@@ -1818,6 +1844,11 @@ def step_inject_dynamic_memory(
             ]
         if recall_candidate_ids_out is not None:
             recall_candidate_ids_out[:] = cached_candidate_ids
+        _append_recent_decision_candidate_ids(
+            recall_candidate_ids_out,
+            excluded_source_ids,
+            memories,
+        )
         recall_source = str(cached.get("source") or "hybrid")
         vector_error = ""
         rerank_cache_hit = "+rerank" in recall_source
@@ -1859,6 +1890,11 @@ def step_inject_dynamic_memory(
             merge_vector_and_bm25_recall(vector_recalled, bm25_scores)
         )
         _replace_recall_candidate_ids(recall_candidate_ids_out, evolution_candidates)
+        _append_recent_decision_candidate_ids(
+            recall_candidate_ids_out,
+            excluded_source_ids,
+            memories,
+        )
         recalled = _exclude_memories_created_in_recent_rounds(
             evolution_candidates,
             excluded_source_ids,

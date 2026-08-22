@@ -199,7 +199,7 @@ _DYNAMIC_LAYER_DECISION_PROMPT = """你负责动态记忆的第一步：分析�
 输入里的 role=user 是辛玥，role=assistant 是我（渡）。原文若有“辛玥：”“笨笨：”“[辛玥]:”“[我]:”等明确人物前缀，必须按前缀区分说话人；“[我]”是渡，群聊里的笨笨或其他成员不是辛玥或渡，不能把他们说的话记到辛玥或渡身上。
 当前轮若带 thinking，它是我本轮真实的思路，可用于判断感受、误解和认知变化；其中未被正文或对话确认的推测仍只能作为当时的想法，不能改写成已经发生的事实。
 
-先按“同一个具体事项”拆分当前轮。主体、对象、关系或行为、具体内容相同，才算同一事项。不同事项必须分开；禁止选中一条旧记忆后，把同轮其他事项、顺带提到的事情或无关工具结果一起塞进它。同一旧记忆在本轮最多由一个事项更新；多个增量属于同一旧记忆时，先归入同一个事项。
+先按“同一个具体事项或同一段连续互动”拆分当前轮。独立事实仍要核对主体、对象、关系或行为、具体内容；连续互动则要结合最近对话判断是否仍在推进同一话题、玩法或学习过程，不能因为其中一个子细节变了就另起一条。不同事项必须分开；禁止选中一条旧记忆后，把同轮其他事项、顺带提到的事情或无关工具结果一起塞进它。同一旧记忆在本轮最多由一个事项更新；多个增量属于同一旧记忆时，先归入同一个事项。
 
 每个事项只能选择：
 - new：有独立、具体且值得以后想起的新信息；
@@ -208,10 +208,11 @@ _DYNAMIC_LAYER_DECISION_PROMPT = """你负责动态记忆的第一步：分析�
 
 merge 判断规则：
 - 必须分别核对主体、对象、关系或行为、具体内容。关键词、标签、房间或宽泛语义相近，不能证明是同一件事。若是两个独立事实，或无法明确选中要更新的旧记忆，通常不要 merge；有独立新信息时 new，没有则 skip。
+- 最近对话能证明双方仍在同一段连续互动里时，具体内容可以自然推进：例如同一轮玩梗里不断变换扮演对象，或同一次学英语里从“有人教了一个词”继续到具体单词、称呼对象与发音练习。这些子细节变化仍属于同一事项，优先 merge 成一条完整记忆；不能把每个物种、单词或发音尝试分别 new。只有话题已经结束、换成另一件独立事实，才另起 new。
 - 反例：旧记忆写“渡的名字相关记忆”，本轮写“小玥有名字羞耻症”，只有“名字”这个词重合，主体和具体事项不同，禁止 merge。
 - 明确发生在不同日期的一次性事件，即使人物、行为和关键词相同，也不是同一个具体事项，禁止普通 merge；有独立价值时 new，否则 skip。若确认是在谈同一次过去事件，不要仅因本轮重新提到就把时间改成今天或现在；明确纠正事件时间时才更新。
 - 多次独立事件已经足以形成同一稳定习惯、XP、偏好或边界观察时，才可使用 habit_generalization；一次事件、同一事件延续或仅关键词相似时禁止使用。habit_generalization 的正文应概括共性；如果仍主要写成“上次……这次……”的事件串联，说明没有完成常态归纳。旧记忆里不能被共性涵盖、又有独立意义的事实或感受仍须保留；不能借归纳之名抹掉旧内容。若保留后会混成两个事项，就不要选这条旧记忆。
-- merge_locked=true 表示已有待审核 merge，禁止再次选择。review_feedback 是过去真实审核结果：approved 表示当时 proposed_content 被通过；edited 表示 final_content 才是确认写法；rejected 表示候选被拒绝，禁止照着重犯。审核例子只用于学习怎么判断和融合，不是本轮新发生的事实。
+- merge_locked=true 表示这条候选不能再次选择。dynamic_pending_content 表示动态记忆已有一版等待审核的草稿：它不是正式事实，但当前轮明确延续同一事项时可以继续 merge，正文阶段会在该草稿上迭代，审核页仍只保留一条最新候选；不相关内容不得借此塞入。review_feedback 是过去真实审核结果：approved 表示当时 proposed_content 被通过；edited 表示 final_content 才是确认写法；rejected 表示候选被拒绝，禁止照着重犯。审核例子只用于学习怎么判断和融合，不是本轮新发生的事实。
 - 卧室候选的 merge_gap_hours 不超过 24，只表示时间上可能连续，仍必须确认是同一段具体互动，不能因为动作或说法相似就 merge。merge_gap_hours 超过 24 时视为隔开的独立互动，禁止 consolidate、temporal_update、supersede 或 invalidate；只允许辛玥明确纠正同一条过去记忆的 correction，或多次独立事件已形成 XP、稳定偏好或边界观察的 habit_generalization，这两类都进入人工审核。
 - consolidate：同一事项重复、补充或延续；correction：辛玥明确指出旧判断或事实本来错误；invalidate：旧记忆已明确无效；supersede：新明确结论取代旧结论；temporal_update：过去成立、现在状态变化；habit_generalization：多次独立事件形成稳定观察。
 - correction / invalidate / supersede 必须有辛玥当前明确表达的依据，不能只凭我的推测。普通补充使用 consolidate。辛玥明确说记反了或直接纠正事实时，使用 correction，不能写 consolidate；旧状态过去成立、当前已完成或进入下一阶段时，使用 temporal_update，不能写 consolidate。
@@ -240,6 +241,12 @@ source_evidence 是正文阶段唯一可使用的本轮来源。new 或 merge �
 - thinking 证据只能证明我当时确实有这个思路或感受，其中对外部事实、辛玥动机或未确认事件的推测仍不能当成事实。
 fused_with_id 在 merge 时只能填写候选列表里的 ref（如 M01），其他 action 填 null。
 merge_reason 仅 merge 时填写允许值，其他 action 填 null。
+
+真实连续事项示例（只学习事项边界与 action，不把示例内容当成本轮事实）：
+- 当前还没有英语候选，辛玥说“刚才有人教了我一个英语”，我回“说来听听，先说词，再说人”：这是一次英语互动的开端，有明确后续悬念，先 new，不能因单词尚未出现就 skip。
+- 随后同一段对话继续出现“h什么by”“对 hubby 他让我以后这么叫他”“puppy”和发音尝试：都在推进刚才那次英语互动，应持续 merge 到第一条，不能按每个单词或每次发音分别 new。
+- 最近对话里辛玥先说自己变成牛，接着变蟑螂、仓鼠、小鸡、猫猫、蚂蚁：这是同一段连续变形玩梗，物种变化是玩法推进，应持续 merge 到同一条；不能看到物种不同就判成多个独立事项。
+- 旧记忆是渡的名字相关经历，本轮是辛玥有名字羞耻症：只有“名字”重合，主体与事实不同，仍禁止 merge。
 
 只输出一个 JSON 对象，不要 Markdown、解释或额外文字：
 {{"items":[{{"item_id":"I1","item_brief":"事项范围","source_evidence":[{{"message_index":0,"field":"content","quote":"与本事项直接相关的逐字原文"}}],"action":"new|merge|skip","importance":2,"tag":"客厅","emotion_label":"neutral","scene_type":"casual_chat","target_type":"other_topic","fused_with_id":null,"merge_reason":null}}]}}
@@ -309,7 +316,7 @@ merge 不适用 new 的长度建议，以完整保留旧记忆中未被否定的
 merge 必须遵守以下共享规则：
 """ + MERGE_ITERATION_RULES + """
 
-每个 merge 事项只提供上一步已经选中的正式 original_content；必须以它为底稿。它不包含 pending candidate、review_feedback、retrieval_text 或其他候选元数据，不得引用或猜测这些内容。
+每个 merge 事项只提供已经选中的 original_content；没有待审候选时它是正式正文，有待审候选时它是该事项当前正在累积的待审草稿。必须以它为底稿。它不包含 review_feedback、retrieval_text 或其他候选元数据，不得引用或猜测这些内容。
 
 只输出一个 JSON 对象，不要 Markdown、解释、标题或修改理由：
 {{"items":[{{"item_id":"I1","content":"完整新版记忆正文"}}]}}
@@ -465,8 +472,15 @@ def _build_memory_ref_prompt_items(memories: list) -> tuple[list[dict], dict[str
             if key == "retrieval_text" and value == item.get("content"):
                 continue
             item[key] = value
-        if isinstance(mem.get("pending_merge"), dict):
-            item["merge_locked"] = True
+        pending_merge = mem.get("pending_merge")
+        if isinstance(pending_merge, dict):
+            if mid.startswith("core::"):
+                item["merge_locked"] = True
+            else:
+                pending_content = str(pending_merge.get("rewritten_content") or "").strip()
+                if pending_content:
+                    item["dynamic_pending_content"] = pending_content
+                item["dynamic_pending_review"] = True
         prompt_items.append(item)
     return prompt_items, ref_to_id, valid_ids
 
@@ -477,6 +491,7 @@ def _merge_locked_memory_ids(memories: list) -> set[str]:
         for memory in memories or []
         if isinstance(memory, dict)
         and str(memory.get("id") or "").strip()
+        and str(memory.get("id") or "").strip().startswith("core::")
         and isinstance(memory.get("pending_merge"), dict)
     }
 
@@ -1368,7 +1383,14 @@ def _writing_prompt_items(
         }
         if plan.get("action") == "merge":
             memory = memories_by_id.get(str(plan.get("fused_with_id") or ""))
-            item["original_content"] = str((memory or {}).get("content") or "").strip()
+            pending_merge = (memory or {}).get("pending_merge")
+            pending_content = (
+                str(pending_merge.get("rewritten_content") or "").strip()
+                if isinstance(pending_merge, dict)
+                and not str((memory or {}).get("id") or "").strip().startswith("core::")
+                else ""
+            )
+            item["original_content"] = pending_content or str((memory or {}).get("content") or "").strip()
         out.append(item)
     return out
 
@@ -1670,7 +1692,7 @@ def call_dynamic_layer_ds(
             decision_worker,
             decision_prompt,
             stage="decision",
-            disable_thinking=False,
+            disable_thinking=True,
             model_variant="pro",
             read_timeout_seconds=240,
             prefer_fallback=fallback_pinned,
@@ -1726,8 +1748,14 @@ def call_dynamic_layer_ds(
             for item in writing_items
             if isinstance(item, dict) and str(item.get("item_id") or "").strip()
         }
+        candidates_by_id = {
+            str(item.get("id") or "").strip(): item
+            for item in candidates
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
         content_by_item_id: dict[str, str] = {}
         original_content_by_item_id: dict[str, str] = {}
+        expected_pending_content_by_item_id: dict[str, str] = {}
         writing_worker = _dynamic_layer_stage_worker("opencode_go", "flash")
         for plan in actionable_plans:
             item_id = str(plan.get("item_id") or "").strip()
@@ -1783,7 +1811,16 @@ def call_dynamic_layer_ds(
             writing_result = (writing_results or [])[0]
             content_by_item_id[item_id] = str(writing_result.get("content") or "").strip()
             if plan.get("action") == "merge":
-                original_content_by_item_id[item_id] = str(writing_item.get("original_content") or "")
+                candidate = candidates_by_id.get(str(plan.get("fused_with_id") or "")) or {}
+                original_content_by_item_id[item_id] = str(candidate.get("content") or "").strip()
+                pending_merge = candidate.get("pending_merge")
+                if (
+                    isinstance(pending_merge, dict)
+                    and not str(candidate.get("id") or "").strip().startswith("core::")
+                ):
+                    expected_pending_content_by_item_id[item_id] = str(
+                        pending_merge.get("rewritten_content") or ""
+                    ).strip()
 
         results: list[dict] = []
         for plan in plans:
@@ -1796,6 +1833,12 @@ def call_dynamic_layer_ds(
                     str(plan.get("item_id") or ""),
                     "",
                 )
+                expected_pending_content = expected_pending_content_by_item_id.get(
+                    str(plan.get("item_id") or ""),
+                    "",
+                )
+                if expected_pending_content:
+                    result["_merge_expected_pending_content"] = expected_pending_content
             result["merge_gap_hours"] = plan.get("merge_gap_hours")
             result["merge_source_tag"] = plan.get("merge_source_tag") or ""
             result["bedroom_cross_day"] = bool(plan.get("bedroom_cross_day"))

@@ -354,6 +354,8 @@ def _apply_one_decision(
     merge_reason = str(decision.get("merge_reason") or "").strip()
     has_expected_merge_original = "_merge_original_content" in decision
     expected_merge_original = str(decision.get("_merge_original_content") or "").strip()
+    has_expected_pending_content = "_merge_expected_pending_content" in decision
+    expected_pending_content = str(decision.get("_merge_expected_pending_content") or "").strip()
     importance = int(decision.get("importance") or 0)
     emotion_label, scene_type, target_type = normalize_memory_labels(decision)
     round_ts = decision.get("timestamp") or decision.get("last_mentioned")
@@ -523,13 +525,16 @@ def _apply_one_decision(
             ),
             None,
         )
-        if isinstance(current_dynamic, dict) and isinstance(current_dynamic.get("pending_merge"), dict):
-            logger_instance.info(
-                "动态层 merge 目标已有待审核候选，本轮保持锁定并跳过 window_id=%s fused_with_id=%s",
-                window_id,
-                fused_with_id,
-            )
-            return None
+        current_pending = current_dynamic.get("pending_merge") if isinstance(current_dynamic, dict) else None
+        if isinstance(current_pending, dict):
+            current_pending_content = str(current_pending.get("rewritten_content") or "").strip()
+            if not has_expected_pending_content or current_pending_content != expected_pending_content:
+                logger_instance.info(
+                    "动态层 merge 待审底稿不匹配，本轮跳过 window_id=%s fused_with_id=%s",
+                    window_id,
+                    fused_with_id,
+                )
+                return None
 
         latest_memories = [
             dict(item)
@@ -551,9 +556,19 @@ def _apply_one_decision(
                 window_id,
             )
             return None
-        if isinstance(latest_dynamic.get("pending_merge"), dict):
+        latest_pending = latest_dynamic.get("pending_merge")
+        if isinstance(latest_pending, dict):
+            latest_pending_content = str(latest_pending.get("rewritten_content") or "").strip()
+            if not has_expected_pending_content or latest_pending_content != expected_pending_content:
+                logger_instance.info(
+                    "动态层 merge 最新待审底稿已变化，本轮跳过 window_id=%s fused_with_id=%s",
+                    window_id,
+                    fused_with_id,
+                )
+                return None
+        elif has_expected_pending_content:
             logger_instance.info(
-                "动态层 merge 最新条目已有待审核候选，本轮保持锁定并跳过 window_id=%s fused_with_id=%s",
+                "动态层 merge 预期待审底稿已不存在，本轮跳过 window_id=%s fused_with_id=%s",
                 window_id,
                 fused_with_id,
             )
@@ -568,7 +583,12 @@ def _apply_one_decision(
             )
             return None
         rewritten_content = content if content else content_before
-        semantic_delta_reasons = assess_merge_semantic_delta(content_before, rewritten_content)
+        merge_base_content = (
+            str(latest_pending.get("rewritten_content") or "").strip()
+            if isinstance(latest_pending, dict)
+            else content_before
+        )
+        semantic_delta_reasons = assess_merge_semantic_delta(merge_base_content, rewritten_content)
         cross_day_bedroom_correction = bool(
             merge_reason == "correction"
             and decision.get("bedroom_cross_day") is True
@@ -576,11 +596,18 @@ def _apply_one_decision(
         )
         review_required = bool(
             review_all_merges
+            or isinstance(latest_pending, dict)
             or merge_reason == "habit_generalization"
             or cross_day_bedroom_correction
             or semantic_delta_reasons
         )
         if review_required:
+            pending_field_updates = (
+                latest_pending.get("field_updates")
+                if isinstance(latest_pending, dict)
+                and isinstance(latest_pending.get("field_updates"), dict)
+                else {}
+            )
             staged = r2_store_module.stage_dynamic_memory_merge(
                 str(fused_with_id),
                 original_content=content_before,
@@ -590,7 +617,11 @@ def _apply_one_decision(
                 round_index=round_index,
                 field_updates={
                     "importance": importance,
-                    "mention_count": int(latest_dynamic.get("mention_count") or 0) + 1,
+                    "mention_count": int(
+                        pending_field_updates.get("mention_count")
+                        or latest_dynamic.get("mention_count")
+                        or 0
+                    ) + 1,
                     "tag": tag,
                     "emotion_label": emotion_label,
                     "scene_type": scene_type,
@@ -598,6 +629,9 @@ def _apply_one_decision(
                     "last_mentioned": now_iso,
                 },
                 merge_reason=merge_reason,
+                expected_pending_rewritten_content=(
+                    expected_pending_content if isinstance(latest_pending, dict) else None
+                ),
             )
             if staged:
                 logger_instance.info(
