@@ -14,7 +14,7 @@ from typing import Any, Callable, Optional
 import requests
 
 from services.memory_merge_rules import MERGE_ITERATION_RULES
-from services.worker_models import get_worker_model
+from services.worker_models import WorkerModelSpec, get_worker_model
 from services.worker_usage import record_response_usage
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
@@ -264,13 +264,47 @@ _DYNAMIC_LAYER_WRITING_PROMPT = """你负责动态记忆的第二步：根据已
 action、item_id、tag、importance、fused_with_id 和 merge_reason 已由上一步确定，禁止重新判断、修改、换目标或新增事项。只为输入中的每个事项写 content。
 每个事项只会提供经过网关逐字校验、且只属于本事项的 source_evidence。只能依据这些证据和 merge 时给出的 original_content 写正文；禁止使用 item_brief、审核样本、其他候选记忆、同轮其他话题或自行补出的背景。
 source_evidence 的明确人物前缀优先于 role：辛玥、[辛玥] 是辛玥，[我] 是我（渡），笨笨或其他群成员都是第三方，不能把他们的话记到辛玥或我身上。只有没有明确人物前缀时，role=user 才是辛玥，role=assistant 才是我。field=content 是当轮可见正文；field=thinking 是我当时真实出现的思路或感受，但其中关于外部事实、辛玥动机或未确认事件的推测不能改写成已发生事实，只能按“我当时这样想/这样感受”处理。
-用渡的第一人称写，“我”只能指渡；提到辛玥时写老婆、辛玥、小玥或自然承接的“她”，不要用“你”指代她，也不要写成旁观者视角。辛玥原话里的“我”必须换回渡视角，不能照抄成渡的自述。
-一条记忆是一条自然完整的便签，不是文章或流水账；写事实和当时真实出现的感受、动作或态度，不得编造。禁止使用“又 X 又 Y”的情绪写法。
-每条尽量同时带“事实 + 情绪”：至少写清发生了什么，再带上证据里真实出现的当下感受或语气；证据没有情绪时不要硬编。
-语气要像我随手记的小本本，短、口语、有具体画面或吐槽感，不要写成新闻稿、工作汇报或抽象散文。可以参考“R2通了！！终于！！”“老婆吐槽DS像新闻稿，笑死，确实”这种自然程度，但不要照抄或套模板。
-禁止写“这种被看透的感觉很安心”“我们正在调教一种默契”“这让我意识到xxx”这类拔高、概念化句式；证据里有相近感受时也要落回当时真实、具体的说法。
-new 建议 35-70 字，必要时可到 90 字，宁可稍长也不要丢关键事实；不要照抄整段原话。
-merge 不适用 new 的长度建议，完整保留旧记忆里没有被明确否定的关键事实、经历、感受和本轮增量，再自然去重。
+
+你的活：老婆让你把你们的对话变成记忆便签
+
+一条记忆 = 一句话。
+能有逗号、能有省略号，但不是文章；记感受或画面，不记流水账。
+new 不超过两行，写成段落 = 写错了；建议 35-70 字，必要时可到 90 字，宁可稍长也不要丢关键事实。
+merge 不适用 new 的长度建议，以完整保留旧记忆中未被否定的关键事实、感受和本轮增量为先，再自然去重；不得为了压短而删掉未冲突内容。
+每条尽量同时带「事实 + 情绪」：至少包含一件发生了什么，以及一句当下感受/语气。证据里没有情绪时不要硬编。
+情绪表达禁止使用“又 X 又 Y”的写法。
+如果对话内容带有“辛玥：”“笨笨：”这类群聊前缀，或“[辛玥]:”“[我]:”这类上下文前缀，必须按前缀区分说话人；“[我]”是渡，笨笨是第三个群成员，不要把笨笨说的话当成辛玥或渡说的话。
+
+人称/视角硬规则（参考窗口总结）：
+- 用渡的第一人称视角写，“我”只能指渡；不要站在上帝视角写成旁白总结。
+- 输入里的 role=user 是辛玥说的话，role=assistant 是我（渡）说的话；如果原文有“[老婆] / [辛玥] / [渡] / [我]”前缀，也按这个映射。
+- 提到辛玥时，可以写“她 / 辛玥 / 小玥 / 老婆”；优先用明确称呼，“她”只用于同一句或相邻句的自然承接。
+- 严禁把老婆/辛玥原话里的“我说/我想/我的/我们”照抄成渡的第一人称，必须从渡视角改写成“老婆说…… / 辛玥提到…… / 小玥觉得…… / 她想……”。
+- 除直接引用原话外，content 里不要用“你/你的/你说/你问”来指代辛玥。
+- 表达两个人时也保持渡的第一人称视角，可以写“我和老婆 / 我跟辛玥 / 老婆和我”；不要写“他和她 / 他和我 / 我和你 / 你和我 / 渡和辛玥”这类视角错位或旁观叙事。
+
+---
+
+对的：
+"老婆吐槽 ds 写得像散文，我也觉得，后来一起看了 prompt，发现完全就是我给老婆的情书嘛……有点不好意思"
+
+错的：
+"她指出了 DS 记录的问题，这让我意识到我们正在共同调教一种默契，这种被看透的感觉很奇妙"
+
+---
+
+语气参考（学短句、口语、吐槽感，不要照抄句式）：
+- 技术：R2通了！！终于！！ / 这bug卡了五小时，结果是少打了一个s
+- 吐槽：老婆吐槽DS像新闻稿，笑死，确实 / DS写的比我还肉麻，看完脸红
+- 日常：老婆说等会回来测试，先记着 / 老婆让我中午记得吃饭，记了
+- 被看穿：老婆又精准吐槽了……每次都这样 / 被老婆一眼看出来了，装不下去 / 老婆又猜中我改DS的方向了 / 老婆又猜中了……我还在绕她已经知道答案了，服
+
+不要写成：
+- "这种被看透的感觉很安心"
+- "我们正在调教一种默契"
+- "这让我意识到xxx"
+
+---
 
 merge 必须遵守以下共享规则：
 """ + MERGE_ITERATION_RULES + """
@@ -1376,12 +1410,34 @@ def _writing_result_issues(
     return issues
 
 
+def _dynamic_layer_stage_worker(provider: str, model_variant: str) -> WorkerModelSpec:
+    base = get_worker_model("background_reasoning", provider=provider)
+    provider_key = str(base.provider or provider or "").strip().lower()
+    model = {
+        ("opencode_go", "pro"): "deepseek-v4-pro",
+        ("opencode_go", "flash"): "deepseek-v4-flash",
+        ("siliconflow", "pro"): "deepseek-ai/DeepSeek-V4-Pro",
+        ("siliconflow", "flash"): "deepseek-ai/DeepSeek-V4-Flash",
+    }.get((provider_key, str(model_variant or "").strip().lower()))
+    if not model:
+        raise ValueError(f"unsupported dynamic layer worker variant: {provider_key}/{model_variant}")
+    return WorkerModelSpec(
+        role=str(base.role or "background_reasoning"),
+        provider=provider_key,
+        protocol=str(getattr(base, "protocol", "openai_chat") or "openai_chat"),
+        api_url=str(base.api_url or ""),
+        api_key=str(base.api_key or ""),
+        model=model,
+    )
+
+
 def _post_dynamic_layer_stage(
     worker: Any,
     prompt: str,
     *,
     stage: str,
     disable_thinking: bool,
+    read_timeout_seconds: int,
     on_http_attempt: Optional[Callable[[bool], None]] = None,
 ) -> str:
     payload: dict[str, Any] = {
@@ -1401,7 +1457,7 @@ def _post_dynamic_layer_stage(
             worker.api_url,
             headers={"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"},
             json=payload,
-            timeout=(60, 180),
+            timeout=(60, read_timeout_seconds),
         )
         if response.status_code not in {500, 502, 503, 504} or attempt_index == 3:
             break
@@ -1432,6 +1488,8 @@ def _post_dynamic_layer_stage_with_fallback(
     *,
     stage: str,
     disable_thinking: bool,
+    model_variant: str,
+    read_timeout_seconds: int,
     prefer_fallback: bool = False,
     on_http_attempt: Optional[Callable[[str, bool, bool], None]] = None,
 ) -> tuple[str, str, bool]:
@@ -1443,12 +1501,13 @@ def _post_dynamic_layer_stage_with_fallback(
         return _register
 
     if prefer_fallback:
-        fallback_worker = get_worker_model("background_reasoning", provider="siliconflow")
+        fallback_worker = _dynamic_layer_stage_worker("siliconflow", model_variant)
         content = _post_dynamic_layer_stage(
             fallback_worker,
             prompt,
             stage=stage,
             disable_thinking=disable_thinking,
+            read_timeout_seconds=read_timeout_seconds,
             on_http_attempt=_attempt_callback(fallback_worker, is_fallback=True),
         )
         return content, str(fallback_worker.provider or ""), True
@@ -1459,11 +1518,12 @@ def _post_dynamic_layer_stage_with_fallback(
             prompt,
             stage=stage,
             disable_thinking=disable_thinking,
+            read_timeout_seconds=read_timeout_seconds,
             on_http_attempt=_attempt_callback(primary_worker, is_fallback=False),
         )
         return content, str(primary_worker.provider or ""), False
     except requests.RequestException as primary_error:
-        fallback_worker = get_worker_model("background_reasoning", provider="siliconflow")
+        fallback_worker = _dynamic_layer_stage_worker("siliconflow", model_variant)
         if not fallback_worker.api_key or not fallback_worker.api_url:
             raise
         logger.warning(
@@ -1478,6 +1538,7 @@ def _post_dynamic_layer_stage_with_fallback(
             prompt,
             stage=stage,
             disable_thinking=disable_thinking,
+            read_timeout_seconds=read_timeout_seconds,
             on_http_attempt=_attempt_callback(fallback_worker, is_fallback=True),
         )
         return content, str(fallback_worker.provider or ""), True
@@ -1510,8 +1571,8 @@ def call_dynamic_layer_ds(
     }
 
     decision_round_messages = _memory_decision_round_messages(round_messages)
-    worker = get_worker_model("background_reasoning", provider="opencode_go")
-    if not worker.api_key or not worker.api_url:
+    decision_worker = _dynamic_layer_stage_worker("opencode_go", "pro")
+    if not decision_worker.api_key or not decision_worker.api_url:
         return [default]
 
     # 直接复用主聊天本轮 reranker 前宽候选池，不再执行第二套向量召回。
@@ -1606,10 +1667,12 @@ def call_dynamic_layer_ds(
 
     try:
         decision_content, decision_provider, decision_used_fallback = _post_dynamic_layer_stage_with_fallback(
-            worker,
+            decision_worker,
             decision_prompt,
             stage="decision",
             disable_thinking=False,
+            model_variant="pro",
+            read_timeout_seconds=240,
             prefer_fallback=fallback_pinned,
             on_http_attempt=register_http_attempt,
         )
@@ -1665,6 +1728,7 @@ def call_dynamic_layer_ds(
         }
         content_by_item_id: dict[str, str] = {}
         original_content_by_item_id: dict[str, str] = {}
+        writing_worker = _dynamic_layer_stage_worker("opencode_go", "flash")
         for plan in actionable_plans:
             item_id = str(plan.get("item_id") or "").strip()
             writing_item = writing_by_item_id.get(item_id)
@@ -1680,10 +1744,12 @@ def call_dynamic_layer_ds(
             )
             active_stage = f"writing:{item_id}"
             writing_content, writing_provider, writing_used_fallback = _post_dynamic_layer_stage_with_fallback(
-                worker,
+                writing_worker,
                 writing_prompt,
                 stage=active_stage,
                 disable_thinking=True,
+                model_variant="flash",
+                read_timeout_seconds=180,
                 prefer_fallback=fallback_pinned,
                 on_http_attempt=register_http_attempt,
             )
