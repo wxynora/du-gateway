@@ -392,7 +392,7 @@ def _has_rule_tone(content: str) -> bool:
     return bool(re.search(r"(^|[。！？\n])\s*(不要|不能|以后(?:要|必须)|接下来要)", text))
 
 
-def _call_ds(prompt: str) -> Optional[dict]:
+def _call_ds(prompt: str, *, max_tokens: int = 16384) -> Optional[dict]:
     worker = get_worker_model("background_reasoning")
     if not worker.api_key or not worker.api_url or not worker.model:
         logger.warning("du_midterm 生成跳过：DeepSeek 未配置")
@@ -401,7 +401,7 @@ def _call_ds(prompt: str) -> Optional[dict]:
         "model": worker.model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
-        "max_tokens": 16384,
+        "max_tokens": max_tokens,
     }
     resp = requests.post(
         worker.api_url,

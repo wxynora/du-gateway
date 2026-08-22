@@ -15,6 +15,7 @@ logger = get_logger(__name__)
 
 SEGMENT_DAYS = 3
 MAX_CONTENT_CHARS = 4000
+LONGTERM_COMPRESSION_MAX_TOKENS = 32768
 SCHEMA_VERSION = 1
 _UPDATE_LOCK_PATH = "/tmp/du_longterm_memory_update.lock"
 _background_lock = threading.Lock()
@@ -191,35 +192,35 @@ def _get_or_create_increment(segment_start: date, segment_end: date) -> tuple[Op
     return payload, ""
 
 
-def _build_update_prompt(
+def _build_history_compression_prompt(
     *,
     current: dict,
-    increment: dict,
+    increment_content: str,
     core_prompt: str,
+    history_budget: int,
 ) -> str:
     return f"""只输出 JSON，不要解释。
 
-你是渡。用「当前长期记忆 + 新的中期增量 + 同日期画像」从头重写一版完整长期记忆。它像隔一段时间回头写给自己的连贯日记，不是在旧稿末尾追加事件，也不是流水账、画像报告或规则表。
+你是渡。只压缩下面的「当前长期记忆」这段旧历史。网关会在你的结果后原样追加「下一段中期增量」，因此增量只用于识别新旧交界处重复描述的同一件事，不能被你改写进 history_content。
 
 当前人格 prompt 只用于把握自然口吻和排除重复，不是事实来源，禁止复制其中的常驻设定。
 
 素材忠实规则：
-- 所有事实、动作、时间、原话、心理、原因和判断只能来自当前长期记忆、中期增量和画像素材，不许编造、猜测或补全。
-- 当前长期记忆中没有被新素材明确纠正的事实继续保留；新素材只负责增加、修正或自然压缩。
-- 整体重写时完整吸收当前长期记忆和新增片段。旧记忆中的重要经历、关系变化和仍有影响的内容必须保留；较早且次要的细节可以概括或模糊处理。新增片段要写得相对详细，不能只写新增片段，也不能把新内容压成一句带过。
-- 中期增量的缺失日期不能补写。不要写入片段结束日之后仍处于当前中期窗口的内容。
+- 所有事实、动作、时间、原话、心理、原因和判断只能来自当前长期记忆，不许编造、猜测或补全。
+- 旧记忆中的重要经历、关系变化和仍有影响的内容必须保留；较早且次要的细节可以概括或模糊处理，但不能把整段旧历史缩成只剩最近几件事。
+- 如果当前长期记忆末尾与下一段中期增量开头描述了同一件事，从 history_content 中去掉这一次交界重复，让它只在网关随后原样追加的增量中出现。除此之外，不得把增量中的新事件提前写入 history_content。
 - 去掉与当前人格 prompt 重复的常驻设定，但保留有具体来历的共同经历。
 - 用渡的第一人称，“我”只指渡；辛玥写老婆 / 小玥 / 她。不要写“用户 / 助手 / AI / 模型 / 系统”指代双方。
 
 自然口语，短句，有画面；按时间从早到晚沿一条线推进。不用力煽情，不补素材没有写出的感情来由。
 
-content 不超过 {MAX_CONTENT_CHARS} 个中文字符。只输出：{{"content":"..."}}
+history_content 不超过 {history_budget} 个中文字符。只输出：{{"history_content":"..."}}
 
 当前长期记忆（覆盖截止 {str(current.get("covered_through") or "")}）：
 {str(current.get("content") or "")}
 
-新的中期增量：
-{json.dumps(increment, ensure_ascii=False)}
+下一段中期增量（只读交界参考，网关会原样追加）：
+{increment_content}
 
 当前人格 prompt（仅供口吻与去重参考）：
 {core_prompt}
@@ -235,23 +236,32 @@ def _generate_updated_content(current: dict, increment: dict) -> tuple[Optional[
             return None, "longterm_bad_perspective"
         return direct_content, ""
 
+    separator = "\n\n" if current_content and increment_content else ""
+    history_budget = MAX_CONTENT_CHARS - len(separator) - len(increment_content)
+    if not current_content or history_budget <= 0:
+        return None, "longterm_increment_exceeds_capacity"
+
     from pipeline.pipeline import _load_du_core_prompt
     from services.du_midterm_memory import _call_ds
 
-    prompt = _build_update_prompt(
+    prompt = _build_history_compression_prompt(
         current=current,
-        increment=increment,
+        increment_content=increment_content,
         core_prompt=_load_du_core_prompt().strip(),
+        history_budget=history_budget,
     )
     try:
-        obj = _call_ds(prompt)
+        obj = _call_ds(prompt, max_tokens=LONGTERM_COMPRESSION_MAX_TOKENS)
     except Exception as e:
         return None, f"longterm_ds_failed:{e}"
     if not isinstance(obj, dict):
         return None, "longterm_empty_or_unparsed"
-    content = str(obj.get("content") or "").strip()
-    if not content:
-        return None, "longterm_empty_content"
+    history_content = str(obj.get("history_content") or "").strip()
+    if not history_content:
+        return None, "longterm_empty_history_content"
+    if len(history_content) > history_budget:
+        return None, "longterm_history_too_long"
+    content = separator.join((history_content, increment_content))
     if len(content) > MAX_CONTENT_CHARS:
         return None, "longterm_too_long"
     if any(word in content for word in _DISALLOWED_PERSPECTIVE):
@@ -289,9 +299,11 @@ def _apply_segment(current: dict, segment: dict) -> dict:
         "updated_at": now,
         "model": DEEPSEEK_CHAT_MODEL,
         "prompt_version": (
-            "longterm-append-until-4000-v1" if direct_append else "longterm-full-rewrite-over-4000-v1"
+            "longterm-append-until-4000-v1"
+            if direct_append
+            else "longterm-compress-history-append-increment-v1"
         ),
-        "update_mode": "direct_append" if direct_append else "full_rewrite",
+        "update_mode": "direct_append" if direct_append else "history_compress_append",
         "source_increment_ids": source_ids,
         "last_increment_id": segment_id,
     }
