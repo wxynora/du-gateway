@@ -18,6 +18,7 @@ from pipeline.memory_recall import (
     _memory_retrieval_text,
     _memory_weight,
 )
+from services.memory_merge_rules import assess_merge_semantic_delta
 from storage import r2_store
 from utils.log import get_logger
 
@@ -351,6 +352,8 @@ def _apply_one_decision(
     content = (decision.get("content") or "").strip()
     fused_with_id = decision.get("fused_with_id")
     merge_reason = str(decision.get("merge_reason") or "").strip()
+    has_expected_merge_original = "_merge_original_content" in decision
+    expected_merge_original = str(decision.get("_merge_original_content") or "").strip()
     importance = int(decision.get("importance") or 0)
     emotion_label, scene_type, target_type = normalize_memory_labels(decision)
     round_ts = decision.get("timestamp") or decision.get("last_mentioned")
@@ -388,7 +391,7 @@ def _apply_one_decision(
                 target_type=str(labels.get("target_type") or target_type or ""),
                 source="dynamic_layer_ds",
                 round_preview=round_messages_to_raw_text(round_messages),
-                decision=decision,
+                decision={key: value for key, value in decision.items() if not str(key).startswith("_")},
             )
         except Exception as e:
             logger_instance.warning("动态记忆血缘记录失败 memory_id=%s action=%s error=%s", memory_id, action_name, e)
@@ -481,6 +484,13 @@ def _apply_one_decision(
                 return None
             current_core = core_items[core_index]
             content_before = str(current_core.get("content") or "")
+            if has_expected_merge_original and content_before.strip() != expected_merge_original:
+                logger_instance.info(
+                    "核心层 merge 底稿已变化，本轮跳过旧底稿候选 window_id=%s fused_with_id=%s",
+                    window_id,
+                    fused_with_id,
+                )
+                return None
             staged = r2_store_module.stage_core_memory_merge(
                 core_entry_id,
                 original_content=content_before,
@@ -520,60 +530,6 @@ def _apply_one_decision(
                 fused_with_id,
             )
             return None
-        cross_day_bedroom_correction = bool(
-            merge_reason == "correction"
-            and decision.get("bedroom_cross_day") is True
-            and isinstance(current_dynamic, dict)
-            and "卧室" in {str(current_dynamic.get("tag") or "").strip(), tag}
-        )
-        review_required = bool(
-            review_all_merges
-            or merge_reason == "habit_generalization"
-            or cross_day_bedroom_correction
-        )
-        if review_required:
-            if not isinstance(current_dynamic, dict):
-                logger_instance.warning(
-                    "动态层待审 merge 未找到 fused_with_id=%s，本轮回退为 skip window_id=%s",
-                    fused_with_id,
-                    window_id,
-                )
-                return None
-            content_before = str(current_dynamic.get("content") or "")
-            staged = r2_store_module.stage_dynamic_memory_merge(
-                str(fused_with_id),
-                original_content=content_before,
-                rewritten_content=content if content else content_before,
-                proposed_at=now_iso,
-                window_id=window_id,
-                round_index=round_index,
-                field_updates={
-                    "importance": importance,
-                    "mention_count": int(current_dynamic.get("mention_count") or 0) + 1,
-                    "tag": tag,
-                    "emotion_label": emotion_label,
-                    "scene_type": scene_type,
-                    "target_type": target_type,
-                    "last_mentioned": now_iso,
-                },
-                merge_reason=merge_reason,
-            )
-            if staged:
-                logger_instance.info(
-                    "动态层待审 merge 已生成候选 window_id=%s fused_with_id=%s reason=%s gap_hours=%s",
-                    window_id,
-                    fused_with_id,
-                    merge_reason,
-                    decision.get("merge_gap_hours"),
-                )
-            else:
-                logger_instance.warning(
-                    "动态层待审 merge 候选未暂存 window_id=%s fused_with_id=%s reason=%s",
-                    window_id,
-                    fused_with_id,
-                    merge_reason,
-                )
-            return None
 
         latest_memories = [
             dict(item)
@@ -601,6 +557,64 @@ def _apply_one_decision(
                 window_id,
                 fused_with_id,
             )
+            return None
+
+        content_before = str(latest_dynamic.get("content") or "")
+        if has_expected_merge_original and content_before.strip() != expected_merge_original:
+            logger_instance.info(
+                "动态层 merge 底稿已变化，本轮跳过旧底稿结果 window_id=%s fused_with_id=%s",
+                window_id,
+                fused_with_id,
+            )
+            return None
+        rewritten_content = content if content else content_before
+        semantic_delta_reasons = assess_merge_semantic_delta(content_before, rewritten_content)
+        cross_day_bedroom_correction = bool(
+            merge_reason == "correction"
+            and decision.get("bedroom_cross_day") is True
+            and "卧室" in {str(latest_dynamic.get("tag") or "").strip(), tag}
+        )
+        review_required = bool(
+            review_all_merges
+            or merge_reason == "habit_generalization"
+            or cross_day_bedroom_correction
+            or semantic_delta_reasons
+        )
+        if review_required:
+            staged = r2_store_module.stage_dynamic_memory_merge(
+                str(fused_with_id),
+                original_content=content_before,
+                rewritten_content=rewritten_content,
+                proposed_at=now_iso,
+                window_id=window_id,
+                round_index=round_index,
+                field_updates={
+                    "importance": importance,
+                    "mention_count": int(latest_dynamic.get("mention_count") or 0) + 1,
+                    "tag": tag,
+                    "emotion_label": emotion_label,
+                    "scene_type": scene_type,
+                    "target_type": target_type,
+                    "last_mentioned": now_iso,
+                },
+                merge_reason=merge_reason,
+            )
+            if staged:
+                logger_instance.info(
+                    "动态层待审 merge 已生成候选 window_id=%s fused_with_id=%s reason=%s semantic_delta=%s gap_hours=%s",
+                    window_id,
+                    fused_with_id,
+                    merge_reason,
+                    semantic_delta_reasons,
+                    decision.get("merge_gap_hours"),
+                )
+            else:
+                logger_instance.warning(
+                    "动态层待审 merge 候选未暂存 window_id=%s fused_with_id=%s reason=%s",
+                    window_id,
+                    fused_with_id,
+                    merge_reason,
+                )
             return None
         latest_snapshot = copy.deepcopy(latest_memories)
         current_memories[:] = latest_memories

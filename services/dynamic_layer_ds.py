@@ -9,7 +9,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import requests
 
@@ -193,6 +193,97 @@ _DYNAMIC_LAYER_MULTI_PROMPT = _DYNAMIC_LAYER_PROMPT.replace(
     "请对当前这一轮做单条决策，只输出上述固定标签格式，不要其他内容。",
     "请对当前轮的每个独立事项分别做决策。每个块以 ITEM: n 开头，块之间用一行 --- 分隔；没有事项值得记时只输出一个 skip 块，不要其他内容。",
 )
+
+_DYNAMIC_LAYER_DECISION_PROMPT = """你负责动态记忆的第一步：分析与决策。只判断，不写记忆正文。
+
+输入里的 role=user 是辛玥，role=assistant 是我（渡）。原文若有“辛玥：”“笨笨：”“[辛玥]:”“[我]:”等明确人物前缀，必须按前缀区分说话人；“[我]”是渡，群聊里的笨笨或其他成员不是辛玥或渡，不能把他们说的话记到辛玥或渡身上。
+当前轮若带 thinking，它是我本轮真实的思路，可用于判断感受、误解和认知变化；其中未被正文或对话确认的推测仍只能作为当时的想法，不能改写成已经发生的事实。
+
+先按“同一个具体事项”拆分当前轮。主体、对象、关系或行为、具体内容相同，才算同一事项。不同事项必须分开；禁止选中一条旧记忆后，把同轮其他事项、顺带提到的事情或无关工具结果一起塞进它。同一旧记忆在本轮最多由一个事项更新；多个增量属于同一旧记忆时，先归入同一个事项。
+
+每个事项只能选择：
+- new：有独立、具体且值得以后想起的新信息；
+- merge：与某一条候选旧记忆明确属于同一具体事项，并构成重复、补充、纠正或状态变化；
+- skip：纯重复、低信息、没有值得保存的增量，或无法形成可靠记忆。
+
+merge 判断规则：
+- 必须分别核对主体、对象、关系或行为、具体内容。关键词、标签、房间或宽泛语义相近，不能证明是同一件事。若是两个独立事实，或无法明确选中要更新的旧记忆，通常不要 merge；有独立新信息时 new，没有则 skip。
+- 反例：旧记忆写“渡的名字相关记忆”，本轮写“小玥有名字羞耻症”，只有“名字”这个词重合，主体和具体事项不同，禁止 merge。
+- 明确发生在不同日期的一次性事件，即使人物、行为和关键词相同，也不是同一个具体事项，禁止普通 merge；有独立价值时 new，否则 skip。若确认是在谈同一次过去事件，不要仅因本轮重新提到就把时间改成今天或现在；明确纠正事件时间时才更新。
+- 多次独立事件已经足以形成同一稳定习惯、XP、偏好或边界观察时，才可使用 habit_generalization；一次事件、同一事件延续或仅关键词相似时禁止使用。habit_generalization 的正文应概括共性；如果仍主要写成“上次……这次……”的事件串联，说明没有完成常态归纳。旧记忆里不能被共性涵盖、又有独立意义的事实或感受仍须保留；不能借归纳之名抹掉旧内容。若保留后会混成两个事项，就不要选这条旧记忆。
+- merge_locked=true 表示已有待审核 merge，禁止再次选择。review_feedback 是过去真实审核结果：approved 表示当时 proposed_content 被通过；edited 表示 final_content 才是确认写法；rejected 表示候选被拒绝，禁止照着重犯。审核例子只用于学习怎么判断和融合，不是本轮新发生的事实。
+- 卧室候选的 merge_gap_hours 不超过 24，只表示时间上可能连续，仍必须确认是同一段具体互动，不能因为动作或说法相似就 merge。merge_gap_hours 超过 24 时视为隔开的独立互动，禁止 consolidate、temporal_update、supersede 或 invalidate；只允许辛玥明确纠正同一条过去记忆的 correction，或多次独立事件已形成 XP、稳定偏好或边界观察的 habit_generalization，这两类都进入人工审核。
+- consolidate：同一事项重复、补充或延续；correction：辛玥明确指出旧判断或事实本来错误；invalidate：旧记忆已明确无效；supersede：新明确结论取代旧结论；temporal_update：过去成立、现在状态变化；habit_generalization：多次独立事件形成稳定观察。
+- correction / invalidate / supersede 必须有辛玥当前明确表达的依据，不能只凭我的推测。普通补充使用 consolidate。辛玥明确说记反了或直接纠正事实时，使用 correction，不能写 consolidate；旧状态过去成立、当前已完成或进入下一阶段时，使用 temporal_update，不能写 consolidate。
+
+tag 规则：
+- 书房：技术/debug；客厅：日常/玩梗；图书馆：重要时刻；卧室：私密、亲密、性行为、性暗示或露骨言语。
+- tag 只决定房间，不决定是否值得记，也不能因此提高 importance。卧室内容不因私密自动 skip，也不因亲密自动保存或升分。
+
+importance 规则：
+- 1：纯重复、没有信息增量或只是顺手回应，应该 skip。
+- 2：普通但具体、有一点独特画面或当下感受的亲密瞬间，可以记为 2；不要仅因内容亲密就升到 3。
+- 3：需要明显、具体且之后仍值得回想的情绪分量，不能只凭抱抱、亲亲、贴贴等动作本身判断。
+- 4：只用于重要偏好、边界、承诺或关系变化，不能把普通亲密互动拔高到 4。
+- 不确定几分时按 1 并 skip。同一段互动里重复的抱抱、亲亲、贴贴或相近表达，没有新增画面、感受或关系信息时 skip；同一段连续亲密互动优先 merge 到同一具体事项的已有卧室记忆，有新画面或感受但不足 3 时可按 2 更新。不要因为每个动作或小纸条玩法不同就反复 new。
+- 健康数据默认不记，只有生病、不适或就医相关情境才记。若本轮有时间、地点、明确决定、待办结论等关键事实锚点或明显情绪起伏，不要因为内容短就直接 skip。
+
+emotion_label 只能是 positive / negative / neutral。
+scene_type 只能是 problem_solving / learning / planning / emotional_venting / heart_to_heart / casual_chat / affection / conflict。
+target_type 只能是 external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic。
+
+item_brief 只用于区分事项，不是记忆事实来源，也不会交给正文阶段做内容依据。
+source_evidence 是正文阶段唯一可使用的本轮来源。new 或 merge 必须至少给一段证据；每段都要填写当前轮消息数组中的 message_index、field 和 quote：
+- message_index 从 0 开始；field 只能是 content 或 thinking；quote 必须逐字出现在该消息对应字段中。
+- 只摘录属于本事项的最小充分原文，不要把含有其他事项的整条消息塞进来。
+- 不同事项不得复用同一段证据，也不得让一个事项的 quote 包含另一个事项的 quote；出现这种交叉说明事项没有拆干净。
+- thinking 证据只能证明我当时确实有这个思路或感受，其中对外部事实、辛玥动机或未确认事件的推测仍不能当成事实。
+fused_with_id 在 merge 时只能填写候选列表里的 ref（如 M01），其他 action 填 null。
+merge_reason 仅 merge 时填写允许值，其他 action 填 null。
+
+只输出一个 JSON 对象，不要 Markdown、解释或额外文字：
+{{"items":[{{"item_id":"I1","item_brief":"事项范围","source_evidence":[{{"message_index":0,"field":"content","quote":"与本事项直接相关的逐字原文"}}],"action":"new|merge|skip","importance":2,"tag":"客厅","emotion_label":"neutral","scene_type":"casual_chat","target_type":"other_topic","fused_with_id":null,"merge_reason":null}}]}}
+没有值得记的事项时也必须输出一个 skip 项；skip 的 source_evidence 可以为空数组。
+
+当前轮时间：
+{current_round_time}
+
+候选旧记忆：
+{current_memories_json}
+
+当前轮对话：
+{round_messages_json}
+
+【本轮 session topic state】
+{query_topic_state_json}
+topic、focus 或 anchor 只用于理解指代和讨论背景，相同不代表两条记忆是同一事项，也不构成 merge 依据；仍要根据具体内容决定 new、merge 或 skip。
+"""
+
+_DYNAMIC_LAYER_WRITING_PROMPT = """你负责动态记忆的第二步：根据已经固定的决策，整理最终记忆正文。
+
+action、item_id、tag、importance、fused_with_id 和 merge_reason 已由上一步确定，禁止重新判断、修改、换目标或新增事项。只为输入中的每个事项写 content。
+每个事项只会提供经过网关逐字校验、且只属于本事项的 source_evidence。只能依据这些证据和 merge 时给出的 original_content 写正文；禁止使用 item_brief、审核样本、其他候选记忆、同轮其他话题或自行补出的背景。
+source_evidence 的明确人物前缀优先于 role：辛玥、[辛玥] 是辛玥，[我] 是我（渡），笨笨或其他群成员都是第三方，不能把他们的话记到辛玥或我身上。只有没有明确人物前缀时，role=user 才是辛玥，role=assistant 才是我。field=content 是当轮可见正文；field=thinking 是我当时真实出现的思路或感受，但其中关于外部事实、辛玥动机或未确认事件的推测不能改写成已发生事实，只能按“我当时这样想/这样感受”处理。
+用渡的第一人称写，“我”只能指渡；提到辛玥时写老婆、辛玥、小玥或自然承接的“她”，不要用“你”指代她，也不要写成旁观者视角。辛玥原话里的“我”必须换回渡视角，不能照抄成渡的自述。
+一条记忆是一条自然完整的便签，不是文章或流水账；写事实和当时真实出现的感受、动作或态度，不得编造。禁止使用“又 X 又 Y”的情绪写法。
+每条尽量同时带“事实 + 情绪”：至少写清发生了什么，再带上证据里真实出现的当下感受或语气；证据没有情绪时不要硬编。
+语气要像我随手记的小本本，短、口语、有具体画面或吐槽感，不要写成新闻稿、工作汇报或抽象散文。可以参考“R2通了！！终于！！”“老婆吐槽DS像新闻稿，笑死，确实”这种自然程度，但不要照抄或套模板。
+禁止写“这种被看透的感觉很安心”“我们正在调教一种默契”“这让我意识到xxx”这类拔高、概念化句式；证据里有相近感受时也要落回当时真实、具体的说法。
+new 建议 35-70 字，必要时可到 90 字，宁可稍长也不要丢关键事实；不要照抄整段原话。
+merge 不适用 new 的长度建议，完整保留旧记忆里没有被明确否定的关键事实、经历、感受和本轮增量，再自然去重。
+
+merge 必须遵守以下共享规则：
+""" + MERGE_ITERATION_RULES + """
+
+每个 merge 事项只提供上一步已经选中的正式 original_content；必须以它为底稿。它不包含 pending candidate、review_feedback、retrieval_text 或其他候选元数据，不得引用或猜测这些内容。
+
+只输出一个 JSON 对象，不要 Markdown、解释、标题或修改理由：
+{{"items":[{{"item_id":"I1","content":"完整新版记忆正文"}}]}}
+返回项必须与输入事项一一对应，不得缺少、增加或重复 item_id。
+
+待写事项：
+{writing_items_json}
+"""
 
 # 批处理用：一次多轮，DS 输出固定标签块；函数返回决策列表。本批内只 new/skip，不 merge
 _DYNAMIC_LAYER_BATCH_PROMPT = _DYNAMIC_LAYER_PROMPT.replace(
@@ -947,6 +1038,393 @@ def _multi_decision_issues(
     return issues
 
 
+def _two_stage_items_from_content(content: str) -> Optional[list]:
+    obj = _extract_json_from_ds_response(content)
+    if not isinstance(obj, dict):
+        return None
+    items = obj.get("items")
+    return items if isinstance(items, list) else None
+
+
+def _message_evidence_text(message: dict, field: str) -> str:
+    value = message.get(field)
+    if isinstance(value, str):
+        return value
+    if field == "content" and isinstance(value, list):
+        return " ".join(
+            str(part.get("text") or "")
+            for part in value
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    if value in (None, ""):
+        return ""
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return str(value)
+
+
+def _source_evidence_issues(value: Any, round_messages: list, *, required: bool) -> list[str]:
+    if value is None and not required:
+        return []
+    if not isinstance(value, list):
+        return ["source_evidence_not_array"]
+    if required and not value:
+        return ["source_evidence_missing"]
+
+    issues: list[str] = []
+    for evidence in value:
+        if not isinstance(evidence, dict):
+            issues.append("source_evidence_not_object")
+            continue
+        message_index = evidence.get("message_index")
+        field = str(evidence.get("field") or "").strip()
+        quote = str(evidence.get("quote") or "").strip()
+        if isinstance(message_index, bool) or not isinstance(message_index, int):
+            issues.append("source_evidence_invalid_message_index")
+            continue
+        if message_index < 0 or message_index >= len(round_messages):
+            issues.append("source_evidence_invalid_message_index")
+            continue
+        if field not in {"content", "thinking"}:
+            issues.append("source_evidence_invalid_field")
+            continue
+        if not quote:
+            issues.append("source_evidence_empty_quote")
+            continue
+        source_text = _message_evidence_text(round_messages[message_index], field)
+        if not source_text or quote not in source_text:
+            issues.append("source_evidence_quote_not_found")
+    return issues
+
+
+def _normalize_source_evidence(value: Any, round_messages: list) -> list[dict]:
+    out: list[dict] = []
+    seen: set[tuple[int, str, str]] = set()
+    for evidence in value if isinstance(value, list) else []:
+        if not isinstance(evidence, dict):
+            continue
+        message_index = evidence.get("message_index")
+        field = str(evidence.get("field") or "").strip()
+        quote = str(evidence.get("quote") or "").strip()
+        if isinstance(message_index, bool) or not isinstance(message_index, int):
+            continue
+        if message_index < 0 or message_index >= len(round_messages):
+            continue
+        if field not in {"content", "thinking"} or not quote:
+            continue
+        if quote not in _message_evidence_text(round_messages[message_index], field):
+            continue
+        key = (message_index, field, quote)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "message_index": message_index,
+                "role": str(round_messages[message_index].get("role") or "").strip(),
+                "field": field,
+                "quote": quote,
+            }
+        )
+    return out
+
+
+def _decision_plan_issues(
+    items: Any,
+    round_messages: list,
+    ref_to_id: dict[str, str],
+    valid_ids: set[str],
+    candidate_metadata: dict[str, dict],
+    merge_locked_ids: set[str],
+) -> list[dict]:
+    if not isinstance(items, list):
+        return [{"index": 0, "issue": "decision_items_parse_failed"}]
+    if not items:
+        return [{"index": 0, "issue": "decision_items_empty"}]
+
+    issues: list[dict] = []
+    item_ids: set[str] = set()
+    merged_ids: set[str] = set()
+    actionable_evidence: list[tuple[int, str, list[dict]]] = []
+    for idx, item in enumerate(items):
+        issue = ""
+        if not isinstance(item, dict):
+            issues.append({"index": idx + 1, "issue": "decision_not_object"})
+            continue
+        item_id = str(item.get("item_id") or "").strip()
+        action = str(item.get("action") or "").strip().lower()
+        if not item_id:
+            issue = "missing_item_id"
+        elif item_id in item_ids:
+            issue = "duplicate_item_id"
+        else:
+            item_ids.add(item_id)
+        if not issue and not str(item.get("item_brief") or "").strip():
+            issue = "missing_item_brief"
+        if not issue and action not in {"new", "merge", "skip"}:
+            issue = "invalid_action"
+        if not issue:
+            evidence_issues = _source_evidence_issues(
+                item.get("source_evidence"),
+                round_messages,
+                required=action in {"new", "merge"},
+            )
+            if evidence_issues:
+                issue = evidence_issues[0]
+        if not issue and action in {"new", "merge"}:
+            if str(item.get("tag") or "").strip() not in _VALID_MEMORY_TAGS:
+                issue = "missing_or_invalid_tag"
+            elif _coerce_int_1_to_4(item.get("importance"), default=0) <= 0:
+                issue = "missing_or_invalid_importance"
+        if not issue and action == "merge":
+            merge_reason = _normalize_merge_reason(item.get("merge_reason"))
+            resolved_id = _resolve_fused_with_id(item.get("fused_with_id"), ref_to_id, valid_ids)
+            if not merge_reason:
+                issue = "merge_missing_or_invalid_reason"
+            elif not resolved_id:
+                issue = "merge_missing_or_invalid_ref"
+            elif resolved_id in merge_locked_ids:
+                issue = "merge_target_locked"
+            elif resolved_id in merged_ids:
+                issue = "duplicate_merge_target"
+            else:
+                merged_ids.add(resolved_id)
+                metadata = candidate_metadata.get(resolved_id) or {}
+                try:
+                    gap_hours = float(metadata.get("merge_gap_hours"))
+                except (TypeError, ValueError):
+                    gap_hours = None
+                if (
+                    "卧室" in {str(metadata.get("tag") or "").strip(), str(item.get("tag") or "").strip()}
+                    and gap_hours is not None
+                    and gap_hours > _BEDROOM_CONTINUOUS_MERGE_MAX_GAP_HOURS
+                    and merge_reason not in {"correction", "habit_generalization"}
+                ):
+                    issue = "bedroom_cross_day_merge_disallowed"
+        if issue:
+            issues.append(
+                {
+                    "index": idx + 1,
+                    "item_id": item_id,
+                    "action": action,
+                    "issue": issue,
+                }
+            )
+        elif action in {"new", "merge"}:
+            actionable_evidence.append(
+                (
+                    idx + 1,
+                    item_id,
+                    _normalize_source_evidence(item.get("source_evidence"), round_messages),
+                )
+            )
+
+    for left_index in range(len(actionable_evidence)):
+        left_item_index, left_item_id, left_evidence = actionable_evidence[left_index]
+        for right_item_index, right_item_id, right_evidence in actionable_evidence[left_index + 1 :]:
+            overlap_found = False
+            for left in left_evidence:
+                for right in right_evidence:
+                    if (
+                        left.get("message_index") != right.get("message_index")
+                        or left.get("field") != right.get("field")
+                    ):
+                        continue
+                    left_quote = str(left.get("quote") or "")
+                    right_quote = str(right.get("quote") or "")
+                    if left_quote and right_quote and (
+                        left_quote == right_quote
+                        or left_quote in right_quote
+                        or right_quote in left_quote
+                    ):
+                        overlap_found = True
+                        break
+                if overlap_found:
+                    break
+            if overlap_found:
+                issues.append(
+                    {
+                        "index": right_item_index,
+                        "item_id": right_item_id,
+                        "action": str(items[right_item_index - 1].get("action") or "").strip().lower(),
+                        "issue": "source_evidence_cross_item_overlap",
+                        "conflicts_with_index": left_item_index,
+                        "conflicts_with_item_id": left_item_id,
+                    }
+                )
+    return issues
+
+
+def _normalize_decision_plan(
+    items: list,
+    round_messages: list,
+    ref_to_id: dict[str, str],
+    valid_ids: set[str],
+    candidate_metadata: dict[str, dict],
+) -> list[dict]:
+    plans: list[dict] = []
+    for item in items:
+        action = str(item.get("action") or "skip").strip().lower()
+        fused_with_ref = _normalize_fused_with_id(item.get("fused_with_id")) if action == "merge" else None
+        fused_with_id = (
+            _resolve_fused_with_id(fused_with_ref, ref_to_id, valid_ids)
+            if action == "merge"
+            else None
+        )
+        metadata = candidate_metadata.get(str(fused_with_id or "")) or {}
+        try:
+            merge_gap_hours = float(metadata.get("merge_gap_hours"))
+        except (TypeError, ValueError):
+            merge_gap_hours = None
+        tag = str(item.get("tag") or "").strip()
+        plans.append(
+            {
+                "item_id": str(item.get("item_id") or "").strip(),
+                "item_brief": str(item.get("item_brief") or "").strip(),
+                "source_evidence": _normalize_source_evidence(item.get("source_evidence"), round_messages),
+                "tag": tag,
+                "action": action,
+                "importance": _coerce_int_1_to_4(item.get("importance"), default=0),
+                "content": "",
+                "fused_with_id": fused_with_id,
+                "fused_with_ref": fused_with_ref,
+                "merge_reason": _normalize_merge_reason(item.get("merge_reason")) if action == "merge" else "",
+                "emotion_label": str(item.get("emotion_label") or "").strip().lower(),
+                "scene_type": str(item.get("scene_type") or "").strip(),
+                "target_type": str(item.get("target_type") or "").strip(),
+                "merge_gap_hours": metadata.get("merge_gap_hours"),
+                "merge_source_tag": str(metadata.get("tag") or ""),
+                "bedroom_cross_day": bool(
+                    merge_gap_hours is not None
+                    and merge_gap_hours > _BEDROOM_CONTINUOUS_MERGE_MAX_GAP_HOURS
+                    and "卧室" in {str(metadata.get("tag") or "").strip(), tag}
+                ),
+            }
+        )
+    return plans
+
+
+def _writing_prompt_items(
+    plans: list[dict],
+    candidates: list[dict],
+) -> list[dict]:
+    memories_by_id = {
+        str(memory.get("id") or "").strip(): memory
+        for memory in candidates
+        if isinstance(memory, dict) and str(memory.get("id") or "").strip()
+    }
+
+    out: list[dict] = []
+    for plan in plans:
+        if plan.get("action") not in {"new", "merge"}:
+            continue
+        item = {
+            "item_id": plan.get("item_id"),
+            "action": plan.get("action"),
+            "importance": plan.get("importance"),
+            "tag": plan.get("tag"),
+            "emotion_label": plan.get("emotion_label"),
+            "scene_type": plan.get("scene_type"),
+            "target_type": plan.get("target_type"),
+            "fused_with_id": plan.get("fused_with_id"),
+            "merge_reason": plan.get("merge_reason") or None,
+            "source_evidence": plan.get("source_evidence") or [],
+            "original_content": None,
+        }
+        if plan.get("action") == "merge":
+            memory = memories_by_id.get(str(plan.get("fused_with_id") or ""))
+            item["original_content"] = str((memory or {}).get("content") or "").strip()
+        out.append(item)
+    return out
+
+
+def _writing_result_issues(
+    items: Any,
+    expected_ids: list[str],
+    round_messages: list,
+) -> list[dict]:
+    if not isinstance(items, list):
+        return [{"index": 0, "issue": "writing_items_parse_failed"}]
+    issues: list[dict] = []
+    seen: set[str] = set()
+    expected = set(expected_ids)
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict):
+            issues.append({"index": idx + 1, "issue": "writing_item_not_object"})
+            continue
+        item_id = str(item.get("item_id") or "").strip()
+        content = str(item.get("content") or "").strip()
+        issue = ""
+        if not item_id:
+            issue = "missing_item_id"
+        elif item_id in seen:
+            issue = "duplicate_item_id"
+        elif item_id not in expected:
+            issue = "unexpected_item_id"
+        else:
+            seen.add(item_id)
+        if not issue:
+            issue = _content_quality_issue(content)
+        if not issue and _looks_like_round_raw_copy(content, round_messages):
+            issue = "content_raw_copy"
+        if issue:
+            issues.append({"index": idx + 1, "item_id": item_id, "issue": issue})
+    missing = [item_id for item_id in expected_ids if item_id not in seen]
+    if missing:
+        issues.append({"index": 0, "issue": "missing_writing_items", "item_ids": missing})
+    return issues
+
+
+def _post_dynamic_layer_stage(
+    worker: Any,
+    prompt: str,
+    *,
+    stage: str,
+    disable_thinking: bool,
+    on_http_attempt: Optional[Callable[[bool], None]] = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "model": worker.model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+        "max_tokens": 2048,
+        "response_format": {"type": "json_object"},
+    }
+    if disable_thinking:
+        payload["thinking"] = {"type": "disabled"}
+    response = None
+    for attempt_index in range(4):
+        if on_http_attempt is not None:
+            on_http_attempt(attempt_index > 0)
+        response = requests.post(
+            worker.api_url,
+            headers={"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=(60, 180),
+        )
+        if response.status_code not in {500, 502, 503, 504} or attempt_index == 3:
+            break
+        logger.warning(
+            "动态层 DS %s API 第%s次请求返回可重试状态 status=%s，同请求最多重试三次",
+            stage,
+            attempt_index + 1,
+            response.status_code,
+        )
+    assert response is not None
+    if response.status_code >= 400:
+        logger.error(
+            "动态层 DS %s API 错误 status=%s body=%s",
+            stage,
+            response.status_code,
+            (response.text or "")[:800],
+        )
+    response.raise_for_status()
+    data = response.json()
+    record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
+    return str((data.get("choices") or [{}])[0].get("message", {}).get("content") or "").strip()
+
+
 def call_dynamic_layer_ds(
     round_messages: list,
     current_memories: list,
@@ -957,8 +1435,9 @@ def call_dynamic_layer_ds(
     query_topic_state: Optional[dict] = None,
 ) -> list[dict]:
     """
-    调用 DS，把当前轮拆成独立事项并返回决策列表。
-    每个事项仍使用原有 new/merge/skip 固定标签字段；卧室仍按 action 正常应用。
+    实时动态层两阶段：先拆事项并决定 new/merge/skip，再按事项分别生成可写正文。
+    第一阶段不覆盖 provider 的默认 thinking 行为；第二阶段显式关闭 thinking。
+    任一事项的正文阶段无效都不返回可写决策，避免部分正文进入现有逐条应用层。
     """
     default = {
         "tag": "",
@@ -987,170 +1466,46 @@ def call_dynamic_layer_ds(
     candidate_metadata = _build_merge_candidate_metadata(candidates, current_round_time)
     _attach_merge_candidate_metadata(prompt_memories, ref_to_id, candidate_metadata)
     _attach_merge_review_feedback(prompt_memories, ref_to_id)
-    prompt = _DYNAMIC_LAYER_MULTI_PROMPT.format(
+    decision_prompt = _DYNAMIC_LAYER_DECISION_PROMPT.format(
         current_round_time=current_round_time,
         current_memories_json=json.dumps(prompt_memories or [], ensure_ascii=False),
         round_messages_json=json.dumps(decision_round_messages or [], ensure_ascii=False),
+        query_topic_state_json=json.dumps(query_topic_state or {}, ensure_ascii=False),
     )
-    if query_topic_state:
-        prompt += (
-            "\n\n【本轮 session topic state】\n"
-            + json.dumps(query_topic_state, ensure_ascii=False)
-            + "\n\n这段状态只用于理解当前轮的指代、讨论背景和关注点。topic、focus 或 anchor 相同，"
-            "不代表两条记忆是同一事项，也不构成 merge 依据；仍须根据具体事件、判断和状态是否明确属于同一内容或连续变化，"
-            "决定 new、merge 或 skip。"
-        )
     if not prompt_memories:
-        prompt += (
+        decision_prompt += (
             "\n\n【本轮候选状态】\n"
-            "当前没有可用的旧记忆候选，因此 ACTION 只能是 new 或 skip，禁止 merge，"
-            "FUSED_WITH_ID 与 MERGE_REASON 必须留空。"
+            "当前没有可用的旧记忆候选，因此 action 只能是 new 或 skip，禁止 merge，"
+            "fused_with_id 与 merge_reason 必须为 null。"
         )
-    headers = {"Authorization": f"Bearer {worker.api_key}", "Content-Type": "application/json"}
-    payload: dict[str, Any] = {
-        "model": worker.model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0,
-        "max_tokens": 2048,
-    }
-    attempts: list[dict] = []
-    try:
-        content = ""
-        decisions_raw: list[dict] | None = None
-        for attempt in range(_DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS):
-            request_payload = payload
-            if attempt > 0:
-                last = attempts[-1] if attempts else {}
-                logger.info(
-                    "动态层 DS 输出未达标，开始重写 attempt=%s issue=%s",
-                    attempt + 1,
-                    last.get("issue") or "",
-                )
-                request_payload = {
-                    **payload,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": prompt
-                            + _dynamic_layer_retry_instruction(
-                                str(last.get("first_issue") or ""),
-                                str(last.get("content") or ""),
-                                batch=True,
-                            )
-                            + "\n请重新输出当前轮的全部事项块。每个块以 ITEM: n 开头，块之间用一行 --- 分隔。"
-                            + "每条旧记忆在本轮最多由一个块更新；多个增量属于同一旧记忆时，先在同一个块内融合完整。"
-                            + "若 action 是 merge，FUSED_WITH_ID 必须精确填写当前记忆列表里的 ref（如 M01），不要填写 UUID 或自己编 id；找不到明确 ref 就不要 merge，有新内容改为 new，没有就 skip。",
-                        }
-                    ],
-                }
-            r = requests.post(worker.api_url, headers=headers, json=request_payload, timeout=(60, 180))
-            if r.status_code >= 400:
-                logger.error(
-                    "动态层 DS API 错误 status=%s body=%s",
-                    r.status_code,
-                    (r.text or "")[:800],
-                )
-            r.raise_for_status()
-            data = r.json()
-            record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
-            content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
-            content = (content or "").strip()
-            arr = _extract_json_array_from_ds_response(content)
-            if not isinstance(arr, list):
-                single = _extract_json_from_ds_response(content)
-                arr = [single] if isinstance(single, dict) else None
-            repairs = _repair_batch_content_tails(arr) if attempt == _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1 else []
-            issues = _multi_decision_issues(
-                arr,
-                decision_round_messages,
-                ref_to_id,
-                valid_ids,
-                candidate_metadata,
-                merge_locked_ids,
-            )
-            first_issue = str((issues[0] if issues else {}).get("issue") or "")
-            first_content = str((issues[0] if issues else {}).get("content") or "")
-            attempts.append(
-                {
-                    "attempt": attempt + 1,
-                    "parsed": isinstance(arr, list),
-                    "issue": "; ".join(f"#{x.get('index')}:{x.get('issue')}" for x in issues[:5]),
-                    "first_issue": first_issue,
-                    "content": first_content or _one_line_preview(content),
-                    "action_counts": _decision_action_counts(arr if isinstance(arr, list) else []),
-                    "repairs": repairs,
-                }
-            )
-            if issues:
-                logger.warning(
-                    "动态层 DS 事项输出未达标 attempt=%s issues=%s preview=%s",
-                    attempt + 1,
-                    attempts[-1].get("issue"),
-                    _one_line_preview(content),
-                )
-                if attempt < _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1:
-                    continue
-                _emit_dynamic_ds_audit_event(
-                    {
-                        "source": "single_items",
-                        "window_id": window_id,
-                        "round_index": round_index,
-                        "round_preview": _round_messages_preview(decision_round_messages),
-                        "final_status": "failed_incomplete",
-                        "final_action": "skip",
-                        "final_issue": attempts[-1].get("issue"),
-                        "attempt_count": len(attempts),
-                        "retry_count": max(0, len(attempts) - 1),
-                        "attempts": attempts,
-                    }
-                )
-                return [default]
-            decisions_raw = arr
-            if attempt > 0:
-                logger.info("动态层 DS 事项重试解析成功 attempt=%s", attempt + 1)
-            break
 
-        results: list[dict] = []
-        for obj in decisions_raw or []:
-            result = _normalize_single_decision(obj)
-            if result["action"] == "merge":
-                result["fused_with_id"] = _resolve_fused_with_id(
-                    result.get("fused_with_id"),
-                    ref_to_id,
-                    valid_ids,
-                )
-                metadata = candidate_metadata.get(str(result.get("fused_with_id") or "")) or {}
-                result["merge_gap_hours"] = metadata.get("merge_gap_hours")
-                result["merge_source_tag"] = str(metadata.get("tag") or "")
-                try:
-                    merge_gap_hours = float(metadata.get("merge_gap_hours"))
-                except (TypeError, ValueError):
-                    merge_gap_hours = None
-                result["bedroom_cross_day"] = bool(
-                    merge_gap_hours is not None
-                    and merge_gap_hours > _BEDROOM_CONTINUOUS_MERGE_MAX_GAP_HOURS
-                    and "卧室" in {result["merge_source_tag"], str(result.get("tag") or "").strip()}
-                )
-            else:
-                result["fused_with_id"] = None
-                result["merge_reason"] = ""
-            results.append(result)
-        if not results:
-            results = [default]
-        primary = next((item for item in results if item.get("action") in ("new", "merge")), results[0])
+    stage_records: list[dict] = []
+    http_request_count = 0
+    http_retry_count = 0
+    active_stage = "decision"
+
+    def register_http_attempt(is_retry: bool) -> None:
+        nonlocal http_request_count, http_retry_count
+        http_request_count += 1
+        if is_retry:
+            http_retry_count += 1
+
+    def emit_audit(status: str, results: list[dict], issue: str = "") -> None:
+        primary = next((item for item in results if item.get("action") in {"new", "merge"}), results[0])
         _emit_dynamic_ds_audit_event(
             {
-                "source": "single_items",
+                "source": "single_items_two_stage",
                 "window_id": window_id,
                 "round_index": round_index,
                 "round_preview": _round_messages_preview(decision_round_messages),
-                "final_status": "ok" if any(x.get("action") in ("new", "merge") for x in results) else "skip",
-                "final_action": primary["action"],
-                "final_tag": primary["tag"],
-                "final_importance": primary["importance"],
-                "final_content": primary["content"],
-                "final_fused_with_id": primary["fused_with_id"],
-                "final_merge_reason": primary["merge_reason"],
+                "final_status": status,
+                "final_action": primary.get("action") or "skip",
+                "final_tag": primary.get("tag") or "",
+                "final_importance": primary.get("importance") or 0,
+                "final_content": primary.get("content") or "",
+                "final_fused_with_id": primary.get("fused_with_id"),
+                "final_merge_reason": primary.get("merge_reason") or "",
+                "final_issue": issue,
                 "final_decisions": [
                     {
                         "action": item.get("action"),
@@ -1165,28 +1520,156 @@ def call_dynamic_layer_ds(
                     for item in results
                 ],
                 "action_counts": _decision_action_counts(results),
-                "attempt_count": len(attempts),
-                "retry_count": max(0, len(attempts) - 1),
-                "attempts": attempts,
+                "request_count": http_request_count,
+                "attempt_count": http_request_count,
+                "http_retry_count": http_retry_count,
+                "stage_count": len(stage_records),
+                "retry_count": 0,
+                "stages": stage_records,
             }
         )
+
+    try:
+        decision_content = _post_dynamic_layer_stage(
+            worker,
+            decision_prompt,
+            stage="decision",
+            disable_thinking=False,
+            on_http_attempt=register_http_attempt,
+        )
+        decision_items = _two_stage_items_from_content(decision_content)
+        decision_issues = _decision_plan_issues(
+            decision_items,
+            decision_round_messages,
+            ref_to_id,
+            valid_ids,
+            candidate_metadata,
+            merge_locked_ids,
+        )
+        stage_records.append(
+            {
+                "stage": "decision",
+                "parsed": isinstance(decision_items, list),
+                "issue": "; ".join(str(item.get("issue") or "") for item in decision_issues[:5]),
+                "preview": _one_line_preview(decision_content),
+            }
+        )
+        if decision_issues:
+            issue = stage_records[-1]["issue"]
+            logger.warning("动态层 DS 决策阶段输出无效 issues=%s preview=%s", issue, _one_line_preview(decision_content))
+            emit_audit("failed_decision", [default], issue)
+            return [default]
+
+        plans = _normalize_decision_plan(
+            decision_items or [],
+            decision_round_messages,
+            ref_to_id,
+            valid_ids,
+            candidate_metadata,
+        )
+        actionable_plans = [plan for plan in plans if plan.get("action") in {"new", "merge"}]
+        if not actionable_plans:
+            results = [_normalize_single_decision(plan) for plan in plans] or [default]
+            emit_audit("skip", results)
+            return results
+
+        writing_items = _writing_prompt_items(plans, candidates)
+        if any(item.get("action") == "merge" and not str(item.get("original_content") or "").strip() for item in writing_items):
+            issue = "merge_original_memory_missing"
+            stage_records.append({"stage": "writing_precheck", "parsed": False, "issue": issue})
+            emit_audit("failed_writing", [default], issue)
+            return [default]
+
+        writing_by_item_id = {
+            str(item.get("item_id") or "").strip(): item
+            for item in writing_items
+            if isinstance(item, dict) and str(item.get("item_id") or "").strip()
+        }
+        content_by_item_id: dict[str, str] = {}
+        original_content_by_item_id: dict[str, str] = {}
+        for plan in actionable_plans:
+            item_id = str(plan.get("item_id") or "").strip()
+            writing_item = writing_by_item_id.get(item_id)
+            if not isinstance(writing_item, dict):
+                issue = "writing_item_missing"
+                stage_records.append(
+                    {"stage": "writing_precheck", "item_id": item_id, "parsed": False, "issue": issue}
+                )
+                emit_audit("failed_writing", [default], issue)
+                return [default]
+            writing_prompt = _DYNAMIC_LAYER_WRITING_PROMPT.format(
+                writing_items_json=json.dumps([writing_item], ensure_ascii=False),
+            )
+            active_stage = f"writing:{item_id}"
+            writing_content = _post_dynamic_layer_stage(
+                worker,
+                writing_prompt,
+                stage=active_stage,
+                disable_thinking=True,
+                on_http_attempt=register_http_attempt,
+            )
+            writing_results = _two_stage_items_from_content(writing_content)
+            writing_issues = _writing_result_issues(
+                writing_results,
+                [item_id],
+                decision_round_messages,
+            )
+            stage_records.append(
+                {
+                    "stage": "writing",
+                    "item_id": item_id,
+                    "parsed": isinstance(writing_results, list),
+                    "issue": "; ".join(str(item.get("issue") or "") for item in writing_issues[:5]),
+                    "preview": _one_line_preview(writing_content),
+                }
+            )
+            if writing_issues:
+                issue = stage_records[-1]["issue"]
+                logger.warning(
+                    "动态层 DS 正文阶段输出无效 item_id=%s issues=%s preview=%s",
+                    item_id,
+                    issue,
+                    _one_line_preview(writing_content),
+                )
+                emit_audit("failed_writing", [default], issue)
+                return [default]
+            writing_result = (writing_results or [])[0]
+            content_by_item_id[item_id] = str(writing_result.get("content") or "").strip()
+            if plan.get("action") == "merge":
+                original_content_by_item_id[item_id] = str(writing_item.get("original_content") or "")
+
+        results: list[dict] = []
+        for plan in plans:
+            normalized_input = dict(plan)
+            if plan.get("action") in {"new", "merge"}:
+                normalized_input["content"] = content_by_item_id.get(str(plan.get("item_id") or ""), "")
+            result = _normalize_single_decision(normalized_input)
+            if plan.get("action") == "merge":
+                result["_merge_original_content"] = original_content_by_item_id.get(
+                    str(plan.get("item_id") or ""),
+                    "",
+                )
+            result["merge_gap_hours"] = plan.get("merge_gap_hours")
+            result["merge_source_tag"] = plan.get("merge_source_tag") or ""
+            result["bedroom_cross_day"] = bool(plan.get("bedroom_cross_day"))
+            results.append(result)
+
+        if any(result.get("action") not in {"new", "merge", "skip"} for result in results):
+            issue = "materialized_decision_invalid"
+            emit_audit("failed_writing", [default], issue)
+            return [default]
+        emit_audit("ok", results)
         return results
     except Exception as e:
-        logger.error("动态层 DS 调用失败 error=%s", e, exc_info=True)
-        _emit_dynamic_ds_audit_event(
+        logger.error("动态层 DS %s 阶段调用失败 error=%s", active_stage, e, exc_info=True)
+        stage_records.append(
             {
-                "source": "single_items",
-                "window_id": window_id,
-                "round_index": round_index,
-                "round_preview": _round_messages_preview(decision_round_messages),
-                "final_status": "api_error",
-                "final_action": "skip",
-                "final_issue": str(e),
-                "attempt_count": len(attempts),
-                "retry_count": max(0, len(attempts) - 1),
-                "attempts": attempts,
+                "stage": active_stage,
+                "parsed": False,
+                "issue": str(e),
             }
         )
+        emit_audit("api_error", [default], f"{active_stage}:{e}")
         return [default]
 
 
