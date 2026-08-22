@@ -1406,7 +1406,8 @@ def _post_dynamic_layer_stage(
         if response.status_code not in {500, 502, 503, 504} or attempt_index == 3:
             break
         logger.warning(
-            "动态层 DS %s API 第%s次请求返回可重试状态 status=%s，同请求最多重试三次",
+            "动态层 DS provider=%s %s API 第%s次请求返回可重试状态 status=%s，同请求最多重试三次",
+            worker.provider,
             stage,
             attempt_index + 1,
             response.status_code,
@@ -1423,6 +1424,63 @@ def _post_dynamic_layer_stage(
     data = response.json()
     record_response_usage(role=worker.role, provider=worker.provider, model=worker.model, data=data)
     return str((data.get("choices") or [{}])[0].get("message", {}).get("content") or "").strip()
+
+
+def _post_dynamic_layer_stage_with_fallback(
+    primary_worker: Any,
+    prompt: str,
+    *,
+    stage: str,
+    disable_thinking: bool,
+    prefer_fallback: bool = False,
+    on_http_attempt: Optional[Callable[[str, bool, bool], None]] = None,
+) -> tuple[str, str, bool]:
+    def _attempt_callback(worker: Any, *, is_fallback: bool) -> Callable[[bool], None]:
+        def _register(is_retry: bool) -> None:
+            if on_http_attempt is not None:
+                on_http_attempt(str(worker.provider or ""), is_retry, is_fallback)
+
+        return _register
+
+    if prefer_fallback:
+        fallback_worker = get_worker_model("background_reasoning", provider="siliconflow")
+        content = _post_dynamic_layer_stage(
+            fallback_worker,
+            prompt,
+            stage=stage,
+            disable_thinking=disable_thinking,
+            on_http_attempt=_attempt_callback(fallback_worker, is_fallback=True),
+        )
+        return content, str(fallback_worker.provider or ""), True
+
+    try:
+        content = _post_dynamic_layer_stage(
+            primary_worker,
+            prompt,
+            stage=stage,
+            disable_thinking=disable_thinking,
+            on_http_attempt=_attempt_callback(primary_worker, is_fallback=False),
+        )
+        return content, str(primary_worker.provider or ""), False
+    except requests.RequestException as primary_error:
+        fallback_worker = get_worker_model("background_reasoning", provider="siliconflow")
+        if not fallback_worker.api_key or not fallback_worker.api_url:
+            raise
+        logger.warning(
+            "动态层 DS %s primary provider=%s 请求失败，切换 fallback provider=%s error_type=%s",
+            stage,
+            primary_worker.provider,
+            fallback_worker.provider,
+            type(primary_error).__name__,
+        )
+        content = _post_dynamic_layer_stage(
+            fallback_worker,
+            prompt,
+            stage=stage,
+            disable_thinking=disable_thinking,
+            on_http_attempt=_attempt_callback(fallback_worker, is_fallback=True),
+        )
+        return content, str(fallback_worker.provider or ""), True
 
 
 def call_dynamic_layer_ds(
@@ -1482,13 +1540,25 @@ def call_dynamic_layer_ds(
     stage_records: list[dict] = []
     http_request_count = 0
     http_retry_count = 0
+    fallback_request_count = 0
+    fallback_retry_count = 0
+    provider_request_counts: dict[str, int] = {}
+    provider_retry_counts: dict[str, int] = {}
+    fallback_pinned = False
     active_stage = "decision"
 
-    def register_http_attempt(is_retry: bool) -> None:
-        nonlocal http_request_count, http_retry_count
+    def register_http_attempt(provider: str, is_retry: bool, is_fallback: bool) -> None:
+        nonlocal http_request_count, http_retry_count, fallback_request_count, fallback_retry_count
+        provider_key = str(provider or "unknown")
         http_request_count += 1
+        provider_request_counts[provider_key] = provider_request_counts.get(provider_key, 0) + 1
+        if is_fallback:
+            fallback_request_count += 1
         if is_retry:
             http_retry_count += 1
+            provider_retry_counts[provider_key] = provider_retry_counts.get(provider_key, 0) + 1
+            if is_fallback:
+                fallback_retry_count += 1
 
     def emit_audit(status: str, results: list[dict], issue: str = "") -> None:
         primary = next((item for item in results if item.get("action") in {"new", "merge"}), results[0])
@@ -1523,6 +1593,11 @@ def call_dynamic_layer_ds(
                 "request_count": http_request_count,
                 "attempt_count": http_request_count,
                 "http_retry_count": http_retry_count,
+                "provider_request_counts": dict(provider_request_counts),
+                "provider_retry_counts": dict(provider_retry_counts),
+                "fallback_request_count": fallback_request_count,
+                "fallback_retry_count": fallback_retry_count,
+                "fallback_pinned": fallback_pinned,
                 "stage_count": len(stage_records),
                 "retry_count": 0,
                 "stages": stage_records,
@@ -1530,13 +1605,15 @@ def call_dynamic_layer_ds(
         )
 
     try:
-        decision_content = _post_dynamic_layer_stage(
+        decision_content, decision_provider, decision_used_fallback = _post_dynamic_layer_stage_with_fallback(
             worker,
             decision_prompt,
             stage="decision",
             disable_thinking=False,
+            prefer_fallback=fallback_pinned,
             on_http_attempt=register_http_attempt,
         )
+        fallback_pinned = fallback_pinned or decision_used_fallback
         decision_items = _two_stage_items_from_content(decision_content)
         decision_issues = _decision_plan_issues(
             decision_items,
@@ -1549,6 +1626,7 @@ def call_dynamic_layer_ds(
         stage_records.append(
             {
                 "stage": "decision",
+                "provider": decision_provider,
                 "parsed": isinstance(decision_items, list),
                 "issue": "; ".join(str(item.get("issue") or "") for item in decision_issues[:5]),
                 "preview": _one_line_preview(decision_content),
@@ -1601,13 +1679,15 @@ def call_dynamic_layer_ds(
                 writing_items_json=json.dumps([writing_item], ensure_ascii=False),
             )
             active_stage = f"writing:{item_id}"
-            writing_content = _post_dynamic_layer_stage(
+            writing_content, writing_provider, writing_used_fallback = _post_dynamic_layer_stage_with_fallback(
                 worker,
                 writing_prompt,
                 stage=active_stage,
                 disable_thinking=True,
+                prefer_fallback=fallback_pinned,
                 on_http_attempt=register_http_attempt,
             )
+            fallback_pinned = fallback_pinned or writing_used_fallback
             writing_results = _two_stage_items_from_content(writing_content)
             writing_issues = _writing_result_issues(
                 writing_results,
@@ -1618,6 +1698,7 @@ def call_dynamic_layer_ds(
                 {
                     "stage": "writing",
                     "item_id": item_id,
+                    "provider": writing_provider,
                     "parsed": isinstance(writing_results, list),
                     "issue": "; ".join(str(item.get("issue") or "") for item in writing_issues[:5]),
                     "preview": _one_line_preview(writing_content),

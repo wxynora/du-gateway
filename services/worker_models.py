@@ -116,6 +116,15 @@ def get_worker_model(role: str, *, provider: str | None = None) -> WorkerModelSp
                 api_key=_env("OPENCODE_GO_API_KEY"),
                 model=_env_or("OPENCODE_GO_MODEL", "deepseek-v4-flash"),
             )
+        if selected_provider in {"siliconflow", "silicon-flow"}:
+            return WorkerModelSpec(
+                role="background_reasoning",
+                provider="siliconflow",
+                protocol="openai_chat",
+                api_url=_siliconflow_chat_url(),
+                api_key=str(resolve_siliconflow_api_key() or "").strip(),
+                model="deepseek-ai/DeepSeek-V4-Flash",
+            )
         return WorkerModelSpec(
             role="background_reasoning",
             provider=_env_or("WORKER_BACKGROUND_REASONING_PROVIDER", "siliconflow").lower(),
